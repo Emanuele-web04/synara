@@ -85,6 +85,14 @@ export interface DeviceListOptions {
 /** The screen edge a gesture starts on; iOS reads it as the OS edge gesture. */
 export type DeviceTouchEdge = "top" | "left" | "bottom" | "right";
 
+export interface DeviceInputOptions {
+  readonly signal?: AbortSignal;
+}
+
+export interface DeviceTapOptions extends DeviceInputOptions {
+  readonly holdMs?: number;
+}
+
 export interface DeviceSwipeGesture {
   readonly fromX: number;
   readonly fromY: number;
@@ -193,8 +201,8 @@ export interface DeviceBackend {
   openUrl(udid: string, url: string): Promise<void>;
 
   /** `holdMs` above ~500 is a long press. */
-  tap(udid: string, x: number, y: number, options?: { readonly holdMs?: number }): Promise<void>;
-  swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void>;
+  tap(udid: string, x: number, y: number, options?: DeviceTapOptions): Promise<void>;
+  swipe(udid: string, gesture: DeviceSwipeGesture, options?: DeviceInputOptions): Promise<void>;
   /**
    * Keystrokes through HID. Only printable ASCII has a key, and the guest
    * resolves keys through its own hardware keyboard layout, so callers that
@@ -203,17 +211,21 @@ export interface DeviceBackend {
   typeText(
     udid: string,
     text: string,
-    options?: { readonly signal?: AbortSignal },
+    options?: DeviceInputOptions,
   ): Promise<DeviceTypeTextOutcome>;
   /**
    * Replace the focused element's value through accessibility: any Unicode,
    * independent of keyboard layout, one change event instead of keystrokes.
    */
-  setFocusedValue(udid: string, value: string): Promise<void>;
+  setFocusedValue(udid: string, value: string, options?: DeviceInputOptions): Promise<void>;
   /** Whether HID keystrokes produce the characters their US key caps show. */
   usesUsKeyboardLayout(udid: string): Promise<boolean>;
-  keyEvent(udid: string, event: DeviceKeyEvent): Promise<void>;
-  pressButton(udid: string, button: DeviceHardwareButton): Promise<void>;
+  keyEvent(udid: string, event: DeviceKeyEvent, options?: DeviceInputOptions): Promise<void>;
+  pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options?: DeviceInputOptions,
+  ): Promise<void>;
 
   /**
    * `save` writes the PNG beside recordings and reports its path. `resolution:
