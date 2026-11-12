@@ -9,10 +9,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
-import TerminalViewport from "../terminal/TerminalViewport";
-import type { TerminalRuntimeStatus } from "../terminal/terminalRuntimeTypes";
-import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
-import { Button } from "../ui/button";
+import TerminalViewport from "../../terminal/TerminalViewport";
+import type { TerminalRuntimeStatus } from "../../terminal/terminalRuntimeTypes";
+import { disposeAndCloseTerminalSession } from "../../terminal/terminalSession";
+import { Button } from "../../ui/button";
 import {
   Dialog,
   DialogPopup,
@@ -20,7 +20,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-} from "../ui/dialog";
+} from "../../ui/dialog";
 import { useTranslation } from "~/i18n";
 
 const ignoreMetadata = () => {};

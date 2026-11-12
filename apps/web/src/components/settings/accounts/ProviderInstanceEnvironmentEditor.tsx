@@ -15,7 +15,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
 import { PlusIcon, XIcon } from "~/lib/icons";
-import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
+import { DebouncedSettingTextInput } from "../DebouncedSettingTextInput";
 import { useTranslation } from "~/i18n";
 
 const isEnvironmentVariableName = Schema.is(ProviderInstanceEnvironmentVariableName);

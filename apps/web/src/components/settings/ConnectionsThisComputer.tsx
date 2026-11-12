@@ -1,6 +1,6 @@
 // FILE: ConnectionsThisComputer.tsx
 // Purpose: "Control this Mac" — the owner's allow switch, the devices trusted to
-//          control this computer, keep-awake, and an Advanced disclosure with the
+//          control this computer, and an Advanced disclosure with the
 //          account's devices, live sessions, and this machine's account link.
 // Layer: Settings UI components
 // Exports: ConnectionsThisComputer
@@ -14,7 +14,7 @@ import type {
 import { type ReactNode, useEffect, useState } from "react";
 
 import { useAccount } from "~/hooks/useAccount";
-import { reportRemoteAccessAllowed, useDesktopKeepAwake } from "~/hooks/useDesktopKeepAwake";
+import { reportRemoteAccessAllowed } from "~/hooks/useDesktopKeepAwake";
 import { useDevices, useHosts, useHostSessions } from "~/hooks/useHosts";
 import { useRemoteHostState } from "~/hooks/useRemoteHostState";
 import { t } from "~/i18n";
@@ -60,7 +60,6 @@ export function ConnectionsThisComputer({
   onViewProPlans?: (() => void) | undefined;
 }) {
   const { state, loadError, refresh } = useRemoteHostState();
-  const keepAwake = useDesktopKeepAwake();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allowOverride, setAllowOverride] = useState<boolean | null>(null);
@@ -233,34 +232,6 @@ export function ConnectionsThisComputer({
           </p>
         ) : null}
       </SettingsSectionShell>
-
-      {keepAwake.state ? (
-        <SettingsSection title="Other settings">
-          <SettingsListRow
-            title={`Keep this ${computerNoun} awake`}
-            description={
-              keepAwake.state.enabled && keepAwake.state.onBattery
-                ? "Paused while on battery"
-                : "Prevent sleep when computer is plugged in and remote access is enabled"
-            }
-            actions={
-              <Switch
-                checked={keepAwake.state.enabled}
-                aria-label={`Keep this ${computerNoun} awake`}
-                onCheckedChange={(next) =>
-                  void keepAwake.setEnabled(next).catch((cause: unknown) =>
-                    toastManager.add({
-                      type: "error",
-                      title: "Could not change keep awake",
-                      description: remoteAccessErrorMessage(cause, "Try again."),
-                    }),
-                  )
-                }
-              />
-            }
-          />
-        </SettingsSection>
-      ) : null}
 
       <section className="mt-6">
         <button

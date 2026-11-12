@@ -18,6 +18,7 @@
     "test:editor:e2e": "playwright test --config playwright.editor.config.ts",
     "test:electron:e2e": "playwright test --config playwright.electron.config.ts",
     "test:browser:install": "playwright install --with-deps chromium",
+    "settings-search:generate": "bun scripts/generate-settings-search-rows.ts && cd ../.. && oxfmt apps/web/src/settingsSearchRows.generated.ts",
     "measure:lcp": "node scripts/measure-lcp.mjs"
   },
   "dependencies": {

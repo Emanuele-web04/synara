@@ -12,6 +12,7 @@ import {
   SETTINGS_SECTION_IDS,
 } from "~/settingsNavigation";
 import { SETTINGS_SEARCH_ENTRIES } from "~/settingsSearchIndex";
+import { t } from "~/i18n";
 
 describe("the hosts settings pane", () => {
   it("is a known settings section", () => {
@@ -23,7 +24,9 @@ describe("the hosts settings pane", () => {
     const item = SETTINGS_NAV_ITEMS.find((entry) => entry.id === "connections");
 
     expect(item).toBeDefined();
-    expect(item?.label).toBe("Connections");
+    // The pane is listed as Devices under the Connections group.
+    expect(t(item!.label)).toBe("Devices");
+    expect(item?.group).toBe("connections");
     expect(item?.description.length).toBeGreaterThan(0);
     expect(item?.icon.length).toBeGreaterThan(0);
   });

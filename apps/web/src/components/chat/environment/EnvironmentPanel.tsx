@@ -343,7 +343,7 @@ export function EnvironmentPanel({
           onClick={() =>
             void navigate({
               to: "/settings",
-              search: { target: SETTINGS_TARGETS.environmentPanel },
+              search: { section: "layout", target: SETTINGS_TARGETS.environmentPanel },
             })
           }
         >

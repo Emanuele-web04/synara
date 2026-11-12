@@ -82,7 +82,9 @@ import type { ThreadImportTarget } from "~/lib/threadImport";
 import type { SettingsSectionId } from "~/settingsNavigation";
 import {
   rankSettingsSearchEntries,
+  settingsSearchEntryDescription,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
   settingsSectionLabel,
 } from "~/settingsSearchIndex";
 import { t, useTranslation } from "~/i18n";
@@ -1159,8 +1161,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     {matchedSettings.map((entry) =>
                       renderActionItem({
                         id: `setting:${entry.id}`,
-                        label: t(entry.title),
-                        description: t(entry.keywords),
+                        label: settingsSearchEntryTitle(entry),
+                        description: settingsSearchEntryDescription(entry),
                         metaLabel: settingsSectionLabel(entry.section),
                         icon: SettingsIcon,
                         run: () => {

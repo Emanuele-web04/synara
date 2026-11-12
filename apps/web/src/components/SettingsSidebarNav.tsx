@@ -20,6 +20,7 @@ import {
 import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
   settingsSectionLabel,
   type SettingsSearchContext,
   type SettingsSearchEntry,
@@ -52,7 +53,6 @@ function SettingsSearchResultRow(props: {
   entry: SettingsSearchEntry;
   onSelect: (entry: SettingsSearchEntry) => void;
 }) {
-  const { t } = useTranslation();
   const { entry, onSelect } = props;
   const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-4";
   // Mirrors the project header + nested thread layout: the section reuses the nav row
@@ -81,7 +81,7 @@ function SettingsSearchResultRow(props: {
         )}
         onClick={() => onSelect(entry)}
       >
-        <span className="min-w-0 truncate">{t(entry.title)}</span>
+        <span className="min-w-0 truncate">{settingsSearchEntryTitle(entry)}</span>
       </button>
     </li>
   );
@@ -97,6 +97,8 @@ export function SettingsSidebarNav(props: {
    * surface that already has it.
    */
   searchContext?: SettingsSearchContext | undefined;
+  /** Accounts that are enabled but not signed in; badges the pinned Accounts row. */
+  accountsNeedingSignIn?: number | undefined;
 }) {
   const { t } = useTranslation();
 
@@ -178,13 +180,17 @@ export function SettingsSidebarNav(props: {
               >
                 <h2
                   id={`settings-nav-${group.id}`}
-                  className={SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME}
+                  className={
+                    group.hideLabel ? "sr-only" : SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME
+                  }
                 >
                   {t(group.label)}
                 </h2>
                 <ul className={cn("flex flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
                   {items.map((item) => {
                     const isActive = item.id === props.activeSection;
+                    const signInCount =
+                      item.id === "accounts" ? (props.accountsNeedingSignIn ?? 0) : 0;
                     return (
                       <li key={item.id}>
                         <button
@@ -214,6 +220,19 @@ export function SettingsSidebarNav(props: {
                               className="ml-auto rounded-full px-1.5 font-normal text-muted-foreground"
                             >
                               {t(item.badge)}
+                            </Badge>
+                          ) : null}
+                          {signInCount > 0 ? (
+                            <Badge
+                              variant="warning"
+                              size="sm"
+                              className="ml-auto rounded-full px-1.5 font-normal tabular-nums"
+                              title={t("settings:accounts_needSignIn", { count: signInCount })}
+                              aria-label={t("settings:accounts_needSignIn", {
+                                count: signInCount,
+                              })}
+                            >
+                              {signInCount}
                             </Badge>
                           ) : null}
                         </button>

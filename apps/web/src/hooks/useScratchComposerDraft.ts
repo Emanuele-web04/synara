@@ -12,8 +12,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getProviderInstanceOptions,
+  newChatDefaultInstanceIdFor,
   resolveSelectableProviderInstanceId,
   type AppSettings,
+  type NewChatDefault,
 } from "../appSettings";
 import { newThreadId } from "~/lib/utils";
 import {
@@ -24,7 +26,8 @@ import {
 import { buildModelSelection, type ProviderOptions } from "../providerModelOptions";
 
 export function useScratchComposerDraft(input: {
-  readonly defaultProvider: ProviderKind;
+  /** Agent and account to start on when nothing was picked yet. */
+  readonly newChatDefault: NewChatDefault;
   readonly settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
@@ -59,11 +62,12 @@ export function useScratchComposerDraft(input: {
         stickyModelSelectionByProvider[activeProviderInstanceId]?.provider ??
         providerInstances.find((instance) => instance.instanceId === activeProviderInstanceId)
           ?.provider)
-      : null) ?? input.defaultProvider;
+      : null) ?? input.newChatDefault.defaultProvider;
   const selectedProviderInstanceId: ProviderInstanceId = resolveSelectableProviderInstanceId(
     input.settings,
     selectedProvider,
     activeProviderInstanceId ??
+      newChatDefaultInstanceIdFor(input.newChatDefault, selectedProvider, null) ??
       Object.values(scratchDraft.modelSelectionByProvider).find(
         (selection) => selection?.provider === selectedProvider,
       )?.instanceId ??

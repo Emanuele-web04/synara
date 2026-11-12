@@ -47,6 +47,9 @@ import {
   removeManageableProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  newChatDefaultForProvider,
+  newChatDefaultInstanceIdFor,
+  resolveNewChatDefault,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
   revealHubsRailItemOnce,
@@ -1139,6 +1142,97 @@ describe("mergeProviderStartOptions", () => {
     ).toEqual({
       codex: { binaryPath: "/group/codex", homePath: "/home/me/.codex" },
     });
+  });
+});
+
+describe("resolveNewChatDefault", () => {
+  const base = {
+    ...AppSettingsSchema.makeUnsafe({}),
+    defaultProvider: "claudeAgent" as const,
+    providerInstances: {
+      claude_work: { driver: "claudeAgent", displayName: "Work", enabled: true },
+      claude_off: { driver: "claudeAgent", displayName: "Off", enabled: false },
+      codex_team: { driver: "codex", displayName: "Team", enabled: true },
+    },
+  };
+
+  it("defaults to an empty account on fresh settings", () => {
+    const fresh = AppSettingsSchema.makeUnsafe({});
+    expect(fresh.defaultProviderInstanceId).toBe("");
+    expect(resolveNewChatDefault(fresh)).toEqual({
+      defaultProvider: "codex",
+      defaultProviderInstanceId: null,
+    });
+  });
+
+  it("returns a stored account that exists, is enabled, and belongs to the agent", () => {
+    expect(resolveNewChatDefault({ ...base, defaultProviderInstanceId: " claude_work " })).toEqual({
+      defaultProvider: "claudeAgent",
+      defaultProviderInstanceId: "claude_work",
+    });
+  });
+
+  it("falls back to the agent's default account for an unusable stored account", () => {
+    for (const defaultProviderInstanceId of ["", "claude_missing", "claude_off", "codex_team"]) {
+      expect(resolveNewChatDefault({ ...base, defaultProviderInstanceId })).toEqual({
+        defaultProvider: "claudeAgent",
+        defaultProviderInstanceId: null,
+      });
+    }
+  });
+
+  it("drops the account while its agent is disabled", () => {
+    expect(
+      resolveNewChatDefault({
+        ...base,
+        defaultProviderInstanceId: "claude_work",
+        disabledProviders: ["claudeAgent"],
+      }),
+    ).toEqual({ defaultProvider: "claudeAgent", defaultProviderInstanceId: null });
+  });
+
+  it("keeps one object per agent and account across unrelated settings writes", () => {
+    const settings = { ...base, defaultProviderInstanceId: "claude_work" };
+    const resolved = resolveNewChatDefault(settings);
+    expect(resolveNewChatDefault(settings)).toBe(resolved);
+    // A write that leaves the default alone (new settings object) keeps the identity.
+    const rewritten: typeof settings = { ...settings, uiFontFamily: "Inter" };
+    expect(rewritten).not.toBe(settings);
+    expect(resolveNewChatDefault(rewritten)).toBe(resolved);
+    // Changing the account yields a different object.
+    expect(resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "" })).not.toBe(
+      resolved,
+    );
+    expect(resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "claude_off" })).toBe(
+      newChatDefaultForProvider("claudeAgent"),
+    );
+  });
+});
+
+describe("newChatDefaultInstanceIdFor", () => {
+  const newChatDefault = {
+    defaultProvider: "claudeAgent" as const,
+    defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+  };
+
+  it("applies the account when its agent is used and no project default chose it", () => {
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", null)).toBe("claude_work");
+  });
+
+  it("drops the account for another agent, under a project default, or without a default", () => {
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "codex", null)).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", "claudeAgent")).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", "codex")).toBeNull();
+    expect(newChatDefaultInstanceIdFor(null, "claudeAgent", null)).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, null, null)).toBeNull();
+  });
+
+  it("pins an explicit provider pick to that agent's default account", () => {
+    expect(newChatDefaultForProvider("codex")).toEqual({
+      defaultProvider: "codex",
+      defaultProviderInstanceId: null,
+    });
+    expect(newChatDefaultForProvider("codex")).toBe(newChatDefaultForProvider("codex"));
   });
 });
 
