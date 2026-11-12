@@ -64,7 +64,7 @@ import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { McpConnectorProposalCard } from "../settings/McpConnectorProposalCard";
 import { MCP_CONNECTORS_ON } from "~/betaFeatures";
 import { BackgroundTaskRow } from "./BackgroundTaskRow";
-import { getChatTranscriptTextStyle, INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { getChatTranscriptTextStyle } from "./chatTypography";
 import { SubagentRunCard } from "./SubagentRunCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
@@ -496,12 +496,11 @@ export function renderWorkEntrySentence(parts: WorkEntryDisplayParts): ReactNode
   if (parts.commandLiteral === null) {
     return parts.displayText;
   }
+  // The command reads as part of the row's sentence, in the row's own type:
+  // no code chip, so a tool call stays one plain line.
   return (
     <>
-      {parts.heading}{" "}
-      <code className={INLINE_COMMAND_CHIP_CLASS_NAME} data-command-literal="true">
-        {parts.commandLiteral}
-      </code>
+      {parts.heading} <span data-command-literal="true">{parts.commandLiteral}</span>
     </>
   );
 }
@@ -697,14 +696,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
               ? "mcp"
               : undefined;
   const displayParts = workEntryDisplayParts(workEntry, t);
-  const { heading, preview, displayText } = displayParts;
-  const showInlineAgentTaskPreview =
-    workEntry.itemType === "collab_agent_tool_call" &&
-    Boolean(preview) &&
-    normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
+  const { displayText } = displayParts;
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText =
-    rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
+  const hoverText = rawCommand ?? webFetchUrl ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
@@ -953,67 +947,34 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                   )}
                 </span>
               ) : null}
-              <div
-                className={cn(
-                  "min-w-0 overflow-hidden",
-                  // Single-line tool labels size to their content so the disclosure
-                  // chevron can sit right after the name; the multi-line markdown
-                  // preview still needs the full row width.
-                  showInlineAgentTaskPreview && "flex-1",
-                )}
-              >
-                {showInlineAgentTaskPreview ? (
-                  <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
-                    <p
-                      className={cn("truncate font-medium leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}
-                      style={{ fontSize: `${rowFontSizePx}px` }}
-                    >
-                      <span data-work-entry-display-text="true">{heading}</span>
-                      {liveActivityMetaText ? (
-                        <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
-                      ) : null}
-                    </p>
-                    <ChatMarkdown
-                      text={preview ?? ""}
-                      cwd={markdownCwd}
-                      threadId={threadId}
-                      isStreaming={false}
-                      className="leading-relaxed"
-                      style={{
-                        color: MUTED_LABEL_TEXT_COLOR,
-                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
-                        lineHeight: compact ? "18px" : "19px",
-                      }}
-                      onImageExpand={onImageExpand}
-                    />
-                  </div>
-                ) : (
-                  <p
-                    className={cn(
-                      "truncate",
-                      compact ? "leading-5" : "leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit, and
-                      // brighten the whole row to foreground on hover/focus instead of a fill.
-                      WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                    )}
-                    data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
-                    data-codex-status-row={isCodexStatusRow ? "true" : undefined}
-                    style={{ fontSize: `${rowFontSizePx}px` }}
-                  >
-                    <span data-work-entry-display-text="true">
-                      {renderWorkEntrySentence(displayParts)}
+              {/* Every tool call is one plain line, sized to its content so the
+                  disclosure chevron sits right after it. */}
+              <div className="min-w-0 overflow-hidden">
+                <p
+                  className={cn(
+                    "truncate",
+                    compact ? "leading-5" : "leading-6",
+                    // Match the leading icon's tone so the row reads as one muted unit, and
+                    // brighten the whole row to foreground on hover/focus instead of a fill.
+                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                  )}
+                  data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
+                  data-codex-status-row={isCodexStatusRow ? "true" : undefined}
+                  style={{ fontSize: `${rowFontSizePx}px` }}
+                >
+                  <span data-work-entry-display-text="true">
+                    {renderWorkEntrySentence(displayParts)}
+                  </span>
+                  {liveActivityMetaText ? (
+                    <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                  ) : null}
+                  {failureMetaText ? (
+                    <span className="text-destructive" data-tool-failure-meta="true">
+                      {" "}
+                      · {failureMetaText}
                     </span>
-                    {liveActivityMetaText ? (
-                      <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
-                    ) : null}
-                    {failureMetaText ? (
-                      <span className="text-destructive" data-tool-failure-meta="true">
-                        {" "}
-                        · {failureMetaText}
-                      </span>
-                    ) : null}
-                  </p>
-                )}
+                  ) : null}
+                </p>
               </div>
             </>
           );

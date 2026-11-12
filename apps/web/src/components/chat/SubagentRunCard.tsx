@@ -11,7 +11,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { pluralize } from "~/i18n/pluralize";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
 import { BackgroundTrayIcon, ChatBubbleIcon, ChevronRightIcon, StopIcon } from "~/lib/icons";
@@ -63,26 +63,14 @@ export function SubagentIdentityLine({ item }: { item: ComposerSubagentStripItem
   );
 }
 
-// Backticked spans in a one-line preview render as inline code, like the
-// subagent's own reply does.
-function renderInlineCode(text: string): ReactNode {
-  const parts = text.split("`");
-  if (parts.length < 3) return text;
-  return parts.map((part, index) =>
-    index % 2 === 1 && index < parts.length - 1 ? (
-      <code key={index}>{part}</code>
-    ) : (
-      <Fragment key={index}>{part}</Fragment>
-    ),
-  );
+// A one-line result reads as plain text, like the rest of the row: backticks
+// from the subagent's Markdown are dropped rather than rendered as code.
+function plainPreview(text: string): string {
+  return text.replaceAll("`", "");
 }
 
 function ActionText({ action }: { action: SubagentRunAction }) {
-  return action.command ? (
-    <code className="min-w-0 truncate">{action.command}</code>
-  ) : (
-    <span className="min-w-0 truncate">{action.label}</span>
-  );
+  return <span className="min-w-0 truncate">{action.command ?? action.label}</span>;
 }
 
 function Separator() {
@@ -136,7 +124,7 @@ function SubagentRunRowView({
               className="size-3.5"
             />
             <SubagentIdentityLine item={row.item} />
-            <span className="chat-markdown flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground/70">
+            <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground/70">
               {/* The avatar leads the row; a live word shimmers like the header count. */}
               <span className={cn("shrink-0", wordToneClassName, live && "shimmer")}>
                 {description.word}
@@ -153,7 +141,7 @@ function SubagentRunRowView({
               {description.detail?.kind === "outcome" ? (
                 <span className="min-w-0 truncate">
                   <span aria-hidden="true">→ </span>
-                  {renderInlineCode(description.detail.text)}
+                  {plainPreview(description.detail.text)}
                 </span>
               ) : null}
               {description.detail?.kind === "was-running" ? (
