@@ -359,6 +359,16 @@ export type HostKeyRegistry = {
     expectedHostId: string,
     action: (host: HostRecord) => Promise<T>,
   ): Promise<T>;
+  /**
+   * The same proof verification and key-generation check as
+   * `withAuthenticatedHost`, without a transaction or `FOR UPDATE`. Only for
+   * read-only routes that produce no effect, ticket or signature; every
+   * mutating route keeps the locked path.
+   */
+  readAuthenticatedHost(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+  ): Promise<HostRecord>;
   replaceEndpoints(
     authorization: string | undefined | null,
     hostId: string,

@@ -2048,13 +2048,13 @@ export function createV1Routes(deps: {
     c.header("Cache-Control", "no-store");
     if (!deps.liveActivities) return c.json({ turns: [] });
     try {
-      const host = await hostKeys.withAuthenticatedHost(
+      // A read-only poll: the watch list it returns changes nothing, so it
+      // verifies the host without a row lock and takes the cached membership
+      // like every other read.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (host) => host,
       );
-      // A read-only poll: the watch list it returns changes nothing, so it
-      // takes the cached membership like every other read.
       await requireRemoteHostMembership(host, { freshMembership: false });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
@@ -2266,15 +2266,14 @@ export function createV1Routes(deps: {
 
   v1.get("/hosts/:id/authorization", async (c) => {
     try {
-      // The host row lock is released before the provider call: a WorkOS
-      // round trip can take up to its 15s timeout, and holding an exclusive
-      // lock across it would stall every grant/patch/unlink for that host —
-      // and, with a small pool, the whole API. The snapshot is advisory
-      // (the host re-verifies on signal), so a lock-free read is correct.
-      const host = await hostKeys.withAuthenticatedHost(
+      // No host row lock: a WorkOS round trip can take up to its 15s timeout,
+      // and holding an exclusive lock across it would stall every
+      // grant/patch/unlink for that host — and, with a small pool, the whole
+      // API. The snapshot is advisory (the host re-verifies on signal), so a
+      // lock-free verified read is correct.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (authenticated) => authenticated,
       );
       // The live membership read and the revocation snapshot are independent,
       // so they run together. Their results are applied in the old order: a
