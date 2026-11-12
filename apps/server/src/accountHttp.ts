@@ -4,7 +4,7 @@
 // Layer: Server account transport
 
 import { createAccountClient, type AccountClient } from "@synara/shared/account";
-import { Agent } from "@effect/platform-node/Undici";
+import * as undiciModule from "undici";
 
 /**
  * How long an idle account-API connection is kept for reuse. Node's fetch
@@ -15,22 +15,47 @@ import { Agent } from "@effect/platform-node/Undici";
  */
 export const ACCOUNT_KEEP_ALIVE_MS = 65_000;
 
+// undici is CommonJS: under Node its exports sit on the namespace and on `default`.
+const undici =
+  (undiciModule as unknown as { default?: typeof undiciModule }).default ?? undiciModule;
+
 /**
- * Node's own fetch with a dispatcher that keeps connections for
- * {@link ACCOUNT_KEEP_ALIVE_MS}. The `Agent` comes from undici through
- * `@effect/platform-node`, which the server already ships; Node's fetch
- * accepts it through its `dispatcher` option, so request, response and error
- * behavior stay Node's.
+ * A dispatcher that keeps connections for {@link ACCOUNT_KEEP_ALIVE_MS}, for
+ * Node's own fetch (request, response and error behavior stay Node's).
+ *
+ * It must be the maintained undici, the pin `apps/desktop/src/httpRuntime.ts`
+ * uses for the same reason: the undici 7 bundled in Electron's Node (and the
+ * 7.x that `@effect/platform-node` resolves) calls `socket.setTypeOfService`
+ * unguarded on every HTTP/1 write. macOS can reject that on a socket the peer
+ * has just closed, which throws outside the fetch promise and takes the
+ * process down. Reusing idle sockets makes a write on a just-closed socket
+ * more likely, so the kept-alive agent has to be the guarded one. undici 8
+ * agents speak a newer handler interface than Node's bundled fetch;
+ * `Dispatcher1Wrapper` is undici's own adapter for it.
+ *
+ * `undefined` under Bun (development): its `undici` is a built-in shim
+ * without the adapter, and its fetch pools connections itself and ignores
+ * dispatchers.
  */
-const dispatcher = new Agent({
-  keepAliveTimeout: ACCOUNT_KEEP_ALIVE_MS,
-  keepAliveMaxTimeout: ACCOUNT_KEEP_ALIVE_MS,
-});
+function createAccountDispatcher(): object | undefined {
+  if (typeof undici.Dispatcher1Wrapper !== "function") return undefined;
+  return new undici.Dispatcher1Wrapper(
+    new undici.Agent({
+      keepAliveTimeout: ACCOUNT_KEEP_ALIVE_MS,
+      keepAliveMaxTimeout: ACCOUNT_KEEP_ALIVE_MS,
+    }),
+  );
+}
+
+const dispatcher = createAccountDispatcher();
 
 // `RequestInit.dispatcher` is typed against Node's bundled undici types, a
-// different copy from the package's, hence the cast; the interface is the same.
-export const accountFetch = ((input, init) =>
-  fetch(input, { ...init, dispatcher } as unknown as RequestInit)) as typeof fetch;
+// different copy from the package's, hence the cast.
+export const accountFetch = (
+  dispatcher
+    ? (input, init) => fetch(input, { ...init, dispatcher } as unknown as RequestInit)
+    : (input, init) => fetch(input, init)
+) as typeof fetch;
 
 /** The account client every server path uses, on the kept-alive transport. */
 export function createServerAccountClient(baseUrl: string): AccountClient {
