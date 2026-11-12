@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { AccountApiError } from "@synara/shared/account";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { writeAccountCredentials, type StoredAccountFile } from "./accountAuth";
@@ -36,6 +37,12 @@ async function tempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "synara-connectivity-"));
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
   return dir;
+}
+
+/** Real time for file I/O and watcher events while timers are fake. */
+async function realWait(): Promise<void> {
+  const until = Date.now() + 100;
+  while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
 }
 
 async function until(check: () => boolean, timeoutMs = 3_000): Promise<void> {
@@ -159,5 +166,109 @@ describe("superviseHostConnectivity", () => {
     await writeAccountCredentials(dir, { ...LINKED, hostKeyGeneration: 3 });
     await supervisor.reconcile();
     expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  /** Fake timers for the supervisor, real time for its file I/O and watcher. */
+  async function refusedSupervisor(code: "not_host_owner" | "subscription_required") {
+    vi.useFakeTimers({
+      toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "performance"],
+    });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    cleanups.push(() => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+    const dir = await tempDir();
+    await writeAccountCredentials(dir, LINKED);
+    const start = vi.fn<() => Promise<() => void>>(async () => {
+      throw new AccountApiError({
+        status: 403,
+        code,
+        message:
+          code === "subscription_required"
+            ? "Remote access requires an active Synara Alto subscription"
+            : "Remote test access is not enabled for this account",
+      });
+    });
+    const supervisor = await superviseHostConnectivity({
+      baseDir: dir,
+      start,
+      debounceMs: 20,
+      pollIntervalMs: 1_000,
+    });
+    cleanups.push(() => supervisor.stop());
+    // Real time first so watcher events can schedule their (fake) debounce.
+    const step = async (ms: number) => {
+      await realWait();
+      await vi.advanceTimersByTimeAsync(ms);
+      await realWait();
+    };
+    // Late watcher events from the initial write land inside the backoff.
+    await step(0);
+    expect(start).toHaveBeenCalledTimes(1);
+    return { dir, start, supervisor, step };
+  }
+
+  it("spaces refused starts out, ignores token renewals, and retries a changed link at once", async () => {
+    const { dir, start, step } = await refusedSupervisor("not_host_owner");
+    // A token renewal rewrites the file without changing the link: no retry.
+    await writeAccountCredentials(dir, { ...LINKED, accessToken: "renewed" });
+    await step(50);
+    expect(start).toHaveBeenCalledTimes(1);
+    // Retries one, two, four… poll intervals apart, polls in between included.
+    await step(950);
+    expect(start).toHaveBeenCalledTimes(2);
+    await step(1_000);
+    expect(start).toHaveBeenCalledTimes(2);
+    await step(1_000);
+    expect(start).toHaveBeenCalledTimes(3);
+    await step(3_000);
+    expect(start).toHaveBeenCalledTimes(3);
+    await step(1_000);
+    expect(start).toHaveBeenCalledTimes(4);
+    // A changed link is a different answer to wait for.
+    await writeAccountCredentials(dir, { ...LINKED, hostKeyGeneration: 2 });
+    await step(50);
+    expect(start).toHaveBeenCalledTimes(5);
+  });
+
+  it("retries a refused start once per interval when billing shows access, then keeps backing off", async () => {
+    const { start, supervisor, step } = await refusedSupervisor("subscription_required");
+    supervisor.wakeAfterRefusal();
+    await step(0);
+    expect(start).toHaveBeenCalledTimes(2);
+    // More granted reads in the same interval are not a retry each.
+    supervisor.wakeAfterRefusal();
+    supervisor.wakeAfterRefusal();
+    await step(0);
+    expect(start).toHaveBeenCalledTimes(2);
+    // Still refused: the backoff resumes (two intervals now) through the next poll.
+    await step(1_000);
+    expect(start).toHaveBeenCalledTimes(2);
+    // A later granted read may wake it once more.
+    supervisor.wakeAfterRefusal();
+    await step(0);
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ["running", async () => vi.fn()],
+    [
+      "failing for another reason",
+      async (): Promise<() => void> => {
+        throw new Error("api down");
+      },
+    ],
+  ])("ignores a granted billing read while connectivity is %s", async (_state, startImpl) => {
+    const dir = await tempDir();
+    await writeAccountCredentials(dir, LINKED);
+    const start = vi.fn<() => Promise<() => void>>(startImpl);
+    const supervisor = await superviseHostConnectivity({ baseDir: dir, start, debounceMs: 20 });
+    cleanups.push(() => supervisor.stop());
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = start.mock.calls.length;
+    supervisor.wakeAfterRefusal();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(start).toHaveBeenCalledTimes(before);
   });
 });

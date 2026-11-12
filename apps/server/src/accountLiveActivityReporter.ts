@@ -8,6 +8,7 @@ import {
   resolveEnvironmentId,
 } from "./accountAuth";
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
+import { exponentialBackoffMs, jitterMs } from "./backoff";
 import { accountLiveActivityEnabled } from "./remoteFeaturePolicy";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
 import {
@@ -156,6 +157,31 @@ function readWatchedTurn(
   });
 }
 
+/** Watched turns are read and reported on this cadence. */
+const WATCHED_POLL_MS = 5_000;
+/** An unchanged snapshot is still sent this often; the account stops a run after 90 s without one. */
+const HEARTBEAT_MS = 30_000;
+/** Watch-list reads while a device is connected or recently was. */
+const CONNECTED_POLL_MS = 15_000;
+/** A device usually registers a watch while connected or just after it leaves. */
+const DISCONNECTED_GRACE_MS = 10 * 60_000;
+/**
+ * The phone can also register a watch while disconnected (it retries a failed
+ * registration every 15 s). This cadence still reports a new watch inside the
+ * account's 90 s first-report window.
+ */
+const DISCONNECTED_POLL_MS = 60_000;
+/** A refused host's reads double from one minute up to this. */
+const FORBIDDEN_POLL_MAX_MS = 10 * 60_000;
+
+/** Turn states and preview recipients, without the per-report sequence and ciphertext. */
+function reportFingerprint(snapshot: LiveActivityHostSnapshot): string {
+  return JSON.stringify({
+    turns: snapshot.turns,
+    previews: (snapshot.previews ?? []).map(({ preview: _ciphertext, ...binding }) => binding),
+  });
+}
+
 /** ActivityKit and completion alerts share this exact-turn projection poll.
  * The durable sequence fences out-of-order reports; later polls repair uploads.
  * APNs credentials never reach this process. */
@@ -166,10 +192,26 @@ export function createAccountLiveActivityReporter(options: {
   hostIdentityPath: string;
   sql: SqlClient.SqlClient;
   completionPreviewTrust?: CompletionPreviewTrust;
+  /** Whether a remote device is connected, and a subscription to one connecting. */
+  remoteSessions?: {
+    readonly open: () => boolean;
+    readonly onOpened: (listener: () => void) => () => void;
+  };
 }) {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
+  let forbidden = 0;
+  let polling = false;
+  let wakeRequested = false;
+  let pollStartedAt = Number.NEGATIVE_INFINITY;
+  let lastConnectedAt = Number.NEGATIVE_INFINITY;
+  let lastReport: { readonly fingerprint: string; readonly at: number } | undefined;
+  const idleDelay = () =>
+    options.remoteSessions === undefined ||
+    performance.now() - lastConnectedAt < DISCONNECTED_GRACE_MS
+      ? CONNECTED_POLL_MS
+      : DISCONNECTED_POLL_MS;
   async function sync() {
     if (!accountLiveActivityEnabled(options.stateDir)) return 60000;
     const account = await readAccountFile(accountStateDirectory(options.baseDir, options.devUrl));
@@ -177,6 +219,17 @@ export function createAccountLiveActivityReporter(options: {
     const identity = await readHostIdentity(options.hostIdentityPath);
     if (!identity) return 60000;
     const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
+    // Only a device approved on this host can learn a turn to watch. Until the
+    // first approval there is nothing to ask for; a local check each cycle
+    // keeps the first watch inside the same 15 s pickup.
+    const remoteAccessSetUp = options.completionPreviewTrust
+      ? await Effect.runPromise(
+          options.completionPreviewTrust.remoteTrust
+            .hasIdentity(environmentId)
+            .pipe(Effect.orElseSucceed(() => true)),
+        )
+      : true;
+    if (!remoteAccessSetUp) return CONNECTED_POLL_MS;
     const proof = await mintHostProof({
       identity,
       environmentId,
@@ -191,7 +244,19 @@ export function createAccountLiveActivityReporter(options: {
       redirect: "error",
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
     });
-    if (!response.ok) return 60000;
+    if (response.status === 403) {
+      await response.body?.cancel();
+      // Refused (owner left the workspace, or no subscription): no device can
+      // register a watch until that changes, so wait longer each time. A device
+      // connecting wakes the next read early.
+      forbidden += 1;
+      return exponentialBackoffMs(forbidden, 60_000, FORBIDDEN_POLL_MAX_MS);
+    }
+    forbidden = 0;
+    if (!response.ok) {
+      await response.body?.cancel();
+      return 60000;
+    }
     const body: unknown = await response.json();
     const WatchList = Schema.Struct({
       turns: Schema.Array(Schema.Struct({ threadId: Schema.String, turnId: Schema.String })).check(
@@ -199,7 +264,10 @@ export function createAccountLiveActivityReporter(options: {
       ),
       previews: Schema.optional(Schema.Unknown),
     });
-    if (!Schema.is(WatchList)(body) || body.turns.length === 0) return 15000;
+    if (!Schema.is(WatchList)(body) || body.turns.length === 0) {
+      lastReport = undefined;
+      return idleDelay();
+    }
     const sql = options.sql;
     const snapshot = await Effect.runPromise(
       sql.withTransaction(
@@ -251,6 +319,11 @@ export function createAccountLiveActivityReporter(options: {
       current.organizationId !== account.organizationId
     )
       return 60000;
+    // Send only a changed report, plus a heartbeat well inside the account's staleness window.
+    const fingerprint = reportFingerprint(snapshot);
+    if (lastReport?.fingerprint === fingerprint && performance.now() - lastReport.at < HEARTBEAT_MS)
+      return WATCHED_POLL_MS;
+    const sentAt = performance.now();
     const updated = await fetch(url, {
       method: "PUT",
       headers,
@@ -258,25 +331,54 @@ export function createAccountLiveActivityReporter(options: {
       redirect: "error",
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
     });
-    return updated.ok ? 5000 : 30000;
+    await updated.body?.cancel();
+    if (!updated.ok) {
+      lastReport = undefined;
+      return 30000;
+    }
+    lastReport = { fingerprint, at: sentAt };
+    return WATCHED_POLL_MS;
   }
   async function poll() {
+    polling = true;
+    pollStartedAt = performance.now();
+    if (options.remoteSessions?.open()) lastConnectedAt = pollStartedAt;
     let delay = 30000;
     try {
       delay = await sync();
     } catch {
       /* Recover on the next poll; never log credentials or turn identifiers. */
     }
-    if (!stopped) {
-      timer = setTimeout(() => void poll(), delay);
-      timer.unref();
-    }
+    polling = false;
+    if (stopped) return;
+    const next = wakeRequested ? Math.min(delay, WATCHED_POLL_MS) : jitterMs(delay);
+    wakeRequested = false;
+    timer = setTimeout(() => void poll(), next);
+    timer.unref();
   }
+  // A device that connects may be about to watch a turn, and a refused host may
+  // be allowed again: read soon rather than at the end of a long wait, but never
+  // closer than the watched cadence to the previous read.
+  const stopWatchingSessions = options.remoteSessions?.onOpened(() => {
+    lastConnectedAt = performance.now();
+    if (stopped) return;
+    if (polling) {
+      wakeRequested = true;
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(
+      () => void poll(),
+      Math.max(0, pollStartedAt + WATCHED_POLL_MS - performance.now()),
+    );
+    timer.unref();
+  });
   timer = setTimeout(() => void poll(), 1000);
   timer.unref();
   return {
     stop() {
       stopped = true;
+      stopWatchingSessions?.();
       clearTimeout(timer);
       controller.abort();
     },

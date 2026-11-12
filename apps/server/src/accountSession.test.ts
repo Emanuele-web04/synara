@@ -19,6 +19,7 @@ import {
   writeAccountCredentials,
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
+import { registerRemoteAccessGrantedWake } from "./hostConnectivitySignals.ts";
 import type { AccountBillingStatus } from "@synara/contracts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
@@ -85,6 +86,28 @@ describe("billing account scope", () => {
     ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
     expect((await readAccountFile(baseDir))?.userId).toBe("user_2");
   });
+
+  it.each([
+    ["granted", 1],
+    ["none", 0],
+  ] as const)(
+    "lets a refused host retry only when a billing read says %s access",
+    async (access, wakes) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const wake = vi.fn();
+      registerRemoteAccessGrantedWake(wake);
+      try {
+        const client = makeClient({ billingStatus: async () => ({ ...billing, access }) });
+        await expect(
+          createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client }).billingStatus(),
+        ).resolves.toMatchObject({ access });
+        expect(wake).toHaveBeenCalledTimes(wakes);
+      } finally {
+        registerRemoteAccessGrantedWake(undefined);
+      }
+    },
+  );
 
   it("forwards only the interval and uses the stored account's credentials", async () => {
     const baseDir = makeBaseDir();

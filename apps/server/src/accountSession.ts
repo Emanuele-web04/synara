@@ -103,6 +103,7 @@ import {
   type SsoCallbackListener,
 } from "./accountSsoCallback";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
+import { noteRemoteAccessGranted, nudgeHostAuthorization } from "./hostConnectivitySignals";
 import { Effect, Path as EffectPath } from "effect";
 import { deriveServerPaths } from "./config";
 import { HostSecretsCoordinator } from "./hostSecrets/coordinator";
@@ -970,8 +971,11 @@ export function createAccountSession(
       return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
     },
 
-    billingStatus() {
-      return withBillingSession((token, client) => client.billingStatus(token));
+    async billingStatus() {
+      const status = await withBillingSession((token, client) => client.billingStatus(token));
+      // A host refused for lack of access may retry its own authorization now.
+      if (status.access === "granted") noteRemoteAccessGranted();
+      return status;
     },
     billingCheckout(input) {
       return withBillingSession((token, client) => client.billingCheckout(token, input));
@@ -1022,6 +1026,8 @@ export function createAccountSession(
 
     async revokeDevice(input) {
       await withSession((token, client) => client.revokeDevice(token, input.deviceId));
+      // An idle host would otherwise apply and confirm this on its slow poll.
+      nudgeHostAuthorization();
       await withLockedAccountFile(credentialDir, async () => {
         const stored = await readAccountFile(credentialDir);
         if (!stored || stored.deviceId !== input.deviceId) return;

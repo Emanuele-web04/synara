@@ -97,7 +97,15 @@ with `no-store`, independently of login. Its persistent hint is scoped to that
 exact account authority and survives logout and host unlink. A policy for a
 different authority cannot clear a known paid policy. Policy discovery never
 proves that the current user has paid; a fresh authenticated authorization lease
-must establish that separately.
+must establish that separately. Every authenticated host authorization snapshot
+carries the same `remoteBillingEnforced` flag; the host adopts it as a policy read
+(a `false` requested before a newer `true` is discarded), so a linked host with
+snapshots flowing makes no `/instance` reads. Otherwise the host reads it every
+fifteen seconds (jittered shorter) while a remote session or legacy remote socket
+is open, once at startup, and before any decision the policy can change whenever
+the last read is older than fifteen seconds. A loopback server without an auth
+token keeps the fifteen-second cadence, because the policy decides each of its
+unauthenticated local requests.
 
 | Setting                                 | Runs on               | Default and rollout use                                                                                                                                                                            |
 | --------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
