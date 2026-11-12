@@ -28,7 +28,7 @@ import { executionKey } from "../lib/hosts/executionContext";
 import * as Schema from "effect/Schema";
 import { CATALOG_OPEN_EVENT } from "~/lib/projectCatalog/navigation";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
-import type { CheckoutRef } from "~/lib/projectCatalog/model";
+import { checkoutKey, type CheckoutRef } from "~/lib/projectCatalog/model";
 import { APP_RAIL_LABEL_KEYS } from "./AppRail";
 import { PR_STATE_LABEL_KEYS } from "./pullRequest/pullRequestStatePresentation";
 import { THREAD_STATUS_LABEL_KEYS } from "./Sidebar.logic";
@@ -413,8 +413,6 @@ import {
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
-  MenuSub,
-  MenuSubTrigger,
   MenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -536,10 +534,7 @@ import {
 } from "../sidebarRowStyles";
 import { AccountFooterControl } from "./account/AccountFooterControl";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
-import {
-  ComposerPickerMenuPopup,
-  ComposerPickerMenuSubPopup,
-} from "./chat/ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
@@ -576,6 +571,7 @@ import {
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
 } from "../lib/projectCreation";
 import { useSpacesUiStore } from "../spacesUiStore";
+import { useRemoteProjectSpacesStore } from "../remoteProjectSpacesStore";
 import {
   CreateProjectDialog,
   type CreateProjectSubmitOptions,
@@ -585,6 +581,7 @@ import { SpaceEditorDialog } from "./SpaceEditorDialog";
 import { useSpacesController } from "./useSpacesController";
 import { SpaceEmptyState } from "./SpaceEmptyState";
 import { SpaceIcon } from "./SpaceIcon";
+import { MoveProjectToSpaceMenu } from "./MoveProjectToSpaceMenu";
 import { SpaceProjectPickerDialog } from "./SpaceProjectPickerDialog";
 import { PROJECT_SPACE_DRAG_MIME, SpaceSwitcher, type SpaceActivityTone } from "./SpaceSwitcher";
 import {
@@ -593,13 +590,7 @@ import {
   SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME,
   SidebarContextMenuIcon,
 } from "./sidebarContextMenuStyles";
-import {
-  VOID_SPACE_KEY,
-  spaceDisplayIcon,
-  spaceDisplayName,
-  spaceKey,
-  resolveActiveSpaceId,
-} from "../lib/spaceGrouping";
+import { spaceDisplayIcon, spaceDisplayName, resolveActiveSpaceId } from "../lib/spaceGrouping";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { t, useTranslation } from "~/i18n";
 
@@ -4309,7 +4300,10 @@ export default function Sidebar() {
     [activateThreadFromSidebarIntent, openPrLink, openRightDockPane],
   );
 
-  const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
+  const handleCloseProjectContextMenu = useCallback(
+    () => setProjectContextMenuState(null),
+    [setProjectContextMenuState],
+  );
   const {
     activeSpace,
     voidSpace,
@@ -4641,6 +4635,7 @@ export default function Sidebar() {
       setRelocateProjectDialogId,
       setEditProjectDialog,
       setProjectAgentDialogState,
+      setProjectContextMenuState,
     ],
   );
 
@@ -4650,7 +4645,7 @@ export default function Sidebar() {
       if (!projectById.has(projectId)) return;
       setProjectContextMenuState({ projectId, position });
     },
-    [projectById],
+    [projectById, setProjectContextMenuState],
   );
 
   const projectDnDSensors = useSensors(
@@ -4863,9 +4858,20 @@ export default function Sidebar() {
     [renameProjectLocally, setProjectAppearanceLocally],
   );
 
+  const savedRemoteProjectSpaces = useRemoteProjectSpacesStore((state) => state.spaceByCheckout);
+  const remoteProjectSpaces = useMemo(() => {
+    const spaceIds = new Set(spaces.map((space) => space.id));
+    // A workspace deleted on the controller sends its projects back to Void.
+    return new Map(
+      Object.entries(savedRemoteProjectSpaces).map(
+        ([key, spaceId]) =>
+          [key, spaceId !== null && spaceIds.has(spaceId) ? spaceId : null] as const,
+      ),
+    );
+  }, [spaces, savedRemoteProjectSpaces]);
   const remotePinnedThreads = useMemo<WorkspaceThreadEntry[]>(() => {
-    if (!isOnGroups && activeSpaceId !== null) return [];
     return workspaceSessions.flatMap((session) => {
+      const environmentId = session.host.executionScope.environmentId;
       const sectionByProjectId = new Map(
         session.summary?.projects.map((project) => [project.id, project.section] as const),
       );
@@ -4875,7 +4881,13 @@ export default function Sidebar() {
           thread.archivedAt ||
           thread.parentThreadId ||
           !thread.isPinned ||
-          (isOnGroups ? section !== "studio" : section === undefined || section === "studio")
+          (isOnGroups
+            ? section !== "studio"
+            : section === undefined ||
+              section === "studio" ||
+              (remoteProjectSpaces.get(
+                checkoutKey({ environmentId, projectId: thread.projectId }),
+              ) ?? null) !== activeSpaceId)
         )
           return [];
         return [
@@ -4887,7 +4899,7 @@ export default function Sidebar() {
         ];
       });
     });
-  }, [activeSpaceId, isOnGroups, workspaceSessions]);
+  }, [activeSpaceId, isOnGroups, remoteProjectSpaces, workspaceSessions]);
   const localEnvironmentId = readExecutionContext()?.controller.environmentId ?? "local";
   const [workspaceProjectOrder, setWorkspaceProjectOrder] = useLocalStorage(
     executionKey("sidebar-project-order:v1"),
@@ -4903,9 +4915,19 @@ export default function Sidebar() {
     ReadonlyMap<string, number>
   >(() => new Map());
   const remoteProjects = useMemo(
-    () => remoteSidebarProjects(workspaceSessions),
-    [workspaceSessions],
+    () => remoteSidebarProjects(workspaceSessions, "projects", remoteProjectSpaces),
+    [remoteProjectSpaces, workspaceSessions],
   );
+  const remoteProjectsBySpace = useMemo(() => {
+    const projectsBySpace = new Map<SpaceId | null, WorkspaceProjectEntry[]>();
+    for (const entry of remoteProjects) {
+      const spaceId = remoteProjectSpaces.get(entry.key) ?? null;
+      const entries = projectsBySpace.get(spaceId);
+      if (entries) entries.push(entry);
+      else projectsBySpace.set(spaceId, [entry]);
+    }
+    return projectsBySpace;
+  }, [remoteProjects, remoteProjectSpaces]);
   const remoteGroupProjects = useMemo(
     () => remoteSidebarProjects(workspaceSessions, "studio"),
     [workspaceSessions],
@@ -5235,7 +5257,7 @@ export default function Sidebar() {
           isPinned: pinnedProjectIdSet.has(project.id),
         })),
         threads: sidebarThreads,
-        remote: activeSpaceId === null ? remoteProjects : [],
+        remote: remoteProjectsBySpace.get(activeSpaceId) ?? [],
         sortOrder: appSettings.sidebarProjectSortOrder,
         preferredOrder: workspaceProjectOrder,
       }),
@@ -5245,7 +5267,7 @@ export default function Sidebar() {
       pinnedProjectIdSet,
       sidebarThreads,
       activeSpaceId,
-      remoteProjects,
+      remoteProjectsBySpace,
       appSettings.sidebarProjectSortOrder,
       workspaceProjectOrder,
     ],
@@ -5449,15 +5471,29 @@ export default function Sidebar() {
     () =>
       buildRailSpacesSections(
         {
-          items: allStandardProjectsBase,
+          items: [
+            ...allStandardProjectsBase.map((project) => ({ kind: "local" as const, project })),
+            ...remoteProjects.map((entry) => ({ kind: "remote" as const, entry })),
+          ],
           spaces,
           activeSpaceId,
-          spaceIdOf: (project) => project.spaceId ?? null,
+          spaceIdOf: (item) =>
+            item.kind === "local"
+              ? (item.project.spaceId ?? null)
+              : (remoteProjectSpaces.get(item.entry.key) ?? null),
           voidSpace,
         },
         t,
       ),
-    [activeSpaceId, allStandardProjectsBase, spaces, voidSpace, t],
+    [
+      activeSpaceId,
+      allStandardProjectsBase,
+      remoteProjects,
+      remoteProjectSpaces,
+      spaces,
+      voidSpace,
+      t,
+    ],
   );
   // Rail layout: Spaces and single projects the user added to the rail from its "…" menu.
   const railShortcuts = useMemo(
@@ -5626,7 +5662,10 @@ export default function Sidebar() {
   const workspaceProjectThreadData = useMemo(
     () =>
       new Map(
-        [...workspaceProjects, ...remoteGroupProjects].flatMap((entry) =>
+        (showRailSpacesPanel
+          ? remoteProjects
+          : [...workspaceProjects, ...remoteGroupProjects]
+        ).flatMap((entry) =>
           entry.session
             ? [
                 [
@@ -5638,6 +5677,8 @@ export default function Sidebar() {
                       entry.session.host.executionScope.environmentId,
                     ),
                     extraPages: workspaceProjectExtraPages.get(entry.key) ?? 0,
+                    // The Spaces panel has no separate Pinned section.
+                    includePinned: showRailSpacesPanel,
                   }),
                 ] as const,
               ]
@@ -5645,6 +5686,8 @@ export default function Sidebar() {
         ),
       ),
     [
+      showRailSpacesPanel,
+      remoteProjects,
       workspaceProjects,
       remoteGroupProjects,
       appSettings.sidebarThreadSortOrder,
@@ -5682,8 +5725,19 @@ export default function Sidebar() {
       return rows;
     }
     if (showRailSpacesPanel) {
-      for (const entry of railSpacesProjectSidebarData?.visibleEntries ?? [])
-        add(entry.rowId, null);
+      if (railSpacesProjectSidebarData) {
+        for (const entry of railSpacesProjectSidebarData.visibleEntries) add(entry.rowId, null);
+      } else {
+        for (const section of railSpacesSections) {
+          for (const item of section.items) {
+            if (item.kind !== "remote" || collapsedWorkspaceProjects.includes(item.entry.key))
+              continue;
+            for (const child of workspaceProjectThreadData.get(item.entry.key)?.visibleEntries ??
+              [])
+              add(child.row.thread.id, item.entry.session);
+          }
+        }
+      }
       return rows;
     }
     for (const entry of visiblePinnedEntries) add(entry.rowId, null);
@@ -5738,6 +5792,7 @@ export default function Sidebar() {
     workspaceActivity,
     showRailSpacesPanel,
     railSpacesProjectSidebarData,
+    railSpacesSections,
     visiblePinnedEntries,
     remotePinnedThreads,
     groupProjectSidebarDataById,
@@ -6922,9 +6977,27 @@ export default function Sidebar() {
       const project = projectById.get(entry.project.id);
       return project ? renderProjectItem(project, dragHandleProps) : null;
     }
+    const threadRows = workspaceProjectThreadData.get(entry.key);
+    if (!threadRows) return null;
+    const environmentId = entry.session.host.executionScope.environmentId;
     return (
       <WorkspaceProjectItem
         entry={entry}
+        threadRows={threadRows}
+        spaceMenu={
+          entry.project.section === "projects" ? (
+            <MoveProjectToSpaceMenu
+              spaceId={remoteProjectSpaces.get(entry.key) ?? null}
+              spaces={spaces}
+              voidSpace={voidSpace}
+              onMove={(spaceId) => {
+                useRemoteProjectSpacesStore
+                  .getState()
+                  .assignSpace({ environmentId, projectId: entry.project.id }, spaceId);
+              }}
+            />
+          ) : null
+        }
         renderThreadHoverCard={renderRemoteThreadHoverCard}
         expanded={!collapsedWorkspaceProjects.includes(entry.key)}
         onToggle={() => {
@@ -6936,8 +7009,6 @@ export default function Sidebar() {
           clearSelection();
           toggleWorkspaceProject(entry.key);
         }}
-        threadSortOrder={appSettings.sidebarThreadSortOrder}
-        extraPages={workspaceProjectExtraPages.get(entry.key) ?? 0}
         onExtraPagesChange={(extraPages) =>
           setWorkspaceProjectExtraPages((current) => new Map(current).set(entry.key, extraPages))
         }
@@ -7047,7 +7118,15 @@ export default function Sidebar() {
                 )}
                 {section.items.length > 0 ? (
                   <SidebarMenu className="gap-0.5">
-                    {section.items.map((project) => renderRailSpacesProjectRow(project))}
+                    {section.items.map((item) =>
+                      item.kind === "local" ? (
+                        renderRailSpacesProjectRow(item.project)
+                      ) : (
+                        <SidebarMenuItem key={item.entry.key}>
+                          {renderWorkspaceProject(item.entry, null)}
+                        </SidebarMenuItem>
+                      ),
+                    )}
                   </SidebarMenu>
                 ) : (
                   <SpaceEmptyState
@@ -8830,55 +8909,29 @@ export default function Sidebar() {
                   <span>{t("workspace:project_openDevServer")}</span>
                 </MenuItem>
               ) : null}
-              <MenuSub keepOpenOnFocusOut>
-                <MenuSubTrigger className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}>
-                  {/* The glyph is the project's current space, so the row doubles as a
-                      read-out of where it lives today. It wears the same secondary tone
-                      as every other leading glyph in this menu. */}
+              <MoveProjectToSpaceMenu
+                spaceId={projectContextMenuProject.spaceId ?? null}
+                spaces={spaces}
+                voidSpace={voidSpace}
+                onMove={(spaceId) =>
+                  void handleMoveProjectToSpace(projectContextMenuProject.id, spaceId)
+                }
+              >
+                <MenuSeparator />
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() => {
+                    const projectId = projectContextMenuProject.id;
+                    handleCloseProjectContextMenu();
+                    openSpaceCreator(projectId);
+                  }}
+                >
                   <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                    <SpaceIcon
-                      icon={spaceDisplayIcon(projectContextMenuProject.spaceId, spaces, voidSpace)}
-                    />
+                    <AddPlusIcon />
                   </span>
-                  <span>{t("workspace:moveToSpace")}</span>
-                </MenuSubTrigger>
-                <ComposerPickerMenuSubPopup className="min-w-48">
-                  <MenuRadioGroup
-                    value={spaceKey(projectContextMenuProject.spaceId ?? null)}
-                    onValueChange={(value) => {
-                      void handleMoveProjectToSpace(
-                        projectContextMenuProject.id,
-                        value === VOID_SPACE_KEY ? null : SpaceId.makeUnsafe(value),
-                      );
-                    }}
-                  >
-                    <MenuRadioItem value={VOID_SPACE_KEY}>
-                      <SpaceIcon icon={voidSpace.icon} className="size-3.5" />
-                      <span className="min-w-0 truncate">{voidSpace.name}</span>
-                    </MenuRadioItem>
-                    {spaces.map((space) => (
-                      <MenuRadioItem key={space.id} value={space.id}>
-                        <SpaceIcon icon={space.icon} className="size-3.5" />
-                        <span className="min-w-0 truncate">{space.name}</span>
-                      </MenuRadioItem>
-                    ))}
-                  </MenuRadioGroup>
-                  <MenuSeparator />
-                  <MenuItem
-                    className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                    onClick={() => {
-                      const projectId = projectContextMenuProject.id;
-                      setProjectContextMenuState(null);
-                      openSpaceCreator(projectId);
-                    }}
-                  >
-                    <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                      <AddPlusIcon />
-                    </span>
-                    <span>{t("workspace:newSpace2")}</span>
-                  </MenuItem>
-                </ComposerPickerMenuSubPopup>
-              </MenuSub>
+                  <span>{t("workspace:newSpace2")}</span>
+                </MenuItem>
+              </MoveProjectToSpaceMenu>
               <MenuSeparator />
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
