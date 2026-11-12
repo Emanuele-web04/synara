@@ -1,6 +1,6 @@
 // FILE: ComposerChoiceRow.tsx
-// Purpose: Shared list-style choice row (leading number chip + label + inline
-// description + optional trailing affordance) used by both composer decision cards —
+// Purpose: Shared list-style choice row (leading number chip + label + description, inline
+// or stacked under the label, + optional trailing affordance) used by both composer decision cards —
 // the pending-approval card and the AskUserQuestion card — so approvals and questions
 // read as one coherent set of Codex-style list controls instead of drifting apart.
 // Layer: Chat composer UI
@@ -24,6 +24,11 @@ interface ComposerChoiceRowProps {
   disabled?: boolean;
   /** Trailing affordance, e.g. a check icon on the selected option. */
   trailing?: ReactNode;
+  /** Small tag after the label, e.g. "Recommended". Rendered by the `stacked` layout. */
+  badge?: ReactNode;
+  /** `inline` puts the description after the label (approval cards). `stacked` drops it
+   *  under the label at a smaller size, so chip, label and description wrap on one lane. */
+  layout?: "inline" | "stacked";
   onSelect: () => void;
 }
 
@@ -51,11 +56,28 @@ export function ComposerChoiceRow({
   tone: toneProp,
   disabled: disabledProp,
   trailing,
+  badge,
+  layout: layoutProp,
   onSelect,
 }: ComposerChoiceRowProps) {
   const selected = selectedProp ?? false;
   const tone = toneProp ?? "neutral";
   const disabled = disabledProp ?? false;
+  const stacked = layoutProp === "stacked";
+  const showDescription = Boolean(description) && description !== label;
+  const chip =
+    shortcut !== null ? (
+      <span
+        className={cn(
+          "flex size-[18px] shrink-0 items-center justify-center rounded-full text-ui-sm font-medium tabular-nums transition-colors duration-150",
+          selected
+            ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
+            : CHIP_TONE_CLASS_NAME[tone],
+        )}
+      >
+        {shortcut}
+      </span>
+    ) : null;
   return (
     <button
       type="button"
@@ -63,29 +85,37 @@ export function ComposerChoiceRow({
       aria-pressed={selectedProp === undefined ? undefined : selected}
       onClick={onSelect}
       className={cn(
-        "group flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
+        "group flex w-full items-start gap-2.5 rounded-lg py-1.5 text-left transition-colors duration-150",
+        stacked ? "px-2.5" : "px-2",
         selected ? "bg-[var(--color-background-button-secondary)]" : ROW_TONE_CLASS_NAME[tone],
         disabled && "cursor-not-allowed opacity-50",
       )}
     >
-      {shortcut !== null ? (
-        <span
-          className={cn(
-            "flex size-[18px] shrink-0 items-center justify-center rounded-full text-ui-sm font-medium tabular-nums transition-colors duration-150",
-            selected
-              ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
-              : CHIP_TONE_CLASS_NAME[tone],
-          )}
-        >
-          {shortcut}
-        </span>
-      ) : null}
-      <div className="min-w-0 flex-1 leading-snug">
-        <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
-        {description && description !== label ? (
-          <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
-        ) : null}
-      </div>
+      {stacked ? (
+        <>
+          {/* A one-line-tall lane centers the chip on the label's first line. */}
+          {chip ? <span className="flex h-5 shrink-0 items-center">{chip}</span> : null}
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+              <span className="text-ui font-medium leading-5 text-foreground/90">{label}</span>
+              {badge}
+            </div>
+            {showDescription ? (
+              <p className="text-ui-sm leading-snug text-muted-foreground">{description}</p>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <>
+          {chip}
+          <div className="min-w-0 flex-1 leading-snug">
+            <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
+            {showDescription ? (
+              <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
+            ) : null}
+          </div>
+        </>
+      )}
       {trailing}
     </button>
   );

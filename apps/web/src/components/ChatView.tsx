@@ -3683,15 +3683,15 @@ export default function ChatView({
     isCenteredEmptyLanding,
   ]);
   // Started threads get the single-row composer while the draft is one plain line. Anything
-  // that needs the block's room (approvals, questions, plan follow-up, banners, attachment
-  // chips) keeps the block layout.
+  // that needs the block's room (approvals, plan follow-up, banners, attachment chips) keeps
+  // the block layout. A pending question keeps the row: its card above holds the choices, and
+  // the row only takes an optional typed answer, measured instead of the parked draft.
   const composerSingleRow = useComposerSingleRow({
     formRef: composerFormRef,
-    prompt,
+    prompt: activePendingProgress ? activePendingProgress.customAnswer : prompt,
     eligible:
       !isCenteredEmptyLanding &&
       !isComposerApprovalState &&
-      pendingUserInputs.length === 0 &&
       !showPlanFollowUpPrompt &&
       !(pendingAutomationConversation && pendingAutomationConversation.threadId === threadId) &&
       !(serverThread?.snoozedUntil != null && serverThread.archivedAt == null) &&
@@ -6740,7 +6740,7 @@ export default function ChatView({
                         : activePendingProgress
                           ? activePendingProgress.activeQuestion?.options.length === 0
                             ? t("chat:placeholder_typeAnswer")
-                            : t("chat:placeholder_typeOwnAnswer")
+                            : t("chat:orTypeYourOwnAnswer")
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? t("chat:placeholder_refinePlan")
                             : activeThread?.parentThreadId
