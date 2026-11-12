@@ -138,6 +138,17 @@ describe("resolveSubagentOpenPlan", () => {
     });
   });
 
+  it("opens the root chat's subagent in the pane beside it when no column is free", () => {
+    expect(
+      resolveSubagentOpenPlan({
+        targetThreadId: childA,
+        hostThreadId: parent,
+        splitView: splitView(horizontal(leaf("left", parent), leaf("right", other))),
+        readThread,
+      }),
+    ).toEqual({ kind: "replace-pane", splitViewId: "split", paneId: "right", threadId: childA });
+  });
+
   it("keeps a subagent on screen when it opens a subagent it launched", () => {
     // Opened full-width, the launcher goes on the left, not its own parent.
     expect(

@@ -97,9 +97,14 @@ export function resolveSubagentOpenPlan(input: {
         threadId: targetThreadId,
       };
     }
-    // A launcher with no room for another column keeps its pane and shows its
-    // child under it.
-    if (hostLaunchedTarget && canSubdividePane(splitView.root, hostLeaf.id, "vertical")) {
+    // A subagent with no room for another column keeps its pane and shows the
+    // child it launched under it. The root chat instead hands the pane beside it
+    // to the subagent below, so subagents keep opening on its right.
+    if (
+      hostLaunchedTarget &&
+      isSubagent(hostLeaf.threadId) &&
+      canSubdividePane(splitView.root, hostLeaf.id, "vertical")
+    ) {
       return {
         kind: "split-pane",
         splitViewId: splitView.id,
