@@ -4,6 +4,7 @@ import {
   derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
+  nestAgentCreatedThreadEntries,
   describeAddProjectError,
   excludeHiddenProjectAgentCoordinatorThreads,
   filterSidebarThreadsBySpace,
@@ -2592,5 +2593,67 @@ describe("sortProjectsForSidebar", () => {
       ProjectId.makeUnsafe("project-2"),
       ProjectId.makeUnsafe("project-1"),
     ]);
+  });
+});
+
+describe("nestAgentCreatedThreadEntries", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const mk = (id: string, sourceId?: string) =>
+    ({
+      id: tid(id),
+      creationSource: sourceId ? "synara_mcp" : null,
+      sourceThreadId: sourceId ? tid(sourceId) : null,
+    }) as unknown as SidebarThreadSummary;
+  const ids = (entries: { rowId: string }[]) => entries.map((entry) => entry.rowId);
+
+  it("nests children under their creator, multi-level, in DFS order", () => {
+    const entries = nestAgentCreatedThreadEntries(
+      [mk("c1", "p"), mk("p"), mk("g", "c1"), mk("c2", "p"), mk("other")],
+      new Set(),
+      undefined,
+    );
+    expect(ids(entries)).toEqual(["p", "c1", "g", "c2", "other"]);
+    expect(entries.map((entry) => entry.depth)).toEqual([0, 1, 2, 1, 0]);
+    expect(entries[0]?.childCount).toBe(2);
+  });
+
+  it("keeps a thread top-level when its creator is absent", () => {
+    const entries = nestAgentCreatedThreadEntries([mk("c", "gone")], new Set(), undefined);
+    expect(entries.map((entry) => entry.depth)).toEqual([0]);
+  });
+
+  it("hides children of a collapsed parent unless the active thread is inside", () => {
+    const threads = [mk("p"), mk("c1", "p"), mk("c2", "p")];
+    const collapsed = new Set([tid("p")]);
+    const hidden = nestAgentCreatedThreadEntries(threads, collapsed, undefined);
+    expect(ids(hidden)).toEqual(["p"]);
+    expect(hidden[0]?.childrenCollapsed).toBe(true);
+    expect(ids(nestAgentCreatedThreadEntries(threads, collapsed, tid("c2")))).toEqual(["p", "c2"]);
+  });
+
+  it("survives cycles", () => {
+    const entries = nestAgentCreatedThreadEntries(
+      [mk("a", "b"), mk("b", "a")],
+      new Set(),
+      undefined,
+    );
+    expect(ids(entries).toSorted()).toEqual(["a", "b"]);
+  });
+
+  it("leaves project data unchanged when the flag is off", () => {
+    const data = deriveSidebarProjectData({
+      projects: [{ id: ProjectId.makeUnsafe("proj"), cwd: "/x", expanded: true }],
+      sortedSidebarThreadsByProjectId: new Map([
+        [ProjectId.makeUnsafe("proj"), [mk("c", "p"), mk("p")]],
+      ]),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 10,
+      previewPageSize: 10,
+    }).get(ProjectId.makeUnsafe("proj"));
+    expect(data?.orderedProjectThreadIds).toEqual([tid("c"), tid("p")]);
+    expect(data?.visibleEntries.every((entry) => entry.depth === undefined)).toBe(true);
   });
 });

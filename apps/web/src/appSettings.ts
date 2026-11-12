@@ -477,6 +477,9 @@ export const AppSettingsSchema = Schema.Struct({
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
   showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Nest threads an agent created from another thread (synara_create_thread) under that
+  // creator thread in the project sidebar tree.
+  nestAgentCreatedThreads: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.

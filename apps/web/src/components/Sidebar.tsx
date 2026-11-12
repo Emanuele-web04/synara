@@ -100,7 +100,9 @@ import {
   type ComponentType,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode,
+  Fragment,
 } from "react";
 import {
   DndContext,
@@ -1827,6 +1829,18 @@ export default function Sidebar() {
   const visualActiveSidebarThreadId =
     pathname === "/remote" ? null : (optimisticActiveThreadId ?? routeActiveSidebarThreadId);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
+  const nestChildThreads = appSettings.nestAgentCreatedThreads;
+  // Parents whose agent-created children are folded away (default empty = expanded).
+  const [collapsedChildParentIds, setCollapsedChildParentIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  const toggleChildParentCollapsed = useCallback((threadId: ThreadId) => {
+    setCollapsedChildParentIds((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(threadId)) next.add(threadId);
+      return next;
+    });
+  }, []);
   const selectSidebarTreeThreads = useMemo(
     () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
     [hideAutomationRunThreads],
@@ -5177,8 +5191,12 @@ export default function Sidebar() {
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
         statusThreadsByProjectId,
         resolveThreadStatus: resolveThreadStatusForSidebar,
+        nestChildThreads,
+        collapsedChildParentIds,
       }),
     [
+      nestChildThreads,
+      collapsedChildParentIds,
       routeActiveSidebarThreadId,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
@@ -5288,8 +5306,12 @@ export default function Sidebar() {
       previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
       statusThreadsByProjectId: groupScopedStatusThreadsByProjectId,
       resolveThreadStatus: resolveThreadStatusForSidebar,
+      nestChildThreads,
+      collapsedChildParentIds,
     });
   }, [
+    nestChildThreads,
+    collapsedChildParentIds,
     routeActiveSidebarThreadId,
     isOnGroups,
     threadListExtraPagesByProjectCwd,
@@ -6163,7 +6185,10 @@ export default function Sidebar() {
     // A group member thread dispatched into a linked repo shows where it runs —
     // same small-label treatment as pinned rows' project name.
     projectContextLabel?: string,
+    // Agent-created child nesting (project tree only).
+    nesting?: { depth?: number; childCount?: number; childrenCollapsed?: boolean },
   ) {
+    const nestDepth = nesting?.depth ?? 0;
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
     const isActive = visualActiveSidebarThreadId === thread.id;
@@ -6199,11 +6224,24 @@ export default function Sidebar() {
       threadId: thread.id,
     });
 
-    return (
+    const childCount = nesting?.childCount ?? 0;
+    const row = (
       <SidebarMenuSubItem
         key={thread.id}
         data-thread-hover-anchor={hoverAnchorId}
-        className="group/thread-row w-full"
+        className={cn(
+          "group/thread-row w-full",
+          nestDepth > 0 &&
+            "relative before:pointer-events-none before:absolute before:inset-y-0 before:left-[var(--child-guide-left)] before:w-px before:bg-border/60",
+        )}
+        style={
+          nestDepth > 0
+            ? ({
+                paddingLeft: `${nestDepth * 12}px`,
+                "--child-guide-left": `${nestDepth * 12 - 6}px`,
+              } as CSSProperties)
+            : undefined
+        }
         data-thread-item
       >
         <Tooltip>
@@ -6316,6 +6354,32 @@ export default function Sidebar() {
         </Tooltip>
       </SidebarMenuSubItem>
     );
+    if (childCount === 0) return row;
+    const collapsed = nesting?.childrenCollapsed === true;
+    return (
+      <Fragment key={thread.id}>
+        {row}
+        <SidebarMenuSubItem
+          className="w-full"
+          style={nestDepth > 0 ? { paddingLeft: `${nestDepth * 12}px` } : undefined}
+        >
+          <SidebarMenuSubButton
+            render={<button type="button" />}
+            size="sm"
+            aria-expanded={!collapsed}
+            aria-label={t("workspace:toggleChildThreads")}
+            className="text-ui-xs text-muted-foreground/70"
+            onClick={() => toggleChildParentCollapsed(thread.id)}
+          >
+            <GitBranchIcon className="size-3 shrink-0" aria-hidden="true" />
+            <span className="truncate">
+              {t("workspace:childThreadCount", { count: childCount })}
+            </span>
+            <DisclosureChevron open={!collapsed} className="ml-auto size-3" />
+          </SidebarMenuSubButton>
+        </SidebarMenuSubItem>
+      </Fragment>
+    );
   }
 
   // Inbox / new terminal thread / new thread for one project. Shared by the tree's
@@ -6393,7 +6457,13 @@ export default function Sidebar() {
     } = projectSidebarData;
     return (
       <>
-        {visibleEntries.map((entry) => renderThreadRow(entry.thread, orderedProjectThreadIds))}
+        {visibleEntries.map((entry) =>
+          renderThreadRow(entry.thread, orderedProjectThreadIds, false, undefined, {
+            depth: entry.depth ?? 0,
+            childCount: entry.childCount ?? 0,
+            childrenCollapsed: entry.childrenCollapsed ?? false,
+          }),
+        )}
 
         {(canShowMoreThreads || canShowLessThreads) && (
           <SidebarMenuSubItem className="w-full">

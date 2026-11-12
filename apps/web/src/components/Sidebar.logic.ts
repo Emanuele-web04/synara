@@ -347,7 +347,79 @@ export type SidebarProjectEntry = {
   kind: "thread";
   rowId: ThreadId;
   thread: SidebarThreadSummary;
+  /** Nesting level (0 = top level); only set when agent-created threads are nested. */
+  depth?: number;
+  childCount?: number;
+  childrenCollapsed?: boolean;
 };
+
+/**
+ * Reorders threads depth-first so agent-created threads (synara_mcp) sit under the thread that
+ * created them. A thread whose creator is not in `threads` stays top-level.
+ */
+export function nestAgentCreatedThreadEntries(
+  threads: readonly SidebarThreadSummary[],
+  collapsedParentIds: ReadonlySet<ThreadId>,
+  activeThreadId: ThreadId | undefined,
+): SidebarProjectEntry[] {
+  const ids = new Set(threads.map((thread) => thread.id));
+  const childrenByParent = new Map<ThreadId, SidebarThreadSummary[]>();
+  const roots: SidebarThreadSummary[] = [];
+  for (const thread of threads) {
+    const parentId = thread.sourceThreadId;
+    if (
+      thread.creationSource === "synara_mcp" &&
+      parentId &&
+      parentId !== thread.id &&
+      ids.has(parentId)
+    ) {
+      const siblings = childrenByParent.get(parentId);
+      if (siblings) siblings.push(thread);
+      else childrenByParent.set(parentId, [thread]);
+    } else {
+      roots.push(thread);
+    }
+  }
+
+  const entries: SidebarProjectEntry[] = [];
+  const visited = new Set<ThreadId>();
+  const containsActive = (id: ThreadId, seen: Set<ThreadId>): boolean => {
+    if (id === activeThreadId) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return (childrenByParent.get(id) ?? []).some((child) => containsActive(child.id, seen));
+  };
+  // Hidden subtrees count as visited so the cycle fallback below doesn't resurrect them.
+  const markHidden = (thread: SidebarThreadSummary) => {
+    if (visited.has(thread.id)) return;
+    visited.add(thread.id);
+    for (const child of childrenByParent.get(thread.id) ?? []) markHidden(child);
+  };
+  const visit = (thread: SidebarThreadSummary, depth: number) => {
+    if (visited.has(thread.id)) return;
+    visited.add(thread.id);
+    const children = childrenByParent.get(thread.id) ?? [];
+    const collapsed = children.length > 0 && collapsedParentIds.has(thread.id);
+    entries.push({
+      kind: "thread",
+      rowId: thread.id,
+      thread,
+      depth,
+      ...(children.length > 0 ? { childCount: children.length, childrenCollapsed: collapsed } : {}),
+    });
+    for (const child of children) {
+      if (collapsed && !containsActive(child.id, new Set())) {
+        markHidden(child);
+        continue;
+      }
+      visit(child, depth + 1);
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  // Cycles (A↔B) have no root; surface any unvisited thread at the top level.
+  for (const thread of threads) visit(thread, 0);
+  return entries;
+}
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
 
@@ -1640,6 +1712,8 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  nestChildThreads?: boolean;
+  collapsedChildParentIds?: ReadonlySet<ThreadId>;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1666,7 +1740,21 @@ export function deriveSidebarProjectData(input: {
     );
     const requestedExtraPages =
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
-    const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+    let orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+    const nestedEntries =
+      input.nestChildThreads && project.expanded
+        ? nestAgentCreatedThreadEntries(
+            projectThreads,
+            input.collapsedChildParentIds ?? new Set(),
+            input.activeSidebarThreadId,
+          )
+        : null;
+    if (input.nestChildThreads) {
+      // Shift-click range selection follows visual order, so use the nested DFS order.
+      orderedProjectThreadIds = (
+        nestedEntries ?? nestAgentCreatedThreadEntries(projectThreads, new Set(), undefined)
+      ).map((entry) => entry.rowId);
+    }
 
     // Collapsed folders should not build or render their full tree; large projects can
     // contain hundreds of rows and folder toggles are on the sidebar hot path.
@@ -1701,11 +1789,13 @@ export function deriveSidebarProjectData(input: {
       continue;
     }
 
-    const orderedEntries: SidebarProjectEntry[] = projectThreads.map((thread) => ({
-      kind: "thread",
-      rowId: thread.id,
-      thread,
-    }));
+    const orderedEntries: SidebarProjectEntry[] =
+      nestedEntries ??
+      projectThreads.map((thread) => ({
+        kind: "thread",
+        rowId: thread.id,
+        thread,
+      }));
 
     const activeEntry =
       input.activeSidebarThreadId === undefined
