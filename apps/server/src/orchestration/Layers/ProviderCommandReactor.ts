@@ -3407,7 +3407,7 @@ const make = Effect.gen(function* () {
     readonly completionEventSequence?: number;
     readonly messageId: string;
     readonly messageText: string;
-    readonly dispatchOrigin?: "user" | "automation" | "agent";
+    readonly dispatchOrigin: "user" | "automation" | "agent";
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
@@ -3501,9 +3501,7 @@ const make = Effect.gen(function* () {
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const computerInvocation =
-      input.dispatchOrigin === undefined || input.dispatchOrigin === "user"
-        ? parseComputerInvocation(input.messageText)
-        : null;
+      input.dispatchOrigin === "user" ? parseComputerInvocation(input.messageText) : null;
     // Synara owns this command. Keep it in durable user text for provenance,
     // but do not ask the provider to interpret a native slash command.
     const authoredMessageText = computerInvocation
@@ -3723,8 +3721,10 @@ const make = Effect.gen(function* () {
       // alone never asks. When on, only a person is asked before
       // resuming a long-idle, large conversation, never for /compact (the choice
       // the prompt recommends); agents and automations proceed as the SDK would.
+      const cacheReviewSource = input.cacheReviewSource;
       const reviewsColdCache =
-        (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+        cacheReviewSource !== undefined &&
+        input.dispatchOrigin === "user" &&
         (yield* serverSettings.getSettings.pipe(
           Effect.map((settings) => settings.providers.claudeAgent.confirmColdCacheResume),
           Effect.catch(() => Effect.succeed(false)),
@@ -3749,6 +3749,7 @@ const make = Effect.gen(function* () {
       );
       const assessment = assessClaudeCache(observation, Date.now());
       if (
+        cacheReviewSource &&
         observation &&
         assessment.requiresConfirmation &&
         !/^\/compact(?:\s|$)/.test(input.messageText.trim()) &&
@@ -3768,44 +3769,23 @@ const make = Effect.gen(function* () {
             updatedAt: createdAt,
           },
         };
-        if (input.cacheReviewSource) {
-          yield* setClaudeCacheReview(
-            input.threadId,
-            {
-              reviewId: `claude-cache:${input.cacheReviewSource.eventId}:${crypto.randomUUID()}`,
-              messageId: MessageId.makeUnsafe(input.messageId),
-              sourceEventSequence: input.cacheReviewSource.sequence,
-              assessment: { ...observation, state: assessment.state },
-              requestedAt: input.cacheReviewSource.payload.createdAt,
-              ...(input.cacheReviewSource.payload.sourceProposedPlan
-                ? { sourceProposedPlan: input.cacheReviewSource.payload.sourceProposedPlan }
-                : {}),
-              status: "pending",
-              createdAt,
-            },
-            pendingReview?.reviewId ?? null,
-            hold,
-          );
-        } else {
-          // Autonomous iterations have no user message to release. Pause the
-          // goal instead of silently spending a cold, large-context request.
-          yield* pauseActiveThreadGoal({
-            threadId: input.threadId,
-            expectedGoalStartedAt: thread.goalStartedAt ?? null,
-          });
-          yield* appendProviderFailureActivity({
-            threadId: input.threadId,
-            kind: "provider.turn.start.failed",
-            summary: thread.goal?.trim()
-              ? "Goal paused for Claude cache review"
-              : "Task paused for Claude cache review",
-            detail:
-              "Claude's large context is likely no longer cached. Send a message to review continuing.",
-            turnId: null,
-            createdAt: new Date().toISOString(),
-          });
-          yield* setClaudeCacheReview(input.threadId, null, null, hold);
-        }
+        yield* setClaudeCacheReview(
+          input.threadId,
+          {
+            reviewId: `claude-cache:${cacheReviewSource.eventId}:${crypto.randomUUID()}`,
+            messageId: MessageId.makeUnsafe(input.messageId),
+            sourceEventSequence: cacheReviewSource.sequence,
+            assessment: { ...observation, state: assessment.state },
+            requestedAt: cacheReviewSource.payload.createdAt,
+            ...(cacheReviewSource.payload.sourceProposedPlan
+              ? { sourceProposedPlan: cacheReviewSource.payload.sourceProposedPlan }
+              : {}),
+            status: "pending",
+            createdAt,
+          },
+          pendingReview?.reviewId ?? null,
+          hold,
+        );
         return;
       }
     }
@@ -6575,6 +6555,7 @@ const make = Effect.gen(function* () {
       messageId: MessageId.makeUnsafe(`usage-limit:${recovery.id}`),
       messageText:
         "Continue the remaining task after the provider usage limit. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
+      dispatchOrigin: "automation",
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       dispatchMode: "queue",
@@ -6718,6 +6699,7 @@ const make = Effect.gen(function* () {
           sourceEventSequence: event.sequence,
           messageId: MessageId.makeUnsafe(`goal-continuation:${event.eventId}`),
           messageText: buildGoalContinuationInput(),
+          dispatchOrigin: "automation",
           runtimeMode: thread.runtimeMode,
           interactionMode: thread.interactionMode,
           dispatchMode: "queue",

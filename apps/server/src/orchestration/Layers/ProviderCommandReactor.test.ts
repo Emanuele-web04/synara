@@ -211,6 +211,20 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
+function expiredCacheObservation(): ClaudeCacheObservation {
+  return {
+    nativeSessionId: "native-claude-session-1",
+    lifecycleGeneration: "generation-1",
+    model: "claude-opus-4-6",
+    observedAt: new Date().toISOString(),
+    contextTokens: 120_000,
+    lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
+    ttlSeconds: 3_600,
+    state: "likely-expired",
+    source: "request-usage",
+  };
+}
+
 describe("legacy provider blocker recovery", () => {
   it("rejects a startup failure only when process cleanup was confirmed", () => {
     const outcome = classifyProviderAttemptOutcome(
@@ -2371,22 +2385,11 @@ describe("ProviderCommandReactor", () => {
       ).toEqual([]);
     });
 
-    it("clears an ordinary-task wait when Claude cold-cache preflight holds the continuation", async () => {
+    it("resumes an ordinary task without asking when the Claude context is cold", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
         Effect.succeed(bindingKey),
       );
-      const observation: ClaudeCacheObservation = {
-        nativeSessionId: "usage-limit-cold-session",
-        lifecycleGeneration: "generation-cold",
-        model: "claude-opus-4-6",
-        observedAt: new Date().toISOString(),
-        contextTokens: 120_000,
-        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
-        ttlSeconds: 3_600,
-        state: "likely-expired",
-        source: "request-usage",
-      };
-      const getClaudeCacheObservation = vi.fn(() => Effect.succeed(observation));
+      const getClaudeCacheObservation = vi.fn(() => Effect.sync(expiredCacheObservation));
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         getClaudeCacheObservation,
@@ -2394,12 +2397,17 @@ describe("ProviderCommandReactor", () => {
       });
       const wait = await seedLimitWait(harness);
       await requestResume(harness, wait.id);
-      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
       await harness.drain();
-      expect(getClaudeCacheObservation).toHaveBeenCalled();
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect((await readHarnessThread(harness))?.goal?.trim() ?? "").toBe("");
-      expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+      expect(getClaudeCacheObservation).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const resumed = await readHarnessThread(harness);
+      expect(resumed?.claudeCacheReview ?? null).toBeNull();
+      expect(resumed?.goal?.trim() ?? "").toBe("");
+      expect(resumed?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "resuming",
+        resumedTurnId: "turn-1",
+      });
     });
 
     it("clears Resuming when provider startup is definitively rejected", async () => {
@@ -3520,20 +3528,6 @@ describe("ProviderCommandReactor", () => {
   });
 
   describe("Claude cache review", () => {
-    function expiredCacheObservation(): ClaudeCacheObservation {
-      return {
-        nativeSessionId: "native-claude-session-1",
-        lifecycleGeneration: "generation-1",
-        model: "claude-opus-4-6",
-        observedAt: new Date().toISOString(),
-        contextTokens: 120_000,
-        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
-        ttlSeconds: 3_600,
-        state: "likely-expired",
-        source: "request-usage",
-      };
-    }
-
     async function createCacheHarness(
       observation: () => ClaudeCacheObservation | undefined = expiredCacheObservation,
       startReactor = true,
@@ -7273,7 +7267,7 @@ describe("ProviderCommandReactor", () => {
       },
     );
 
-    it("sends without holding when the review is off, the default like Claude Code", async () => {
+    it("sends without holding when the user turns the review off", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         getClaudeCacheObservation: () => Effect.sync(expiredCacheObservation),
@@ -7312,70 +7306,7 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
     });
 
-    it("does not restore a goal session stopped during cache observation", async () => {
-      let readingObservation = false;
-      let releaseObservation!: () => void;
-      const observationGate = new Promise<void>((resolve) => {
-        releaseObservation = resolve;
-      });
-      const harness = await createHarness({
-        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
-        getClaudeCacheObservation: () => {
-          readingObservation = true;
-          return Effect.promise(() => observationGate).pipe(Effect.as(expiredCacheObservation()));
-        },
-      });
-      const threadId = ThreadId.makeUnsafe("thread-1");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-cache-goal-before-stop"),
-          threadId,
-          goal: "Complete remaining work",
-          goalStartBehavior: "defer",
-        }),
-      );
-      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.goal.continue",
-          commandId: CommandId.makeUnsafe("cmd-cache-goal-racing-stop"),
-          threadId,
-          goalStartedAt: goalStartedAt!,
-          trigger: "turn-completed",
-          createdAt: new Date().toISOString(),
-        }),
-      );
-      let cancellationSequence = 0;
-      try {
-        await waitFor(() => readingObservation);
-        cancellationSequence = (
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.session.stop",
-              commandId: CommandId.makeUnsafe("cmd-cache-goal-stop"),
-              threadId,
-              createdAt: new Date().toISOString(),
-            }),
-          )
-        ).sequence;
-      } finally {
-        releaseObservation();
-      }
-      await harness.drain();
-      const laterEvents = await Effect.runPromise(
-        Stream.runCollect(harness.engine.readEvents(cancellationSequence)),
-      );
-      expect(
-        Array.from(laterEvents).filter(
-          (event) =>
-            event.type === "thread.session-set" && event.payload.session.status === "ready",
-        ),
-      ).toEqual([]);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-    });
-
-    it("pauses a goal continuation before sending a large expired-cache request", async () => {
+    it("continues an active goal without asking when the Claude context is cold", async () => {
       const harness = await createCacheHarness();
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -7399,10 +7330,10 @@ describe("ProviderCommandReactor", () => {
           createdAt: new Date().toISOString(),
         }),
       );
-      await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
       await harness.drain();
 
-      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((await readHarnessThread(harness))?.goalPausedAt ?? null).toBeNull();
       expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
     });
   });

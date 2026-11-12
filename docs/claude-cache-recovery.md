@@ -28,9 +28,10 @@ queueing the prompt. The review is on by default, although embedded Claude Code 
 **Ask before resuming a long idle session** is on, then, as in Claude Code's resume prompt, a context
 of at least 100,000 tokens whose last response is at least 70 minutes old requires a choice, whatever
 the cache state. This applies to
-a resumed process and a long pause in the same process. Only messages a person sends are held; agent
-and automation messages and `/compact` are not. An unknown last-response time does not block
-ordinary use. There is no periodic inference to maintain or inspect the cache.
+a resumed process and a long pause in the same process. Agent and automation messages, automatic
+goal continuations, usage-limit recovery, and `/compact` proceed without a new review. An unknown
+last-response time does not block ordinary use. There is no periodic inference to maintain or inspect
+the cache.
 
 The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider
