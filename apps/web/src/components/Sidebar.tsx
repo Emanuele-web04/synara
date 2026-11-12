@@ -4300,7 +4300,10 @@ export default function Sidebar() {
     [activateThreadFromSidebarIntent, openPrLink, openRightDockPane],
   );
 
-  const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
+  const handleCloseProjectContextMenu = useCallback(
+    () => setProjectContextMenuState(null),
+    [setProjectContextMenuState],
+  );
   const {
     activeSpace,
     voidSpace,
@@ -4632,6 +4635,7 @@ export default function Sidebar() {
       setRelocateProjectDialogId,
       setEditProjectDialog,
       setProjectAgentDialogState,
+      setProjectContextMenuState,
     ],
   );
 
@@ -4641,7 +4645,7 @@ export default function Sidebar() {
       if (!projectById.has(projectId)) return;
       setProjectContextMenuState({ projectId, position });
     },
-    [projectById],
+    [projectById, setProjectContextMenuState],
   );
 
   const projectDnDSensors = useSensors(
@@ -8918,7 +8922,7 @@ export default function Sidebar() {
                   className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                   onClick={() => {
                     const projectId = projectContextMenuProject.id;
-                    setProjectContextMenuState(null);
+                    handleCloseProjectContextMenu();
                     openSpaceCreator(projectId);
                   }}
                 >
