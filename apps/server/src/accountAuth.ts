@@ -27,6 +27,7 @@ import {
   AccountApiError,
   ACCOUNT_URL_ENV_NAME,
   createAccountClient,
+  GRANT_REQUEST_TIMEOUT_MS,
   OrganizationRequiredError,
   resolveConfiguredAccountUrl,
   type AccountClient,
@@ -694,7 +695,7 @@ async function clearStoredSessionIfCurrent(
 
 /** What renewing the session produced: a usable token, or a dead session. */
 type SessionRenewal =
-  | { kind: "renewed"; accessToken: string; userId: string | undefined }
+  | { kind: "renewed"; accessToken: string; refreshToken: string; userId: string | undefined }
   | { kind: "expired" };
 
 /**
@@ -713,7 +714,8 @@ type SessionRenewal =
 const RENEWAL_ATTEMPTS = 4;
 const RENEWAL_RETRY_BASE_MS = 1_000;
 const RENEWAL_RETRY_MAX_MS = 4_000;
-const RENEWAL_RETRY_WINDOW_MS = 20_000;
+// This limits replay dispatch. An in-flight replay still gets its own deadline.
+const RENEWAL_RETRY_WINDOW_MS = 28_000;
 
 /**
  * After a series fails, later renewals of the same token wait before trying
@@ -725,22 +727,21 @@ const RENEWAL_RETRY_WINDOW_MS = 20_000;
 const RENEWAL_COOLDOWN_BASE_MS = 5_000;
 const RENEWAL_COOLDOWN_MAX_MS = 60_000;
 
+type RenewalCooldown = {
+  readonly tokenHash: string;
+  readonly failedSeries: number;
+  readonly until: number;
+  readonly error: unknown;
+  /** The failure's logged shape, so an unchanged outage is not logged on every series. */
+  readonly signature: string;
+  /** The series failed without an answer from the account service itself. */
+  readonly serviceUnreachable: boolean;
+  /** This cooldown's one early series was already spent. */
+  readonly probed: boolean;
+};
+
 /** Per credential directory: the last failed renewal series of one refresh token (monotonic clock). */
-const renewalCooldowns = new Map<
-  string,
-  {
-    readonly tokenHash: string;
-    readonly failedSeries: number;
-    readonly until: number;
-    readonly error: unknown;
-    /** The failure's logged shape, so an unchanged outage is not logged on every series. */
-    readonly signature: string;
-    /** The series failed without an answer from the account service itself. */
-    readonly serviceUnreachable: boolean;
-    /** This cooldown's one early series was already spent. */
-    readonly probed: boolean;
-  }
->();
+const renewalCooldowns = new Map<string, RenewalCooldown>();
 
 /** A failure that says the account service could not be reached, not that it refused. */
 function isAccountServiceUnreachable(error: unknown): boolean {
@@ -789,8 +790,8 @@ async function renewSession(
   baseDir: string,
   client: AccountClient,
   consumed: AccountCredentials,
-  /** The account service just answered this caller's own request (with a 401). */
-  serviceAnswered: boolean,
+  /** The cooldown already in force when this caller got an answer from the service. */
+  answeredDuring: RenewalCooldown | undefined,
 ): Promise<SessionRenewal> {
   return withLockedAccountFile(baseDir, async (): Promise<SessionRenewal> => {
     const current = await readAccountFile(baseDir);
@@ -822,7 +823,12 @@ async function renewSession(
     // Someone else rotated first — their stored pair is the live one.
     if (current.refreshToken !== consumed.refreshToken) {
       return current.accessToken
-        ? { kind: "renewed", accessToken: current.accessToken, userId: current.userId }
+        ? {
+            kind: "renewed",
+            accessToken: current.accessToken,
+            refreshToken: current.refreshToken,
+            userId: current.userId,
+          }
         : { kind: "expired" };
     }
 
@@ -835,7 +841,7 @@ async function renewSession(
     // once, for a caller the service has just answered: the outage may be
     // over, and failing that caller with the old error would outlast it.
     const probing =
-      coolingDown && serviceAnswered && previous.serviceUnreachable && !previous.probed;
+      coolingDown && previous === answeredDuring && previous.serviceUnreachable && !previous.probed;
     if (coolingDown && !probing) throw previous.error;
 
     const startedAt = performance.now();
@@ -868,7 +874,7 @@ async function renewSession(
           performance.now() - startedAt + delay <= RENEWAL_RETRY_WINDOW_MS
         ) {
           await new Promise<void>((resolve) => setTimeout(resolve, delay));
-          continue;
+          if (performance.now() - startedAt <= RENEWAL_RETRY_WINDOW_MS) continue;
         }
         reportReliabilityIssue(
           failure === "not-attempted"
@@ -921,7 +927,12 @@ async function renewSession(
       // rewrites the same id.
       userId: refreshed.user.id,
     });
-    return { kind: "renewed", accessToken: refreshed.accessToken, userId: refreshed.user.id };
+    return {
+      kind: "renewed",
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      userId: refreshed.user.id,
+    };
   });
 }
 
@@ -968,29 +979,31 @@ export async function withFreshAccessToken<A>(
       throw identityFenceRefused(baseDir, fence, current, expected);
   };
   assertIdentity(credentials, "expected_identity_before_send");
-  let serviceAnswered = false;
+  const send = async (accessToken: string, refreshToken: string): Promise<A> => {
+    try {
+      return await fn(accessToken);
+    } catch (error) {
+      if (!(error instanceof OrganizationRequiredError)) throw error;
+      const cleared = await clearStoredSessionIfCurrent(baseDir, refreshToken);
+      logAccountSession(baseDir, "workspace_refused", {
+        cleared,
+        organizations: error.organizations.length,
+      });
+      throw new WorkspaceAccessChangedError();
+    }
+  };
+  let answeredDuring: RenewalCooldown | undefined;
   // A token held for its whole lifetime would only come back 401; renew before sending it.
   if (!accessTokenOutlived(baseDir, credentials.accessToken)) {
     try {
-      return await fn(credentials.accessToken);
+      return await send(credentials.accessToken, credentials.refreshToken);
     } catch (error) {
-      // The workspace, not the token, is what the account rejected. Renewing
-      // would mint another token for the same dead organization, so the retry
-      // is skipped and the session dropped in favour of a fresh sign-in.
-      if (error instanceof OrganizationRequiredError) {
-        const cleared = await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
-        logAccountSession(baseDir, "workspace_refused", {
-          cleared,
-          organizations: error.organizations.length,
-        });
-        throw new WorkspaceAccessChangedError();
-      }
       if (!isUnauthorized(error)) throw error;
-      serviceAnswered = true;
+      answeredDuring = renewalCooldowns.get(baseDir);
     }
   }
 
-  const renewal = await renewSession(baseDir, client, credentials, serviceAnswered);
+  const renewal = await renewSession(baseDir, client, credentials, answeredDuring);
   if (renewal.kind === "expired") throw new SessionExpiredError();
   const current = await readAccountCredentials(baseDir);
   if (!current) throw new SessionExpiredError();
@@ -1017,7 +1030,7 @@ export async function withFreshAccessToken<A>(
     );
   assertIdentity(current, "expected_identity_after_renewal");
   accessTokenOutlived(baseDir, renewal.accessToken);
-  return await fn(renewal.accessToken);
+  return send(renewal.accessToken, renewal.refreshToken);
 }
 
 /** When this process first held each credential directory's current access token (monotonic). */
@@ -1473,6 +1486,7 @@ export async function scopeTokenToWorkspace(
   const refreshed = await client.refreshAccessToken({
     refreshToken: token.refreshToken,
     organizationId: organization.id,
+    timeoutMs: GRANT_REQUEST_TIMEOUT_MS,
   });
 
   onOrganizationChosen?.(organization);

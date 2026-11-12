@@ -737,7 +737,11 @@ export function createAccountSession(
       // A rejected token that survived the refresh attempt is a dead session
       // too — but an unreachable account is not, and reporting it as signed
       // out would make a network blip look like being logged out.
-      if (error instanceof AccountApiError && error.status === 401) {
+      if (
+        error instanceof AccountApiError &&
+        error.status === 401 &&
+        error.code === "unauthorized"
+      ) {
         logAccountSession(credentialDir, "status_unauthorized", {
           status: error.status,
           code: error.code,

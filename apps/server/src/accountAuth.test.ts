@@ -11,7 +11,11 @@ import { type AccountHost, EnvironmentId } from "@synara/contracts";
 import { decodeJwt } from "jose";
 
 import type { AccountClient } from "@synara/shared/account";
-import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
+import {
+  AccountApiError,
+  createAccountClient,
+  OrganizationRequiredError,
+} from "@synara/shared/account";
 import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
 
 vi.mock("./tailscaleEndpoint", () => ({
@@ -727,6 +731,46 @@ describe("withFreshAccessToken", () => {
       expect(reports).not.toHaveBeenCalled();
     });
 
+    it("replays a rotated token within the provider grace when the first response stalls", async () => {
+      useFakeRenewalClock();
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+      const baseDir = makeBaseDir();
+      const stored = credentials();
+      await writeAccountCredentials(baseDir, stored);
+      let rotatedAt: number | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        expect(JSON.parse(String(init?.body)).refreshToken).toBe(stored.refreshToken);
+        if (rotatedAt === undefined) {
+          rotatedAt = performance.now();
+          const signal = init!.signal!;
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        }
+        if (performance.now() - rotatedAt >= 30_000)
+          return Response.json({ error: "unauthorized", message: "Spent" }, { status: 401 });
+        return Response.json(rotatedPair());
+      });
+      const client = createAccountClient({ baseUrl: stored.accountUrl });
+
+      await expect(
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, async (token) => {
+            if (token === stored.accessToken) throw unauthorized();
+            return token;
+          }),
+        ),
+      ).resolves.toBe("access-2");
+      expect(await readAccountFile(baseDir)).toMatchObject({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+      });
+    });
+
     // The failure must reach the caller unchanged: reporting it as an expired
     // session would send the user to re-authenticate over an outage.
     it.each([
@@ -869,6 +913,39 @@ describe("withFreshAccessToken", () => {
       expect(await readAccountFile(baseDir)).toEqual(
         credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
       );
+    });
+
+    it("keeps the recovery probe available for a response received after the failure", async () => {
+      useFakeRenewalClock();
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials());
+      const outage = transportFailure();
+      const started = Promise.withResolvers<void>();
+      const queued = Promise.withResolvers<void>();
+      const refreshAccessToken = vi.fn<AccountClient["refreshAccessToken"]>(async () => {
+        started.resolve();
+        throw outage;
+      });
+      const client = makeClient({ refreshAccessToken });
+      const first = withFreshAccessToken({ baseDir, client }, async () => {
+        throw unauthorized();
+      });
+      await started.promise;
+      const second = withFreshAccessToken({ baseDir, client }, async () => {
+        queued.resolve();
+        throw unauthorized();
+      });
+      await queued.promise;
+      await settleSkippingSleeps(Promise.allSettled([first, second]));
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+
+      refreshAccessToken.mockResolvedValue(rotatedPair());
+      await expect(
+        withFreshAccessToken({ baseDir, client }, async (token) => {
+          if (token === "access-1") throw unauthorized();
+          return token;
+        }),
+      ).resolves.toBe("access-2");
     });
 
     it("waits for the next renewal, without an in-call retry, when the account API never sent the token", async () => {
@@ -1174,28 +1251,29 @@ describe("withFreshAccessToken and workspace access", () => {
    * same dead organization, so the refresh is skipped entirely — a retry here
    * would be a guaranteed second failure and a spent refresh token.
    */
-  it("clears the session without refreshing when the workspace is no longer the caller's", async () => {
+  it.each([
+    { when: "on the original request", renewed: false },
+    { when: "after renewal", renewed: true },
+  ])("clears the session when the workspace is refused $when", async ({ renewed }) => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    let attempts = 0;
+    const refreshAccessToken = vi.fn().mockResolvedValue(rotatedPair());
     await expect(
       withFreshAccessToken(
         {
           baseDir,
-          client: makeClient({
-            refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
-          }),
+          client: makeClient({ refreshAccessToken }),
         },
-        () => {
-          attempts += 1;
+        (token) => {
+          if (renewed && token === "access-1") return Promise.reject(unauthorized());
           return Promise.reject(organizationRequired([]));
         },
       ),
     ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
 
-    expect(attempts).toBe(1);
+    expect(refreshAccessToken).toHaveBeenCalledTimes(renewed ? 1 : 0);
     expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session workspace_refused", {
       cleared: true,
       organizations: 0,

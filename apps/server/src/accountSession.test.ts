@@ -471,14 +471,14 @@ describe("status", () => {
 
   // Renewal runs every few minutes; one that fails without a terminal refusal
   // is an outage to retry, not a sign-out.
-  it("fails rather than reporting signed out when renewal hits an outage", async () => {
+  it.each([503, 401])("surfaces refresh errors with status %i", async (statusCode) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
       const baseDir = makeBaseDir();
       await writeAccountCredentials(baseDir, credentials(linkedHostFields));
       const outage = new AccountApiError({
         code: "internal_error",
-        status: 503,
+        status: statusCode,
         message: "Account service temporarily unavailable",
       });
       const session = sessionFor(

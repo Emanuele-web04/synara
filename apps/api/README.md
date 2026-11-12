@@ -447,14 +447,16 @@ Host Secrets operations also verify the registered device identity before using
 credentials or applying a result.
 
 When a renewal fails without a terminal refusal, the desktop keeps its token pair
-and retries the same refresh token: up to four attempts, 1s, 2s and 4s apart, while
-they fit within 20 seconds of the first, all under the credential-file lock.
+and retries the same refresh token under the credential-file lock. Each request
+has a 26-second deadline. Up to three replays can start within 28 seconds of the
+first request, with jittered backoff of 1s, 2s and 4s. This leaves time to replay
+when the first response stalls after WorkOS rotates the token.
 Transport errors, timeouts, `429` and `5xx` are retried that way; `refresh_not_attempted`
 and other refusals are not. After a failed series, later renewals of that token
 wait out a cooldown that starts at 5 seconds and doubles to a one-minute cap, so
 background requests fail fast instead of each retrying. If that series failed
-because the account service was unreachable, the first request the service answers
-again may renew once before the cooldown ends. The failure reaches the
+because the account service was unreachable, a rejection received during that
+cooldown can trigger one early renewal. The failure reaches the
 caller as itself, so account status reports an error rather than signing out.
 Files written by older versions may carry a `refreshPendingTokenHash` marker;
 it is ignored and dropped with the next rotation. Every way the desktop server
