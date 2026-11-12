@@ -344,7 +344,27 @@ export function createLiveActivityService(options: {
     });
   }
 
-  async function deliver(id: string) {
+  async function deliver(due: { id: string; user_id: string; org_id: string }) {
+    const { id } = due;
+    // Provider reads (live membership, billing) run before the row transaction,
+    // so a slow WorkOS or Polar answer never holds a pooled connection and the
+    // row lock. Their results are applied below at the same points and with
+    // the same precedence as before; the send and its bookkeeping stay inside
+    // the row-locked transaction, serialized per activity.
+    const [membership, remoteAccess] = await Promise.all([
+      Promise.resolve()
+        .then(() => options.isMember(due.user_id, due.org_id))
+        .then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      // Commercial outages must not send with a stale entitlement.
+      options.isRemoteAccessAllowed
+        ? Promise.resolve()
+            .then(() => options.isRemoteAccessAllowed!(due.user_id))
+            .catch(() => false)
+        : undefined,
+    ]);
     await transaction(async (db) => {
       const activity = (
         await db.query<ActivityRow>(
@@ -354,6 +374,14 @@ export function createLiveActivityService(options: {
         )
       ).rows[0];
       if (!activity) return;
+      // Reads made for another owner do not apply; ask again, as before.
+      const sameOwner = activity.user_id === due.user_id && activity.org_id === due.org_id;
+      const isMember = async () => {
+        if (!sameOwner) return options.isMember(activity.user_id, activity.org_id);
+        // A membership lookup failure still fails this attempt, after the device check.
+        if (!membership.ok) throw membership.error;
+        return membership.value;
+      };
       const stop = () =>
         db.query(
           `UPDATE live_activities SET ended=true,request=jsonb_set(request-'preview','{token}','""') WHERE id=$1`,
@@ -364,7 +392,7 @@ export function createLiveActivityService(options: {
         WHERE d.id=$1 AND d.user_id=$2 AND d.revoked_at IS NULL AND s.session_id=$3 AND s.user_id=$2 AND s.revoked_at IS NULL`,
         [activity.device_id, activity.user_id, activity.session_id],
       );
-      if (!authorized.rowCount || !(await options.isMember(activity.user_id, activity.org_id))) {
+      if (!authorized.rowCount || !(await isMember())) {
         await stop();
         return;
       }
@@ -396,7 +424,9 @@ export function createLiveActivityService(options: {
       if (options.isRemoteAccessAllowed) {
         let allowed = false;
         try {
-          allowed = await options.isRemoteAccessAllowed(activity.user_id);
+          allowed = sameOwner
+            ? remoteAccess === true
+            : await options.isRemoteAccessAllowed(activity.user_id);
         } catch {
           // Commercial outages must not send with a stale entitlement.
         }
@@ -594,12 +624,13 @@ export function createLiveActivityService(options: {
   function flush(): Promise<void> {
     if (flushing) return flushing;
     flushing = (async () => {
-      const due = await pool.query<{ id: string }>(
-        `SELECT id FROM live_activities WHERE NOT ended AND next_attempt_at<=now() ORDER BY next_attempt_at LIMIT 32`,
+      const due = await pool.query<{ id: string; user_id: string; org_id: string }>(
+        `SELECT id,user_id,org_id FROM live_activities WHERE NOT ended AND next_attempt_at<=now() ORDER BY next_attempt_at LIMIT 32`,
       );
-      for (const { id } of due.rows) {
+      for (const activity of due.rows) {
+        const { id } = activity;
         try {
-          await deliver(id);
+          await deliver(activity);
         } catch {
           // A failed membership lookup or transient database/send failure for one
           // account must not starve other recipients. Keep data out of logs.

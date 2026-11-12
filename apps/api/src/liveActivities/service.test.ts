@@ -73,16 +73,22 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     const sent: ActivityDelivery[] = [];
     const notifications: NotificationDelivery[] = [];
     let result: ApnsResult = "delivered";
-    let member = true;
+    let member: boolean | "unavailable" = true;
     let remoteAccess: boolean | "unavailable" = true;
+    let providerRead: (() => Promise<void>) | undefined;
     const service = () =>
       createLiveActivityService({
         pool,
         environment: deployment,
-        isMember: async () => member,
+        isMember: async () => {
+          await providerRead?.();
+          if (member === "unavailable") throw new Error("Membership unavailable");
+          return member;
+        },
         ...(enforceBilling
           ? {
               isRemoteAccessAllowed: async () => {
+                await providerRead?.();
                 if (remoteAccess === "unavailable") throw new Error("Billing unavailable");
                 return remoteAccess;
               },
@@ -137,6 +143,12 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
       },
       revokeMembership: () => {
         member = false;
+      },
+      setMembership: (value: boolean | "unavailable") => {
+        member = value;
+      },
+      onProviderRead: (read: () => Promise<void>) => {
+        providerRead = read;
       },
       setRemoteAccess: (value: boolean | "unavailable") => {
         remoteAccess = value;
@@ -472,6 +484,50 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
       ).rows[0],
     ).toEqual({ ended: true, token: "" });
     expect(f.notifications).toHaveLength(0);
+  });
+
+  it("reads membership and billing without holding the activity row lock", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.register(f.owner, f.request);
+    const observed: boolean[] = [];
+    f.onProviderRead(async () => {
+      // FOR SHARE conflicts with the delivery's FOR UPDATE, not with the other read's probe.
+      const lockFree = await pool
+        .query("SELECT id FROM live_activities WHERE id=$1 FOR SHARE NOWAIT", [
+          f.request.activityId,
+        ])
+        .then(
+          () => true,
+          () => false,
+        );
+      observed.push(lockFree);
+    });
+    await f.live.flush();
+    expect(observed).toEqual([true, true]);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it("keeps the device check ahead of a failed membership lookup", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    f.setMembership("unavailable");
+    await f.live.flush();
+    const row = async () =>
+      (
+        await pool.query(
+          "SELECT ended, next_attempt_at > now() + interval '20 seconds' AS postponed FROM live_activities WHERE id=$1",
+          [f.request.activityId],
+        )
+      ).rows[0];
+    // An authorized device waits for membership to be known; nothing is sent.
+    expect(await row()).toEqual({ ended: false, postponed: true });
+    expect(f.sent).toHaveLength(0);
+    // A revoked device retires the watch whatever membership says.
+    await pool.query("UPDATE devices SET revoked_at=now() WHERE id=$1", [f.deviceId]);
+    await f.due();
+    await f.live.flush();
+    expect((await row()).ended).toBe(true);
+    expect(f.sent).toHaveLength(0);
   });
 
   it.each(["match", "key replacement", "opt out", "wrong recovered turn"] as const)(
