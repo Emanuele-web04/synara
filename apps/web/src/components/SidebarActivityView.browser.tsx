@@ -377,6 +377,34 @@ describe("SidebarActivityView", () => {
     await expect.element(page.getByText("1 needs you")).toBeVisible();
   });
 
+  it.each(["working", "unread"] as const)(
+    "keeps a %s child in Priority when its creator is Done",
+    async (state) => {
+      const parent = makeThread(1);
+      const child = makeThread(2, {
+        creationSource: "synara_mcp",
+        sourceThreadId: parent.id,
+        ...(state === "working"
+          ? { hasLiveTailWork: true }
+          : { lastVisitedAt: "2026-08-02T09:00:00.000Z" }),
+      });
+      const mounted = await render(
+        <SidebarProvider>
+          {renderActivity({
+            threads: [parent, child],
+            settledOverrideByThreadId: new Map([[parent.id, true]]),
+            resolveThreadStatus: realThreadStatus,
+            nestChildThreads: true,
+          })}
+        </SidebarProvider>,
+      );
+      await vi.waitFor(() => expect(activityLayout()).toContain("# Priority"));
+      await expect
+        .element(mounted.getByTestId(`activity-child-thread-${child.id}`), { timeout: 3000 })
+        .toBeVisible();
+    },
+  );
+
   it("reveals an open child when its creator is in the closed Done section", async () => {
     const parent = makeThread(1);
     const child = makeThread(2, { creationSource: "synara_mcp", sourceThreadId: parent.id });

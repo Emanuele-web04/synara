@@ -961,9 +961,9 @@ export function SidebarActivityView({
       ),
     [childTierByRootId, resolveOwnTier],
   );
-  // ...and a child waiting on the user reopens a parent already marked done.
+  // Keep a family's current work or unread results visible without changing its saved Done state.
   const settledOverrideByThreadId = useMemo(() => {
-    const reopened = [...childTierByRootId].filter(([, tier]) => tier === "waiting");
+    const reopened = [...childTierByRootId].filter(([, tier]) => tier !== null);
     if (reopened.length === 0) return ownSettledOverrideByThreadId;
     const overrides = new Map(ownSettledOverrideByThreadId);
     for (const [rootId] of reopened) overrides.set(rootId, false);

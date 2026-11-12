@@ -2287,10 +2287,15 @@ export default function Sidebar() {
       ),
     [activeSpaceNonGroupSidebarTreeThreads, isOnGroups, pinnedThreadIds, groupSidebarTreeThreads],
   );
-  // A pinned parent brings its agent-created children into the Pinned section.
-  const pinnedFamilyByRootId = useMemo(() => {
+  // Rendering and keyboard navigation share the same visible pinned families.
+  const visiblePinnedEntries = useMemo<SidebarProjectEntry[]>(() => {
+    const pinnedEntry = (thread: SidebarThreadSummary): SidebarProjectEntry => ({
+      kind: "thread",
+      rowId: thread.id,
+      thread,
+    });
     if (!nestChildThreads || pinnedThreads.length === 0) {
-      return null;
+      return pinnedThreads.map(pinnedEntry);
     }
     const pinned = new Set(pinnedThreadIds);
     const families = groupSidebarThreadFamilies(
@@ -2307,7 +2312,7 @@ export default function Sidebar() {
         byRootId.set(root.rowId, family);
       }
     }
-    return byRootId;
+    return pinnedThreads.flatMap((thread) => byRootId.get(thread.id) ?? [pinnedEntry(thread)]);
   }, [
     activeSpaceNonGroupSidebarTreeThreads,
     collapsedChildParentIds,
@@ -2315,7 +2320,7 @@ export default function Sidebar() {
     isOnGroups,
     nestChildThreads,
     pinnedThreadIds,
-    pinnedThreads.length,
+    pinnedThreads,
   ]);
   const openPrLink = useCallback(
     (event: MouseEvent<HTMLElement>, prUrl: string) => {
@@ -5661,7 +5666,7 @@ export default function Sidebar() {
         add(entry.rowId, null);
       return rows;
     }
-    for (const thread of pinnedThreads) add(thread.id, null);
+    for (const entry of visiblePinnedEntries) add(entry.rowId, null);
     for (const entry of remotePinnedThreads) add(entry.thread.id, entry.session);
     if (isOnGroups) {
       for (const entry of remoteGroupProjects) {
@@ -5713,7 +5718,7 @@ export default function Sidebar() {
     workspaceActivity,
     showRailSpacesPanel,
     railSpacesProjectSidebarData,
-    pinnedThreads,
+    visiblePinnedEntries,
     remotePinnedThreads,
     groupProjectSidebarDataById,
     groupProjects,
@@ -5977,9 +5982,8 @@ export default function Sidebar() {
     );
   }
   // Identical "Pinned" header + rows block shared by the Threads and Groups surfaces.
-  // `pinnedThreads` is already the surface-appropriate list, so a single helper keeps both in sync.
   function renderPinnedThreadsSection() {
-    if (pinnedThreads.length === 0 && remotePinnedThreads.length === 0) {
+    if (visiblePinnedEntries.length === 0 && remotePinnedThreads.length === 0) {
       return null;
     }
     return (
@@ -5988,12 +5992,7 @@ export default function Sidebar() {
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{t("common:app_pinned")}</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          {pinnedThreads.flatMap((thread) => {
-            const family = pinnedFamilyByRootId?.get(thread.id);
-            return family
-              ? family.map((entry) => renderPinnedThreadRow(entry.thread, entry))
-              : [renderPinnedThreadRow(thread)];
-          })}
+          {visiblePinnedEntries.map((entry) => renderPinnedThreadRow(entry.thread, entry))}
           {remotePinnedThreads.map((entry) => (
             <WorkspaceThreadRow
               key={entry.key}
