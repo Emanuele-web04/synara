@@ -22,6 +22,62 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.5.3",
+    date: "Nov 12",
+    features: [
+      {
+        id: "settings-accounts",
+        title: "Find settings and manage accounts more easily",
+        description:
+          "Settings are grouped by purpose, with a dedicated Accounts page for provider sign-ins and a choice of default account for new chats.",
+        details:
+          "Search accounts and edit their settings separately. Resetting the agents list keeps your accounts and sign-in folders.",
+      },
+      {
+        id: "subagent-work",
+        title: "Follow subagents alongside your chat",
+        description:
+          "Open a subagent next to its parent conversation, and follow related agent-created threads together in the sidebar and Activity.",
+        details:
+          "Running subagents remain visible after the parent finishes. The running-agents indicator opens the Subagents list.",
+      },
+      {
+        id: "calmer-chats",
+        title: "Clearer conversations",
+        description:
+          "Tool activity and provider warnings are less noisy, questions use a compact composer, and choosing a starred model keeps its picker open.",
+      },
+      {
+        id: "claude-usage",
+        title: "Avoid unnecessary Claude usage",
+        description:
+          "New installs ask before resuming a large, long-idle Claude session and offer to continue from a summary.",
+        details:
+          "Existing installations keep their preference. Claude is also guided to avoid unrequested subagents when parallel work does not clearly help.",
+      },
+      {
+        id: "account-reliability",
+        title: "More reliable sign-in and Remote work",
+        description:
+          "Temporary account refresh failures no longer force a sign-out. Sign-in and background account requests handle delays and retries more gracefully.",
+      },
+      {
+        id: "performance-recovery",
+        title: "Less background work, smoother recovery",
+        description:
+          "Idle account polling and usage synchronization do less work, while interrupted chats and Remote project placement recover more reliably.",
+        details:
+          "Account API changes also reduce database and service round trips; their availability depends on the deployed service.",
+      },
+      {
+        id: "browser-errors",
+        title: "More useful browser automation errors",
+        description:
+          "Supported browser script failures provide a safe, actionable cause and guidance without exposing arbitrary page text.",
+      },
+    ],
+  },
+  {
     version: "1.5.2",
     date: "Nov 11",
     features: [
