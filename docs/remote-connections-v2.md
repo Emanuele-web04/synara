@@ -81,6 +81,8 @@ A checkout is `{environmentId, projectId}`; a thread remains `{environmentId, th
 
 GitHub suggestions normalize SSH/HTTPS and `.git` conservatively and require confirmation. Fork owners remain distinct; multiple repository identities do not produce suggestions. Other Git servers and no-remote projects can be linked manually. The normalization utility preserves significant case and ports on self-hosted servers. Dismissed suggestions and unlink/split corrections persist. Two clones remain two members even on the same computer.
 
+When you add a project on a connected computer from a named Space, the controlling computer remembers that placement locally. The project and its chats stay on the connected computer. If the Space is removed, its projects are listed in Void on the controller.
+
 ## Unsupported remote surfaces
 
 Agent-controlled browser, dev-server previews, Computer Use, device control, AppSnap and external editors are unavailable in remote execution. Both RPC admission and UI capabilities enforce this boundary. Local clipboard, export of received files and opening public links remain controller operations. Remote folder selection uses the execution filesystem.

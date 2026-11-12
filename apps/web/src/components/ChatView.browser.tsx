@@ -24,7 +24,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   OrchestrationProposedPlanId,
   type OrchestrationReadModel,
-  type ProjectId,
+  ProjectId,
   type ProjectAgentOverview,
   type ServerConfig,
   type ServerSettingsPatch,
@@ -120,12 +120,14 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { appHistory } from "../appNavigation";
 import { readExecutionContext } from "../lib/hosts/executionContext";
 import {
   addWorkspaceSession,
   removeWorkspaceSession,
   updateWorkspaceSession,
 } from "../lib/hosts/workspaceSessions";
+import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "./hosts/RemoteConnectionsAnnouncement";
 import { WorkspacePanels } from "./hosts/WorkspacePanels";
 
 vi.mock("../lib/hosts/executionContext", { spy: true });
@@ -4524,6 +4526,147 @@ describe("ChatView transcript geometry (full app)", () => {
       });
     } finally {
       await mounted.cleanup();
+      useSpacesUiStore.getState().setActiveSpaceId(null);
+      useRailShellStore.getState().closeSpacesProject();
+      useRailShellStore.getState().selectPanelItem("home");
+    }
+  });
+
+  it("keeps a remote project in the rail Space where it was created", async () => {
+    localStorage.setItem(
+      REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
+      JSON.stringify({ acknowledged: true }),
+    );
+    const destinationSpaceId = SpaceId.makeUnsafe("remote-destination");
+    const hostId = "remote-project-owner";
+    const projectId = ProjectId.makeUnsafe("remote-created-project");
+    const projectName = "Remote created project";
+    const workspaceRoot = "/remote/created-project";
+    const controller = {
+      environmentId: "remote-project-controller",
+      label: "This computer",
+      channel: "dev",
+      capabilities: { remoteConnections: true },
+    } as ExecutionEnvironmentDescriptor;
+    vi.mocked(readExecutionContext).mockReturnValue({
+      controller,
+      execution: controller,
+      remote: null,
+    });
+    vi.mocked(WorkspacePanels).mockReturnValue(null);
+    const navigate = vi.spyOn(appHistory, "push").mockImplementation(() => {});
+    onTestFinished(() => {
+      navigate.mockRestore();
+      vi.mocked(readExecutionContext).mockRestore();
+      vi.mocked(WorkspacePanels).mockRestore();
+    });
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("remote-project-space"),
+      targetText: "Remote project",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        spaces: [
+          {
+            id: destinationSpaceId,
+            name: "Remote destination",
+            icon: "bag",
+            sortOrder: 0,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            deletedAt: null,
+          },
+        ],
+      },
+    });
+    const projects = [
+      {
+        id: projectId,
+        kind: "project" as const,
+        name: projectName,
+        cwd: workspaceRoot,
+        appearance: null,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        isPinned: false,
+        section: "projects" as const,
+      },
+    ];
+    const createProject = vi.fn(async () => {
+      updateWorkspaceSession(hostId, {
+        summary: {
+          state: "open",
+          path: "/remote-draft",
+          activeProjectId: projectId,
+          projects,
+          threads: [],
+        },
+      });
+      return { projectId, path: "/remote-draft" };
+    });
+    try {
+      addWorkspaceSession({
+        hostId,
+        hostName: "Remote test computer",
+        wsPath: "/ws/remote/project-owner",
+        executionScope: {
+          environmentId: hostId,
+          accountAuthority: "https://account.example",
+          userId: "alice",
+          organizationId: "org",
+          channel: "dev",
+        },
+      });
+      updateWorkspaceSession(hostId, {
+        navigation: {
+          createProject,
+          navigate: vi.fn(),
+          newChat: vi.fn(),
+          createChat: vi.fn(),
+          openTerminal: vi.fn(),
+          browseFolders: vi.fn(),
+          openProject: vi.fn(),
+          recover: vi.fn(),
+        },
+        summary: { state: "open", path: "/", projects: [], threads: [] },
+      });
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Spaces", exact: true })
+        .click();
+      const header = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>(".group\\/project-header")).find(
+            (element) => element.textContent?.includes("Remote destination"),
+          ) ?? null,
+        "Remote destination Space header missing",
+      );
+      header.querySelector<HTMLButtonElement>('button[aria-label="Add project"]')!.click();
+      await page.getByRole("button", { name: "Project computer: This computer" }).click();
+      await page.getByRole("menuitem", { name: /Remote test computer/ }).click();
+      await page.getByLabelText("Project folder path").fill(workspaceRoot);
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+      await vi.waitFor(() =>
+        expect(createProject).toHaveBeenCalledWith(expect.objectContaining({ workspaceRoot })),
+      );
+      await vi.waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith(
+          "/remote?environment=remote-project-owner&path=%2Fremote-draft",
+        ),
+      );
+
+      // Closing the fresh remote draft must not hide an explicitly assigned empty project.
+      updateWorkspaceSession(hostId, {
+        summary: { state: "open", path: "/", projects, threads: [] },
+      });
+      await vi.waitFor(() => expect(header.parentElement?.textContent).toContain(projectName), {
+        timeout: 2_000,
+      });
+    } finally {
+      await mounted.cleanup();
+      removeWorkspaceSession(hostId);
       useSpacesUiStore.getState().setActiveSpaceId(null);
       useRailShellStore.getState().closeSpacesProject();
       useRailShellStore.getState().selectPanelItem("home");

@@ -28,7 +28,7 @@ import { executionKey } from "../lib/hosts/executionContext";
 import * as Schema from "effect/Schema";
 import { CATALOG_OPEN_EVENT } from "~/lib/projectCatalog/navigation";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
-import type { CheckoutRef } from "~/lib/projectCatalog/model";
+import { checkoutKey, type CheckoutRef } from "~/lib/projectCatalog/model";
 import { APP_RAIL_LABEL_KEYS } from "./AppRail";
 import { PR_STATE_LABEL_KEYS } from "./pullRequest/pullRequestStatePresentation";
 import { THREAD_STATUS_LABEL_KEYS } from "./Sidebar.logic";
@@ -576,6 +576,7 @@ import {
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
 } from "../lib/projectCreation";
 import { useSpacesUiStore } from "../spacesUiStore";
+import { useRemoteProjectSpacesStore } from "../remoteProjectSpacesStore";
 import {
   CreateProjectDialog,
   type CreateProjectSubmitOptions,
@@ -4863,9 +4864,19 @@ export default function Sidebar() {
     [renameProjectLocally, setProjectAppearanceLocally],
   );
 
+  const savedRemoteProjectSpaces = useRemoteProjectSpacesStore((state) => state.spaceByCheckout);
+  const remoteProjectSpaces = useMemo(() => {
+    const spaceIds = new Set(spaces.map((space) => space.id));
+    // A workspace deleted on the controller sends its projects back to Void.
+    return new Map(
+      Object.entries(savedRemoteProjectSpaces).map(
+        ([key, spaceId]) => [key, spaceIds.has(spaceId) ? spaceId : null] as const,
+      ),
+    );
+  }, [spaces, savedRemoteProjectSpaces]);
   const remotePinnedThreads = useMemo<WorkspaceThreadEntry[]>(() => {
-    if (!isOnGroups && activeSpaceId !== null) return [];
     return workspaceSessions.flatMap((session) => {
+      const environmentId = session.host.executionScope.environmentId;
       const sectionByProjectId = new Map(
         session.summary?.projects.map((project) => [project.id, project.section] as const),
       );
@@ -4875,7 +4886,13 @@ export default function Sidebar() {
           thread.archivedAt ||
           thread.parentThreadId ||
           !thread.isPinned ||
-          (isOnGroups ? section !== "studio" : section === undefined || section === "studio")
+          (isOnGroups
+            ? section !== "studio"
+            : section === undefined ||
+              section === "studio" ||
+              (remoteProjectSpaces.get(
+                checkoutKey({ environmentId, projectId: thread.projectId }),
+              ) ?? null) !== activeSpaceId)
         )
           return [];
         return [
@@ -4887,7 +4904,7 @@ export default function Sidebar() {
         ];
       });
     });
-  }, [activeSpaceId, isOnGroups, workspaceSessions]);
+  }, [activeSpaceId, isOnGroups, remoteProjectSpaces, workspaceSessions]);
   const localEnvironmentId = readExecutionContext()?.controller.environmentId ?? "local";
   const [workspaceProjectOrder, setWorkspaceProjectOrder] = useLocalStorage(
     executionKey("sidebar-project-order:v1"),
@@ -4903,9 +4920,19 @@ export default function Sidebar() {
     ReadonlyMap<string, number>
   >(() => new Map());
   const remoteProjects = useMemo(
-    () => remoteSidebarProjects(workspaceSessions),
-    [workspaceSessions],
+    () => remoteSidebarProjects(workspaceSessions, "projects", remoteProjectSpaces),
+    [remoteProjectSpaces, workspaceSessions],
   );
+  const remoteProjectsBySpace = useMemo(() => {
+    const projectsBySpace = new Map<SpaceId | null, WorkspaceProjectEntry[]>();
+    for (const entry of remoteProjects) {
+      const spaceId = remoteProjectSpaces.get(entry.key) ?? null;
+      const entries = projectsBySpace.get(spaceId);
+      if (entries) entries.push(entry);
+      else projectsBySpace.set(spaceId, [entry]);
+    }
+    return projectsBySpace;
+  }, [remoteProjects, remoteProjectSpaces]);
   const remoteGroupProjects = useMemo(
     () => remoteSidebarProjects(workspaceSessions, "studio"),
     [workspaceSessions],
@@ -5235,7 +5262,7 @@ export default function Sidebar() {
           isPinned: pinnedProjectIdSet.has(project.id),
         })),
         threads: sidebarThreads,
-        remote: activeSpaceId === null ? remoteProjects : [],
+        remote: remoteProjectsBySpace.get(activeSpaceId) ?? [],
         sortOrder: appSettings.sidebarProjectSortOrder,
         preferredOrder: workspaceProjectOrder,
       }),
@@ -5245,7 +5272,7 @@ export default function Sidebar() {
       pinnedProjectIdSet,
       sidebarThreads,
       activeSpaceId,
-      remoteProjects,
+      remoteProjectsBySpace,
       appSettings.sidebarProjectSortOrder,
       workspaceProjectOrder,
     ],
@@ -7030,36 +7057,45 @@ export default function Sidebar() {
     return (
       <SidebarGroup className="px-1.5 py-1.5">
         {threadsHydrated
-          ? railSpacesSections.map((section) => (
-              <div key={section.key}>
-                {renderListSectionHeader(
-                  section.name,
-                  <SidebarIconButton
-                    icon={AddPlusIcon}
-                    label={t("workspace:sections_addProject")}
-                    onClick={() => {
-                      setCreateProjectSpaceId(section.spaceId);
-                      setCreateProjectDialogOpen(true);
-                    }}
-                    tooltip={t("workspace:sections_addProject")}
-                    tooltipSide="right"
-                  />,
-                )}
-                {section.items.length > 0 ? (
-                  <SidebarMenu className="gap-0.5">
-                    {section.items.map((project) => renderRailSpacesProjectRow(project))}
-                  </SidebarMenu>
-                ) : (
-                  <SpaceEmptyState
-                    space={spaces.find((space) => space.id === section.spaceId) ?? null}
-                    hasProjectsElsewhere={allStandardProjectsBase.length > 0}
-                    onMoveProjects={() => {
-                      if (section.spaceId !== null) openSpaceProjectPicker(section.spaceId);
-                    }}
-                  />
-                )}
-              </div>
-            ))
+          ? railSpacesSections.map((section) => {
+              const remoteEntries =
+                section.spaceId === null ? [] : (remoteProjectsBySpace.get(section.spaceId) ?? []);
+              return (
+                <div key={section.key}>
+                  {renderListSectionHeader(
+                    section.name,
+                    <SidebarIconButton
+                      icon={AddPlusIcon}
+                      label={t("workspace:sections_addProject")}
+                      onClick={() => {
+                        setCreateProjectSpaceId(section.spaceId);
+                        setCreateProjectDialogOpen(true);
+                      }}
+                      tooltip={t("workspace:sections_addProject")}
+                      tooltipSide="right"
+                    />,
+                  )}
+                  {section.items.length > 0 || remoteEntries.length > 0 ? (
+                    <SidebarMenu className="gap-0.5">
+                      {section.items.map((project) => renderRailSpacesProjectRow(project))}
+                      {remoteEntries.map((entry) => (
+                        <SidebarMenuItem key={entry.key}>
+                          {renderWorkspaceProject(entry, null)}
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  ) : (
+                    <SpaceEmptyState
+                      space={spaces.find((space) => space.id === section.spaceId) ?? null}
+                      hasProjectsElsewhere={allStandardProjectsBase.length > 0}
+                      onMoveProjects={() => {
+                        if (section.spaceId !== null) openSpaceProjectPicker(section.spaceId);
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })
           : null}
       </SidebarGroup>
     );

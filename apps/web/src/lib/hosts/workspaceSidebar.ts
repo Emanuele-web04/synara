@@ -12,7 +12,7 @@ import type { Project, SidebarThreadSummary } from "../../types";
 import { checkoutKey } from "../projectCatalog/model";
 import type { WorkspaceSummary } from "./workspaceFrame";
 import type { WorkspaceSession } from "./workspaceSessions";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, type SpaceId } from "@synara/contracts";
 
 export interface WorkspaceProjectEntry {
   readonly key: string;
@@ -68,6 +68,7 @@ export function deriveWorkspaceProjectThreadRows(input: {
 export function remoteSidebarProjects(
   sessions: readonly WorkspaceSession[],
   section: "projects" | "studio" = "projects",
+  assignedProjectKeys?: ReadonlyMap<string, SpaceId | null>,
 ): WorkspaceProjectEntry[] {
   return sessions.flatMap((session) => {
     const environmentId = session.host.executionScope.environmentId;
@@ -80,16 +81,18 @@ export function remoteSidebarProjects(
     }
     return (session.summary?.projects ?? []).flatMap((project) => {
       const threads = threadsByProject.get(project.id) ?? [];
-      // Connecting a computer doesn't import its entire empty project catalog into navigation.
+      const key = checkoutKey({ environmentId, projectId: project.id });
+      // Keep explicitly assigned projects even after their last chat closes.
       if (
         project.section !== section ||
         project.kind === "chat" ||
-        (!threads.length && !project.isPinned && session.summary?.activeProjectId !== project.id)
+        (!threads.length &&
+          !project.isPinned &&
+          session.summary?.activeProjectId !== project.id &&
+          !assignedProjectKeys?.has(key))
       )
         return [];
-      return [
-        { key: checkoutKey({ environmentId, projectId: project.id }), project, threads, session },
-      ];
+      return [{ key, project, threads, session }];
     });
   });
 }

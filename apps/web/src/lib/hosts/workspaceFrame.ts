@@ -55,7 +55,7 @@ export interface WorkspaceNavigation {
     workspaceRoot: string;
     additionalFolders?: ReadonlyArray<string>;
     createIfMissing: boolean;
-  }): Promise<string>;
+  }): Promise<{ projectId: ProjectId; path: string }>;
   openProject(projectId: string): Promise<string>;
   recover(): void | (() => void);
 }

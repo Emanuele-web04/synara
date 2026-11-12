@@ -189,7 +189,7 @@ it
       },
     );
     await page.addLocatorHandler(
-      page.getByRole("button", { name: "Skip tour", exact: true }),
+      page.getByRole("button", { name: /^(Skip|Close) tour$/ }),
       async (button) => {
         await button.click();
       },
@@ -453,6 +453,16 @@ it
       });
       expect(await fs.readFile(path.join(roots[0]!, "same.txt"), "utf8")).toBe("REMOTE changed");
       expect(await fs.readFile(path.join(roots[1]!, "same.txt"), "utf8")).toBe("LOCAL original");
+      await localRpc.request("orchestration.dispatchCommand", {
+        type: "space.create",
+        commandId: randomUUID(),
+        spaceId: randomUUID(),
+        name: "Remote destination",
+        icon: "bag",
+        createdAt: new Date().toISOString(),
+      });
+      const destination = page.getByRole("tab", { name: /^Remote destination/ });
+      await destination.click();
       const addedRoot = path.join(host.baseDir, "added-from-picker");
       await fs.mkdir(addedRoot);
       await fs.writeFile(path.join(addedRoot, "README.md"), "PICKED ON REMOTE");
@@ -505,7 +515,13 @@ it
       expect(
         localProjects.projects.some((project) => project.workspaceRoot === canonicalAddedRoot),
       ).toBe(false);
+      const assignedProject = projectsList.getByText("Named remote project", { exact: true });
+      await assignedProject.waitFor();
       await page.reload();
+      await destination.click();
+      await assignedProject.waitFor();
+      await page.getByRole("tab", { name: /^Void/ }).click();
+      await assignedProject.waitFor({ state: "hidden" });
       await page
         .getByRole("button", { name: /^REMOTE checkout, E2E host/ })
         .first()

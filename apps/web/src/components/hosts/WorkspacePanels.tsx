@@ -635,7 +635,7 @@ export function WorkspaceFrameNavigation() {
             throw new Error(
               "The project was added, but its chat could not be opened. Reopen it from the sidebar.",
             );
-          return `/${id}`;
+          return { projectId: result.projectId, path: `/${id}` };
         }),
       newChat: async (projectId) => {
         if (!projectId) {
