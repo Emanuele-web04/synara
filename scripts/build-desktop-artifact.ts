@@ -1461,6 +1461,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "mac") {
     const updateZip = timedBuildStage(
       "update-zip",
+      // Wait for archive subprocesses and extraction cleanup before the
+      // enclosing build scope removes the staging directory on interruption.
       Effect.tryPromise({
         try: () =>
           finalizeMacUpdateZip({
@@ -1477,7 +1479,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             message: "macOS update zip finalization failed.",
             cause,
           }),
-      }),
+      }).pipe(Effect.uninterruptible),
     );
     let finalizedZip: Effect.Success<typeof updateZip>;
     if (options.target === "dmg" && options.signed) {
