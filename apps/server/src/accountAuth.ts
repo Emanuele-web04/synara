@@ -719,7 +719,8 @@ const RENEWAL_RETRY_WINDOW_MS = 20_000;
  * After a series fails, later renewals of the same token wait before trying
  * again: 5s, doubling per failed series up to a minute, jittered. Without it
  * every poller that finds the token expired would run its own series against
- * an account service that is down.
+ * an account service that is down. When the service was unreachable, the
+ * first caller it answers again may run one series before the wait is over.
  */
 const RENEWAL_COOLDOWN_BASE_MS = 5_000;
 const RENEWAL_COOLDOWN_MAX_MS = 60_000;
@@ -734,8 +735,17 @@ const renewalCooldowns = new Map<
     readonly error: unknown;
     /** The failure's logged shape, so an unchanged outage is not logged on every series. */
     readonly signature: string;
+    /** The series failed without an answer from the account service itself. */
+    readonly serviceUnreachable: boolean;
+    /** This cooldown's one early series was already spent. */
+    readonly probed: boolean;
   }
 >();
+
+/** A failure that says the account service could not be reached, not that it refused. */
+function isAccountServiceUnreachable(error: unknown): boolean {
+  return !(error instanceof AccountApiError) || error.status === 408 || error.status === 503;
+}
 
 /**
  * How a failed refresh call bears on the stored session. Only the endpoint's
@@ -779,6 +789,8 @@ async function renewSession(
   baseDir: string,
   client: AccountClient,
   consumed: AccountCredentials,
+  /** The account service just answered this caller's own request (with a 401). */
+  serviceAnswered: boolean,
 ): Promise<SessionRenewal> {
   return withLockedAccountFile(baseDir, async (): Promise<SessionRenewal> => {
     const current = await readAccountFile(baseDir);
@@ -818,7 +830,13 @@ async function renewSession(
     const tokenHash = createHash("sha256").update(refreshToken).digest("hex");
     const cooldown = renewalCooldowns.get(baseDir);
     const previous = cooldown?.tokenHash === tokenHash ? cooldown : undefined;
-    if (previous && performance.now() < previous.until) throw previous.error;
+    const coolingDown = previous !== undefined && performance.now() < previous.until;
+    // A cooldown that began because the service was unreachable ends early,
+    // once, for a caller the service has just answered: the outage may be
+    // over, and failing that caller with the old error would outlast it.
+    const probing =
+      coolingDown && serviceAnswered && previous.serviceUnreachable && !previous.probed;
+    if (coolingDown && !probing) throw previous.error;
 
     const startedAt = performance.now();
     let refreshed;
@@ -869,6 +887,8 @@ async function renewSession(
           until: performance.now() + cooldownMs,
           error: refreshError,
           signature,
+          serviceUnreachable: isAccountServiceUnreachable(refreshError),
+          probed: probing,
         });
         // A long outage logs its 1st, 2nd, 4th, 8th… series, and any series
         // that fails differently from the one before.
@@ -948,6 +968,7 @@ export async function withFreshAccessToken<A>(
       throw identityFenceRefused(baseDir, fence, current, expected);
   };
   assertIdentity(credentials, "expected_identity_before_send");
+  let serviceAnswered = false;
   // A token held for its whole lifetime would only come back 401; renew before sending it.
   if (!accessTokenOutlived(baseDir, credentials.accessToken)) {
     try {
@@ -965,10 +986,11 @@ export async function withFreshAccessToken<A>(
         throw new WorkspaceAccessChangedError();
       }
       if (!isUnauthorized(error)) throw error;
+      serviceAnswered = true;
     }
   }
 
-  const renewal = await renewSession(baseDir, client, credentials);
+  const renewal = await renewSession(baseDir, client, credentials, serviceAnswered);
   if (renewal.kind === "expired") throw new SessionExpiredError();
   const current = await readAccountCredentials(baseDir);
   if (!current) throw new SessionExpiredError();

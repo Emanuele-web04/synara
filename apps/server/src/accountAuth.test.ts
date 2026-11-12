@@ -783,7 +783,13 @@ describe("withFreshAccessToken", () => {
       useFakeRenewalClock();
       const baseDir = makeBaseDir();
       await writeAccountCredentials(baseDir, credentials());
-      const outage = transportFailure();
+      // The account service answers but its identity provider does not, so a
+      // caller it just answered has no reason to expect a different outcome.
+      const outage = new AccountApiError({
+        code: "internal_error",
+        status: 502,
+        message: "Identity provider is unavailable",
+      });
       const refreshAccessToken = vi
         .fn<AccountClient["refreshAccessToken"]>()
         .mockRejectedValue(outage);
@@ -819,6 +825,47 @@ describe("withFreshAccessToken", () => {
         refreshToken: "refresh-1",
         organizationId: ORGANIZATION.id,
       });
+      expect(await readAccountFile(baseDir)).toEqual(
+        credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+      );
+    });
+
+    it("renews early, once, when the service that was unreachable answers again", async () => {
+      useFakeRenewalClock();
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials());
+      const outage = transportFailure();
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(outage);
+      const client = makeClient({ refreshAccessToken });
+      // The service answering 401 is what makes the renewal run.
+      const answered = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, (accessToken) =>
+            accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve("ok"),
+          ),
+        );
+
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+
+      // Still inside the cooldown, the service answers this caller: one early series.
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+      // That early series is spent; later callers wait out the (doubled) cooldown.
+      await expect(answered()).rejects.toBe(outage);
+      vi.advanceTimersByTime(9_999);
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+
+      // The next ordinary series fails too, which allows one early series again.
+      vi.advanceTimersByTime(1);
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(12);
+      refreshAccessToken.mockReset().mockResolvedValue(rotatedPair());
+      await expect(answered()).resolves.toBe("ok");
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
       expect(await readAccountFile(baseDir)).toEqual(
         credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
       );

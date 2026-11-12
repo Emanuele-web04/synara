@@ -452,7 +452,9 @@ they fit within 20 seconds of the first, all under the credential-file lock.
 Transport errors, timeouts, `429` and `5xx` are retried that way; `refresh_not_attempted`
 and other refusals are not. After a failed series, later renewals of that token
 wait out a cooldown that starts at 5 seconds and doubles to a one-minute cap, so
-background requests fail fast instead of each retrying. The failure reaches the
+background requests fail fast instead of each retrying. If that series failed
+because the account service was unreachable, the first request the service answers
+again may renew once before the cooldown ends. The failure reaches the
 caller as itself, so account status reports an error rather than signing out.
 Files written by older versions may carry a `refreshPendingTokenHash` marker;
 it is ignored and dropped with the next rotation. Every way the desktop server
