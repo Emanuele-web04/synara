@@ -9,12 +9,15 @@ const parent = ThreadId.makeUnsafe("parent");
 const childA = ThreadId.makeUnsafe("child-a");
 const childB = ThreadId.makeUnsafe("child-b");
 const other = ThreadId.makeUnsafe("other");
+// Launched by child-a: a nested subagent of the same parent.
+const grandchild = ThreadId.makeUnsafe("grandchild");
 
 const threads: Record<string, SubagentOpenThreadInfo> = {
   parent: { parentThreadId: null, projectId: project },
   other: { parentThreadId: null, projectId: project },
   "child-a": { parentThreadId: parent, projectId: project },
   "child-b": { parentThreadId: parent, projectId: project },
+  grandchild: { parentThreadId: parent, sourceThreadId: childA, projectId: project },
 };
 const readThread = (threadId: ThreadId) => threads[threadId] ?? null;
 
@@ -126,7 +129,49 @@ describe("resolveSubagentOpenPlan", () => {
         }),
         readThread,
       }),
-    ).toEqual({ kind: "split-pane", splitViewId: "split", paneId: "left", threadId: childA });
+    ).toEqual({
+      kind: "split-pane",
+      splitViewId: "split",
+      paneId: "left",
+      direction: "horizontal",
+      threadId: childA,
+    });
+  });
+
+  it("keeps a subagent on screen when it opens a subagent it launched", () => {
+    // Opened full-width, the launcher goes on the left, not its own parent.
+    expect(
+      resolveSubagentOpenPlan({
+        targetThreadId: grandchild,
+        hostThreadId: childA,
+        splitView: null,
+        readThread,
+      }),
+    ).toMatchObject({ kind: "create-split", sourceThreadId: childA, threadId: grandchild });
+    // In the subagent slot, the launcher keeps its pane and shows its child under it.
+    expect(
+      resolveSubagentOpenPlan({
+        targetThreadId: grandchild,
+        hostThreadId: childA,
+        splitView: splitView(horizontal(leaf("left", parent), leaf("right", childA))),
+        readThread,
+      }),
+    ).toEqual({
+      kind: "split-pane",
+      splitViewId: "split",
+      paneId: "right",
+      direction: "vertical",
+      threadId: grandchild,
+    });
+    // Beside another subagent pane, that pane takes the child instead.
+    expect(
+      resolveSubagentOpenPlan({
+        targetThreadId: grandchild,
+        hostThreadId: childA,
+        splitView: splitView(horizontal(leaf("left", childA), leaf("right", childB))),
+        readThread,
+      }),
+    ).toMatchObject({ kind: "replace-pane", paneId: "right", threadId: grandchild });
   });
 
   it("navigates normally to threads that are not subagents", () => {

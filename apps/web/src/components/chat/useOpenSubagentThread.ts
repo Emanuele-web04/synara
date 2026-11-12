@@ -39,7 +39,11 @@ export function useOpenSubagentThread(input: {
         readThread: (id) => {
           const shell = shells?.[id];
           return shell
-            ? { parentThreadId: shell.parentThreadId ?? null, projectId: shell.projectId }
+            ? {
+                parentThreadId: shell.parentThreadId ?? null,
+                sourceThreadId: shell.sourceThreadId ?? null,
+                projectId: shell.projectId,
+              }
             : null;
         },
       });
@@ -84,7 +88,7 @@ export function useOpenSubagentThread(input: {
             !splitStore.dropThreadOnPane({
               splitViewId: plan.splitViewId,
               targetPaneId: plan.paneId,
-              direction: "horizontal",
+              direction: plan.direction,
               side: "second",
               threadId: plan.threadId,
             })

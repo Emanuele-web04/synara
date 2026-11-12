@@ -1,22 +1,29 @@
 // FILE: openSubagentThread.logic.ts
 // Purpose: Decides where a subagent opens. A subagent never replaces the chat that launched
-//          it: it opens as the right pane of a split beside its parent, and opening another
-//          subagent swaps that pane. In a full split the pane beside the launcher takes it.
-//          Threads already on screen get focus; anything that is not a subagent keeps plain
-//          navigation.
+//          it: it opens as the right pane of a split beside its launcher (the parent, or the
+//          subagent above it when nested), and opening a sibling swaps that pane. With no room
+//          for another column, a launcher's child opens under it, and otherwise the pane beside
+//          the launcher takes it. Threads already on screen get focus; anything that is not a
+//          subagent keeps plain navigation.
 // Layer: Chat navigation logic (pure)
 // Exports: resolveSubagentOpenPlan, SubagentOpenPlan
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
 import { canSubdividePane, collectLeaves, findParentSplitNode } from "../../splitView.logic";
-import type { PaneId, SplitView, SplitViewId } from "../../splitViewStore";
+import type { PaneId, SplitDirection, SplitView, SplitViewId } from "../../splitViewStore";
 
 export type SubagentOpenPlan =
   | { kind: "navigate"; threadId: ThreadId }
   | { kind: "focus-pane"; splitViewId: SplitViewId; paneId: PaneId; threadId: ThreadId }
   | { kind: "replace-pane"; splitViewId: SplitViewId; paneId: PaneId; threadId: ThreadId }
-  | { kind: "split-pane"; splitViewId: SplitViewId; paneId: PaneId; threadId: ThreadId }
+  | {
+      kind: "split-pane";
+      splitViewId: SplitViewId;
+      paneId: PaneId;
+      direction: SplitDirection;
+      threadId: ThreadId;
+    }
   | {
       kind: "create-split";
       sourceThreadId: ThreadId;
@@ -26,6 +33,8 @@ export type SubagentOpenPlan =
 
 export interface SubagentOpenThreadInfo {
   readonly parentThreadId: ThreadId | null;
+  /** Its launcher: the parent, or for a nested subagent the subagent that launched it. */
+  readonly sourceThreadId?: ThreadId | null;
   readonly projectId: ProjectId | null;
 }
 
@@ -57,13 +66,17 @@ export function resolveSubagentOpenPlan(input: {
   if (!target?.parentThreadId) return navigate;
   const isSubagent = (threadId: ThreadId | null) =>
     threadId !== null && Boolean(readThread(threadId)?.parentThreadId);
+  // Opened from the chat that launched it: that chat must stay on screen beside it.
+  const hostLaunchedTarget =
+    hostThreadId !== null && (target.sourceThreadId ?? target.parentThreadId) === hostThreadId;
 
   if (splitView) {
     const hostLeaf = leaves.find((leaf) => leaf.threadId === hostThreadId) ?? null;
     // Another subagent pane is the subagent slot: swap it rather than stacking panes.
-    // Opened from a subagent pane itself (its dock list), that pane is the slot.
+    // A subagent pane opening a sibling (from its dock list) is itself the slot, but
+    // never when it launched the target.
     const subagentLeaf =
-      (hostLeaf && isSubagent(hostLeaf.threadId) ? hostLeaf : null) ??
+      (hostLeaf && !hostLaunchedTarget && isSubagent(hostLeaf.threadId) ? hostLeaf : null) ??
       leaves.find((leaf) => leaf !== hostLeaf && isSubagent(leaf.threadId)) ??
       null;
     if (subagentLeaf) {
@@ -80,6 +93,18 @@ export function resolveSubagentOpenPlan(input: {
         kind: "split-pane",
         splitViewId: splitView.id,
         paneId: hostLeaf.id,
+        direction: "horizontal",
+        threadId: targetThreadId,
+      };
+    }
+    // A launcher with no room for another column keeps its pane and shows its
+    // child under it.
+    if (hostLaunchedTarget && canSubdividePane(splitView.root, hostLeaf.id, "vertical")) {
+      return {
+        kind: "split-pane",
+        splitViewId: splitView.id,
+        paneId: hostLeaf.id,
+        direction: "vertical",
         threadId: targetThreadId,
       };
     }
@@ -102,9 +127,10 @@ export function resolveSubagentOpenPlan(input: {
     return navigate;
   }
 
-  // From a subagent opened full-width, put its parent back on the left.
+  // The launcher goes on the left. From a subagent opened full-width that did not
+  // launch the target (a sibling), that is its parent.
   const host = hostThreadId ? readThread(hostThreadId) : null;
-  const sourceThreadId = host?.parentThreadId ?? hostThreadId;
+  const sourceThreadId = hostLaunchedTarget ? hostThreadId : (host?.parentThreadId ?? hostThreadId);
   if (!sourceThreadId || sourceThreadId === targetThreadId) return navigate;
   const ownerProjectId = readThread(sourceThreadId)?.projectId ?? target.projectId;
   if (!ownerProjectId) return navigate;
