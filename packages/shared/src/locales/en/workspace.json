@@ -622,6 +622,8 @@
   "projectCoordinatorIsUnavailable": "Project coordinator is unavailable.",
   "startNewChatInLastUsedProject": "Start new chat in last used project",
   "couldNotMoveTheThreadToTheHub": "Could not move the thread to the hub",
+  "couldNotMoveTheThreadToTheProject": "Could not move the thread to the project",
+  "theThreadCouldNotBeMovedToThatProject": "The thread could not be moved to that project. Try again after it finishes any active work.",
   "handoffToInThisThread": "Handoff to {{value0}} in this thread",
   "thisProjectIsNoLongerAvailable": "This project is no longer available.",
   "typeAPathToNavigateFolders": "Type a path, ↑↓ to navigate folders.",

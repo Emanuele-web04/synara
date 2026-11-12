@@ -61,6 +61,7 @@ import {
 import {
   findSpaceById,
   isLegacyHomeChatContainerRow,
+  isOrdinaryProjectRow,
   CHECKPOINT_REVERT_STARTED_ACTIVITY_KIND,
   CHECKPOINT_REVERT_SUCCEEDED_ACTIVITY_KIND,
   checkpointRevertActiveTurnDetail,
@@ -1928,6 +1929,49 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         }
       }
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
+      const targetProjectId = command.projectId;
+      const movesProject = targetProjectId !== undefined && targetProjectId !== thread.projectId;
+      if (movesProject) {
+        const targetProject = yield* requireProject({
+          readModel,
+          command,
+          projectId: targetProjectId,
+        });
+        if (
+          !isOrdinaryProjectRow({
+            projectKind: targetProject.kind,
+            projectTitle: targetProject.title,
+            projectWorkspaceRoot: targetProject.workspaceRoot,
+            workspacePaths,
+          })
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${targetProjectId}' cannot hold moved threads.`,
+          });
+        }
+        if (
+          project !== undefined &&
+          !isOrdinaryProjectRow({
+            projectKind: project.kind,
+            projectTitle: project.title,
+            projectWorkspaceRoot: project.workspaceRoot,
+            workspacePaths,
+          })
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Threads cannot be moved out of this project.",
+          });
+        }
+        if (threadHasInFlightTurn(thread) || threadHasCheckpointRevertInProgress(thread)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "Wait for the active turn or checkpoint restore to finish before moving the thread to another project.",
+          });
+        }
+      }
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
       if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
@@ -1967,6 +2011,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
+          ...(movesProject ? { projectId: targetProjectId } : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
