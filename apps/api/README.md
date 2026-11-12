@@ -904,9 +904,10 @@ connection while a provider answers:
   checks for one user queue in the process and share the result. Webhook
   flush, checkout, portal and erasure cleanup take the same queue; they still
   call the provider under the lock.
-- **Push delivery** reads membership and billing before the row transaction and
-  reads them again inside it if the transaction waited more than two seconds
-  for a connection. The send and its bookkeeping stay in the row-locked
+- **Push delivery** reads membership and billing before the row transaction.
+  Each read is used only within two seconds of its own answer; an older one
+  (a slow sibling read, a wait for a connection) is made again inside the
+  transaction. The send and its bookkeeping stay in the row-locked
   transaction.
 - **Sweeps**: the five-second push sweep only looks for due deliveries;
   retention of expired activities runs with the 30-second maintenance sweep.

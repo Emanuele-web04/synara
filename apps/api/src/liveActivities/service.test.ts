@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
+import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from "vitest";
 import { createIsolatedTestDatabase } from "../testing/isolatedDatabase";
 import { createLiveActivityService } from "./service";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
@@ -540,6 +540,30 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     await f.live.flush();
     expect(observed).toEqual([true, true]);
     expect(f.sent).toHaveLength(1);
+  });
+
+  it("re-reads a billing decision that aged while the membership lookup was slow", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.register(f.owner, f.request);
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      let reads = 0;
+      f.onProviderRead(async () => {
+        reads += 1;
+        if (reads !== 1) return;
+        // The membership lookup stalls after billing has already answered;
+        // the entitlement lapses meanwhile.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        f.setRemoteAccess(false);
+        vi.advanceTimersByTime(2_001);
+      });
+      await f.live.flush();
+      // Membership, billing, then billing again inside the row transaction.
+      expect(reads).toBe(3);
+      expect(f.sent).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the device check ahead of a failed membership lookup", async () => {

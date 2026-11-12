@@ -45,9 +45,10 @@ const sourceIdentity = ({ hostId, threadId, turnId }: LiveActivitySource) =>
 const swiftEpoch = 978307200;
 /**
  * How old a membership or billing read made before the row transaction may be
- * when the send is decided. The reads normally precede it by milliseconds; a
- * transaction that waited longer than this for a pooled connection reads again
- * inside, so removal still stops a push as promptly as it did.
+ * when it is used to decide the send, counted from that read's own answer. The
+ * reads normally precede it by milliseconds; one that aged past this (a slow
+ * sibling read, a transaction that waited for a pooled connection) is made
+ * again inside, so removal still stops a push as promptly as it did.
  */
 const PROVIDER_READ_MAX_AGE_MS = 2_000;
 
@@ -362,17 +363,17 @@ export function createLiveActivityService(options: {
       Promise.resolve()
         .then(() => options.isMember(due.user_id, due.org_id))
         .then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
+          (value) => ({ ok: true as const, value, at: performance.now() }),
+          (error: unknown) => ({ ok: false as const, error, at: performance.now() }),
         ),
       // Commercial outages must not send with a stale entitlement.
       options.isRemoteAccessAllowed
         ? Promise.resolve()
             .then(() => options.isRemoteAccessAllowed!(due.user_id))
             .catch(() => false)
+            .then((allowed) => ({ allowed, at: performance.now() }))
         : undefined,
     ]);
-    const readAt = performance.now();
     await transaction(async (db) => {
       const activity = (
         await db.query<ActivityRow>(
@@ -382,15 +383,15 @@ export function createLiveActivityService(options: {
         )
       ).rows[0];
       if (!activity) return;
-      // Reads made for another owner do not apply, and reads that aged while
-      // this transaction waited for a connection are not fresh enough to send
-      // on; ask again in both cases, as before.
-      const sameOwner =
-        activity.user_id === due.user_id &&
-        activity.org_id === due.org_id &&
-        performance.now() - readAt <= PROVIDER_READ_MAX_AGE_MS;
+      // Reads made for another owner do not apply, and a read is not fresh
+      // enough to send on once it has aged: each one from its own answer, up
+      // to the moment it is used, so neither a slow sibling read nor a wait
+      // for a connection is overlooked. Ask again in both cases, as before.
+      const sameOwner = activity.user_id === due.user_id && activity.org_id === due.org_id;
+      const usable = (read: { readonly at: number }) =>
+        sameOwner && performance.now() - read.at <= PROVIDER_READ_MAX_AGE_MS;
       const isMember = async () => {
-        if (!sameOwner) return options.isMember(activity.user_id, activity.org_id);
+        if (!usable(membership)) return options.isMember(activity.user_id, activity.org_id);
         // A membership lookup failure still fails this attempt, after the device check.
         if (!membership.ok) throw membership.error;
         return membership.value;
@@ -437,9 +438,10 @@ export function createLiveActivityService(options: {
       if (options.isRemoteAccessAllowed) {
         let allowed = false;
         try {
-          allowed = sameOwner
-            ? remoteAccess === true
-            : await options.isRemoteAccessAllowed(activity.user_id);
+          allowed =
+            remoteAccess && usable(remoteAccess)
+              ? remoteAccess.allowed
+              : await options.isRemoteAccessAllowed(activity.user_id);
         } catch {
           // Commercial outages must not send with a stale entitlement.
         }
