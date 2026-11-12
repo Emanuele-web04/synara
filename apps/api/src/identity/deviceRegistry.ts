@@ -115,21 +115,6 @@ export function createDeviceRegistry(
       });
     },
 
-    async isSessionRevoked(userId, sessionId) {
-      const [row] = await db
-        .select({ sessionId: deviceAccountSessions.sessionId })
-        .from(deviceAccountSessions)
-        .where(
-          and(
-            eq(deviceAccountSessions.userId, userId),
-            eq(deviceAccountSessions.sessionId, sessionId),
-            isNotNull(deviceAccountSessions.revokedAt),
-          ),
-        )
-        .limit(1);
-      return row !== undefined;
-    },
-
     async revokeSessions(userId, deviceId, deliver) {
       const bindings = await db.transaction(async (tx) => {
         const [device] = await tx

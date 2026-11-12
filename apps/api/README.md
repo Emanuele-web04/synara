@@ -253,6 +253,12 @@ seconds; explicit status reads reconcile immediately. Provider outages leave
 events retryable without holding up normal host/tunnel housekeeping. Remote
 access checks use a bounded 30-second cache, bypass pending webhook work and
 expired access leases, and do not convert provider failures into stale grants.
+A grant checked within those 30 seconds, with an unexpired lease, no pending
+webhook and no erasure request, is answered by one read-only statement; anything
+else takes the locked path, which re-checks under the lock and reconciles with
+Polar when the grant is not reusable. The window stays at 30 seconds because
+the access policy refuses statuses older than 60 seconds, so a longer reuse
+would answer `billing_unavailable` rather than save a Polar call.
 
 Checkout creation commits a durable attempt ID and chosen product before sending
 Polar a POST. A timeout is **uncertain**, not proof that no checkout was created.
@@ -503,7 +509,16 @@ makes a revoked membership take effect without anything being purged.
 
 Membership lists are cached per process for 60 seconds, so a burst of requests
 costs one round trip while an added or removed member still takes effect on its
-own.
+own. The WorkOS user behind a session is cached the same way, and read once per
+request. Plain reads (`/me`, host listing, usage push and summary, member count)
+accept both caches, and the read-only host polls (`GET /hosts/:id/authorization`
+and `GET /hosts/:id/live-activities`) accept the membership cache, so a removed
+member or a user deleted in WorkOS can keep read access for at most 60 seconds.
+Every mutating or admission route (profile, workspace and account writes, host
+linking and grants, pairing, tunnels, host publication) resolves membership
+live, and the user too when one is signed in, so it refuses at once. Account
+erasure never depends on these caches: every signed-in request checks the
+durable deletion fence first.
 
 ## What WorkOS owning identity means in practice
 
@@ -784,9 +799,14 @@ egress, proof verification projects only identity and heartbeat fields under the
 existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
 less than a minute old. Authorization reads all three bounded revocation sources
 in one statement, retaining pending-delivery precedence on equal timestamps and
-requiring acknowledgements even beyond ordinary event retention. Billing access
-projects only entitlement fields while retaining its transaction, deletion check,
-pending-webhook check and provider freshness limit; it adds no authorization cache.
+requiring acknowledgements even beyond ordinary event retention. The owner's
+membership comes from the 60-second cache described above, so a warm poll makes
+no WorkOS call. Billing access projects only entitlement fields: a grant
+reconciled within 30 seconds, with no pending webhook or erasure request, is
+read in one statement with no transaction or write, and everything else keeps
+the locked path with its deletion check, pending-webhook check and provider
+freshness limit. Every signed-in (bearer-token) request checks the
+revoked-session and erasure tombstones in one statement.
 Measure PostgreSQL response bytes separately from the provider's billed egress:
 local warm-connection measurements exclude connection setup, TLS/TCP overhead,
 other routes and the production traffic mix.

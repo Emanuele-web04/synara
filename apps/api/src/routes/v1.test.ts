@@ -27,6 +27,7 @@ import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
+import { clearUserCache, getCachedUser } from "../identity/userCache";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import { AVATAR_STORAGE_TIMEOUT_MS, type AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
@@ -191,10 +192,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     await workos?.close();
   });
 
-  // The membership cache is process-global and outlives a single request, so a
-  // test that changes someone's memberships would otherwise leak into the next.
+  // The membership and user caches are process-global and outlive a single
+  // request, so a test that changes someone's memberships or account would
+  // otherwise leak into the next.
   beforeEach(() => {
     clearOrgCache();
+    clearUserCache();
   });
 
   describe("account erasure", () => {
@@ -389,12 +392,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await published.json()).toMatchObject({ avatarUrl: storage.publicUrl(key) });
 
       let admissionChecked = false;
-      const originalIsDeleting = deletion.isDeleting;
-      const admission = vi.spyOn(deletion, "isDeleting").mockImplementation(async (userId) => {
-        const result = await originalIsDeleting(userId);
-        if (userId === owner.userId && !result) admissionChecked = true;
-        return result;
-      });
+      const originalIsSessionFenced = deletion.isSessionFenced;
+      const admission = vi
+        .spyOn(deletion, "isSessionFenced")
+        .mockImplementation(async (userId, sessionId) => {
+          const result = await originalIsSessionFenced(userId, sessionId);
+          if (userId === owner.userId && !result) admissionChecked = true;
+          return result;
+        });
       let pendingUpload: Promise<Response> | undefined;
       vi.useFakeTimers({ toFake: ["Date"] });
       try {
@@ -993,6 +998,157 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     } finally {
       logged.mockRestore();
     }
+  });
+
+  describe("identity provider and database round trips", () => {
+    /** Provider user and membership reads for `userId` since request index `since`. */
+    function providerReads(since: number, userId: string) {
+      const reads = workos.requests.slice(since).filter((request) => request.method === "GET");
+      return {
+        user: reads.filter((request) => request.path === `/user_management/users/${userId}`).length,
+        memberships: reads.filter(
+          (request) => request.path === "/user_management/organization_memberships",
+        ).length,
+      };
+    }
+
+    it("answers /me with one provider user read cold and no provider call warm", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+
+      const cold = workos.requests.length;
+      const first = await app.request("/api/v1/me", { headers: authHeaders(session.token) });
+      expect(first.status).toBe(200);
+      const body = await first.json();
+      expect(providerReads(cold, session.userId)).toEqual({ user: 1, memberships: 1 });
+
+      const warm = workos.requests.length;
+      const second = await app.request("/api/v1/me", { headers: authHeaders(session.token) });
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual(body);
+      expect(workos.requests.length).toBe(warm);
+    });
+
+    it("keeps a warm usage push off the identity provider", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+
+      const cold = workos.requests.length;
+      const first = await pushUsage(app, session.token, usageBody(randomUUID()), "203.0.122.1");
+      expect(first.status).toBe(202);
+      expect(providerReads(cold, session.userId)).toEqual({ user: 1, memberships: 1 });
+
+      const warm = workos.requests.length;
+      const second = await pushUsage(app, session.token, usageBody(randomUUID()), "203.0.122.1");
+      expect(second.status).toBe(202);
+      expect(workos.requests.length).toBe(warm);
+    });
+
+    it("checks the session and erasure tombstones in one database statement", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+      // Without a Live Activity service this route touches nothing past the
+      // session gate, so every statement observed belongs to that gate.
+      const statements = vi.spyOn(pool, "query");
+      try {
+        const response = await app.request(`/api/v1/live-activities/${randomUUID()}`, {
+          method: "DELETE",
+          headers: authHeaders(session.token),
+        });
+        expect(response.status).toBe(200);
+        expect(statements).toHaveBeenCalledTimes(1);
+      } finally {
+        statements.mockRestore();
+      }
+    });
+
+    it("maps a provider 404 on a cold read to 401", async () => {
+      const { app } = buildApp();
+      const token = await workos.signAccessToken({
+        sub: `user_never_registered_${randomUUID()}`,
+        sid: `session_${randomUUID()}`,
+      });
+      const response = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({
+        error: "unauthorized",
+        message: "This account no longer exists",
+      });
+    });
+
+    it("refuses an account deleted at the provider on mutating routes while reads may use the cache", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      // Deleted outside this API, so nothing here invalidated the cached user.
+      await createWorkosIdentityProvider(config).verifier.deleteUser!(session.userId);
+
+      // A plain read inside the TTL may still answer from the cache...
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      // ...but a mutating route reads the user live and refuses at once.
+      const write = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(session.token),
+        body: JSON.stringify({
+          handle: `gone-${randomUUID().slice(0, 8)}`,
+          displayName: "Gone",
+          avatarColor: "#22c55e",
+        }),
+      });
+      expect(write.status).toBe(401);
+      expect(await write.json()).toEqual({
+        error: "unauthorized",
+        message: "This account no longer exists",
+      });
+      // The live 404 evicted the cached user, so reads refuse from now on too.
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(401);
+    });
+
+    it("drops the cached user when the account is deleted and when erasure deletes it", async () => {
+      const { verifier } = createWorkosIdentityProvider(config);
+      const deletion = createAccountDeletionService({ db: database.db, verifier });
+      const { app, db } = buildApp({ accountDeletion: deletion });
+      const session = await signIn();
+      const user = await verifier.getUser(session.userId);
+      const cachedLookup = () => {
+        const lookup = vi.fn(async () => user);
+        return { lookup, read: () => getCachedUser({ getUser: lookup }, session.userId) };
+      };
+
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      const warm = cachedLookup();
+      await warm.read();
+      expect(warm.lookup).not.toHaveBeenCalled();
+
+      const response = await app.request("/api/v1/me", {
+        method: "DELETE",
+        headers: authHeaders(session.token),
+        body: JSON.stringify({ confirmation: "delete", email: user.email }),
+      });
+      expect(response.status).toBe(202);
+      const afterRequest = cachedLookup();
+      await afterRequest.read();
+      expect(afterRequest.lookup).toHaveBeenCalledTimes(1);
+
+      // That read refilled the cache; the provider deletion during erasure drops it again.
+      await db
+        .update(accountDeletions)
+        .set({ nextAttemptAt: new Date(0) })
+        .where(eq(accountDeletions.userId, session.userId));
+      await deletion.flush();
+      await expect(verifier.getUser(session.userId)).rejects.toMatchObject({ status: 404 });
+      const afterErasure = cachedLookup();
+      await afterErasure.read();
+      expect(afterErasure.lookup).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not expose the removed legacy POST /hosts registration surface", async () => {

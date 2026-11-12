@@ -127,6 +127,7 @@ import type { ApiSigningService } from "../identity/signing";
 import { hostRecordFromRow, isHostProofAuthorization } from "../identity/hostKeyRegistry";
 import { deleteHostSecretRows } from "../identity/hostSecretStore";
 import { writeRevocationEvents } from "../identity/revocationLog";
+import { getCachedUser, invalidateUserCache, type UserCacheDeps } from "../identity/userCache";
 import { createRateLimiter } from "../rateLimit";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -641,8 +642,10 @@ export function createV1Routes(deps: {
 
   /**
    * Resolves the caller from an access token. Verification is stateless
-   * (JWKS signature + expiry), followed by our durable session tombstone.
-   * Provider revocation independently prevents subsequent token refresh.
+   * (JWKS signature + expiry), followed by our durable tombstones — the
+   * revoked account session and the account-erasure fence, read together in
+   * one database round trip. Provider revocation independently prevents
+   * subsequent token refresh.
    */
   async function verifyDeviceSession(
     token: string,
@@ -656,8 +659,7 @@ export function createV1Routes(deps: {
     }
     // A database outage must fail closed as a server failure, without telling
     // clients to discard a valid sign-in session.
-    return (await devices.isSessionRevoked(verified.userId, verified.sessionId)) ||
-      (await accountDeletion.isDeleting(verified.userId))
+    return (await accountDeletion.isSessionFenced(verified.userId, verified.sessionId))
       ? null
       : verified;
   }
@@ -667,6 +669,17 @@ export function createV1Routes(deps: {
     const token = authorization ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] : undefined;
     return token ? verifyDeviceSession(token) : null;
   }
+
+  // Late-bound so a test spying on `verifier.getUser` still sees every lookup.
+  const userLookup: UserCacheDeps = { getUser: (userId) => verifier.getUser(userId) };
+
+  /**
+   * The provider user `requireOrgSession` read, kept for the rest of the same
+   * request. Request-scoped on purpose rather than a field on `OrgSession`:
+   * routes spread the session into service calls, and the email must not ride
+   * along into them.
+   */
+  const requestUsers = new WeakMap<Context, { userId: string; user: IdentityUser }>();
 
   /**
    * An authenticated caller acting inside an organization. Host routes use
@@ -707,12 +720,16 @@ export function createV1Routes(deps: {
    *
    * Returns the session, or a Response that the caller must return as-is.
    *
-   * Freshness: plain reads (`/me`, host listing, profile) accept the
-   * membership cache — a revoked member can retain READ access for up to the
-   * cache TTL (≤60s), the documented read-path SLA. PRIVILEGED/MUTATING
-   * routes (host register, owner host delete, organization rename) pass
-   * `{ freshMembership: true }` so the membership is resolved live and
-   * revocation takes effect immediately on anything that changes state.
+   * Freshness: plain reads (`/me`, host listing, usage, member count) accept
+   * the per-process caches for both the provider user and the membership — a
+   * revoked member, or an account deleted at the provider, can retain READ
+   * access for up to the cache TTL (≤60s), the documented read-path SLA.
+   * PRIVILEGED/MUTATING routes (host register, owner host delete, profile and
+   * organization writes, account deletion) pass `{ freshMembership: true }`,
+   * which reads the user AND the membership live, so revocation and deletion
+   * take effect immediately on anything that changes state. Either way the
+   * user read here is remembered for the rest of this request, so
+   * `loadSessionUser` does not ask the provider a second time.
    */
   async function requireOrgSession(
     c: Context,
@@ -724,7 +741,10 @@ export function createV1Routes(deps: {
     let user: IdentityUser;
     let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
-      user = await verifier.getUser(session.userId);
+      user = await getCachedUser(userLookup, session.userId, {
+        fresh: options?.freshMembership === true,
+      });
+      requestUsers.set(c, { userId: session.userId, user });
       scope = await grants.resolveEnvironmentScope(session, user.email, options);
     } catch (error) {
       if (error instanceof IdentityProviderError && error.status === 404) {
@@ -862,10 +882,16 @@ export function createV1Routes(deps: {
    * The user behind a session, mapping the two failures that matter: a deleted
    * account is the caller's authentication problem, anything else is ours.
    * Returns the user, or the Response to return as-is.
+   *
+   * Reuses the user `requireOrgSession` already read for this request, at the
+   * freshness that route chose. Without one (routes gated by
+   * `requireUserSession`) it is a live provider read.
    */
   async function loadSessionUser(c: Context, userId: string): Promise<IdentityUser | Response> {
+    const known = requestUsers.get(c);
+    if (known?.userId === userId) return known.user;
     try {
-      return await verifier.getUser(userId);
+      return await getCachedUser(userLookup, userId, { fresh: true });
     } catch (error) {
       // The token verified, so the caller held a valid session — but the
       // provider will not describe the user. A 404 means the account was
@@ -989,6 +1015,9 @@ export function createV1Routes(deps: {
     if (!accountDeletion.supported)
       return errorResponse(c, 503, "internal_error", "Account deletion is not configured");
     await accountDeletion.request(session.userId);
+    // The durable deletion fence already refuses this account; this only keeps
+    // the process from describing a user it has just asked to erase.
+    invalidateUserCache(session.userId);
     c.header("Cache-Control", "private, no-store");
     return c.json({ status: "pending" }, 202);
   });
@@ -1891,10 +1920,20 @@ export function createV1Routes(deps: {
     }
   });
 
-  async function requireRemoteHostMembership(host: { ownerUserId: string; ownerOrgId: string }) {
+  /**
+   * Refuses a host whose owner has left its workspace. Freshness is the
+   * caller's explicit choice: admission and publication pass
+   * `freshMembership: true` so removal stops them immediately; read-only host
+   * polls pass false and accept the ≤60s membership cache, the documented
+   * read-path SLA.
+   */
+  async function requireRemoteHostMembership(
+    host: { ownerUserId: string; ownerOrgId: string },
+    freshness: { freshMembership: boolean },
+  ) {
     let memberships: OrganizationRef[];
     try {
-      memberships = await grants.listUserOrganizations(host.ownerUserId, { freshMembership: true });
+      memberships = await grants.listUserOrganizations(host.ownerUserId, freshness);
     } catch {
       throw new HostAuthDomainError(502, "internal_error", "Identity provider is unavailable");
     }
@@ -1998,7 +2037,9 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      await requireRemoteHostMembership(host);
+      // A read-only poll: the snapshot it returns changes nothing, so it takes
+      // the cached membership like every other read.
+      await requireRemoteHostMembership(host, { freshMembership: false });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
@@ -2026,7 +2067,7 @@ export function createV1Routes(deps: {
       );
       if (!liveActivityLimiter.tryConsume(`host:${host.id}`))
         return errorResponse(c, 429, "rate_limited", "Too many snapshots");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
@@ -2054,7 +2095,7 @@ export function createV1Routes(deps: {
       if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`publish:${host.id}`, 5)))
         return errorResponse(c, 429, "rate_limited", "Wait before creating another pairing code");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       return c.json(await rendezvous.publish(host, bundle));
     } catch (error) {
       return hostDomainError(c, error);
@@ -2114,7 +2155,7 @@ export function createV1Routes(deps: {
       if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`tunnel:${host.id}`, 10)))
         return errorResponse(c, 429, "rate_limited", "Wait before retrying remote setup");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       return c.json(await deps.tunnels.provision(host, input.originPort));
     } catch (error) {
       if (error instanceof CloudflareError)
@@ -2219,10 +2260,16 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (authenticated) => authenticated,
       );
+      // Cached membership (≤60s), the documented read SLA: this snapshot is
+      // advisory and the host re-verifies on signal. Device revocations are
+      // delivered separately as revocation events and are read from the
+      // database below on every poll, so only `ownerInOrg` can lag. Grants,
+      // pairing, tunnels and publication for this host still read membership
+      // live, so a removed owner is refused there immediately.
       let organizations: OrganizationRef[];
       try {
         organizations = await grants.listUserOrganizations(host.ownerUserId, {
-          freshMembership: true,
+          freshMembership: false,
         });
       } catch (error) {
         console.error("[api] host authorization membership lookup failed:", error);
@@ -2744,10 +2791,11 @@ export function createV1Routes(deps: {
     // DELIBERATE cache acceptance, unlike the other mutating routes: pushes
     // are event-driven and frequent (a busy machine sends several per
     // minute), so a live provider round trip per push would put WorkOS on
-    // the hot path for no security gain — the worst a just-revoked member
-    // can do inside the ≤60s TTL is attribute more usage counters to
-    // themselves under the stale workspace, which leaks nothing and grants
-    // nothing.
+    // the hot path for no security gain. Without `freshMembership` both the
+    // provider user and the membership come from the ≤60s caches, so a warm
+    // push makes no provider call at all. The worst a just-revoked member
+    // can do inside the TTL is attribute more usage counters to themselves
+    // under the stale workspace, which leaks nothing and grants nothing.
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
