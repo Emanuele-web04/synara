@@ -19,6 +19,9 @@ const CONTROL_METHODS = new Set<string>([
   WS_METHODS.serverGetRuntimeStatus,
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   ORCHESTRATION_WS_METHODS.settleTurnDispatch,
+  // "Unblock thread" lists a thread's blockers (LIMIT-bounded, indexed) before
+  // reconciling them; recovery must not queue behind snapshot and stats reads.
+  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
   ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
   ORCHESTRATION_WS_METHODS.prepareQuitResume,
   WS_METHODS.terminalWrite,
@@ -42,7 +45,6 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   ORCHESTRATION_WS_METHODS.getFullThreadDiff,
   ORCHESTRATION_WS_METHODS.getInlineVisual,
   ORCHESTRATION_WS_METHODS.replayEvents,
-  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
   WS_METHODS.projectsSearchEntries,
   WS_METHODS.projectsSearchLocalEntries,
   WS_METHODS.projectsSearchContent,

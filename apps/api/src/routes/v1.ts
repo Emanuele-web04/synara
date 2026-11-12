@@ -80,6 +80,7 @@ import {
 } from "@synara/contracts";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { unionAll } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -2236,9 +2237,32 @@ export function createV1Routes(deps: {
       // the host-scoped event is the safe evidence that this device could have
       // reached THIS host. Combining only those two sources prevents unrelated
       // tenants' churn from leaking or consuming the bounded snapshot.
-      const [revokedOwnerDevices, revokedMemberDevices] = await Promise.all([
+      // One fresh database snapshot and one result description per poll, including
+      // empty feeds. Keep each source's tenant scope, retention and bound intact.
+      const revocations = await unionAll(
         db
-          .select({ jkt: deviceRows.jkt, revokedAt: deviceRows.revokedAt })
+          .select({
+            jkt: sql<string | null>`${deviceRows.jkt}`,
+            revokedAt: sql<Date | string | null>`${deviceRevocationDeliveries.revokedAt}`,
+            source: sql<number>`0`,
+          })
+          .from(deviceRevocationDeliveries)
+          .innerJoin(deviceRows, eq(deviceRows.id, deviceRevocationDeliveries.deviceId))
+          .where(
+            and(
+              eq(deviceRevocationDeliveries.hostId, host.id),
+              eq(deviceRows.userId, host.ownerUserId),
+              isNull(deviceRevocationDeliveries.confirmedAt),
+            ),
+          )
+          .orderBy(desc(deviceRevocationDeliveries.revokedAt))
+          .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
+        db
+          .select({
+            jkt: deviceRows.jkt,
+            revokedAt: deviceRows.revokedAt,
+            source: sql<number>`1`,
+          })
           .from(deviceRows)
           .where(
             and(
@@ -2253,6 +2277,7 @@ export function createV1Routes(deps: {
           .select({
             jkt: revocationEvents.subject,
             revokedAt: sql<Date>`max(${revocationEvents.createdAt})`,
+            source: sql<number>`2`,
           })
           .from(revocationEvents)
           .where(
@@ -2266,26 +2291,11 @@ export function createV1Routes(deps: {
           .groupBy(revocationEvents.subject)
           .orderBy(desc(sql`max(${revocationEvents.createdAt})`))
           .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
-      ]);
-      const pendingDeliveries = await db
-        .select({ jkt: deviceRows.jkt, revokedAt: deviceRevocationDeliveries.revokedAt })
-        .from(deviceRevocationDeliveries)
-        .innerJoin(deviceRows, eq(deviceRows.id, deviceRevocationDeliveries.deviceId))
-        .where(
-          and(
-            eq(deviceRevocationDeliveries.hostId, host.id),
-            eq(deviceRows.userId, host.ownerUserId),
-            isNull(deviceRevocationDeliveries.confirmedAt),
-          ),
-        )
-        .orderBy(desc(deviceRevocationDeliveries.revokedAt))
-        .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT);
+      );
       const revokedDeviceJkts: string[] = [];
       const seenRevokedDevices = new Set<string>();
-      // The two branches disagree on shape: drizzle hydrates the column read
-      // into a Date, while `max(...)` comes back as whatever pg's driver
-      // yields for the aggregate. Normalize before comparing rather than
-      // assuming a Date — calling .getTime() on the aggregate 500s the route.
+      // Raw timestamp/aggregate expressions can arrive as strings, unlike
+      // Drizzle column reads. Normalize before comparing either driver shape.
       const revokedAtMs = (value: unknown): number => {
         if (value instanceof Date) return value.getTime();
         if (typeof value === "string" || typeof value === "number") {
@@ -2294,11 +2304,13 @@ export function createV1Routes(deps: {
         }
         return 0;
       };
-      for (const revoked of [
-        ...pendingDeliveries,
-        ...revokedOwnerDevices,
-        ...revokedMemberDevices,
-      ].toSorted((left, right) => revokedAtMs(right.revokedAt) - revokedAtMs(left.revokedAt))) {
+      // UNION ALL does not promise branch order. Preserve pending -> owner ->
+      // member precedence on equal timestamps before applying the shared cap.
+      const orderedRevocations = revocations.toSorted(
+        (left, right) =>
+          revokedAtMs(right.revokedAt) - revokedAtMs(left.revokedAt) || left.source - right.source,
+      );
+      for (const revoked of orderedRevocations) {
         if (revoked.jkt === null || seenRevokedDevices.has(revoked.jkt)) continue;
         seenRevokedDevices.add(revoked.jkt);
         revokedDeviceJkts.push(revoked.jkt);
@@ -2307,9 +2319,10 @@ export function createV1Routes(deps: {
       const body: HostAuthorizationSnapshot = {
         remoteBillingEnforced: deps.remoteBillingEnforced === true,
         revokedDeviceJkts,
-        pendingRevocationDeviceJkts: pendingDeliveries
+        pendingRevocationDeviceJkts: orderedRevocations
+          .filter((entry) => entry.source === 0)
           .map((entry) => entry.jkt)
-          .filter((jkt) => seenRevokedDevices.has(jkt)),
+          .filter((jkt): jkt is string => jkt !== null && seenRevokedDevices.has(jkt)),
         discoverable: host.discoverable,
         ownerUserId: host.ownerUserId,
         orgId: host.ownerOrgId,

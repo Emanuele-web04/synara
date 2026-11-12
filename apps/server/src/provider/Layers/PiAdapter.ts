@@ -2202,19 +2202,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       const warnUnsupported = (method: string) => {
         if (unsupportedWarnings.has(method)) return;
         unsupportedWarnings.add(method);
-        offerRuntimeEvent({
-          ...makeEventBase(context, { includeTurnId: false }),
-          type: "runtime.warning",
-          payload: {
-            message: `Pi extension UI API '${method}' is not supported in Synara yet.`,
-            detail: { method },
-          },
-          raw: {
-            source: "pi.sdk.event",
-            method: "extension/ui-unsupported",
-            payload: { method },
-          },
-        } satisfies ProviderRuntimeEvent);
+        // Terminal-only extension chrome is a developer concern, not transcript content.
+        Effect.runFork(
+          Effect.logDebug("pi.extension_ui_unsupported", {
+            threadId: context.session.threadId,
+            method,
+          }),
+        );
       };
       const uiContext: ExtensionUIContext = {
         async select(title, options, opts) {

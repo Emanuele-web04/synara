@@ -302,6 +302,26 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+it("marks Codex stderr warnings so replay can apply the stderr policy to them alone", () => {
+  const project = (provider: "codex" | "cursor", method: string) =>
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider,
+        type: "runtime.warning",
+        eventId: `${provider}-${method}`,
+        turnId: TURN_ID,
+        payload: { message: "fatal: permission denied" },
+        raw: { source: "codex.app-server.notification", method, payload: {} },
+      }),
+    )[0];
+
+  expect(project("codex", "process/stderr")?.payload).toMatchObject({
+    nativeEventType: "codex.process/stderr",
+  });
+  expect(project("cursor", "process/stderr")?.payload).not.toHaveProperty("nativeEventType");
+  expect(project("codex", "warning")?.payload).toMatchObject({ nativeEventType: "codex.warning" });
+});
+
 it("projects Claude Monitor events as labeled notices", () => {
   const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
   const [activity] = projectProviderRuntimeActivities(

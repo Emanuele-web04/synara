@@ -366,6 +366,29 @@ export function isSafeLegacyProviderBlocker(lastError: string | null): boolean {
   return normalized.includes("stdin closed before the frame was written");
 }
 
+/** Recorded on an external provider command whose claim expired before it settled. */
+export const PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL =
+  "External provider command claim expired without a durable acceptance result; execution was not replayed.";
+
+const EXPIRED_INTERRUPT_CLAIM_NOTE =
+  "Interrupt left in flight by an earlier server process; the runtime it targeted ended with that process. Settled without replay.";
+
+/**
+ * An interrupt left in flight by an earlier server process. The runtime binding
+ * it targeted ended with that process, so neither it nor its outcome can apply
+ * to anything running now; restart turn reconciliation settles the turn it
+ * left running. Other commands with this detail stay ambiguous and blocked.
+ */
+export function isExpiredInterruptClaimBlocker(
+  blocker: Pick<ProviderBlockingDeliveryEvidence, "eventType" | "state" | "lastError">,
+): boolean {
+  return (
+    blocker.eventType === "thread.turn-interrupt-requested" &&
+    blocker.state === "uncertain" &&
+    blocker.lastError === PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL
+  );
+}
+
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -9467,6 +9490,58 @@ const make = Effect.gen(function* () {
       return true;
     });
 
+    // An earlier server process died with this interrupt in flight. The runtime
+    // binding it targeted ended with that process, and replaying it could stop
+    // a turn started since, so it is neither replayed nor allowed to quarantine
+    // the thread. Restart turn reconciliation settles a turn the dead runtime
+    // left running. The terminal record plus an abandon reconciliation keep the
+    // audit trail; a crash between the two writes leaves exactly the blocker
+    // that startup recovery reconciles the same way.
+    const settleExpiredForeignInterruptClaim = Effect.fnUntraced(function* (input: {
+      readonly event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>;
+      readonly expiredOwner: string;
+    }) {
+      const { event } = input;
+      const settledAt = new Date().toISOString();
+      const marked = yield* deliveryRepository.markTerminalFailure({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+        expectedClaimOwner: input.expiredOwner,
+        state: "uncertain",
+        error: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+        updatedAt: settledAt,
+      });
+      if (!marked) {
+        return yield* Effect.die(
+          new Error(
+            `Provider command delivery ${event.sequence} lost terminal settlement ownership`,
+          ),
+        );
+      }
+      const reconciled = yield* deliveryRepository.reconcile({
+        reconciliationId: crypto.randomUUID(),
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+        threadId: event.payload.threadId,
+        expectedState: "uncertain",
+        outcome: "abandon",
+        reconciledBy: "system:provider-command-reactor",
+        note: EXPIRED_INTERRUPT_CLAIM_NOTE,
+        reconciledAt: settledAt,
+      });
+      yield* Effect.logWarning(
+        Option.isSome(reconciled)
+          ? "provider interrupt claimed by an earlier server process expired; settled without replay"
+          : "provider interrupt claimed by an earlier server process expired; its blocker is left for startup recovery",
+        {
+          eventSequence: event.sequence,
+          threadId: event.payload.threadId,
+          expiredOwner: input.expiredOwner,
+        },
+      );
+      yield* requireCursorAdvance(event);
+    });
+
     const processClaimedProviderIntent = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       const threadId = event.payload.threadId;
       const handoff = readProviderHandoff(event);
@@ -9578,13 +9653,19 @@ const make = Effect.gen(function* () {
               }
             }
           }
+          if (
+            event.type === "thread.turn-interrupt-requested" &&
+            !expiredOwner.startsWith(`${processOwner}:`)
+          ) {
+            yield* settleExpiredForeignInterruptClaim({ event, expiredOwner });
+            return;
+          }
           if (!isReplaySafeClaimedProviderIntent(event)) {
             yield* settleTerminalFailure({
               event,
               claimOwner: expiredOwner,
               state: "uncertain",
-              detail:
-                "External provider command claim expired without a durable acceptance result; execution was not replayed.",
+              detail: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
             });
             return;
           }
@@ -10242,8 +10323,9 @@ const make = Effect.gen(function* () {
         );
     });
 
-    // Recover only proven pre-write failures or quit interrupts whose provider
-    // had already stopped. Exit-unproven failures remain quarantined.
+    // Recover only proven pre-write failures, quit interrupts whose provider
+    // had already stopped, and interrupts whose claim expired with an earlier
+    // process. Exit-unproven failures remain quarantined.
     // Skipped prompts are not replayed at startup; instead, surface a durable
     // activity asking the user to resend them.
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
@@ -10266,7 +10348,14 @@ const make = Effect.gen(function* () {
           )
             continue;
           const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
-          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) {
+          // Every claim in a blocker found at startup belonged to an earlier
+          // process, so an expired interrupt claim targeted a dead binding.
+          const expiredInterrupt = !settledQuit && isExpiredInterruptClaimBlocker(blocker);
+          if (
+            !settledQuit &&
+            !expiredInterrupt &&
+            !isSafeLegacyProviderBlocker(blocker.lastError)
+          ) {
             // A surviving blocker keeps the thread quarantined across the
             // restart; without this the "Unblock thread" contract only appears
             // after another message is skipped. Surface it once per thread.
@@ -10296,13 +10385,19 @@ const make = Effect.gen(function* () {
             reconciledBy: "system:provider-command-reactor",
             note: settledQuit
               ? "Intentional quit interrupt: provider stop was recorded before shutdown rejected its diagnostic; settled without replay."
-              : "Recorded failure proves the provider never executed this command; settled at startup.",
+              : expiredInterrupt
+                ? EXPIRED_INTERRUPT_CLAIM_NOTE
+                : "Recorded failure proves the provider never executed this command; settled at startup.",
             reconciledAt: new Date().toISOString(),
           });
           if (Option.isNone(reconciled)) continue;
 
           quarantinedThreads.delete(blocker.threadId);
-          if (settledQuit) {
+          if (settledQuit || expiredInterrupt) {
+            // Clear the block banner this blocker put on the session, and only
+            // that one: an expired interrupt's banner can sit on a session in
+            // any status, so leave the status alone unless it is the error the
+            // block set.
             const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
               threadId: blocker.threadId,
@@ -10310,7 +10405,8 @@ const make = Effect.gen(function* () {
             const session = (yield* resolveThreadShell(blocker.threadId))?.session;
             if (
               Option.isNone(remaining) &&
-              session?.status === "error" &&
+              session != null &&
+              (session.status === "error" || expiredInterrupt) &&
               session.activeTurnId === null &&
               blocker.lastError !== null &&
               session.lastError === formatProviderDeliveryBlockDetail(blocker.lastError)
@@ -10319,7 +10415,12 @@ const make = Effect.gen(function* () {
               yield* setThreadSession({
                 threadId: blocker.threadId,
                 expectedSession: session,
-                session: { ...session, status: "stopped", lastError: null, updatedAt: createdAt },
+                session: {
+                  ...session,
+                  status: session.status === "error" ? "stopped" : session.status,
+                  lastError: null,
+                  updatedAt: createdAt,
+                },
                 createdAt,
               });
             }

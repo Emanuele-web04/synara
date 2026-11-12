@@ -771,6 +771,18 @@ Provider references: [connections](https://supabase.com/docs/guides/database/con
 [Data API settings](https://supabase.com/docs/guides/api/securing-your-api),
 [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
+Host polling keeps its authorization and notification cadence. To limit database
+egress, proof verification projects only identity and heartbeat fields under the
+existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
+less than a minute old. Authorization reads all three bounded revocation sources
+in one statement, retaining pending-delivery precedence on equal timestamps and
+requiring acknowledgements even beyond ordinary event retention. Billing access
+projects only entitlement fields while retaining its transaction, deletion check,
+pending-webhook check and provider freshness limit; it adds no authorization cache.
+Measure PostgreSQL response bytes separately from the provider's billed egress:
+local warm-connection measurements exclude connection setup, TLS/TCP overhead,
+other routes and the production traffic mix.
+
 ## Deploying to Cloudflare
 
 Synara's selected API host is Cloudflare Containers. The public profiles run in

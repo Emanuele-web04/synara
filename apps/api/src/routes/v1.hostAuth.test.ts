@@ -717,6 +717,75 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   });
 
   describe("3. HostProof", () => {
+    it("retains old pending revocations until acknowledgement and prioritizes them at the snapshot cap", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      const host = await linkHost(app, owner);
+      const device = await registerDevice(app, owner);
+      const headers = { authorization: `HostProof ${await hostProof(host.key, host)}` };
+      const snapshot = async () => {
+        const response = await app.request(`/api/v1/hosts/${host.id}/authorization`, { headers });
+        expect(response.status).toBe(200);
+        return response.json() as Promise<{
+          revokedDeviceJkts: string[];
+          pendingRevocationDeviceJkts: string[];
+        }>;
+      };
+      await pool.query("UPDATE devices SET revoked_at=now()-interval '30 days' WHERE id=$1", [
+        device.id,
+      ]);
+      await pool.query(
+        `INSERT INTO device_revocation_deliveries(device_id,host_id,revoked_at)
+        VALUES($1,$2,now()-interval '30 days')`,
+        [device.id, host.id],
+      );
+      expect(await snapshot()).toMatchObject({
+        revokedDeviceJkts: [device.jkt],
+        pendingRevocationDeviceJkts: [device.jkt],
+      });
+      expect(
+        (
+          await app.request(`/api/v1/hosts/${host.id}/device-revocations/ack`, {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({ deviceJkts: [device.jkt] }),
+          })
+        ).status,
+      ).toBe(204);
+      expect(await snapshot()).toMatchObject({
+        revokedDeviceJkts: [],
+        pendingRevocationDeviceJkts: [],
+      });
+
+      const at = new Date();
+      await pool.query(
+        `INSERT INTO devices(user_id,public_key_jwk,jkt,display_name,platform,revoked_at)
+        SELECT $1,'{}',$2 || n::text,'Test','ios',$3 FROM generate_series(1,102) n`,
+        [owner.userId, `${device.jkt}-`, at],
+      );
+      // These keys may fall outside the owner's bounded branch. Equal timestamps
+      // must still give pending delivery precedence over that branch's 100 rows.
+      await pool.query(
+        `INSERT INTO device_revocation_deliveries(device_id,host_id,revoked_at)
+        SELECT id,$1,$2 FROM devices WHERE user_id=$3 AND jkt=$4`,
+        [host.id, at, owner.userId, `${device.jkt}-102`],
+      );
+      await pool.query(
+        `UPDATE device_revocation_deliveries SET confirmed_at=NULL,revoked_at=$1 WHERE device_id=$2 AND host_id=$3`,
+        [new Date(at.getTime() + 1), device.id, host.id],
+      );
+      // The same thumbprint from a member event must not consume another slot.
+      await pool.query(
+        "INSERT INTO revocation_events(host_id,kind,subject,created_at) VALUES($1,'device_revoked',$2,$3)",
+        [host.id, `${device.jkt}-102`, at],
+      );
+      const bounded = await snapshot();
+      expect(bounded.revokedDeviceJkts).toHaveLength(100);
+      expect(new Set(bounded.revokedDeviceJkts).size).toBe(100);
+      expect(bounded.revokedDeviceJkts.slice(0, 2)).toEqual([device.jkt, `${device.jkt}-102`]);
+      expect(bounded.pendingRevocationDeviceJkts).toEqual([device.jkt, `${device.jkt}-102`]);
+    });
+
     it("returns revoked device thumbprints only for users who could reach this host", async () => {
       const { app, db } = buildApp();
       const owner = await signIn();
@@ -756,6 +825,8 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const owner = await signIn();
       const host = await linkHost(app, owner, { environmentId: randomUUID() });
       const valid = await hostProof(host.key, host);
+      const staleSeenAt = new Date(Date.now() - 61_000);
+      await db.update(hosts).set({ lastSeenAt: staleSeenAt }).where(eq(hosts.id, host.id));
       expect(
         await Promise.all(
           [0, 1].map(
@@ -768,6 +839,19 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           ),
         ),
       ).toEqual([200, 200]);
+      const [seen] = await db
+        .select({ at: hosts.lastSeenAt })
+        .from(hosts)
+        .where(eq(hosts.id, host.id));
+      expect(seen!.at.getTime()).toBeGreaterThan(staleSeenAt.getTime());
+      await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+        headers: { authorization: `HostProof ${valid}` },
+      });
+      const [seenAgain] = await db
+        .select({ at: hosts.lastSeenAt })
+        .from(hosts)
+        .where(eq(hosts.id, host.id));
+      expect(seenAgain!.at).toEqual(seen!.at);
       expect(
         (
           await app.request(`/api/v1/hosts/${host.id}/endpoints`, {
