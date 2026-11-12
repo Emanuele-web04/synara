@@ -2771,8 +2771,16 @@ describe("ChatView transcript geometry (full app)", () => {
         nextFixture.projectAgentSummariesPending = true;
       };
       const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot, configureFixture });
-      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
-      await first.cleanup();
+      try {
+        await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+      } finally {
+        await first.cleanup();
+      }
+
+      // Reopening starts a fresh connection while the server still owns the failed turn.
+      resetRetainedThreadDetailSubscriptionsForTests();
+      await resetWsNativeApiForTest();
+      wsRequests.length = 0;
       const reopened = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot,
