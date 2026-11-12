@@ -253,6 +253,12 @@ seconds; explicit status reads reconcile immediately. Provider outages leave
 events retryable without holding up normal host/tunnel housekeeping. Remote
 access checks use a bounded 30-second cache, bypass pending webhook work and
 expired access leases, and do not convert provider failures into stale grants.
+A grant checked within those 30 seconds, with an unexpired lease, no pending
+webhook and no erasure request, is answered by one read-only statement; anything
+else takes the locked path, which re-checks under the lock and reconciles with
+Polar when the grant is not reusable. The window stays at 30 seconds because
+the access policy refuses statuses older than 60 seconds, so a longer reuse
+would answer `billing_unavailable` rather than save a Polar call.
 
 Checkout creation commits a durable attempt ID and chosen product before sending
 Polar a POST. A timeout is **uncertain**, not proof that no checkout was created.
@@ -503,7 +509,22 @@ makes a revoked membership take effect without anything being purged.
 
 Membership lists are cached per process for 60 seconds, so a burst of requests
 costs one round trip while an added or removed member still takes effect on its
-own.
+own. The WorkOS user behind a session is cached the same way, and read once per
+request. Routine requests (`/me`, host listing, usage push and summary, member count)
+accept both caches, and the read-only watch poll (`GET /hosts/:id/live-activities`)
+accepts the membership cache. When WorkOS is healthy, membership or user
+changes reach these routes within 60 seconds. `GET /hosts/:id/authorization`
+reads membership live on every poll, because the host pauses itself on its
+`ownerInOrg` answer. When a WorkOS user lookup fails with anything but a 404, a
+routine request can reuse the last known user for up to 10 minutes while the
+membership check still passes. A 404 during a cache lookup invalidates the user
+and any pending shared lookup. Concurrent cold lookups for one user share one
+call, and entries past that window are pruned. Creating a personal workspace
+requires a live user lookup. Routes that require fresh organization authorization
+(including profile and workspace writes, host linking and grants, pairing,
+tunnels, and host publication) resolve membership live and fetch the user live
+for bearer sessions. Every signed-in request checks the durable account deletion
+fence first.
 
 ## What WorkOS owning identity means in practice
 
@@ -784,9 +805,14 @@ egress, proof verification projects only identity and heartbeat fields under the
 existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
 less than a minute old. Authorization reads all three bounded revocation sources
 in one statement, retaining pending-delivery precedence on equal timestamps and
-requiring acknowledgements even beyond ordinary event retention. Billing access
-projects only entitlement fields while retaining its transaction, deletion check,
-pending-webhook check and provider freshness limit; it adds no authorization cache.
+requiring acknowledgements even beyond ordinary event retention. The
+authorization snapshot reads the owner's membership live; the watch poll takes
+it from the 60-second cache described above. Billing access projects only entitlement fields: a grant
+reconciled within 30 seconds, with no pending webhook or erasure request, is
+read in one statement with no transaction or write, and everything else keeps
+the locked path with its deletion check, pending-webhook check and provider
+freshness limit. Every signed-in (bearer-token) request checks the
+revoked-session and erasure tombstones in one statement.
 Measure PostgreSQL response bytes separately from the provider's billed egress:
 local warm-connection measurements exclude connection setup, TLS/TCP overhead,
 other routes and the production traffic mix.

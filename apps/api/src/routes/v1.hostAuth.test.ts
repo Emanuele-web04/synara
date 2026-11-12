@@ -21,6 +21,7 @@ import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
+import { clearUserCache } from "../identity/userCache";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createBillingService } from "../billing/service";
@@ -297,7 +298,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
     await workos?.close();
   });
 
-  beforeEach(() => clearOrgCache());
+  beforeEach(() => {
+    clearOrgCache();
+    clearUserCache();
+  });
 
   it.each([undefined, false, true])(
     "publishes only uncached deployment policy without authentication (enforced: %s)",
@@ -1431,7 +1435,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
 
   describe("managed remote token isolation", () => {
     describe("paid remote admission", () => {
-      function billingFixture() {
+      function billingFixture(billingPool = pool) {
         const states = new Map<string, BillingSnapshot>();
         const provider: BillingProvider = {
           environment: "sandbox",
@@ -1453,7 +1457,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           cancelRenewals: vi.fn(async () => {}),
           verify: vi.fn(async () => null),
         };
-        const billing = createBillingService({ pool, provider });
+        const billing = createBillingService({ pool: billingPool, provider });
         const paid = (userId: string) =>
           states.set(userId, {
             customerId: randomUUID(),
@@ -1677,6 +1681,9 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         const owner = await signIn();
         const host = await linkHost(app, owner);
         workos.removeMembership(owner.orgId, owner.userId);
+        // The poll reads membership through the ≤60s cache that linking just
+        // filled; expire it, standing in for the TTL.
+        clearOrgCache();
         const response = await app.request(`/api/v1/hosts/${host.id}/live-activities`, {
           headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
         });
@@ -1718,6 +1725,67 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           remoteBillingEnforced: true,
         });
         expect(access).not.toHaveBeenCalled();
+      });
+
+      it("serves repeat host polls with no Polar call or billing transaction, and watch polls with no WorkOS call", async () => {
+        // Billing on its own pool, so every statement it issues is observable
+        // apart from the host-proof and live-activity queries.
+        const billingDb = createDb(databaseUrl);
+        try {
+          const { billing, provider, paid } = billingFixture(billingDb.pool);
+          const { app } = buildApp(undefined, false, { billing, remoteBillingEnforced: true });
+          const owner = await signIn();
+          paid(owner.userId);
+          const host = await linkHost(app, owner);
+          // Measure the polls' own cost, not what linking left in the caches.
+          clearOrgCache();
+          clearUserCache();
+          vi.mocked(provider.state).mockClear();
+          const poll = async (suffix: "authorization" | "live-activities") =>
+            app.request(`/api/v1/hosts/${host.id}/${suffix}`, {
+              headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+            });
+          const providerReads = (since: number) =>
+            workos.requests
+              .slice(since)
+              .filter(
+                (request) =>
+                  request.method === "GET" &&
+                  (request.path === "/user_management/organization_memberships" ||
+                    request.path.startsWith("/user_management/users/")),
+              ).length;
+
+          const cold = workos.requests.length;
+          const first = await poll("authorization");
+          expect(first.status).toBe(200);
+          expect(await first.json()).toMatchObject({ ownerInOrg: true });
+          expect(providerReads(cold)).toBe(1);
+          expect(provider.state).toHaveBeenCalledTimes(1);
+
+          const checkouts = vi.spyOn(billingDb.pool, "connect");
+          const statements = vi.spyOn(billingDb.pool, "query");
+          const polls = ["authorization", "live-activities", "authorization", "live-activities"];
+          for (const suffix of polls as Array<"authorization" | "live-activities">) {
+            const before = workos.requests.length;
+            expect((await poll(suffix)).status).toBe(200);
+            // The authorization snapshot reads membership live on every poll
+            // (the host acts on `ownerInOrg`); the watch poll reuses the cache.
+            expect(providerReads(before)).toBe(suffix === "authorization" ? 1 : 0);
+          }
+          expect(provider.state).toHaveBeenCalledTimes(1);
+          // One read-only statement per poll. pool.query checks a client out
+          // through connect(callback) internally; a transaction would need an
+          // explicit checkout, and none happened.
+          expect(statements).toHaveBeenCalledTimes(polls.length);
+          for (const [text] of statements.mock.calls)
+            // Whole keywords only: the statement reads the `deleted_at` column.
+            expect(String(text)).not.toMatch(
+              /\b(insert|update|delete|for update|pg_advisory\w*)\b/i,
+            );
+          expect(checkouts.mock.calls.filter((args) => typeof args[0] !== "function")).toEqual([]);
+        } finally {
+          await billingDb.pool.end();
+        }
       });
 
       it("preserves beta admission and skips billing entirely when enforcement is off", async () => {
@@ -2009,6 +2077,62 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
       });
       expect(await snapshot.json()).toMatchObject({ ownerInOrg: false });
+    });
+    it("keeps the authorization snapshot and host publication live while the watch poll may answer from cache", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      const host = await linkHost(app, owner);
+      const hostHeaders = async () => ({
+        authorization: `HostProof ${await hostProof(host.key, host)}`,
+        "content-type": "application/json",
+      });
+      const snapshot = async () =>
+        (
+          await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+            headers: await hostHeaders(),
+          })
+        ).json();
+      const watches = async () =>
+        (
+          await app.request(`/api/v1/hosts/${host.id}/live-activities`, {
+            headers: await hostHeaders(),
+          })
+        ).status;
+
+      expect(await watches()).toBe(200);
+      workos.removeMembership(owner.orgId, owner.userId);
+      // Inside the TTL the read-only watch poll may still answer from the
+      // cache...
+      expect(await watches()).toBe(200);
+      // ...and once it expires (cleared here, standing in for the TTL) it
+      // sees the removal.
+      clearOrgCache();
+      expect(await watches()).toBe(403);
+
+      // Restore, warm the cache, remove again: the authorization snapshot
+      // reads membership live, reports the loss at once, and its fresh answer
+      // refills the cache the watch poll reads.
+      workos.addMembership(owner.orgId, owner.userId);
+      clearOrgCache();
+      expect(await watches()).toBe(200);
+      workos.removeMembership(owner.orgId, owner.userId);
+      expect(await watches()).toBe(200);
+      expect(await snapshot()).toMatchObject({ ownerInOrg: false });
+      expect(await watches()).toBe(403);
+
+      // Same for publication: live, refused at once.
+      workos.addMembership(owner.orgId, owner.userId);
+      clearOrgCache();
+      expect(await watches()).toBe(200);
+      workos.removeMembership(owner.orgId, owner.userId);
+      const published = await app.request(`/api/v1/hosts/${host.id}/live-activities`, {
+        method: "PUT",
+        headers: await hostHeaders(),
+        body: JSON.stringify({ sequence: 1, turns: [] }),
+      });
+      expect(published.status).toBe(403);
+      expect(await published.json()).toMatchObject({ error: "not_host_owner" });
+      expect(await watches()).toBe(403);
     });
     it("refuses grants and authorization snapshots when the account loses the explicit test entitlement", async () => {
       const { app } = buildApp();

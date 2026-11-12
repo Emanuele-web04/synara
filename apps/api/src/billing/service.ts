@@ -55,6 +55,42 @@ type Row = {
   deleted_at: Date | null;
 };
 
+/**
+ * How long a reconciled authorization is reused without asking the provider.
+ * Deliberately below REMOTE_BILLING_MAX_STATUS_AGE_MS in accessPolicy.ts,
+ * which refuses older statuses outright: a longer reuse here would turn into
+ * `billing_unavailable` there, not into fewer provider calls.
+ */
+const ACCESS_REUSE_MS = 30_000;
+
+type AccessRow = Pick<Row, "access_granted" | "checked_at" | "valid_until">;
+type BillingAccess = Pick<
+  AccountBillingStatus,
+  "available" | "access" | "checkedAt" | "validUntil"
+>;
+
+/**
+ * Whether a stored authorization may be served without reconciling: checked
+ * within the reuse window by the API clock (a future timestamp is not
+ * trusted), and its lease not yet over. Pending webhooks and the erasure
+ * fence are checked separately by each caller.
+ */
+function isAccessReusable(row: AccessRow, now: number): boolean {
+  const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
+  return (
+    age >= 0 && age <= ACCESS_REUSE_MS && (!row.valid_until || row.valid_until.getTime() > now)
+  );
+}
+
+function serializeAccess(row: AccessRow): BillingAccess {
+  return {
+    available: true,
+    access: row.access_granted ? "granted" : "none",
+    checkedAt: row.checked_at?.toISOString() ?? null,
+    validUntil: row.valid_until?.toISOString() ?? null,
+  };
+}
+
 function serialize(
   row: Row,
   plans: AccountBillingStatus["plans"],
@@ -193,20 +229,39 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         return serialize(await reconcile(client, userId), plans, provider.environment);
       });
     },
-    async access(
-      userId: string,
-    ): Promise<Pick<AccountBillingStatus, "available" | "access" | "checkedAt" | "validUntil">> {
-      // Authorization needs no customer, product or checkout payload. Keep the
-      // same locks, tombstone check and webhook freshness as the full ledger read.
+    async access(userId: string): Promise<BillingAccess> {
+      // Authorization needs no customer, product or checkout payload. The
+      // common case — a recent, unexpired grant with no pending webhook on a
+      // live account — is answered by one read-only statement: no transaction,
+      // lock or write. The erasure fence is read from account_deletions too,
+      // because the locked path's upsert is what copies it into deleted_at.
+      await initialize();
+      const { rows } = await pool.query<
+        AccessRow & Pick<Row, "deleted_at"> & { pending_webhook: boolean; deleting: boolean }
+      >(
+        `SELECT access_granted, checked_at, valid_until, deleted_at,
+          EXISTS(SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL) AS pending_webhook,
+          EXISTS(SELECT 1 FROM account_deletions WHERE user_id=$1) AS deleting
+        FROM billing_accounts WHERE user_id=$1`,
+        [userId],
+      );
+      const stored = rows[0];
+      if (
+        stored &&
+        !stored.deleted_at &&
+        !stored.deleting &&
+        !stored.pending_webhook &&
+        isAccessReusable(stored, Date.now())
+      )
+        return serializeAccess(stored);
+      // Anything else re-decides under the same locks, tombstone check and
+      // webhook freshness as the full ledger read.
       return withAccount(
         userId,
         async (client, row) => {
           assertAvailable(row);
-          const now = Date.now();
-          const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
           let current = row;
-          let reusable =
-            age >= 0 && age <= 30_000 && (!row.valid_until || row.valid_until.getTime() > now);
+          let reusable = isAccessReusable(row, Date.now());
           if (reusable) {
             const pending = await client.query(
               "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
@@ -216,12 +271,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           }
           // A failed refresh cannot extend an old authorization lease.
           if (!reusable) current = await reconcile(client, userId);
-          return {
-            available: true,
-            access: current.access_granted ? "granted" : "none",
-            checkedAt: current.checked_at?.toISOString() ?? null,
-            validUntil: current.valid_until?.toISOString() ?? null,
-          };
+          return serializeAccess(current);
         },
         ["access_granted", "checked_at", "valid_until", "deleted_at"],
       );

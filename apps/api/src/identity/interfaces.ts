@@ -369,7 +369,6 @@ export type HostKeyRegistry = {
 
 export type DeviceRegistry = {
   register(userId: string, proof: string, verifiedSessionId: string): Promise<AccountDevice>;
-  isSessionRevoked(userId: string, sessionId: string): Promise<boolean>;
   revokeSessions(
     userId: string,
     deviceId: string,

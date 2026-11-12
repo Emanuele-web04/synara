@@ -35,6 +35,20 @@ function discoveryPath(clientId: string): string {
 }
 
 describe("verifyAccessToken", () => {
+  it("checks that the user still exists before provisioning from a cached identity", async () => {
+    const user = workos.addUser({ id: "user_deleted_before_provision", email: "gone@example.net" });
+    const { verifier, grants } = createWorkosIdentityProvider(workos.config());
+    await verifier.deleteUser!(user.id);
+    const requestsBefore = workos.requests.length;
+
+    await expect(
+      grants.resolveEnvironmentScope({ userId: user.id, sessionId: "session_deleted" }, user.email),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(workos.requests.slice(requestsBefore)).not.toContainEqual(
+      expect.objectContaining({ method: "POST", path: "/organizations" }),
+    );
+  });
+
   it("preserves migrated ownership across email/SSO grants, refresh, membership and revocation", async () => {
     const user = workos.addUser({
       id: "user_production_migration",
