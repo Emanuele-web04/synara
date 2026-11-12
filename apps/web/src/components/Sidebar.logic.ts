@@ -1740,7 +1740,6 @@ export function deriveSidebarProjectData(input: {
     );
     const requestedExtraPages =
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
-    let orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
     const nestedEntries =
       input.nestChildThreads && project.expanded
         ? nestAgentCreatedThreadEntries(
@@ -1749,12 +1748,10 @@ export function deriveSidebarProjectData(input: {
             input.activeSidebarThreadId,
           )
         : null;
-    if (input.nestChildThreads) {
-      // Shift-click range selection follows visual order, so use the nested DFS order.
-      orderedProjectThreadIds = (
-        nestedEntries ?? nestAgentCreatedThreadEntries(projectThreads, new Set(), undefined)
-      ).map((entry) => entry.rowId);
-    }
+    // Shift-click range selection follows visual order, so use the nested DFS order.
+    const orderedProjectThreadIds = nestedEntries
+      ? nestedEntries.map((entry) => entry.rowId)
+      : projectThreads.map((thread) => thread.id);
 
     // Collapsed folders should not build or render their full tree; large projects can
     // contain hundreds of rows and folder toggles are on the sidebar hot path.
