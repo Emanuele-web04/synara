@@ -69,6 +69,22 @@ const MULTI_PUSH_PACE_MS = 2_100;
  */
 const WATERMARK_SAFETY_LAP_MS = 2 * 60_000;
 
+/**
+ * A flush derives its buckets with synchronous SQLite reads on the server's
+ * event loop, and usage-relevant events keep arriving while it runs. After a
+ * flush, the next debounced one waits this many times as long as the last
+ * flush's local work took, so the reporter blocks the loop for at most about
+ * a tenth of the time however large the database is. `flushNow` (sign-in) is
+ * not paced.
+ */
+const LOCAL_WORK_PACING_MULTIPLE = 10;
+/** Upper bound on that wait, so usage still reaches the account eventually. */
+const MAX_PACED_FLUSH_GAP_MS = 10 * 60_000;
+/** Local work at least this long is reported in the server log. */
+const SLOW_LOCAL_WORK_MS = 1_000;
+/** At most one slow-flush line per this interval. */
+const SLOW_LOCAL_WORK_LOG_INTERVAL_MS = 10 * 60_000;
+
 // Domain events whose effects can change a usage bucket: turn starts (turns +
 // prompt/turn attribution), user messages (prompts, skills), and activity
 // records (token counters). notifyActivity is cheap and debounced, so this
@@ -123,7 +139,10 @@ export interface AccountUsageReporterDeps {
   readonly failureBackoffMs?: number;
   readonly backfillDays?: number;
   readonly now?: () => number;
-  /** One line per failure streak; default console.warn, injectable for tests. */
+  /**
+   * One line per failure streak and, rate-limited, one per slow flush;
+   * default console.warn, injectable for tests.
+   */
   readonly log?: (message: string, data?: Record<string, unknown>) => void;
 }
 
@@ -132,6 +151,37 @@ export interface AccountUsageReporterDeps {
 /** Floors a Unix-ms timestamp to its UTC minute as `YYYY-MM-DDTHH:MM:00Z`. */
 export function minuteStartIso(ms: number): string {
   return `${new Date(ms - (ms % 60_000)).toISOString().slice(0, 17)}00Z`;
+}
+
+/**
+ * How far a stored timestamp's leading `YYYY-MM-DD` can trail the UTC instant
+ * SQLite's date functions read from it. Server writers store
+ * `Date#toISOString()`, but `IsoDateTime` is an unchecked string: client
+ * commands, the quit-resume file, and adopted databases can carry any
+ * spelling those functions accept. A `-14:59` offset, hour `24`, and day 31
+ * of a 28-day month together trail by under 5 days.
+ */
+const RAW_TIMESTAMP_DAY_LAG_MS = 5 * 86_400_000;
+
+/**
+ * Plain-string lower bound for a timestamp column, used next to the exact
+ * `STRFTIME(...) >= fromMinute` test so SQLite can skip older rows (and seek
+ * an index that holds the column) without evaluating STRFTIME on them. It is
+ * a day prefix, which sorts at or below every spelling of that day (`T` or a
+ * space separator, with or without seconds, fractions, or an offset), moved
+ * back by the lag above, so it never excludes a row STRFTIME places in the
+ * window. A plain `column >= fromMinute` would: `...:00.123Z` sorts below
+ * `...:00Z`. Only bare Julian-day numbers such as `+2461356.5` are not
+ * covered; nothing writes them.
+ */
+export function rawTimestampLowerBound(fromMinute: string): string {
+  const boundMs = Date.parse(fromMinute) - RAW_TIMESTAMP_DAY_LAG_MS;
+  if (!Number.isFinite(boundMs)) return "";
+  const bound = new Date(boundMs);
+  const year = bound.getUTCFullYear();
+  // toISOString switches to a signed six-digit year outside 0000-9999, which
+  // would not compare as a prefix; the empty string excludes nothing.
+  return year >= 0 && year <= 9999 ? bound.toISOString().slice(0, 10) : "";
 }
 
 // ── Row shapes ─────────────────────────────────────────────────────────
@@ -266,25 +316,37 @@ export const chunkingForTesting = { chunkByMinute, USAGE_PUSH_MAX_STREAM_BYTES }
 // ── Bucket derivation ──────────────────────────────────────────────────
 
 /**
- * Recomputes every model bucket and skill bucket for UTC minutes >=
- * `fromMinute`. Exported for direct test coverage of the derivation SQL.
- *
- * Token deltas are computed over each thread's FULL activity history and only
- * filtered to the window afterwards: a cumulative counter's first row inside
- * the window would otherwise count the whole pre-window total as one delta.
+ * The per-minute bucket queries for UTC minutes >= `fromMinute`. Every time
+ * filter pairs the exact STRFTIME minute test with `rawTimestampLowerBound`,
+ * so a steady-state flush only reads recent rows. Exported for query-plan
+ * tests; `collectUsageBuckets` is the only production caller.
  */
-export function collectUsageBuckets(
-  sql: SqlClient.SqlClient,
-  fromMinute: string,
-): Effect.Effect<
-  { readonly models: UsageModelBucket[]; readonly skills: UsageSkillBucket[] },
-  unknown
-> {
-  return Effect.gen(function* () {
-    // Share the canonical provider counters and verified Claude turn totals with
-    // local/Inbox statistics; apply the account window only after deriving deltas.
-    const tokenRows = yield* sql<MinuteModelRow>`
-      WITH ${tokenDeltaCtes(sql)}
+export function usageBucketQueries(sql: SqlClient.SqlClient, fromMinute: string) {
+  const rawFrom = rawTimestampLowerBound(fromMinute);
+  return {
+    // Share the canonical provider counters and verified Claude turn totals
+    // with local/Inbox statistics. Deltas need each thread's full history (see
+    // tokenDeltaCtes), so, as in usage analytics and recaps, the scope is
+    // every thread with token activity in the window and the window applies
+    // to the computed delta rows. The scope starts from projection_threads,
+    // which the delta rows join anyway, so each thread is one seek on
+    // (thread_id, created_at); the unary + keeps SQLite from scanning every
+    // token activity through the (kind, ...) index instead. It is materialized
+    // because the token CTEs read it several times.
+    tokens: sql<MinuteModelRow>`
+      WITH usage_token_threads AS MATERIALIZED (
+        SELECT t.thread_id
+        FROM projection_threads t
+        WHERE EXISTS (
+          SELECT 1
+          FROM projection_thread_activities a
+          WHERE a.thread_id = t.thread_id
+            AND a.created_at >= ${rawFrom}
+            AND +a.kind IN ('context-window.updated', 'turn.completed')
+            AND STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) >= ${fromMinute}
+        )
+      ),
+      ${tokenDeltaCtes(sql, { threadIdsQuery: sql`SELECT thread_id FROM usage_token_threads` })}
       SELECT STRFTIME('%Y-%m-%dT%H:%M:00Z', created_at) AS minute,
         provider, model, reasoning, SUM(tokens) AS count
       FROM token_delta_rows
@@ -292,13 +354,14 @@ export function collectUsageBuckets(
         AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
       GROUP BY minute, provider, model, reasoning
       HAVING SUM(tokens) > 0
-    `;
+    `,
 
     // Turns per minute — per-minute variant of profileStats.ts's
     // queryTurnInsights: turn-start events bucketed by their own timestamp,
     // attributed to the event's modelSelection with the thread's current
     // selection as the legacy fallback, agent-dispatched prompts excluded.
-    const turnRows = yield* sql<MinuteModelRow>`
+    // The raw bound drops older events before the JSON reads and joins.
+    turns: sql<MinuteModelRow>`
       WITH per_turn AS (
         SELECT
           STRFTIME('%Y-%m-%dT%H:%M:00Z', e.occurred_at) AS minute,
@@ -344,19 +407,22 @@ export function collectUsageBuckets(
           ON um.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
          AND um.message_id = json_extract(e.payload_json, '$.messageId')
         WHERE e.event_type = 'thread.turn-start-requested'
+          AND e.occurred_at >= ${rawFrom}
           AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
       )
       SELECT minute, provider, model, reasoning, COUNT(*) AS count
       FROM per_turn
       WHERE minute >= ${fromMinute}
       GROUP BY minute, provider, model, reasoning
-    `;
+    `,
 
     // Prompts per minute — the same native-user-prompt filter as
     // profileStats.ts's queryPromptActivity, attributed to the turn the prompt
     // started (turn-start events carry the pending messageId) so the prompt
-    // count lands on the same bucket key as the turn it produced.
-    const promptRows = yield* sql<MinuteModelRow>`
+    // count lands on the same bucket key as the turn it produced. The decider
+    // writes every turn-start event on its thread's stream, so matching
+    // stream_id as well keeps the lookup on the (event_type, stream_id) index.
+    prompts: sql<MinuteModelRow>`
       WITH per_prompt AS (
         SELECT
           STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) AS minute,
@@ -405,24 +471,26 @@ export function collectUsageBuckets(
         LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
         LEFT JOIN orchestration_events e
           ON e.event_type = 'thread.turn-start-requested'
+         AND e.stream_id = m.thread_id
          AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = m.thread_id
          AND json_extract(e.payload_json, '$.messageId') = m.message_id
         WHERE m.role = 'user'
           AND m.source = 'native'
           AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+          AND m.created_at >= ${rawFrom}
           AND STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) >= ${fromMinute}
         GROUP BY m.thread_id, m.message_id
       )
       SELECT minute, provider, model, reasoning, COUNT(*) AS count
       FROM per_prompt
       GROUP BY minute, provider, model, reasoning
-    `;
+    `,
 
     // Skills per minute — the same message rows profileStats.ts's
     // querySkillUsageMessages feeds into aggregateProfileSkillUsageRows,
     // filtered to the window (safe: skill counts have no cross-row deltas) and
     // aggregated per minute with the exact same shared function.
-    const skillMessageRows = yield* sql<MinuteSkillMessageRow>`
+    skillMessages: sql<MinuteSkillMessageRow>`
       SELECT
         STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) AS minute,
         m.message_id AS messageId,
@@ -439,6 +507,7 @@ export function collectUsageBuckets(
       WHERE m.role = 'user'
         AND m.source = 'native'
         AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+        AND m.created_at >= ${rawFrom}
         AND STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) >= ${fromMinute}
         AND (
           (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
@@ -447,7 +516,7 @@ export function collectUsageBuckets(
           OR m.text GLOB '*/[A-Za-z0-9]*'
         )
       ORDER BY m.created_at ASC, m.message_id ASC
-    `;
+    `,
 
     // ── Archived (purged-thread) aggregates ────────────────────────────
     //
@@ -462,7 +531,7 @@ export function collectUsageBuckets(
     // bucket by minute exactly like the live path. The archive has no
     // reasoning dimension — those buckets key on null reasoning, matching the
     // local dashboard's model split, which does not key tokens on reasoning.
-    const archivedTokenRows = yield* sql<MinuteModelRow>`
+    archivedTokens: sql<MinuteModelRow>`
       SELECT
         STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) AS minute,
         a.provider AS provider,
@@ -470,13 +539,14 @@ export function collectUsageBuckets(
         NULL AS reasoning,
         SUM(a.tokens) AS count
       FROM profile_stats_deleted_tokens a
-      WHERE STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) >= ${fromMinute}
+      WHERE a.created_at >= ${rawFrom}
+        AND STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) >= ${fromMinute}
       GROUP BY minute, a.provider, a.model
-    `;
+    `,
 
     // Archived prompts carry only their timestamp (no model attribution, as
     // in the local prompt-activity query); they land on the 'unknown' bucket.
-    const archivedPromptRows = yield* sql<MinuteModelRow>`
+    archivedPrompts: sql<MinuteModelRow>`
       SELECT
         STRFTIME('%Y-%m-%dT%H:%M:00Z', d.created_at) AS minute,
         NULL AS provider,
@@ -484,17 +554,19 @@ export function collectUsageBuckets(
         NULL AS reasoning,
         COUNT(*) AS count
       FROM profile_stats_deleted_prompts d
-      WHERE STRFTIME('%Y-%m-%dT%H:%M:00Z', d.created_at) >= ${fromMinute}
+      WHERE d.created_at >= ${rawFrom}
+        AND STRFTIME('%Y-%m-%dT%H:%M:00Z', d.created_at) >= ${fromMinute}
       GROUP BY minute
-    `;
+    `,
 
     // Archived turns and skills carry NO timestamp — they are pre-aggregated
     // per thread. Attribute each thread's counts to one synthetic minute: the
     // thread's most recent archived token timestamp, falling back to its most
     // recent archived prompt. A thread with neither has no timestamp evidence
     // at all, so its (timestampless) turn/skill counts are skipped — there is
-    // no minute they could truthfully land on.
-    const archivedTurnRows = yield* sql<MinuteModelRow>`
+    // no minute they could truthfully land on. That minute is a per-thread
+    // maximum, not a column, so there is no row-level bound to add here.
+    archivedTurns: sql<MinuteModelRow>`
       WITH thread_minute AS (
         SELECT
           d.thread_id AS thread_id,
@@ -523,9 +595,9 @@ export function collectUsageBuckets(
       WHERE tm.minute IS NOT NULL
         AND tm.minute >= ${fromMinute}
       GROUP BY tm.minute, dt.provider, dt.model, dt.reasoning
-    `;
+    `,
 
-    const archivedSkillRows = yield* sql<MinuteSkillRow>`
+    archivedSkills: sql<MinuteSkillRow>`
       WITH thread_minute AS (
         SELECT
           d.thread_id AS thread_id,
@@ -553,7 +625,35 @@ export function collectUsageBuckets(
       WHERE tm.minute IS NOT NULL
         AND tm.minute >= ${fromMinute}
       GROUP BY tm.minute, ds.name, ds.kind
-    `;
+    `,
+  };
+}
+
+/**
+ * Recomputes every model bucket and skill bucket for UTC minutes >=
+ * `fromMinute`. Exported for direct test coverage of the derivation SQL.
+ *
+ * Token deltas are computed over each thread's FULL activity history and only
+ * filtered to the window afterwards: a cumulative counter's first row inside
+ * the window would otherwise count the whole pre-window total as one delta.
+ */
+export function collectUsageBuckets(
+  sql: SqlClient.SqlClient,
+  fromMinute: string,
+): Effect.Effect<
+  { readonly models: UsageModelBucket[]; readonly skills: UsageSkillBucket[] },
+  unknown
+> {
+  return Effect.gen(function* () {
+    const queries = usageBucketQueries(sql, fromMinute);
+    const tokenRows = yield* queries.tokens;
+    const turnRows = yield* queries.turns;
+    const promptRows = yield* queries.prompts;
+    const skillMessageRows = yield* queries.skillMessages;
+    const archivedTokenRows = yield* queries.archivedTokens;
+    const archivedPromptRows = yield* queries.archivedPrompts;
+    const archivedTurnRows = yield* queries.archivedTurns;
+    const archivedSkillRows = yield* queries.archivedSkills;
 
     // Merge tokens, turns, and prompts onto one bucket key.
     const modelBuckets = new Map<
@@ -751,8 +851,44 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
   let rerunAfterFlight = false;
   let failureStreak = 0;
   let cachedEnvironmentId: string | undefined;
+  // Pacing state: when the running flush's local work started, and how long
+  // the last one took and when it ended (all on the injectable clock).
+  let localWorkStartedAtMs: number | undefined;
+  let lastLocalWorkMs = 0;
+  let lastLocalWorkEndedAtMs: number | undefined;
+  let lastSlowLocalWorkLogAtMs: number | undefined;
+
+  function finishLocalWork(fromMinute: string | undefined): void {
+    if (localWorkStartedAtMs === undefined) return;
+    const endedAtMs = now();
+    const durationMs = Math.max(0, endedAtMs - localWorkStartedAtMs);
+    localWorkStartedAtMs = undefined;
+    lastLocalWorkMs = durationMs;
+    lastLocalWorkEndedAtMs = endedAtMs;
+    if (
+      durationMs >= SLOW_LOCAL_WORK_MS &&
+      (lastSlowLocalWorkLogAtMs === undefined ||
+        endedAtMs - lastSlowLocalWorkLogAtMs >= SLOW_LOCAL_WORK_LOG_INTERVAL_MS)
+    ) {
+      lastSlowLocalWorkLogAtMs = endedAtMs;
+      log("account usage flush spent a long time on local work; pacing later flushes", {
+        durationMs,
+        ...(fromMinute !== undefined ? { fromMinute } : {}),
+      });
+    }
+  }
+
+  /** Delay for the next debounced flush: the debounce, or the pacing gap left. */
+  function nextFlushDelayMs(): number {
+    if (lastLocalWorkEndedAtMs === undefined) return debounceMs;
+    const gapMs = Math.min(LOCAL_WORK_PACING_MULTIPLE * lastLocalWorkMs, MAX_PACED_FLUSH_GAP_MS);
+    // Clamped to the gap itself so a clock step backwards cannot stall syncing.
+    const remainingMs = Math.min(gapMs, lastLocalWorkEndedAtMs + gapMs - now());
+    return Math.max(debounceMs, remainingMs);
+  }
 
   async function flush(options: { readonly bypassBackoff: boolean }): Promise<void> {
+    let windowFromMinute: string | undefined;
     try {
       if (!(await isSignedIn())) return;
 
@@ -768,6 +904,8 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       }
 
       const flushStartedAtMs = now();
+      // Everything up to the derived buckets is local work; pushes are not.
+      localWorkStartedAtMs = flushStartedAtMs;
       // The watermark belongs to ONE identity. A stored watermark whose
       // identity differs from the current one — or predates the identity
       // column (NULL) — proves nothing about what THIS account has received,
@@ -846,7 +984,9 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
         }
       }
 
+      windowFromMinute = fromMinute;
       const { models, skills } = await Effect.runPromise(collectUsageBuckets(sql, fromMinute));
+      finishLocalWork(fromMinute);
 
       if (models.length > 0 || skills.length > 0) {
         cachedEnvironmentId ??= await resolveEnvironment();
@@ -911,6 +1051,8 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       }
       failureStreak = 0;
     } catch (error) {
+      // Local work that failed part-way still occupied the loop; pace on it.
+      finishLocalWork(windowFromMinute);
       failureStreak += 1;
       if (failureStreak === 1) {
         log("account usage push failed; backing off until new activity", {
@@ -933,6 +1075,13 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
     }
     inFlight = flush(options).finally(() => {
       inFlight = undefined;
+      // A timer armed while this flush ran was timed before its cost was
+      // known; re-arm it so the pacing gap applies.
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+        rerunAfterFlight = true;
+      }
       if (rerunAfterFlight && !stopped) {
         rerunAfterFlight = false;
         schedule();
@@ -946,7 +1095,7 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
     timer = setTimeout(() => {
       timer = undefined;
       void runFlush({ bypassBackoff: false });
-    }, debounceMs);
+    }, nextFlushDelayMs());
     timer.unref?.();
   }
 

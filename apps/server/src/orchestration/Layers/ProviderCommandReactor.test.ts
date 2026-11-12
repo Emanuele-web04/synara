@@ -162,6 +162,7 @@ import {
   hasBoundProviderSession,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
+  PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
   resolvePreTurnBaselineTimeoutMs,
 } from "./ProviderCommandReactor.ts";
 import * as groupsBetaGate from "../../projectAgent/groupsBetaGate.ts";
@@ -9252,9 +9253,10 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("REL-01B gate: quarantines an expired external claim without replaying it", async () => {
-    const harness = await createHarness({ startReactor: false });
-    const now = new Date().toISOString();
+  async function seedRunningTurnInterrupt(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    now: string,
+  ) {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -9286,9 +9288,20 @@ describe("ProviderCommandReactor", () => {
         Effect.map((chunk) => Array.from(chunk)),
       ),
     );
-    const interruptRequested = events.find(
-      (event) => event.type === "thread.turn-interrupt-requested",
-    )!;
+    return {
+      events,
+      interruptRequested: events.find((event) => event.type === "thread.turn-interrupt-requested")!,
+    };
+  }
+
+  // The previous server process died with this interrupt in flight. The
+  // runtime it targeted died with it, so the interrupt is neither replayed nor
+  // allowed to block the thread; restart reconciliation settles the turn.
+  it("REL-01B gate: settles an interrupt left in flight by an earlier process without replay or quarantine", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const { events, interruptRequested } = await seedRunningTurnInterrupt(harness, now);
     await Effect.runPromise(
       harness.deliveryRepository.claim({
         consumerName: "provider-command-reactor.v1",
@@ -9310,13 +9323,161 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
-      state: "uncertain",
+      state: "succeeded",
       attemptCount: 1,
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
     });
+    const audits = await Effect.runPromise(harness.sql<{
+      outcome: string;
+      reconciled_by: string;
+      previous_state: string;
+    }>`
+      SELECT outcome, reconciled_by, previous_state FROM provider_delivery_reconciliations
+      WHERE event_sequence = ${interruptRequested.sequence}
+    `);
+    expect(audits).toEqual([
+      {
+        outcome: "abandon",
+        reconciled_by: "system:provider-command-reactor",
+        previous_state: "uncertain",
+      },
+    ]);
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers).toEqual([]);
     const consumerState = await Effect.runPromise(
       harness.deliveryRepository.getConsumerState("provider-command-reactor.v1"),
     );
     expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
+
+    // Boot settles the turn the dead runtime left running, and the next
+    // message reaches the provider.
+    await harness.runtime.runPromise(
+      reconcileRestartStuckTurns.pipe(Effect.provide(ProviderSessionRuntimeRepositoryLive)),
+    );
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "interrupted",
+      activeTurnId: null,
+      lastError: null,
+    });
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "after-expired-interrupt",
+      text: "Continue after the restart",
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Continue after the restart",
+    });
+  });
+
+  it("REL-01B gate: quarantines an interrupt whose claim expired in this process", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const { interruptRequested } = await seedRunningTurnInterrupt(harness, now);
+    // The first claim the starting reactor makes (thread.created, earlier in
+    // the same lane) names its process. Stage the interrupt's claim under that
+    // process with a lease that has already run out.
+    const repository = harness.deliveryRepository as {
+      claim: typeof harness.deliveryRepository.claim;
+    };
+    const claim = repository.claim;
+    let stagedOwner: string | undefined;
+    repository.claim = (input) => {
+      if (stagedOwner !== undefined || input.eventSequence === interruptRequested.sequence)
+        return claim(input);
+      stagedOwner = `${input.claimOwner.slice(0, input.claimOwner.lastIndexOf(":"))}:${interruptRequested.sequence}`;
+      return claim({
+        consumerName: input.consumerName,
+        eventSequence: interruptRequested.sequence,
+        threadId: "thread-1",
+        claimOwner: stagedOwner,
+        claimedAt: "2020-01-01T00:00:00.000Z",
+        claimExpiresAt: "2020-01-01T00:01:00.000Z",
+      }).pipe(Effect.andThen(claim(input)));
+    };
+
+    await harness.startReactor();
+
+    expect(stagedOwner).toMatch(/^provider-command-reactor:/);
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: interruptRequested.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "uncertain",
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+    });
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers.map((blocker) => blocker.eventSequence)).toEqual([interruptRequested.sequence]);
+  });
+
+  it("REL-01B gate: quarantines an expired external turn-start claim without replaying it", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "expired-external-start",
+      text: "Sent before the crash",
+      createdAt: new Date().toISOString(),
+    });
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const turnStartRequested = events.find(
+      (event) => event.type === "thread.turn-start-requested",
+    )!;
+    await Effect.runPromise(
+      harness.deliveryRepository.claim({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: turnStartRequested.sequence,
+        threadId: "thread-1",
+        claimOwner: "crashed-provider-command-process",
+        claimedAt: "2020-01-01T00:00:00.000Z",
+        claimExpiresAt: "2020-01-01T00:01:00.000Z",
+      }),
+    );
+
+    await harness.startReactor();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: turnStartRequested.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "uncertain",
+      attemptCount: 1,
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+    });
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers.map((blocker) => blocker.eventSequence)).toEqual([turnStartRequested.sequence]);
   });
 
   it("accepts a new message after a failed Codex startup without reconciliation", async () => {
@@ -10743,6 +10904,172 @@ describe("ProviderCommandReactor", () => {
         note: expect.stringContaining("without replay"),
       });
   });
+
+  // Threads quarantined by an older build stay blocked across every boot
+  // unless startup recovery reconciles the expired-interrupt blocker.
+  it.each([
+    { scenario: "expired interrupt", sessionStatus: "error", recovered: true },
+    { scenario: "expired interrupt", sessionStatus: "interrupted", recovered: true },
+    { scenario: "expired turn start", sessionStatus: "error", recovered: false },
+    { scenario: "interrupt with another error", sessionStatus: "error", recovered: false },
+  ] as const)(
+    "reconciles only an expired interrupt claim blocker at startup: $scenario ($sessionStatus session)",
+    async ({ scenario, sessionStatus, recovered }) => {
+      const harness = await createHarness({ startReactor: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = "2026-11-10T08:00:00.000Z";
+      const failedAt = "2026-11-10T08:00:31.000Z";
+      const lastError =
+        scenario === "interrupt with another error"
+          ? "Provider process tree did not prove exit."
+          : PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL;
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch(
+          scenario === "expired turn start"
+            ? {
+                type: "thread.turn.start",
+                commandId: CommandId.makeUnsafe("expired-start"),
+                threadId,
+                message: {
+                  messageId: asMessageId("expired-start"),
+                  role: "user",
+                  text: "Do not replay",
+                  attachments: [],
+                },
+                runtimeMode: "approval-required",
+                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                createdAt,
+              }
+            : {
+                type: "thread.turn.interrupt",
+                commandId: CommandId.makeUnsafe("user-interrupt"),
+                threadId,
+                turnId: asTurnId("old-turn"),
+                createdAt,
+              },
+        ),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          threadId,
+          claimOwner: "old-process",
+          claimedAt: createdAt,
+          claimExpiresAt: createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.markTerminalFailure({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          expectedClaimOwner: "old-process",
+          state: "uncertain",
+          error: lastError,
+          updatedAt: failedAt,
+        }),
+      );
+      // A message the quarantine skipped, and the block banner it left.
+      const skippedAt = "2026-11-10T08:01:00.000Z";
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("skipped-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("skipped"),
+            role: "user",
+            text: "Skipped while blocked",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: skippedAt,
+        }),
+      );
+      const sessionError = formatProviderDeliveryBlockDetail(lastError);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("visible-delivery-error"),
+          threadId,
+          session: {
+            threadId,
+            status: sessionStatus,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: sessionError,
+            updatedAt: skippedAt,
+          },
+          createdAt: skippedAt,
+        }),
+      );
+      for (const event of await Effect.runPromise(
+        Stream.runCollect(harness.engine.readEvents(0)),
+      )) {
+        await Effect.runPromise(
+          harness.deliveryRepository.advanceCursor({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: event.sequence,
+            updatedAt: skippedAt,
+          }),
+        );
+      }
+
+      await harness.startReactor();
+      await harness.drain();
+
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+        }),
+      );
+      expect(Option.getOrThrow(delivery).state).toBe(recovered ? "succeeded" : "uncertain");
+      const thread = await readHarnessThread(harness);
+      expect(thread?.session).toMatchObject(
+        recovered
+          ? { status: sessionStatus === "error" ? "stopped" : sessionStatus, lastError: null }
+          : { status: sessionStatus, lastError: sessionError },
+      );
+      expect(
+        thread?.activities.some(
+          (activity) => activity.summary === "Previous messages were not sent",
+        ),
+      ).toBe(recovered);
+      const audits = await Effect.runPromise(harness.sql<{
+        outcome: string;
+        reconciled_by: string;
+        note: string;
+      }>`
+        SELECT outcome, reconciled_by, note FROM provider_delivery_reconciliations
+        WHERE event_sequence = ${requested.sequence}
+      `);
+      expect(audits).toEqual(
+        recovered
+          ? [
+              {
+                outcome: "abandon",
+                reconciled_by: "system:provider-command-reactor",
+                note: expect.stringContaining("without replay"),
+              },
+            ]
+          : [],
+      );
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+
+      // A healed thread takes new messages; a still-blocked one skips them.
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "after-startup-recovery",
+        text: "Next message",
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(recovered ? 1 : 0);
+    },
+  );
 
   // The quarantine alone does not reach the UI: "Unblock thread" only renders
   // for the provider-delivery block contract, which used to be written lazily

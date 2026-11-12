@@ -7,7 +7,7 @@ import {
   WS_REQUEST_CLASS_LIMITS,
   type WsRequestClass,
 } from "@synara/shared/wsRequestClass";
-import { Effect, Layer, Ref } from "effect";
+import { Clock, Effect, Layer, Ref } from "effect";
 import { Headers } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema } from "effect/unstable/rpc";
 import {
@@ -25,10 +25,24 @@ export interface WsRequestLease {
   readonly leaseId: string;
   readonly method: string;
   readonly requestClass: WsRequestClass;
+  readonly acquiredAtMs: number;
+}
+
+/**
+ * Capacity rejections are logged at most once per client and class in this
+ * interval, so a saturated lane names what holds it without flooding the log.
+ */
+export const WS_REQUEST_REJECTION_LOG_INTERVAL_MS = 10_000;
+
+interface RejectionLogState {
+  readonly loggedAtMs: number;
+  readonly suppressed: number;
 }
 
 interface AdmissionLedger {
   readonly clients: ReadonlyMap<number, ReadonlyMap<string, WsRequestLease>>;
+  /** Keyed by `${clientId}:${requestClass}`; dropped when the client drains. */
+  readonly rejectionLogs: ReadonlyMap<string, RejectionLogState>;
   readonly admittedTotal: number;
   readonly releasedTotal: number;
   readonly rejectedTotal: number;
@@ -44,6 +58,7 @@ export interface WsRequestAdmissionSnapshot {
 
 const initialLedger = (): AdmissionLedger => ({
   clients: new Map(),
+  rejectionLogs: new Map(),
   admittedTotal: 0,
   releasedTotal: 0,
   rejectedTotal: 0,
@@ -53,38 +68,67 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
   const ledgerRef = yield* Ref.make<AdmissionLedger>(initialLedger());
 
   const acquire = (clientId: number, method: string) =>
-    Ref.modify(
-      ledgerRef,
-      (ledger): readonly [Effect.Effect<WsRequestLease, WsRpcError>, AdmissionLedger] => {
-        const requestClass = classifyWsRequest(method);
-        const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
-        const activeForClass = Array.from(clientLeases.values()).reduce(
-          (count, lease) => count + (lease.requestClass === requestClass ? 1 : 0),
-          0,
-        );
-        if (activeForClass >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
-          return [
-            Effect.fail(makeWsRequestCapacityError(requestClass)),
-            { ...ledger, rejectedTotal: ledger.rejectedTotal + 1 },
-          ] as const;
-        }
+    Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+      Ref.modify(
+        ledgerRef,
+        (ledger): readonly [Effect.Effect<WsRequestLease, WsRpcError>, AdmissionLedger] => {
+          const requestClass = classifyWsRequest(method);
+          const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
+          const heldForClass = Array.from(clientLeases.values()).filter(
+            (lease) => lease.requestClass === requestClass,
+          );
+          if (heldForClass.length >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
+            const rejected = Effect.fail(makeWsRequestCapacityError(requestClass));
+            const logKey = `${clientId}:${requestClass}`;
+            const previous = ledger.rejectionLogs.get(logKey);
+            const rejectionLogs = new Map(ledger.rejectionLogs);
+            if (
+              previous !== undefined &&
+              nowMs - previous.loggedAtMs < WS_REQUEST_REJECTION_LOG_INTERVAL_MS
+            ) {
+              rejectionLogs.set(logKey, { ...previous, suppressed: previous.suppressed + 1 });
+              return [
+                rejected,
+                { ...ledger, rejectionLogs, rejectedTotal: ledger.rejectedTotal + 1 },
+              ] as const;
+            }
+            rejectionLogs.set(logKey, { loggedAtMs: nowMs, suppressed: 0 });
+            // Method names and hold times only; request payloads never reach the log.
+            const logged = Effect.logWarning("WebSocket request rejected: class capacity in use", {
+              clientId,
+              method,
+              requestClass,
+              limit: WS_REQUEST_CLASS_LIMITS[requestClass],
+              heldBy: heldForClass.map((lease) => ({
+                method: lease.method,
+                heldForMs: Math.max(0, nowMs - lease.acquiredAtMs),
+              })),
+              suppressedSinceLastLog: previous?.suppressed ?? 0,
+            });
+            return [
+              logged.pipe(Effect.andThen(rejected)),
+              { ...ledger, rejectionLogs, rejectedTotal: ledger.rejectedTotal + 1 },
+            ] as const;
+          }
 
-        const lease: WsRequestLease = {
-          clientId,
-          leaseId: Crypto.randomUUID(),
-          method,
-          requestClass,
-        };
-        const nextClientLeases = new Map(clientLeases);
-        nextClientLeases.set(lease.leaseId, lease);
-        const nextClients = new Map(ledger.clients);
-        nextClients.set(clientId, nextClientLeases);
-        return [
-          Effect.succeed(lease),
-          { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
-        ] as const;
-      },
-    ).pipe(Effect.flatten);
+          const lease: WsRequestLease = {
+            clientId,
+            leaseId: Crypto.randomUUID(),
+            method,
+            requestClass,
+            acquiredAtMs: nowMs,
+          };
+          const nextClientLeases = new Map(clientLeases);
+          nextClientLeases.set(lease.leaseId, lease);
+          const nextClients = new Map(ledger.clients);
+          nextClients.set(clientId, nextClientLeases);
+          return [
+            Effect.succeed(lease),
+            { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
+          ] as const;
+        },
+      ).pipe(Effect.flatten),
+    );
 
   const release = (lease: WsRequestLease) =>
     Ref.update(ledgerRef, (ledger) => {
@@ -93,11 +137,21 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
       const nextClientLeases = new Map(clientLeases);
       nextClientLeases.delete(lease.leaseId);
       const nextClients = new Map(ledger.clients);
-      if (nextClientLeases.size === 0) nextClients.delete(lease.clientId);
-      else nextClients.set(lease.clientId, nextClientLeases);
+      let rejectionLogs = ledger.rejectionLogs;
+      if (nextClientLeases.size === 0) {
+        nextClients.delete(lease.clientId);
+        // A drained client starts its next saturation with a fresh log line.
+        const prefix = `${lease.clientId}:`;
+        if (Array.from(rejectionLogs.keys()).some((key) => key.startsWith(prefix))) {
+          rejectionLogs = new Map(
+            Array.from(rejectionLogs).filter(([key]) => !key.startsWith(prefix)),
+          );
+        }
+      } else nextClients.set(lease.clientId, nextClientLeases);
       return {
         ...ledger,
         clients: nextClients,
+        rejectionLogs,
         releasedTotal: ledger.releasedTotal + 1,
       };
     });
