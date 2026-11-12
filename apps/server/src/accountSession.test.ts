@@ -196,6 +196,10 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
   } as AccountClient;
 }
 
+function accountServiceUnavailable(): Promise<never> {
+  return Promise.reject(new Error("Account service unavailable"));
+}
+
 function meResponse(overrides: Partial<AccountMe> = {}): AccountMe {
   return {
     id: "user_1",
@@ -611,6 +615,79 @@ describe("OTP sign-in", () => {
       accessToken: "access-1",
       refreshToken: "refresh-1",
     });
+  });
+
+  it("logs each sign-in step's duration once, without secrets", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        registerDevice: accountServiceUnavailable,
+        startHostLink: accountServiceUnavailable,
+      }),
+    );
+    try {
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      const detail = lines[0]![1] as Record<string, unknown>;
+      expect(Object.keys(detail)).toEqual([
+        "path",
+        "outcome",
+        "instance_ms",
+        "code_exchange_ms",
+        "workspace_probe_ms",
+        "workspace_refresh_ms",
+        "credentials_ms",
+        "device_registration_ms",
+        "host_link_ms",
+        "final_me_ms",
+        "returned_ms",
+      ]);
+      expect(detail).toMatchObject({ path: "otp", outcome: "signed_in" });
+      for (const [key, value] of Object.entries(detail))
+        if (key.endsWith("_ms")) expect(value).toEqual(expect.any(Number));
+      expect(JSON.stringify(lines)).not.toMatch(
+        /654321|access-|refresh-|user_1|org_1|ada@|https?:/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs a failed sign-in's timing with the steps that ran", async () => {
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        authenticateOtp: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "invalid_verification_code",
+              status: 401,
+              message: "Wrong code",
+            }),
+          ),
+      }),
+    );
+    try {
+      await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow("Wrong code");
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      expect(Object.keys(lines[0]![1] as object)).toEqual([
+        "path",
+        "outcome",
+        "instance_ms",
+        "code_exchange_ms",
+        "returned_ms",
+      ]);
+      expect(lines[0]![1]).toMatchObject({ outcome: "failed" });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("keeps remote enrollment inert while the remote qualification gate is closed", async () => {

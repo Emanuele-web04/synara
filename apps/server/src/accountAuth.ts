@@ -515,7 +515,10 @@ function isGrantRejected(error: unknown): boolean {
   return error instanceof AccountApiError && error.status === 401 && error.code === "unauthorized";
 }
 
-/** Why this machine dropped, stopped trusting, or could not renew its stored session. */
+/**
+ * Why this machine dropped, stopped trusting, or could not renew its stored
+ * session — or how long each step of a sign-in took.
+ */
 export type AccountSessionLogReason =
   /** The refresh endpoint's terminal `401 unauthorized`; the session was cleared. */
   | "refresh_rejected"
@@ -526,7 +529,9 @@ export type AccountSessionLogReason =
   /** `/me` still answered 401 after renewal; status reports signed out. */
   | "status_unauthorized"
   /** A renewal series ended without a new pair; the session is kept. */
-  | "refresh_failed";
+  | "refresh_failed"
+  /** One sign-in's per-step durations (step names and milliseconds only). */
+  | "sign_in_timing";
 
 type AccountSessionLogDetail = Readonly<Record<string, string | number | boolean>>;
 
@@ -1447,6 +1452,11 @@ export interface ScopeTokenToWorkspaceOptions {
   ) => Promise<OrganizationSummary>;
   /** Told which workspace was chosen, once, after the scoped token is minted. */
   readonly onOrganizationChosen?: (organization: OrganizationSummary) => void;
+  /** Times each request this makes, for the sign-in step log. */
+  readonly measure?: <A>(
+    step: "workspace_probe" | "workspace_refresh",
+    run: () => Promise<A>,
+  ) => Promise<A>;
 }
 
 /**
@@ -1464,10 +1474,11 @@ export async function scopeTokenToWorkspace(
   options: ScopeTokenToWorkspaceOptions,
 ): Promise<ScopedSessionTokens> {
   const { client, chooseOrganization, onOrganizationChosen } = options;
+  const measure = options.measure ?? (<A>(_step: string, run: () => Promise<A>) => run());
 
   let organizations: readonly OrganizationSummary[];
   try {
-    const me = await client.me(token.accessToken);
+    const me = await measure("workspace_probe", () => client.me(token.accessToken));
     return {
       accessToken: token.accessToken,
       refreshToken: token.refreshToken,
@@ -1483,11 +1494,13 @@ export async function scopeTokenToWorkspace(
   // Redeeming the refresh token here spends it, so the rotated pair this
   // returns is the only usable one — the caller must persist it, not the
   // pair it started with.
-  const refreshed = await client.refreshAccessToken({
-    refreshToken: token.refreshToken,
-    organizationId: organization.id,
-    timeoutMs: GRANT_REQUEST_TIMEOUT_MS,
-  });
+  const refreshed = await measure("workspace_refresh", () =>
+    client.refreshAccessToken({
+      refreshToken: token.refreshToken,
+      organizationId: organization.id,
+      timeoutMs: GRANT_REQUEST_TIMEOUT_MS,
+    }),
+  );
 
   onOrganizationChosen?.(organization);
   return {

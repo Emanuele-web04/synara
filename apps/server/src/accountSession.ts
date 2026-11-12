@@ -103,6 +103,7 @@ import {
   startSsoCallbackListener,
   type SsoCallbackListener,
 } from "./accountSsoCallback";
+import { createSignInTiming, type SignInTiming } from "./accountSignInTiming";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
 import { noteRemoteAccessGranted, nudgeHostAuthorization } from "./hostConnectivitySignals";
 import { Effect, Path as EffectPath } from "effect";
@@ -571,25 +572,33 @@ export function createAccountSession(
   }
 
   /** Enrollment is additive to sign-in: local use survives an account outage. */
-  async function ensureDesktopEnrollment(knownUserId: string): Promise<void> {
+  async function ensureDesktopEnrollment(
+    knownUserId: string,
+    timing?: SignInTiming,
+  ): Promise<void> {
     if (remoteConnectionsUnavailableReason()) return;
+    const measure: SignInTiming["measure"] = timing
+      ? (step, run) => timing.measure(step, run)
+      : (_step, run) => run();
     try {
-      await ensureShellDevice(knownUserId);
+      await measure("device_registration", () => ensureShellDevice(knownUserId));
     } catch {
       // A later status read retries; the durable user session remains valid.
     }
     try {
       const stored = await readAccountCredentials(credentialDir);
       if (!stored) return;
-      await ensureLocalAccountHostLinked({
-        accountUrl: stored.accountUrl,
-        baseDir,
-        client: clientFor(stored.accountUrl),
-        ...(options.devUrl ? { devUrl: options.devUrl } : {}),
-        ...(options.platform ? { platform: options.platform } : {}),
-        ...(options.hostname ? { hostname: options.hostname } : {}),
-        ...(options.appVersion ? { appVersion: options.appVersion } : {}),
-      });
+      await measure("host_link", () =>
+        ensureLocalAccountHostLinked({
+          accountUrl: stored.accountUrl,
+          baseDir,
+          client: clientFor(stored.accountUrl),
+          ...(options.devUrl ? { devUrl: options.devUrl } : {}),
+          ...(options.platform ? { platform: options.platform } : {}),
+          ...(options.hostname ? { hostname: options.hostname } : {}),
+          ...(options.appVersion ? { appVersion: options.appVersion } : {}),
+        }),
+      );
     } catch {
       // Host linking has the same retry-on-status semantics as registration.
     }
@@ -618,6 +627,8 @@ export function createAccountSession(
       accountUrl: string;
       client: AccountClient;
       instance: InstanceInfo;
+      /** Records each step's duration for the sign-in log line. */
+      timing: SignInTiming;
       /**
        * Called the moment the scoped pair is durably on disk — the point after
        * which the sign-in can no longer be lost. The device path uses it to
@@ -628,60 +639,63 @@ export function createAccountSession(
       onPersisted?: () => void;
     },
   ): Promise<AccountStatus> {
-    const { accountUrl, client, instance } = context;
+    const { accountUrl, client, instance, timing } = context;
 
     // V1 is personal-org-only and this flow has no picker, so more than one
     // workspace FAILS CLOSED — see selectOrganization.
     const scoped = await scopeTokenToWorkspace(token, {
       client,
       chooseOrganization: selectOrganization,
+      measure: (step, run) => timing.measure(step, run),
     });
 
     // Expiry may remove the workspace, but it retains the host's owner.
     // Recover only that owner's link; another member of the same workspace
     // must enroll a fresh host identity instead of inheriting its authority.
-    await withLockedAccountFile(credentialDir, async () => {
-      const previous = await readAccountFile(credentialDir);
-      const sameAccountAndWorkspace =
-        previous?.accountUrl === accountUrl &&
-        previous.hostOwnerUserId === scoped.userId &&
-        (previous.organizationId === scoped.organizationId ||
-          (previous?.organizationId === undefined && previous?.hostId !== undefined));
-      await writeAccountCredentials(credentialDir, {
-        accountUrl,
-        workosClientId: instance.clientId,
-        workosApiUrl: instance.workosApiUrl,
-        organizationId: scoped.organizationId,
-        userId: scoped.userId,
-        accessToken: scoped.accessToken,
-        refreshToken: scoped.refreshToken,
-        ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
-        ...(sameAccountAndWorkspace && previous?.hostOwnerUserId
-          ? { hostOwnerUserId: previous.hostOwnerUserId }
-          : {}),
-        ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
-          ? { hostKeyGeneration: previous.hostKeyGeneration }
-          : {}),
-        ...(sameAccountAndWorkspace && previous?.discoverabilityAcknowledgedByHostId
-          ? {
-              discoverabilityAcknowledgedByHostId: previous.discoverabilityAcknowledgedByHostId,
-            }
-          : {}),
-      });
-      if (previous && !sameAccountAndWorkspace) {
-        const { hostIdentityPath } = await Effect.runPromise(
-          deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
-        );
-        await deleteHostIdentity(hostIdentityPath);
-      }
-    });
+    await timing.measure("credentials", () =>
+      withLockedAccountFile(credentialDir, async () => {
+        const previous = await readAccountFile(credentialDir);
+        const sameAccountAndWorkspace =
+          previous?.accountUrl === accountUrl &&
+          previous.hostOwnerUserId === scoped.userId &&
+          (previous.organizationId === scoped.organizationId ||
+            (previous?.organizationId === undefined && previous?.hostId !== undefined));
+        await writeAccountCredentials(credentialDir, {
+          accountUrl,
+          workosClientId: instance.clientId,
+          workosApiUrl: instance.workosApiUrl,
+          organizationId: scoped.organizationId,
+          userId: scoped.userId,
+          accessToken: scoped.accessToken,
+          refreshToken: scoped.refreshToken,
+          ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
+          ...(sameAccountAndWorkspace && previous?.hostOwnerUserId
+            ? { hostOwnerUserId: previous.hostOwnerUserId }
+            : {}),
+          ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
+            ? { hostKeyGeneration: previous.hostKeyGeneration }
+            : {}),
+          ...(sameAccountAndWorkspace && previous?.discoverabilityAcknowledgedByHostId
+            ? {
+                discoverabilityAcknowledgedByHostId: previous.discoverabilityAcknowledgedByHostId,
+              }
+            : {}),
+        });
+        if (previous && !sameAccountAndWorkspace) {
+          const { hostIdentityPath } = await Effect.runPromise(
+            deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
+          );
+          await deleteHostIdentity(hostIdentityPath);
+        }
+      }),
+    );
 
     // The durable checkpoint: the scoped pair is on disk, so everything after
     // this line — the status `/me` below included — can fail without losing
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
 
-    await ensureDesktopEnrollment(scoped.userId);
+    await ensureDesktopEnrollment(scoped.userId, timing);
 
     // A fresh session means the machine's EXISTING local history can sync:
     // the reporter's first flush has no watermark and backfills everything.
@@ -691,7 +705,9 @@ export function createAccountSession(
     // org-less token and was refused, so this is the first `/me` the scoped
     // token answers (and it runs through withSession's renewal). Only the
     // pre-scoped self-hoster path pays a second call.
-    return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
+    return signedInStatus(
+      await timing.measure("final_me", () => withSession((accessToken, c) => c.me(accessToken))),
+    );
   }
 
   /** The `status()` body, callable from inside the session's own methods. */
@@ -833,7 +849,8 @@ export function createAccountSession(
      * and a reconnecting client recovers the result from `status()`.
      */
     completeSso(input) {
-      return signInWithRecovery(async () => {
+      const timing = createSignInTiming(credentialDir, "sso");
+      const result = signInWithRecovery(async () => {
         const pending = pendingSsoAttempts.get(input.ssoId);
         if (!pending) {
           throw new Error("This sign-in attempt has expired. Start a new one.");
@@ -842,19 +859,18 @@ export function createAccountSession(
         const accountUrl = configuredUrl;
         const client = clientFor(accountUrl);
         // Instance before anything can consume the code, as on every path.
-        const instance = await client.instance();
+        const instance = await timing.measure("instance", () => client.instance());
 
         // Resumable: a previous attempt may have exchanged the single-use
         // code and failed before persistence; the cached pair makes a retry
         // of this RPC recover the sign-in instead of stranding a spent code.
         let token = pending.redeemedToken;
         if (!token) {
-          const code = await pending.listener.waitForCode();
+          const code = await timing.measure("browser", () => pending.listener.waitForCode());
           try {
-            token = await client.exchangeAuthorizeCode({
-              code,
-              codeVerifier: pending.codeVerifier,
-            });
+            token = await timing.measure("code_exchange", () =>
+              client.exchangeAuthorizeCode({ code, codeVerifier: pending.codeVerifier }),
+            );
           } catch (error) {
             // A classified terminal refusal means the code is dead and the
             // attempt can never complete — drop it and its listener now.
@@ -871,6 +887,7 @@ export function createAccountSession(
           accountUrl,
           client,
           instance,
+          timing,
           // Retired at the durable checkpoint, exactly like the device entry.
           // Retired only once the scoped pair is durably on disk: deleting
           // earlier would turn a failure between exchange and persistence
@@ -881,6 +898,7 @@ export function createAccountSession(
           },
         });
       });
+      return timing.settle(result);
     },
 
     /**
@@ -913,17 +931,19 @@ export function createAccountSession(
      * retry. What is persisted is the resulting token pair, exactly as for SSO.
      */
     authenticateOtp(input) {
-      return signInWithRecovery(async () => {
+      const timing = createSignInTiming(credentialDir, "otp");
+      const result = signInWithRecovery(async () => {
         const accountUrl = configuredUrl;
         const client = clientFor(accountUrl);
         // Sequenced, not raced: the instance metadata is non-secret and does
         // not depend on the grant, so it is fetched BEFORE the code is spent.
         // In a Promise.all an /instance failure would discard a successful
         // redemption — the user's single-use code, gone with nothing stored.
-        const instance = await client.instance();
-        const token = await client.authenticateOtp(input);
-        return establishSession(token, { accountUrl, client, instance });
+        const instance = await timing.measure("instance", () => client.instance());
+        const token = await timing.measure("code_exchange", () => client.authenticateOtp(input));
+        return establishSession(token, { accountUrl, client, instance, timing });
       });
+      return timing.settle(result);
     },
 
     /**
