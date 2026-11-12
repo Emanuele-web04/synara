@@ -129,6 +129,7 @@ export function SidebarThreadRowContent({
   variant,
   pendingStatusColorClass,
   suffix,
+  hideLeadingGlyph = false,
 }: {
   thread: SidebarThreadSummary;
   terminalEntryPoint: boolean;
@@ -138,21 +139,34 @@ export function SidebarThreadRowContent({
   variant: "pinned" | "standard";
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
+  /**
+   * Keeps the glyph's space but hides it, for a pinned parent whose child-count chip sits on
+   * top of it. Rows without a glyph still reserve one, so the chip never covers the title.
+   */
+  hideLeadingGlyph?: boolean;
 }) {
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
   const hasPendingDraft = useThreadHasPendingDraft(thread.id);
 
+  const leadingGlyph = terminalEntryPoint ? (
+    <SidebarGlyph icon={TerminalIcon} variant="chrome" />
+  ) : showThreadProviderAvatar ? (
+    <ProviderAvatarWithTerminal
+      thread={thread}
+      terminalStatus={terminalStatus}
+      terminalCount={terminalCount}
+    />
+  ) : null;
+
   return (
     <>
-      {terminalEntryPoint ? (
-        <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-      ) : showThreadProviderAvatar ? (
-        <ProviderAvatarWithTerminal
-          thread={thread}
-          terminalStatus={terminalStatus}
-          terminalCount={terminalCount}
-        />
-      ) : null}
+      {hideLeadingGlyph ? (
+        <span aria-hidden="true" className="invisible flex shrink-0 items-center">
+          {leadingGlyph ?? <span className="size-3" />}
+        </span>
+      ) : (
+        leadingGlyph
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
         <span
           className={cn(

@@ -4,8 +4,8 @@
 //          model/effort, ticking time and stop/background on hover; "Done" rows retain
 //          the model/effort and show when they finished,
 //          with totals and the result in the tooltip. From a subagent thread it lists the
-//          siblings plus a row back to the parent. Selecting a row opens that thread and
-//          keeps this list beside it.
+//          siblings plus a row back to the parent. Selecting a subagent opens it in a
+//          split beside this chat; the parent row returns to the parent with this list.
 // Layer: Chat right-dock UI
 // Exports: SubagentsDockPane, SubagentsList (the presentational list it renders)
 
@@ -34,6 +34,7 @@ import {
 } from "./environment/EnvironmentSubagentsSection.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { SubagentAvatar } from "./SubagentAvatar";
+import { useOpenSubagentThread } from "./useOpenSubagentThread";
 import { useSubagentRunControls } from "./useSubagentRunControls";
 import { type SubagentParentRow, useThreadSubagentRoster } from "./useSubagentStripSource";
 import { useTranslation, t } from "~/i18n";
@@ -323,33 +324,46 @@ export function SubagentsList({
 
 export function SubagentsDockPane({
   hostThreadId,
+  splitViewId = null,
   onOpenThread,
 }: {
   hostThreadId: ThreadId;
+  /** The split view this dock sits in, so subagents open beside the host pane. */
+  splitViewId?: string | null;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
   const { roster, source } = useThreadSubagentRoster(hostThreadId);
   const { backgroundSubagent, stopSubagent } = useSubagentRunControls(source.stripSourceThreadId);
   const navigate = useNavigate();
   const openRightDockPane = useRightDockStore((store) => store.openPane);
+  const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const nowMs = useNowMs(
     roster.active.length > 0 || roster.previous.some((item) => item.settledAt !== null),
     roster.active.length > 0 ? 1_000 : 60_000,
   );
 
-  // Docks are per thread: open this list in the destination's dock too, so hopping
-  // between siblings (or back to the parent) keeps it beside the transcript.
+  // A subagent opens in a split to the right of this chat, taking the list's
+  // place so the chat keeps its width; the Environment panel reopens the list.
+  // Anything else (the row back to the parent) replaces this chat: open the list
+  // in the destination's dock too so it stays beside the transcript.
+  const openSubagentThread = useOpenSubagentThread({
+    hostThreadId,
+    splitViewId,
+    onNavigate: (threadId) => {
+      openRightDockPane(threadId, { kind: "subagents" });
+      if (onOpenThread) {
+        onOpenThread(threadId);
+        return;
+      }
+      void navigate({
+        to: "/$threadId",
+        params: { threadId },
+        search: (previousSearch) => stripDiffSearchParams(previousSearch),
+      });
+    },
+  });
   const openThread = (threadId: ThreadId) => {
-    openRightDockPane(threadId, { kind: "subagents" });
-    if (onOpenThread) {
-      onOpenThread(threadId);
-      return;
-    }
-    void navigate({
-      to: "/$threadId",
-      params: { threadId },
-      search: (previousSearch) => stripDiffSearchParams(previousSearch),
-    });
+    if (openSubagentThread(threadId) !== "navigate") setDockOpen(hostThreadId, false);
   };
 
   return (

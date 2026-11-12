@@ -67,6 +67,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:showTheThreadEachStandaloneAutomationRunCreatesRuns",
   },
   {
+    target: "setting-nest-child-threads",
+    section: "layout",
+    title: "settings:childThreads",
+    description: "settings:nestAgentCreatedThreadsDescription",
+  },
+  {
     target: "setting-open-by-default",
     section: "layout",
     title: "settings:openByDefault",

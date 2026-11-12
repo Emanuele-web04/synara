@@ -155,6 +155,16 @@ export function LayoutSettingsView(binding: AppSettingsBinding) {
           resetLabel="settings:automationRuns2"
           ariaLabel="settings:showAutomationRunThreadsInTheSidebar"
         />
+
+        <BooleanSettingRow
+          {...binding}
+          id="setting-nest-child-threads"
+          settingKey="nestAgentCreatedThreads"
+          title="settings:childThreads"
+          description="settings:nestAgentCreatedThreadsDescription"
+          resetLabel="settings:childThreadsReset"
+          ariaLabel="settings:nestAgentCreatedThreadsAria"
+        />
       </SettingsSection>
 
       <div id={SETTINGS_TARGETS.environmentPanel}>

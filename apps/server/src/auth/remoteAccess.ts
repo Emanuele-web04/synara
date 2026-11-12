@@ -18,14 +18,35 @@ export function isTrustedLocalServerToken(
   );
 }
 
+/**
+ * Answers with the current billing policy. An idle host refreshes that policy
+ * first, but only when the policy can change this answer, so requests it
+ * cannot affect never wait on the account service.
+ */
+export function decideWithBillingPolicy<A extends boolean | string>(
+  registry: RemoteSessionRegistry,
+  decide: (remoteBillingEnforced: boolean) => A,
+): Effect.Effect<A> {
+  if (decide(true) === decide(false))
+    return Effect.sync(() => decide(registry.remoteBillingEnforced));
+  return Effect.promise(() => registry.prepareBillingPolicy()).pipe(
+    Effect.map(() => decide(registry.remoteBillingEnforced)),
+  );
+}
+
 /** A verified session is local only when its trusted issuance recorded that fact. */
 export function requireRemoteSessionAdmission<A extends Pick<AuthenticatedSession, "accessOrigin">>(
   registry: RemoteSessionRegistry,
   session: A,
 ): Effect.Effect<A, AuthError> {
-  return session.accessOrigin === "local" || registry.canAdmitRemoteSession()
-    ? Effect.succeed(session)
-    : Effect.fail(new AuthError({ message: "Remote authorization unavailable.", status: 503 }));
+  if (session.accessOrigin === "local") return Effect.succeed(session);
+  return Effect.promise(() => registry.prepareRemoteAdmission()).pipe(
+    Effect.flatMap(() =>
+      registry.canAdmitRemoteSession()
+        ? Effect.succeed(session)
+        : Effect.fail(new AuthError({ message: "Remote authorization unavailable.", status: 503 })),
+    ),
+  );
 }
 
 /** Pause a remote stream on lease loss without retiring its durable credential or device trust. */
@@ -38,6 +59,7 @@ export function runWithRemoteAdmission<A, E, R>(
   return Effect.scoped(
     Effect.gen(function* () {
       const closed = yield* Deferred.make<void>();
+      yield* Effect.promise(() => registry.prepareRemoteAdmission());
       const release = registry.registerLegacyConnection(() =>
         Effect.runSync(Deferred.succeed(closed, undefined)),
       );

@@ -50,7 +50,7 @@ function expiredCleanupCutoff(): Date {
 }
 
 /** The one row→HostRecord projection, shared with the route layer. */
-export function hostRecordFromRow(row: typeof hosts.$inferSelect): HostRecord {
+export function hostRecordFromRow(row: HostRecord): HostRecord {
   return {
     id: row.id,
     ownerUserId: row.ownerUserId,
@@ -143,7 +143,7 @@ export function createHostKeyRegistry(
   async function withAuthenticatedHost<T>(
     authorization: string | undefined | null,
     expectedHostId: string,
-    action: (tx: Transaction, row: typeof hosts.$inferSelect, host: HostRecord) => Promise<T>,
+    action: (tx: Transaction, host: HostRecord) => Promise<T>,
   ): Promise<T> {
     const match = authorization ? /^HostProof\s+(.+)$/i.exec(authorization) : null;
     const proof = match?.[1];
@@ -161,7 +161,16 @@ export function createHostKeyRegistry(
       // The lock is held through the protected action. A relink/unlink cannot
       // land after proof verification but before the effect or signed ticket.
       const [row] = await tx
-        .select()
+        .select({
+          id: hosts.id,
+          ownerUserId: hosts.ownerUserId,
+          ownerOrgId: hosts.ownerOrgId,
+          environmentId: hosts.environmentId,
+          publicKeyJwk: hosts.publicKeyJwk,
+          keyGeneration: hosts.keyGeneration,
+          discoverable: hosts.discoverable,
+          lastSeenAt: hosts.lastSeenAt,
+        })
         .from(hosts)
         .where(eq(hosts.id, claims.sub))
         .limit(1)
@@ -188,11 +197,13 @@ export function createHostKeyRegistry(
       // each time is pure MVCC churn. One-minute granularity is plenty for a
       // historical-metadata column, and actions that update the row anyway
       // (replaceEndpoints) carry their own fresh lastSeenAt.
-      await tx
-        .update(hosts)
-        .set({ lastSeenAt: new Date() })
-        .where(and(eq(hosts.id, row.id), lt(hosts.lastSeenAt, new Date(Date.now() - 60_000))));
-      return action(tx, row, hostRecordFromRow(row));
+      const now = new Date();
+      // The row is still locked, so this decision cannot race another heartbeat.
+      // Avoid a database round trip even when the conditional UPDATE would do nothing.
+      if (row.lastSeenAt.getTime() < now.getTime() - 60_000) {
+        await tx.update(hosts).set({ lastSeenAt: now }).where(eq(hosts.id, row.id));
+      }
+      return action(tx, hostRecordFromRow(row));
     });
   }
 
@@ -525,7 +536,7 @@ export function createHostKeyRegistry(
     },
 
     withAuthenticatedHost(authorization, expectedHostId, action) {
-      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, _row, host) =>
+      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, host) =>
         action(host),
       );
     },

@@ -130,7 +130,7 @@ export function ProvidersSettingsPanel({
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
     () => ({
-      ...createProviderInstallDisclosureState(settings),
+      ...createProviderInstallDisclosureState(settings, defaults),
       ...(providerTarget ? { [providerTarget]: true } : {}),
     }),
   );

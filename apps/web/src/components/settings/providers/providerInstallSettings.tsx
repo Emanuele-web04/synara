@@ -12,7 +12,7 @@
 //          isDefaultAccountIdentityField, providerInstanceConfigKey,
 //          providerInstanceLaunchConfigFor
 
-import { DEFAULT_CODEX_ACCOUNT_ID, type ProviderKind } from "@synara/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import type { ReactNode } from "react";
 
 import type { AppSettings } from "~/appSettings";
@@ -172,7 +172,7 @@ export const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         kind: "boolean",
         settingsKey: "claudeConfirmColdCacheResume",
         label: "settings:askBeforeResumingALongIdleSession",
-        description: "settings:offByDefaultLikeClaudeCodeWhenOnAfter",
+        description: "settings:onByDefaultAfter70MinutesWithoutA",
       },
     ],
   },
@@ -515,23 +515,15 @@ export function createProviderCliFieldsResetPatch(defaults: AppSettings): Partia
   ) as Partial<AppSettings>;
 }
 
+/** Open providers with customized installs, including when a default is enabled. */
 export function createProviderInstallDisclosureState(
   settings: AppSettings,
+  defaults: AppSettings,
 ): Record<ProviderKind, boolean> {
   return Object.fromEntries(
     PROVIDER_INSTALL_SETTINGS.map((config) => [
       config.provider,
-      config.fields.some((field) =>
-        field.kind === "password"
-          ? settings[field.configuredKey]
-          : Boolean(settings[field.settingsKey]),
-      ) ||
-        Object.values(settings.providerInstances).some(
-          (instance) => instance.driver === config.provider,
-        ) ||
-        (config.provider === "codex" &&
-          (settings.codexAccounts.length > 0 ||
-            settings.selectedCodexAccountId !== DEFAULT_CODEX_ACCOUNT_ID)),
+      isProviderInstallConfigDirty(config, settings, defaults),
     ]),
   ) as Record<ProviderKind, boolean>;
 }

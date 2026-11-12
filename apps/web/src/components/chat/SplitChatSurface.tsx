@@ -219,7 +219,11 @@ function SplitPaneEmbeddedPanel(props: {
             closeLabel={t("chat:hideSubagents")}
             onClose={props.onClosePanel}
           />
-          <SubagentsDockPane hostThreadId={props.threadId} onOpenThread={props.onOpenThread} />
+          <SubagentsDockPane
+            hostThreadId={props.threadId}
+            splitViewId={props.splitViewId}
+            onOpenThread={props.onOpenThread}
+          />
         </div>
       ) : terminalPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

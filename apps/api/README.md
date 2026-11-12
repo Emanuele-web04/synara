@@ -97,7 +97,15 @@ with `no-store`, independently of login. Its persistent hint is scoped to that
 exact account authority and survives logout and host unlink. A policy for a
 different authority cannot clear a known paid policy. Policy discovery never
 proves that the current user has paid; a fresh authenticated authorization lease
-must establish that separately.
+must establish that separately. Every authenticated host authorization snapshot
+carries the same `remoteBillingEnforced` flag; the host adopts it as a policy read
+(a `false` requested before a newer `true` is discarded), so a linked host with
+snapshots flowing makes no `/instance` reads. Otherwise the host reads it every
+fifteen seconds (jittered shorter) while a remote session or legacy remote socket
+is open, once at startup, and before any decision the policy can change whenever
+the last read is older than fifteen seconds. A loopback server without an auth
+token keeps the fifteen-second cadence, because the policy decides each of its
+unauthenticated local requests.
 
 | Setting                                 | Runs on               | Default and rollout use                                                                                                                                                                            |
 | --------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -770,6 +778,18 @@ Provider references: [connections](https://supabase.com/docs/guides/database/con
 [SSL](https://supabase.com/docs/guides/platform/ssl-enforcement),
 [Data API settings](https://supabase.com/docs/guides/api/securing-your-api),
 [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
+Host polling keeps its authorization and notification cadence. To limit database
+egress, proof verification projects only identity and heartbeat fields under the
+existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
+less than a minute old. Authorization reads all three bounded revocation sources
+in one statement, retaining pending-delivery precedence on equal timestamps and
+requiring acknowledgements even beyond ordinary event retention. Billing access
+projects only entitlement fields while retaining its transaction, deletion check,
+pending-webhook check and provider freshness limit; it adds no authorization cache.
+Measure PostgreSQL response bytes separately from the provider's billed egress:
+local warm-connection measurements exclude connection setup, TLS/TCP overhead,
+other routes and the production traffic mix.
 
 ## Deploying to Cloudflare
 

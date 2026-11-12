@@ -102,9 +102,10 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     }
     return initialization;
   }
-  async function withAccount<T>(
+  async function withAccount<T, K extends keyof Row = keyof Row>(
     userId: string,
-    action: (client: pg.PoolClient, row: Row) => Promise<T>,
+    action: (client: pg.PoolClient, row: Pick<Row, K>) => Promise<T>,
+    columns?: readonly K[],
   ) {
     await initialize();
     const client = await pool.connect();
@@ -119,8 +120,8 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         ON CONFLICT(user_id) DO UPDATE SET deleted_at=coalesce(billing_accounts.deleted_at,excluded.deleted_at)`,
         [userId],
       );
-      const { rows } = await client.query<Row>(
-        "SELECT * FROM billing_accounts WHERE user_id=$1 FOR UPDATE",
+      const { rows } = await client.query<Pick<Row, K>>(
+        `SELECT ${columns?.join(",") ?? "*"} FROM billing_accounts WHERE user_id=$1 FOR UPDATE`,
         [userId],
       );
       const result = await action(client, rows[0]!);
@@ -176,7 +177,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     if (!rows[0]) throw new BillingError(409, "This account is being deleted");
     return rows[0];
   }
-  function assertAvailable(row: Row) {
+  function assertAvailable(row: Pick<Row, "deleted_at">) {
     if (row.deleted_at) throw new BillingError(409, "This account is being deleted");
   }
   return {
@@ -195,29 +196,35 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     async access(
       userId: string,
     ): Promise<Pick<AccountBillingStatus, "available" | "access" | "checkedAt" | "validUntil">> {
-      return withAccount(userId, async (client, row) => {
-        assertAvailable(row);
-        const now = Date.now();
-        const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
-        let current = row;
-        let reusable =
-          age >= 0 && age <= 30_000 && (!row.valid_until || row.valid_until.getTime() > now);
-        if (reusable) {
-          const pending = await client.query(
-            "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
-            [userId],
-          );
-          reusable = pending.rows.length === 0;
-        }
-        // A failed refresh cannot extend an old authorization lease.
-        if (!reusable) current = await reconcile(client, userId);
-        return {
-          available: true,
-          access: current.access_granted ? "granted" : "none",
-          checkedAt: current.checked_at?.toISOString() ?? null,
-          validUntil: current.valid_until?.toISOString() ?? null,
-        };
-      });
+      // Authorization needs no customer, product or checkout payload. Keep the
+      // same locks, tombstone check and webhook freshness as the full ledger read.
+      return withAccount(
+        userId,
+        async (client, row) => {
+          assertAvailable(row);
+          const now = Date.now();
+          const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
+          let current = row;
+          let reusable =
+            age >= 0 && age <= 30_000 && (!row.valid_until || row.valid_until.getTime() > now);
+          if (reusable) {
+            const pending = await client.query(
+              "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
+              [userId],
+            );
+            reusable = pending.rows.length === 0;
+          }
+          // A failed refresh cannot extend an old authorization lease.
+          if (!reusable) current = await reconcile(client, userId);
+          return {
+            available: true,
+            access: current.access_granted ? "granted" : "none",
+            checkedAt: current.checked_at?.toISOString() ?? null,
+            validUntil: current.valid_until?.toISOString() ?? null,
+          };
+        },
+        ["access_granted", "checked_at", "valid_until", "deleted_at"],
+      );
     },
     /**
      * The stored entitlement as last reconciled, with no provider call and no

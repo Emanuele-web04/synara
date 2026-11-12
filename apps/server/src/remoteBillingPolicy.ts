@@ -8,6 +8,7 @@ import { Effect } from "effect";
 
 import { accountApiIssuer } from "./accountAuth";
 import { writeFileStringAtomically } from "./atomicWrite";
+import { jitterMs } from "./backoff";
 import type { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
 
 const MAX_FALSE_POLICY_AGE_MS = 60_000;
@@ -20,6 +21,16 @@ interface PolicyHint {
 }
 
 const pendingWrites = new Map<string, Promise<void>>();
+/** Running policies by hint file, so an authenticated snapshot can stand in for a public read. */
+const livePolicies = new Map<
+  string,
+  (hint: PolicyHint, requestedAt: number, persist: () => Promise<void>) => Promise<void>
+>();
+
+/** Monotonic time since an attempt started; never started counts as forever. */
+function elapsed(startedAt: number | undefined): number {
+  return startedAt === undefined ? Number.POSITIVE_INFINITY : performance.now() - startedAt;
+}
 
 function policyFilePath(stateDir: string, accountUrl: string): string {
   const authorityHash = createHash("sha256").update(accountApiIssuer(accountUrl)).digest("hex");
@@ -37,12 +48,17 @@ async function withPolicyWrite(filePath: string, write: () => Promise<void>): Pr
   }
 }
 
-/** Authenticated host snapshots also persist deployment policy independently of login. */
+/**
+ * Authenticated host snapshots also persist deployment policy independently of
+ * login. With `requestedAt` (the monotonic start of that snapshot request) a
+ * running policy also adopts it as its latest read.
+ */
 export async function recordRemoteBillingPolicyHint(
   stateDir: string,
   accountUrl: string,
   enforced: boolean,
   checkedAt = Date.now(),
+  requestedAt?: number,
 ): Promise<void> {
   if (!Number.isFinite(checkedAt) || checkedAt < 0) {
     if (!enforced) throw new Error("A disabled remote billing policy requires a valid clock");
@@ -50,13 +66,16 @@ export async function recordRemoteBillingPolicyHint(
   }
   const filePath = policyFilePath(stateDir, accountUrl);
   const hint: PolicyHint = { apiIssuer: accountApiIssuer(accountUrl), enforced, checkedAt };
-  await withPolicyWrite(filePath, () =>
+  const persist = () =>
     Effect.runPromise(
       writeFileStringAtomically({
         filePath,
         contents: JSON.stringify(hint),
       }),
-    ),
+    );
+  const adopt = livePolicies.get(filePath);
+  await withPolicyWrite(filePath, () =>
+    adopt && requestedAt !== undefined ? adopt(hint, requestedAt, persist) : persist(),
   );
 }
 
@@ -68,6 +87,12 @@ export interface RemoteBillingPolicyOptions {
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
   readonly pollIntervalMs?: number;
+  /**
+   * Keep polling while no remote access is active. Hosts whose unauthenticated
+   * local access is itself decided by this policy need it; every other host
+   * polls only while remote access is active and refreshes before admitting.
+   */
+  readonly pollWhileIdle?: boolean;
 }
 
 export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptions): Promise<{
@@ -124,14 +149,62 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
     if (invalid) falseDeadline = 0;
     return invalid;
   };
-  const unregister = options.remoteSessions.registerGlobalBillingPolicy({
-    authority: apiIssuer,
-    enforced,
-  });
+  const pollIntervalMs = Math.min(
+    MAX_FALSE_POLICY_AGE_MS,
+    Math.max(100, options.pollIntervalMs ?? 15_000),
+  );
   let stopped = false;
   let inFlight: Promise<void> | undefined;
   let requestAbort: AbortController | undefined;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  // Monotonic start of the newest attempt, and of the newest settled one.
+  let attemptStartedAt: number | undefined;
+  let settledAttemptStartedAt: number | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  // Jittered only downwards: the interval also bounds how old a decision's policy may be.
+  let nextPollAfterMs = pollIntervalMs;
+  // A false answer requested before the newest true one is stale.
+  let newestTrueRequestedAt = Number.NEGATIVE_INFINITY;
+  // Every read arms the next one an interval later. While remote connections
+  // are open this keeps the fixed cadence; an idle host stops polling here.
+  const armPoll = () => {
+    if (stopped || pollTimer) return;
+    const due =
+      attemptStartedAt === undefined
+        ? 0
+        : Math.max(0, attemptStartedAt + nextPollAfterMs - performance.now());
+    pollTimer = setTimeout(() => {
+      pollTimer = undefined;
+      if (options.pollWhileIdle === true || options.remoteSessions.remoteConnectionsOpen)
+        void refresh();
+    }, due);
+    pollTimer.unref();
+  };
+  const rearmFrom = (startedAt: number) => {
+    nextPollAfterMs = jitterMs(pollIntervalMs, { towards: "shorter" });
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = undefined;
+    attemptStartedAt = Math.max(attemptStartedAt ?? startedAt, startedAt);
+    armPoll();
+  };
+  // A decision may use a policy no older than the polling cadence allows: one
+  // interval since the newest attempt, or one interval plus one bounded request
+  // while that attempt is still in flight.
+  const ensureFresh = (): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    if (inFlight)
+      return elapsed(settledAttemptStartedAt) < pollIntervalMs + REFRESH_TIMEOUT_MS
+        ? Promise.resolve()
+        : inFlight;
+    return elapsed(attemptStartedAt) < pollIntervalMs ? Promise.resolve() : refresh();
+  };
+  const unregister = options.remoteSessions.registerGlobalBillingPolicy({
+    authority: apiIssuer,
+    enforced,
+    ensureFresh,
+  });
+  // Covers a connection admitted just as the idle timer lapsed.
+  const stopWatchingConnections = options.remoteSessions.onRemoteConnectionOpened(armPoll);
   const enforceAdmission = () => {
     if (stopped) return;
     if (!options.remoteSessions.canAdmitRemoteSession()) {
@@ -160,6 +233,8 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
     if (inFlight) return inFlight;
     enforceAdmission();
     const policyRevision = options.remoteSessions.billingPolicyRevision;
+    const startedAt = performance.now();
+    rearmFrom(startedAt);
     inFlight = (async () => {
       const controller = new AbortController();
       requestAbort = controller;
@@ -193,6 +268,7 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
         const next: PolicyHint = { apiIssuer, enforced: instance.remoteBillingEnforced, checkedAt };
         // A live true response closes unpaid sockets before waiting for disk I/O.
         if (next.enforced) {
+          newestTrueRequestedAt = Math.max(newestTrueRequestedAt, startedAt);
           hint = next;
           enforceAdmission();
         }
@@ -200,7 +276,9 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
         await withPolicyWrite(policyPath, async () => {
           if (
             stopped ||
-            (!next.enforced && options.remoteSessions.billingPolicyRevision !== policyRevision)
+            (!next.enforced &&
+              (options.remoteSessions.billingPolicyRevision !== policyRevision ||
+                startedAt < newestTrueRequestedAt))
           )
             return;
           await Effect.runPromise(
@@ -213,7 +291,9 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
         });
         if (
           !saved ||
-          (!next.enforced && options.remoteSessions.billingPolicyRevision !== policyRevision)
+          (!next.enforced &&
+            (options.remoteSessions.billingPolicyRevision !== policyRevision ||
+              startedAt < newestTrueRequestedAt))
         )
           return;
         if (stopped) return;
@@ -229,17 +309,36 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
       }
     })().finally(() => {
       inFlight = undefined;
+      settledAttemptStartedAt = Math.max(settledAttemptStartedAt ?? startedAt, startedAt);
+      // A timer that lapsed during a slow attempt found it in flight and started nothing.
+      armPoll();
     });
     return inFlight;
   };
 
-  const interval = setInterval(
-    () => {
-      void refresh();
-    },
-    Math.min(MAX_FALSE_POLICY_AGE_MS, Math.max(100, options.pollIntervalMs ?? 15_000)),
-  );
-  interval.unref();
+  // An authenticated snapshot carries the same deployment flag. Adopting it as a
+  // read keeps the policy fresh without a public request while snapshots flow.
+  const adopt = async (next: PolicyHint, requestedAt: number, persist: () => Promise<void>) => {
+    if (stopped || next.apiIssuer !== apiIssuer) return;
+    // Check while holding the write slot so a rejected snapshot cannot survive a restart.
+    if (!next.enforced && requestedAt < newestTrueRequestedAt) return;
+    await persist();
+    if (stopped) return;
+    if (next.enforced) {
+      newestTrueRequestedAt = Math.max(newestTrueRequestedAt, requestedAt);
+      hint = next;
+      enforceAdmission();
+    } else {
+      if (requestedAt < newestTrueRequestedAt) return;
+      hint = next;
+      resetFalseDeadline();
+      enforceAdmission();
+    }
+    settledAttemptStartedAt = Math.max(settledAttemptStartedAt ?? requestedAt, requestedAt);
+    rearmFrom(requestedAt);
+  };
+  livePolicies.set(policyPath, adopt);
+
   // Only disk restoration precedes startup; the first public read is asynchronous.
   void refresh();
   return {
@@ -248,7 +347,9 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
       if (options.remoteSessions.remoteBillingEnforced)
         options.remoteSessions.setRemoteBillingEnforced(true);
       stopped = true;
-      clearInterval(interval);
+      if (livePolicies.get(policyPath) === adopt) livePolicies.delete(policyPath);
+      stopWatchingConnections();
+      if (pollTimer) clearTimeout(pollTimer);
       if (expiryTimer) clearTimeout(expiryTimer);
       requestAbort?.abort();
       await inFlight;

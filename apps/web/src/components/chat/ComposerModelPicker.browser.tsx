@@ -334,24 +334,35 @@ describe("ComposerModelPicker", () => {
     }
   });
 
-  it("opens on starred presets and restores model + traits in one click", async () => {
-    const onProviderModelChange = vi.fn();
-    const screen = await mountPicker({ onProviderModelChange }, { reasoningEffort: "medium" }, [
-      { provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null },
-    ]);
-    try {
-      await expect
-        .element(page.getByRole("tab", { name: "Starred" }))
-        .toHaveAttribute("aria-selected", "true");
-      await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
-        modelOptions: { reasoningEffort: "low", fastMode: true },
-        instanceId: "codex",
-      });
-    } finally {
-      await screen.unmount();
-    }
-  });
+  it.each(["menu", "slider"] as const)(
+    "restores a starred preset and keeps the picker open only in slider mode (%s)",
+    async (effortControl) => {
+      const onProviderModelChange = vi.fn();
+      const screen = await mountPicker(
+        { effortControl, onProviderModelChange },
+        { reasoningEffort: "medium" },
+        [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null }],
+      );
+      try {
+        const starred = page.getByRole("tab", { name: "Starred" });
+        await expect.element(starred).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
+        expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
+          modelOptions: { reasoningEffort: "low", fastMode: true },
+          instanceId: "codex",
+        });
+        if (effortControl === "slider") {
+          await expect
+            .element(page.getByRole("slider", { name: "Reasoning effort" }))
+            .toBeVisible();
+        } else {
+          await expect.element(starred).not.toBeInTheDocument();
+        }
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 
   it("shows the star on every starred model of the provider tab, whatever its traits", async () => {
     const screen = await mountPicker({}, { reasoningEffort: "medium" }, [

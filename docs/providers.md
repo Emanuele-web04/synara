@@ -481,18 +481,28 @@ direct app-server input. Finished native children are also read-only. These send
 before adding a user message, preserving the completed outcome. Ordinary delegated task
 conversations keep their independent messaging behavior.
 
-The parent transcript groups adjacent child launches from the same turn in a compact card at
-their launch position; assistant narration separates groups. Cards start collapsed and preserve
-each invocation's status, elapsed time, current step and short result. Their compact headers stay
-visible after the parent turn ends, including while background children continue working.
+The parent transcript groups adjacent child launches from the same turn in one compact row at
+their launch position; assistant narration separates groups. The row reads like a tool row: the
+children's avatars and "Created subagent" or "Created N subagents", with a shimmering running
+count while they work. It starts collapsed and preserves each invocation's status, elapsed time,
+current step and short result. A row with a child still at work stays visible after the parent
+turn ends, including while background children continue working, at the end of the answer just
+above its actions and time; once every child settles, it folds into the turn's "Worked for"
+disclosure with the rest of that turn's work. Work rows stack 14px apart and keep the same 14px
+from the text around them.
 While agents are active, an “N agents running” capsule above the composer counts them during
-and after the turn; selecting it brings the newest available running card or task into view.
+and after the turn; selecting it opens the Subagents list on the right, the same list the
+Environment panel opens.
 It replaces the duplicate floating running-card chip. In a child thread, it counts that child’s
 nested agents, not its siblings. Background commands and monitors remain in the transcript
 and sidebar background-work status; they do not count as agents. Stop all stays visible on a live header;
 expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
 subagents separately; their rows start collapsed. The sidebar lists top-level threads only;
-child threads are reached from the card, Environment and the Subagents dock. Child threads link back to
+child threads are reached from the card, Environment and the Subagents dock. Opening one shows it
+in a split to the right of the chat that launched it, in place of the Subagents list, so that chat
+keeps its width. If the adjacent column already contains two chats, the child opens below its
+launcher. Opening another subagent swaps the available subagent pane, and a subagent already on
+screen gets focus. Child threads link back to
 their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
@@ -572,9 +582,10 @@ the native resume cursor and incorporates native resume metadata when the runtim
 Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
 transcript file size and base64 image size are not model token counts.
 
-Like embedded Claude Code, Synara sends after a long pause without asking by default; the first
-request then re-caches the full history once. Turning on **Ask before resuming a long idle session** in
-Settings → Providers → Claude adds Claude Code's interactive resume prompt (checked against Claude Code
+Embedded Claude Code sends after a long pause without asking, and the first request then re-caches
+the full history once, which on a large session can take several percent of a usage window. Synara
+therefore asks by default: **Ask before resuming a long idle session** in Settings → Providers → Claude
+is on unless you turn it off, and adds Claude Code's interactive resume prompt (checked against Claude Code
 2.1.296): when Claude's context is at least 100,000 tokens and its last response is at least 70 minutes
 old, whatever the cache state, Synara holds the next message a person sends before delivering it to the runtime.
 The composer uses Claude Code's wording and choices: **Resume from summary (recommended)** compacts

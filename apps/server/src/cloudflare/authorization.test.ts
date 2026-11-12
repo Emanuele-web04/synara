@@ -16,6 +16,7 @@ const snapshot: HostAuthorizationSnapshot = {
   pendingRevocationDeviceJkts: [],
 };
 afterEach(() => vi.useRealTimers());
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("remote authorization lease", () => {
   it("admits only after durable application and closes existing streams once at expiry", async () => {
     vi.useFakeTimers();
@@ -215,6 +216,8 @@ describe("remote authorization lease", () => {
       signal: abort.signal,
       now: () => clock,
       pollIntervalMs: 1,
+      // Keeps refusals polling quickly; the backoff itself is covered below.
+      refusedPollMaxMs: 1,
     });
     try {
       await vi.waitFor(() => expect(poll.available()).toBe(true));
@@ -231,6 +234,171 @@ describe("remote authorization lease", () => {
       await vi.waitFor(() => expect(poll.available()).toBe(true));
       expect(apply.mock.calls.length).toBeGreaterThan(1);
       expect(unavailable).not.toHaveBeenCalledWith(true);
+    } finally {
+      abort.abort();
+      await poll.done;
+    }
+  });
+  describe("without open remote connections", () => {
+    /** A poll whose snapshots revoke whatever `revoked` lists, applied as host tombstones. */
+    function revocationFixture(options: { pollIntervalMs: number; idlePollIntervalMs: number }) {
+      const abort = new AbortController();
+      const revoked: string[] = [];
+      const tombstones = new Set<string>();
+      let open = false;
+      const refresh = vi.fn(async () => ({ ...snapshot, revokedDeviceJkts: [...revoked] }));
+      const log = vi.fn();
+      const poll = startRemoteAuthorization({
+        refresh,
+        apply: async (applied) => {
+          for (const jkt of applied.revokedDeviceJkts) tombstones.add(jkt);
+        },
+        unavailable: async () => {},
+        signal: abort.signal,
+        active: () => open,
+        log,
+        ...options,
+      });
+      // The host's device admission: a fresh snapshot first, then durable trust.
+      const admit = async (deviceJkt: string) => {
+        await poll.ensureFresh();
+        return poll.available() && !tombstones.has(deviceJkt);
+      };
+      return {
+        poll,
+        refresh,
+        revoked,
+        tombstones,
+        admit,
+        log,
+        setOpen: (value: boolean) => {
+          open = value;
+        },
+        stop: async () => {
+          abort.abort();
+          await poll.done;
+        },
+      };
+    }
+
+    it("checks on demand before admitting and refuses a device revoked since the last check", async () => {
+      const f = revocationFixture({ pollIntervalMs: 20, idlePollIntervalMs: 3_600_000 });
+      try {
+        await vi.waitFor(() => expect(f.refresh).toHaveBeenCalledOnce());
+        await sleep(200);
+        // Idle: no lease renewal between admissions.
+        expect(f.refresh).toHaveBeenCalledOnce();
+        expect(await f.admit("phone")).toBe(true);
+        expect(f.refresh).toHaveBeenCalledTimes(2);
+        // A second admission within one poll interval decides on that answer.
+        expect(await f.admit("tablet")).toBe(true);
+        expect(f.refresh).toHaveBeenCalledTimes(2);
+        f.revoked.push("phone");
+        await sleep(30);
+        expect(await f.admit("phone")).toBe(false);
+        expect(f.refresh).toHaveBeenCalledTimes(3);
+      } finally {
+        await f.stop();
+      }
+    });
+
+    it("renews on the normal cadence as soon as a connection opens, so connected revocation is not slower", async () => {
+      const f = revocationFixture({ pollIntervalMs: 50, idlePollIntervalMs: 3_600_000 });
+      try {
+        await vi.waitFor(() => expect(f.refresh).toHaveBeenCalledOnce());
+        await sleep(100);
+        f.setOpen(true);
+        f.poll.wake();
+        await vi.waitFor(() => expect(f.refresh.mock.calls.length).toBeGreaterThanOrEqual(3), {
+          timeout: 500,
+        });
+        f.revoked.push("phone");
+        // Reaches the connected device within about one poll, without any admission.
+        await vi.waitFor(() => expect(f.tombstones.has("phone")).toBe(true), { timeout: 300 });
+        f.setOpen(false);
+        await sleep(100);
+        const idle = f.refresh.mock.calls.length;
+        await sleep(300);
+        expect(f.refresh).toHaveBeenCalledTimes(idle);
+      } finally {
+        await f.stop();
+      }
+    });
+
+    it("checks at once when this app revoked a device", async () => {
+      const f = revocationFixture({ pollIntervalMs: 20, idlePollIntervalMs: 3_600_000 });
+      try {
+        await vi.waitFor(() => expect(f.refresh).toHaveBeenCalledOnce());
+        f.revoked.push("phone");
+        f.poll.checkSoon();
+        await vi.waitFor(() => expect(f.tombstones.has("phone")).toBe(true), { timeout: 300 });
+      } finally {
+        await f.stop();
+      }
+    });
+
+    it("lets an idle lease lapse without logging a pause", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      let clock = 10_000;
+      const abort = new AbortController();
+      const log = vi.fn();
+      const unavailable = vi.fn(async () => {});
+      const poll = startRemoteAuthorization({
+        refresh: async () => snapshot,
+        apply: async () => {},
+        unavailable,
+        signal: abort.signal,
+        now: () => clock,
+        active: () => false,
+        idlePollIntervalMs: 3_600_000,
+        log,
+      });
+      try {
+        await vi.waitFor(() => expect(poll.available()).toBe(true));
+        clock += REMOTE_AUTHORIZATION_LEASE_MS;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(poll.available()).toBe(false);
+        expect(unavailable).toHaveBeenCalledWith(false);
+        expect(log).not.toHaveBeenCalled();
+      } finally {
+        abort.abort();
+        await poll.done;
+      }
+    });
+  });
+  it("backs off repeated refusals and returns to the normal cadence once access is back", async () => {
+    const abort = new AbortController();
+    const polledAt: number[] = [];
+    let refusals = 5;
+    const poll = startRemoteAuthorization({
+      refresh: async () => {
+        polledAt.push(performance.now());
+        if (refusals-- > 0)
+          throw new AccountApiError({
+            status: 403,
+            code: "subscription_required",
+            message: "The host owner's remote subscription is required",
+          });
+        return snapshot;
+      },
+      apply: async () => {},
+      unavailable: async () => {},
+      signal: abort.signal,
+      pollIntervalMs: 10,
+      refusedPollMaxMs: 400,
+    });
+    try {
+      await vi.waitFor(() => expect(polledAt.length).toBeGreaterThanOrEqual(7), {
+        timeout: 5_000,
+      });
+      expect(poll.available()).toBe(true);
+      const gaps = polledAt.slice(1).map((at, index) => at - polledAt[index]!);
+      // Five refusals wait 10, 20, 40, 80 and 160 ms (each with -10% jitter at most).
+      [10, 20, 40, 80, 160].forEach((interval, index) =>
+        expect(gaps[index]).toBeGreaterThanOrEqual(interval * 0.9 - 1),
+      );
+      // The first lease restores the 10 ms cadence.
+      expect(gaps[5]).toBeLessThan(144);
     } finally {
       abort.abort();
       await poll.done;

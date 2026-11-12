@@ -725,6 +725,117 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.label).toBe("Pi extension");
   });
 
+  it("hides persisted Pi unsupported-UI warnings but keeps extension notifications", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-info",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "Indexing finished", nativeEventType: "info" },
+        }),
+        makeActivity({
+          id: "pi-unsupported",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Pi extension UI API 'setWidget' is not supported in Synara yet." },
+        }),
+        makeActivity({
+          id: "pi-warning",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Extension could not load its config", nativeEventType: "warning" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
+  });
+
+  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
+    const stderr = (id: string, message: string, nativeEventType?: string) =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: { message, ...(nativeEventType ? { nativeEventType } : {}) },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        // Stored only because ingestion kept it: a structured ERROR whose level
+        // the message normalization removed must not be judged again.
+        stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
+        stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
+        stderr("other-provider", "Bash was denied: outside workspace"),
+        stderr("other-plain", "Falling back to the default model"),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "codex-error",
+      "codex-structured-error",
+      "other-plain",
+      "other-provider",
+    ]);
+  });
+
+  it("hides stored Claude warnings the adapter now only logs", () => {
+    const retry = (id: string, attempt: number, error = "overloaded") =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: {
+          message: `Request retry ${attempt}/3 in 2s (HTTP 503).`,
+          data: { type: "system", subtype: "api_retry", attempt, max_retries: 3, error },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unhandled",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Unhandled Claude system message subtype 'notification'." },
+        }),
+        makeActivity({
+          id: "attachment-missing",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message: "Unhandled Claude system message subtype 'file_attachments_missing'.",
+          },
+        }),
+        makeActivity({
+          id: "uncached",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message:
+              "Claude reported ~60k input tokens outside cache in one request, plus ~2k cache writes and ~0 cache reads.",
+          },
+        }),
+        retry("retry-1", 1),
+        retry("retry-2-rate-limit", 2, "rate_limit"),
+        retry("retry-3", 3),
+        makeActivity({
+          id: "denied",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Bash was denied: outside the workspace" },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "attachment-missing",
+      "denied",
+      "retry-2-rate-limit",
+      "retry-3",
+    ]);
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [
