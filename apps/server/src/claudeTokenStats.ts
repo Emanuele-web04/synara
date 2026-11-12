@@ -27,7 +27,9 @@ export function tokenStatsThreadFilter(
 }
 
 // The scope plus its threads' parents: a subagent's usage is judged against its
-// parent's results even when the parent is outside the scope.
+// parent's results even when the parent is outside the scope. One IN list, not
+// two joined by OR, so SQLite can seek (kind, thread_id) instead of reading
+// every activity of the kind.
 function tokenStatsLineageFilter(
   sql: SqlClient.SqlClient,
   column: Statement.Fragment,
@@ -37,10 +39,12 @@ function tokenStatsLineageFilter(
     return sql.literal("");
   }
   const threads = "threadId" in scope ? sql`SELECT ${scope.threadId}` : scope.threadIdsQuery;
-  return sql`AND (${column} IN (${threads}) OR ${column} IN (
+  return sql`AND ${column} IN (
+    ${threads}
+    UNION
     SELECT parent_thread_id FROM projection_threads
     WHERE thread_id IN (${threads}) AND parent_thread_id IS NOT NULL
-  ))`;
+  )`;
 }
 
 // A non-negative JSON number at `path`, else 0. Paths are constants, never input.
