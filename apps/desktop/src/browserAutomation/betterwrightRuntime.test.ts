@@ -244,7 +244,24 @@ describe("Betterwright runtime errors", () => {
       {
         name: "TypeError",
         api: "page.evaluate",
-        message: "page.evaluate: Cannot read properties of null (reading 'textContent')",
+        message: "page.evaluate: Cannot read properties of null (reading a property)",
+      },
+    ],
+    [
+      // A computed key can be page data: the engine message must not carry it.
+      "page.evaluate: TypeError: Cannot read properties of null (reading 'hunter42')",
+      {
+        name: "TypeError",
+        api: "page.evaluate",
+        message: "page.evaluate: Cannot read properties of null (reading a property)",
+      },
+    ],
+    [
+      "page.evaluate: TypeError: privatePageFn is not a function",
+      {
+        name: "TypeError",
+        api: "page.evaluate",
+        message: "page.evaluate: a value is not a function",
       },
     ],
     [
@@ -282,7 +299,7 @@ describe("Betterwright runtime errors", () => {
     ["Unexpected token ';'", { name: "SyntaxError", message: "Unexpected token ';'" }],
     [
       "Cannot read properties of undefined (reading 'foo')",
-      { name: "TypeError", message: "Cannot read properties of undefined (reading 'foo')" },
+      { name: "TypeError", message: "Cannot read properties of undefined (reading a property)" },
     ],
     [
       "human.type needs about 33421 ms to type 350 characters at human pace, but about 18712 ms remain in this call. Nothing was typed. Use locator.fill(text) or page.keyboard.insertText(text) for long text, or raise timeoutMs.",

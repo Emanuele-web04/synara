@@ -179,6 +179,19 @@ const makeCause = (
 const engineMessageName = (message: string): ScriptErrorName | undefined =>
   ENGINE_MESSAGE_SHAPES.find(([shape]) => shape.test(message))?.[1];
 
+// A property read through a computed key names that key, which can be page data
+// (`null[secret]` reads "(reading 'secret')"). Keep the error's shape only.
+const withoutPropertyName = (message: string): string =>
+  message.replace(/\((reading|setting) '[^'\n]*'\)$/, "($1 a property)");
+
+// Inside page code every name and quoted value in an engine message may come
+// from the page, so only the kind of error survives.
+const withoutPageText = (message: string): string =>
+  withoutPropertyName(message)
+    .replace(/'[^'\n]*'/g, "'…'")
+    .replace(/^[\w$.]{1,100}(?= is not (?:a function|iterable|a constructor)$)/, "a value")
+    .replace(/^[A-Za-z_$][\w$]{0,63}(?= is not defined$)/, "a name");
+
 function playwrightApiCause(api: string, detail: string): BrowserAutomationErrorCause {
   const timeout = /^Timeout (\d{1,9})ms exceeded\.?$/.exec(detail);
   if (timeout) return makeCause(`${api}: Timeout ${timeout[1]}ms exceeded.`, "TimeoutError", api);
@@ -187,7 +200,9 @@ function playwrightApiCause(api: string, detail: string): BrowserAutomationError
   const body = name ? thrown![2]! : detail;
   if (PAGE_EVALUATION_METHODS.has(api.slice(api.indexOf(".") + 1))) {
     const engineName = engineMessageName(body);
-    if (engineName) return makeCause(`${api}: ${body}`, name ?? engineName, api);
+    if (engineName) {
+      return makeCause(`${api}: ${withoutPageText(body)}`, name ?? engineName, api);
+    }
     return makeCause(
       `${api}: ${name ?? "An error"} was thrown in the page; its message was withheld because page code controls it.`,
       name,
@@ -255,7 +270,7 @@ export function describeBetterwrightFailure(
     return failed(playwrightApiCause(`${api[1]}.${api[2]}`, api[3]!));
   }
   const engineName = engineMessageName(line);
-  if (engineName) return failed(makeCause(line, engineName));
+  if (engineName) return failed(makeCause(withoutPropertyName(line), engineName));
   if (FIXED_RUNTIME_MESSAGES.some((message) => message.test(line))) return failed(makeCause(line));
   return failed(makeCause(WITHHELD_ERROR[source]));
 }
