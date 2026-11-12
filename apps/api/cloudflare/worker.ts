@@ -179,21 +179,48 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    await this.ensureRuntimeConfiguration();
-    // A matching stored config does not prove a process survived sleep or a crash.
-    // Use the SDK's throwing readiness path before its fetch can expose startup errors.
-    if (!this.ctx.container?.running) {
-      try {
-        await this.startAndWaitForPorts();
-      } catch (error) {
-        // Do not reuse a historical readiness claim after a failed restart.
-        this.runtimeConfiguration = undefined;
-        await this.ctx.storage.delete(RUNTIME_CONFIG_KEY);
-        throw error;
+    try {
+      await this.ensureRuntimeConfiguration();
+      // A matching stored config does not prove a process survived sleep or a crash.
+      // Use the SDK's throwing readiness path before its fetch can expose startup errors.
+      if (!this.ctx.container?.running) {
+        try {
+          await this.startAndWaitForPorts();
+        } catch (error) {
+          // Do not reuse a historical readiness claim after a failed restart.
+          this.runtimeConfiguration = undefined;
+          await this.ctx.storage.delete(RUNTIME_CONFIG_KEY);
+          throw error;
+        }
       }
+    } catch (error) {
+      if (isRefreshRequest(request)) return refreshNotAttempted();
+      throw error;
     }
     return super.fetch(request);
   }
+}
+
+function isRefreshRequest(request: Request): boolean {
+  return request.method === "POST" && new URL(request.url).pathname === "/api/v1/auth/refresh";
+}
+
+/**
+ * Up to here the API process has not seen the request, so its refresh token
+ * provably never reached the identity provider. Answer with the API's own
+ * pre-dispatch refusal, which released desktops treat as "keep the token and
+ * renew later"; the generic 503 below reads to them as an uncertain refresh.
+ * A failure after forwarding has an unknown outcome and never gets this answer.
+ */
+function refreshNotAttempted(): Response {
+  console.error("[account-api] Container unavailable");
+  return Response.json(
+    {
+      error: "refresh_not_attempted",
+      message: "Account service temporarily unavailable — the refresh was not attempted",
+    },
+    { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "5" } },
+  );
 }
 
 export default {

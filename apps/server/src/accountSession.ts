@@ -75,6 +75,7 @@ import {
   accountApiIssuer,
   accountStateDirectory,
   ensureLocalAccountHostLinked,
+  logAccountSession,
   readAccountCredentials,
   readAccountFile,
   deleteAccountCredentials,
@@ -708,13 +709,22 @@ export function createAccountSession(
         // acquire an identity from the exact token that produced this response.
         await withLockedAccountFile(credentialDir, async () => {
           const current = await readAccountCredentials(credentialDir);
-          if (
-            !current ||
-            current.accountUrl !== credentials.accountUrl ||
-            current.organizationId !== verified.organization.id ||
-            (current.userId ? current.userId !== verified.id : current.accessToken !== token)
-          )
+          const changed = !current
+            ? "session"
+            : current.accountUrl !== credentials.accountUrl
+              ? "accountUrl"
+              : current.organizationId !== verified.organization.id
+                ? "organizationId"
+                : current.userId
+                  ? current.userId !== verified.id && "userId"
+                  : current.accessToken !== token && "accessToken";
+          if (!current || changed) {
+            logAccountSession(credentialDir, "identity_fence", {
+              fence: "status_verified_identity",
+              field: changed || "session",
+            });
             throw new SessionExpiredError();
+          }
           if (!current.userId)
             await writeAccountCredentials(credentialDir, { ...current, userId: verified.id });
         });
@@ -727,7 +737,13 @@ export function createAccountSession(
       // A rejected token that survived the refresh attempt is a dead session
       // too — but an unreachable account is not, and reporting it as signed
       // out would make a network blip look like being logged out.
-      if (error instanceof AccountApiError && error.status === 401) return SIGNED_OUT;
+      if (error instanceof AccountApiError && error.status === 401) {
+        logAccountSession(credentialDir, "status_unauthorized", {
+          status: error.status,
+          code: error.code,
+        });
+        return SIGNED_OUT;
+      }
       throw error;
     }
   }

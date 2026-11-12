@@ -421,16 +421,24 @@ backs both:
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
 
-Refresh admission failures use `429 refresh_not_attempted` only when this API
-rejects the request before sending the refresh token to the identity provider.
-That response includes `Retry-After: 60`; desktop keeps the token available for
-the next request. Upstream `429 rate_limited`, unknown outcomes and lost API
-responses remain distinct: they do not prove that a token was unused.
-Only `401 unauthorized` from the refresh endpoint proves a terminal refusal;
-an unrecognized response preserves the credential and its uncertain-operation
-marker. Identity metadata or verification-key outages surface as server failures,
-so they do not tell desktop clients to renew a valid session. Invalid or expired
-access tokens still receive `401 unauthorized`.
+Refresh follows WorkOS's
+[session-resilience contract](https://workos.com/docs/authkit/session-resilience):
+refresh tokens rotate, a replay of the just-used token within 30 seconds returns
+the same rotated pair, and a token whose exchange never reached WorkOS is still
+valid. Presenting the same token again is therefore always the recovery, and
+only a terminal refusal ends a session.
+
+Refresh admission failures use `429 refresh_not_attempted` only when the refresh
+token provably never reached the identity provider: this API's own per-IP limiter
+(`Retry-After: 60`), or the Cloudflare Worker when the API process could not be
+configured or started before the request was forwarded (`Retry-After: 5`). A
+failure after forwarding stays the generic `503`, since its outcome is unknown.
+Upstream `429 rate_limited`, timeouts, other unknown outcomes and lost API
+responses remain distinct: they do not prove that a token was unused. Only
+`401 unauthorized` from the refresh endpoint proves a terminal refusal. Identity
+metadata or verification-key outages surface as server failures, so they do not
+tell desktop clients to renew a valid session. Invalid or expired access tokens
+still receive `401 unauthorized`.
 
 The desktop renews access tokens for session failures. Authenticated permission
 denials and device-proof failures pass through without rotating the session.
@@ -438,14 +446,31 @@ Billing stays bound to the captured account and workspace. Remote grants and
 Host Secrets operations also verify the registered device identity before using
 credentials or applying a result.
 
-The WorkOS adapter retries a transient refresh failure once, with backoff and
-a total deadline of at most 25 seconds from the first attempt. The configured
-grant timeout can shorten that deadline. This uses WorkOS's documented
-[30-second replay grace period](https://workos.com/docs/authkit/session-resilience)
-for the exact same refresh request; revoked or expired grants are not retried.
-OTP and PKCE grants retain their existing behavior. Account-status failures are
-request-scoped RPC errors, so a temporary renewal fault does not fail unrelated
-requests on the connection.
+When a renewal fails without a terminal refusal, the desktop keeps its token pair
+and retries the same refresh token: up to four attempts, 1s, 2s and 4s apart, while
+they fit within 20 seconds of the first, all under the credential-file lock.
+Transport errors, timeouts, `429` and `5xx` are retried that way; `refresh_not_attempted`
+and other refusals are not. After a failed series, later renewals of that token
+wait out a cooldown that starts at 5 seconds and doubles to a one-minute cap, so
+background requests fail fast instead of each retrying. The failure reaches the
+caller as itself, so account status reports an error rather than signing out.
+Files written by older versions may carry a `refreshPendingTokenHash` marker;
+it is ignored and dropped with the next rotation. Every way the desktop server
+drops, distrusts or fails to renew a session writes one `[account] session <reason>`
+log line (`refresh_rejected`, `workspace_refused`, `identity_fence`,
+`status_unauthorized`, `refresh_failed`) with non-secret context only — HTTP
+status, account error code, fence and field names, counts — and repeats of the
+same line are suppressed for ten minutes.
+
+The WorkOS adapter retries a transient refresh failure (`408`, `429`, `5xx`,
+including its own timeouts and interrupted responses) with the exact same request,
+backing off from 250ms and doubling to a 4-second cap with jitter. Every attempt
+stays within a 25-second budget from the first, inside WorkOS's 30-second replay
+grace; the configured grant timeout can shorten that budget, and the adapter
+stops once the budget cannot fit another attempt. Revoked or expired grants
+(`invalid_grant`) are not retried. OTP and PKCE grants retain their existing
+behavior. Account-status failures are request-scoped RPC errors, so a temporary
+renewal fault does not fail unrelated requests on the connection.
 
 ## Hosts are account entities shared through organizations
 
