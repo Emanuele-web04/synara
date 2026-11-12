@@ -1172,6 +1172,20 @@ describe("resolveNewChatDefault", () => {
     });
   });
 
+  it("keeps the migrated Codex preference until the user explicitly chooses the default account", () => {
+    const settings = AppSettingsSchema.makeUnsafe({
+      codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+      selectedCodexAccountId: "work",
+    });
+    expect(resolveNewChatDefault(settings).defaultProviderInstanceId).toBe(
+      codexAccountInstanceId("work"),
+    );
+    expect(
+      resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "codex" })
+        .defaultProviderInstanceId,
+    ).toBe("codex");
+  });
+
   it("falls back to the agent's default account for an unusable stored account", () => {
     for (const defaultProviderInstanceId of ["", "claude_missing", "claude_off", "codex_team"]) {
       expect(resolveNewChatDefault({ ...base, defaultProviderInstanceId })).toEqual({

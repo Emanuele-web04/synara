@@ -62,6 +62,23 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
   });
 
+  it("omits desktop-only Appearance controls in a browser", () => {
+    const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
+    const targets = results.map(settingsSearchEntryTarget);
+    expect(targets).toContain("setting-base-font-size");
+    expect(targets).not.toContain("setting-app-icon");
+    expect(targets).not.toContain("setting-use-custom-title-bar");
+  });
+
+  it("finds the agent keep-awake row only when the server supports it", () => {
+    const targets = (keepAwakeAvailable: boolean) =>
+      rankSettingsSearchEntries("keep computer awake", SETTINGS_SEARCH_ENTRIES.length, {
+        keepAwakeAvailable,
+      }).map(settingsSearchEntryTarget);
+    expect(targets(false)).not.toContain("setting-keep-computer-awake");
+    expect(targets(true)).toContain("setting-keep-computer-awake");
+  });
+
   it("respects the result limit", () => {
     expect(rankSettingsSearchEntries("e", 3)).toHaveLength(3);
   });

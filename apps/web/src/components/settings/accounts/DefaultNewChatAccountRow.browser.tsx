@@ -54,15 +54,20 @@ describe("DefaultNewChatAccountRow", () => {
     });
   });
 
-  it("stores an agent's default account as empty", async () => {
+  it("can explicitly choose default Codex over a migrated account preference", async () => {
     const updateSettings = await mount(
-      settingsWith({ defaultProvider: "claudeAgent", defaultProviderInstanceId: "claude_work" }),
+      settingsWith({
+        codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+        selectedCodexAccountId: "work",
+      }),
     );
-    await page.getByRole("combobox", { name: "Agent and account" }).click();
+    const select = page.getByRole("combobox", { name: "Agent and account" });
+    await expect.element(select).toHaveTextContent("Codex · Work");
+    await select.click();
     await page.getByRole("option", { name: "Codex", exact: true }).click();
     expect(updateSettings).toHaveBeenCalledExactlyOnceWith({
       defaultProvider: "codex",
-      defaultProviderInstanceId: "",
+      defaultProviderInstanceId: "codex",
     });
   });
 

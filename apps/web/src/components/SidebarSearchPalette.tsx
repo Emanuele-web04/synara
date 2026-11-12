@@ -64,6 +64,7 @@ import {
   matchSidebarSearchThemes,
   matchSidebarSearchThreads,
 } from "./SidebarSearchPalette.logic";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
 import { useTheme } from "../hooks/useTheme";
 import { getAvailableCodeThemes, getCodeThemeSeed } from "../theme/theme.logic";
 import {
@@ -393,6 +394,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { t } = useTranslation();
+  const keepAwakeAvailable = useKeepAwakeState()?.available === true;
 
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
   const [query, setQuery] = useState("");
@@ -548,7 +550,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         : undefined,
     [serverThreadSearch, trimmedQuery],
   );
-  const matchedSettings = isBrowsing ? [] : rankSettingsSearchEntries(query, 12);
+  const matchedSettings = isBrowsing
+    ? []
+    : rankSettingsSearchEntries(query, 12, { keepAwakeAvailable });
   // Scoring normalizes and scans every message of every thread; keep it keyed
   // on the thread set and query so highlight/keyboard/state re-renders and
   // unrelated store flushes do not rescore the whole workspace.

@@ -55,8 +55,7 @@ export function DefaultNewChatAccountRow({
   const { t } = useTranslation();
   const options = useMemo(() => listNewChatAccountOptions(settings), [settings]);
   // resolveNewChatDefault drops a stored account that is gone, off, or on another agent.
-  // Empty storage means the agent's default account, whose id is the agent kind; a stored
-  // account that no longer resolves selects nothing, so the row asks for one.
+  // A stored account that no longer resolves leaves the selection empty.
   const resolved = resolveNewChatDefault(settings);
   const selectedInstanceId =
     resolved.defaultProviderInstanceId ??
@@ -93,8 +92,7 @@ export function DefaultNewChatAccountRow({
             if (!next) return;
             updateSettings({
               defaultProvider: next.provider,
-              // The default account is stored as empty, like a fresh install.
-              defaultProviderInstanceId: next.isDefault ? "" : next.instanceId,
+              defaultProviderInstanceId: next.instanceId,
             });
           }}
           ariaLabel={t("settings:general_newChatAccount")}

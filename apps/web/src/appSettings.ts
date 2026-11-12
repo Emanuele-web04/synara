@@ -615,7 +615,7 @@ export const AppSettingsSchema = Schema.Struct({
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only: the account (provider instance) of `defaultProvider` that new chats
-  // start on. Empty means that agent's default account.
+  // start on. Empty follows the agent's default, including a legacy Codex selection.
   defaultProviderInstanceId: Schema.String.pipe(withDefaults(() => "")),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
@@ -1166,11 +1166,17 @@ export function resolveNewChatDefault(settings: NewChatDefaultSettings): NewChat
   const cached = newChatDefaultBySettings.get(settings);
   if (cached) return cached;
   const defaultProvider = settings.defaultProvider;
-  const storedInstanceId = settings.defaultProviderInstanceId?.trim() ?? "";
+  const storedInstanceId = settings.defaultProviderInstanceId?.trim();
+  const legacyInstanceId =
+    !storedInstanceId && defaultProvider === "codex"
+      ? resolveDefaultProviderInstanceId(settings, defaultProvider)
+      : null;
+  const requestedInstanceId =
+    storedInstanceId || (legacyInstanceId === defaultProvider ? null : legacyInstanceId);
   let defaultProviderInstanceId: ProviderInstanceId | null = null;
-  if (storedInstanceId && !settings.disabledProviders?.includes(defaultProvider)) {
+  if (requestedInstanceId && !settings.disabledProviders?.includes(defaultProvider)) {
     const account = getProviderInstanceOptions(settings).find(
-      (option) => option.instanceId === storedInstanceId,
+      (option) => option.instanceId === requestedInstanceId,
     );
     if (account && account.enabled && account.provider === defaultProvider) {
       defaultProviderInstanceId = account.instanceId;

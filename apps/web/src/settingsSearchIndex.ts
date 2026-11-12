@@ -4,8 +4,10 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
+import { isElectron } from "~/env";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
+import { getNavigatorPlatform, isLinuxPlatform, isWindowsPlatform } from "~/lib/utils";
 import { i18n, t } from "~/i18n";
 import {
   GENERATED_SETTINGS_SEARCH_ROWS,
@@ -61,6 +63,7 @@ export interface SettingsSearchAccount {
 export interface SettingsSearchContext {
   /** Configured accounts; each becomes a result that opens its row on Accounts. */
   readonly accounts?: ReadonlyArray<SettingsSearchAccount> | undefined;
+  readonly keepAwakeAvailable?: boolean;
 }
 
 const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {};
@@ -186,6 +189,12 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
 
 /** Rows that exist only on some machines; omitted rows are offered everywhere. */
 export const ROW_APPLIES: Readonly<Record<string, (context: SettingsSearchContext) => boolean>> = {
+  "setting-app-icon": () => isElectron,
+  "setting-use-custom-title-bar": () => {
+    const platform = getNavigatorPlatform();
+    return isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
+  },
+  "setting-keep-computer-awake": ({ keepAwakeAvailable }) => keepAwakeAvailable === true,
   // Only the desktop app can keep the machine awake for remote access.
   "setting-stay-awake-for-remote-access": () =>
     typeof window !== "undefined" && Boolean(window.desktopBridge?.keepAwake),
@@ -229,6 +238,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   ...GENERATED_SETTINGS_SEARCH_ROWS.map(generatedRowEntry),
 
   // ── Pages and groups ─────────────────────────────────────────────────────────
+  {
+    id: "shortcuts:shortcuts",
+    section: "shortcuts",
+    title: "settings:nav_keyboardShortcuts",
+    keywords: ["common:advanced_keybindings"],
+    target: null,
+  },
   {
     target: "setting-providers",
     id: "providers:agents",
