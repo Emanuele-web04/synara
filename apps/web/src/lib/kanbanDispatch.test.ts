@@ -121,7 +121,7 @@ describe("kanbanDispatch failure preserves the prompt", () => {
       threadId,
       projectId,
       thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -164,7 +164,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
         threadId,
         projectId,
         thread,
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
       });
       expect(deferred).toEqual({ kind: "dispatched", deferred: true });
@@ -185,7 +185,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       threadId,
       projectId,
       thread,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
     expect(retry).toEqual({ kind: "dispatched" });
@@ -212,7 +212,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
         threadId,
         projectId,
         thread,
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
       });
       expect(result.kind).toBe("dispatched");
@@ -248,7 +248,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       threadId,
       projectId,
       thread,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -288,7 +288,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       threadId,
       projectId,
       thread,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -311,7 +311,7 @@ describe("kanbanDispatch board-vs-chat turn guard", () => {
       threadId,
       projectId,
       thread,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
     expect(result.kind).toBe("dispatched");
@@ -376,7 +376,7 @@ describe("kanbanDispatch persisted image attachments", () => {
         threadId,
         projectId,
         thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
       });
 
@@ -437,7 +437,7 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
       threadId,
       projectId,
       thread: threadSummary(threadId, projectId),
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -464,7 +464,7 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
       threadId,
       projectId,
       thread: threadSummary(threadId, projectId),
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -486,7 +486,7 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
       threadId,
       projectId,
       thread: threadSummary(threadId, projectId),
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -504,7 +504,7 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
       threadId,
       projectId,
       thread: threadSummary(threadId, projectId),
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 

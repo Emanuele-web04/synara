@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { Effect } from "effect";
+import { BrowserAutomationErrorMessages } from "@synara/contracts";
 
+import { BrowserHostRpcError } from "../browserAutomation/browserHostRpcClient.ts";
 import type { BrowserAutomationHostShape } from "../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeAgentGatewayBrowserTools, normalizeGatewayBrowserArguments } from "./browserTools.ts";
 import type { ToolContext } from "./toolRuntime.ts";
@@ -136,6 +138,41 @@ describe("agent gateway browser tools", () => {
       expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 700);
     },
   );
+
+  it("relays the desktop's sanitized script cause and drops unknown fields", async () => {
+    const cause = {
+      name: "TimeoutError",
+      api: "page.waitForFunction",
+      message: "page.waitForFunction: Timeout 5000ms exceeded.",
+    };
+    const execute = vi.fn(() =>
+      Effect.fail(
+        new BrowserHostRpcError("remote", "Browser evaluation failed.", {
+          type: "synara_browser_error",
+          version: 1,
+          error: {
+            code: "BrowserEvaluationFailed",
+            message: BrowserAutomationErrorMessages.BrowserEvaluationFailed,
+            retryable: false,
+            phase: "evaluate",
+            effectMayHaveCommitted: true,
+            cause: { ...cause, stack: "private-stack" },
+            details: "private-details",
+          },
+        }),
+      ),
+    );
+    const run = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
+      (tool) => tool.definition.name === "browser_run",
+    )!;
+    const result = await Effect.runPromise(run.handler({ code: "return true" }, context));
+    expect(result.isError).toBe(true);
+    const content = result.content[0];
+    expect(JSON.parse(content?.type === "text" ? content.text : "null")).toMatchObject({
+      error: { code: "BrowserEvaluationFailed", cause },
+    });
+    expect(JSON.stringify(result)).not.toContain("private-");
+  });
 
   it("keeps error details visible to Codex result-selection fallback", async () => {
     const execute = vi.fn();

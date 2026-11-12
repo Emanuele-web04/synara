@@ -16,6 +16,7 @@ import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../sess
 import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
+import { mergeSubagentRunEntries } from "./SubagentRunCard.logic";
 import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
@@ -495,6 +496,24 @@ export function deriveTurnTimingByTurnId(input: {
 // folded turn's header: its status is the turn's lasting result. One the turn
 // started and settled itself (a dev server it stopped) folds with its work.
 // A successful later response can also consume that exact task completion.
+function isSubagentRunWorkRow(entries: ReadonlyArray<WorkLogEntry>): boolean {
+  return entries.length > 0 && entries.every((entry) => entry.subagentRun);
+}
+
+/**
+ * A folded subagent row with a child still at work stays visible at the end
+ * of its turn's answer until every child settles. `liveEntryIds` are the scanned cards
+ * with a live row; a merged row is live when any of its launches is.
+ */
+export function isPinnedSubagentRunEntry(
+  entry: WorkLogEntry,
+  liveEntryIds: ReadonlySet<string> | undefined,
+): boolean {
+  const run = entry.subagentRun;
+  if (!run || !liveEntryIds || liveEntryIds.size === 0) return false;
+  return liveEntryIds.has(entry.id) || (run.entryIds ?? []).some((id) => liveEntryIds.has(id));
+}
+
 export function isPinnedBackgroundTaskEntry(
   entry: WorkLogEntry,
   turnEndedAt: string | null,
@@ -731,25 +750,36 @@ export interface ThreadFindJumpTarget {
 export function resolveWorkEntryJumpTarget(
   rows: readonly MessagesTimelineRow[],
   entryId: string,
-): { rowIndex: number; expandCollapsedWorkMessageId?: MessageId } | null {
+): {
+  rowIndex: number;
+  /** The rendered card's `data-subagent-run-card` id (a merged card wears its first launch's). */
+  cardEntryId: string;
+  expandCollapsedWorkMessageId?: MessageId;
+} | null {
+  // A merged subagent card answers for every launch folded into it.
+  const matches = (entry: WorkLogEntry) =>
+    entry.id === entryId || (entry.subagentRun?.entryIds ?? []).includes(entryId);
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]!;
-    if (row.kind === "work" && row.groupedEntries.some((entry) => entry.id === entryId)) {
-      return { rowIndex };
+    if (row.kind === "work" && row.groupedEntries.some(matches)) {
+      const cardEntryId = row.groupedEntries.every((entry) => entry.subagentRun)
+        ? (row.groupedEntries[0]?.id ?? entryId)
+        : entryId;
+      return { rowIndex, cardEntryId };
     }
     if (row.kind !== "message") continue;
     const hasEntry = (entries: readonly WorkLogEntry[] | undefined) =>
-      (entries ?? []).some((entry) => entry.id === entryId);
+      (entries ?? []).some(matches);
     if (hasEntry(row.leadingWorkEntries) || hasEntry(row.inlineWorkEntries)) {
-      return { rowIndex };
+      return { rowIndex, cardEntryId: entryId };
     }
-    if (
-      (row.collapsedTurnItems ?? []).some(
-        (item) => item.kind === "work" && item.entry.id === entryId,
-      )
-    ) {
+    const collapsed = (row.collapsedTurnItems ?? []).find(
+      (item) => item.kind === "work" && matches(item.entry),
+    );
+    if (collapsed?.kind === "work") {
       return {
         rowIndex: turnHeaderRowIndex(rows, rowIndex),
+        cardEntryId: collapsed.entry.id,
         expandCollapsedWorkMessageId: row.message.id,
       };
     }
@@ -1060,9 +1090,6 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
-  // Background subagents still running after the parent turn ended: the parent
-  // turn is idle but its work is not done, so it must not fold yet.
-  subagentsRunning?: boolean;
   // User setting: false keeps every finished turn expanded.
   collapseFinishedTurns?: boolean;
   activeTurnId?: TurnId | null | undefined;
@@ -1343,8 +1370,9 @@ export function deriveMessagesTimelineRows(input: {
     collapseSettledTurns(nextRows, {
       terminalAssistantMessageIds,
       collapseWork: input.collapseFinishedTurns !== false,
-      activeTurnInProgress:
-        (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
+      // A turn folds when the agent's own turn ends. Background subagents that
+      // outlive it fold too; live ones stay at the end of the answer.
+      activeTurnInProgress: input.activeTurnInProgress ?? false,
       activeTurnId: input.activeTurnId ?? null,
       activeResponseStartedAt: liveBoundary.resumedStartedAt,
       turnTimingByTurnId: input.turnTimingByTurnId,
@@ -1638,7 +1666,13 @@ function collapseSettledTurns(
           continue;
         }
         // Standalone rows stay visible without stopping the fold of nearby work.
-        if (prev.groupedEntries.some(isStandaloneWorkEntry)) continue;
+        // Subagent rows fold with the turn: the Environment panel and the
+        // Subagents dock list them; the ones still at work close the answer.
+        if (
+          !isSubagentRunWorkRow(prev.groupedEntries) &&
+          prev.groupedEntries.some(isStandaloneWorkEntry)
+        )
+          continue;
         foldIndices.push(scan);
         continue;
       }
@@ -1692,7 +1726,13 @@ function collapseSettledTurns(
       }
       if (folded.kind === "work") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
-        collectWorkItems(folded.groupedEntries, collapsedItems);
+        if (isSubagentRunWorkRow(folded.groupedEntries)) {
+          // Adjacent launches keep reading as one card inside the disclosure.
+          const merged = mergeSubagentRunEntries(folded.groupedEntries);
+          collapsedItems.push({ kind: "work", id: merged.id, entry: merged });
+        } else {
+          collectWorkItems(folded.groupedEntries, collapsedItems);
+        }
       } else if (folded.kind === "message-segment") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         if (!foldedSegmentMessageIds.has(folded.message.id)) {

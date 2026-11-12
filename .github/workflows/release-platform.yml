@@ -53,11 +53,12 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 75
     steps:
+      # Packaging and provenance read only the checked-out commit (rev-parse
+      # HEAD, a clean status and file bytes), never older history or tags.
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_commit }}
-          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -443,8 +444,11 @@ jobs:
         with:
           bun-version-file: package.json
 
+      # The smoke imports @synara/scripts code and the server's supervised
+      # process teardown (apps/server, @synara/cli); scripts alone cannot
+      # resolve the server's `effect` import.
       - name: Install verification dependencies
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+        run: bun install --frozen-lockfile --ignore-scripts --filter '@synara/scripts' --filter '@synara/cli'
 
       - name: Download the packaged Intel app
         uses: actions/download-artifact@v8

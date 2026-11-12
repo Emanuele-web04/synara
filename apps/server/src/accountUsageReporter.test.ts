@@ -12,6 +12,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { PushUsageRequest } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as Statement from "effect/unstable/sql/Statement";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +21,8 @@ import {
   createAccountUsageReporter,
   isAccountUsageRelevantEventType,
   minuteStartIso,
+  rawTimestampLowerBound,
+  usageBucketQueries,
   type AccountUsageReporterDeps,
 } from "./accountUsageReporter";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
@@ -166,13 +169,14 @@ const seedTokenActivity = (
     readonly sequence: number;
     readonly createdAt: string;
     readonly payloadJson: string;
+    readonly kind?: "context-window.updated" | "turn.completed";
   },
 ) => sql`
   INSERT INTO projection_thread_activities (
     activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
   ) VALUES (
     ${input.activityId}, ${input.threadId}, ${input.turnId}, 'info',
-    'context-window.updated', 'tokens updated', ${input.payloadJson},
+    ${input.kind ?? "context-window.updated"}, 'tokens updated', ${input.payloadJson},
     ${input.sequence}, ${input.createdAt}
   )
 `;
@@ -516,6 +520,314 @@ describe("collectUsageBuckets", () => {
       }),
     );
   });
+
+  it("counts only threads with token activity in the window, each against its full history", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const codex = '{"provider":"codex","model":"gpt-5-codex"}';
+        yield* seedThread(sql, "quiet", codex);
+        yield* seedThread(sql, "active", codex);
+        yield* seedTokenActivity(sql, {
+          activityId: "quiet-1",
+          threadId: "quiet",
+          turnId: null,
+          sequence: 1,
+          createdAt: "2026-08-11T08:00:00.000Z",
+          payloadJson: '{"totalProcessedTokens":5000}',
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "active-1",
+          threadId: "active",
+          turnId: null,
+          sequence: 1,
+          createdAt: "2026-08-11T08:30:00.000Z",
+          payloadJson: '{"totalProcessedTokens":1000}',
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "active-2",
+          threadId: "active",
+          turnId: null,
+          sequence: 2,
+          createdAt: "2026-08-11T09:06:10.000Z",
+          payloadJson: '{"totalProcessedTokens":1300}',
+        });
+
+        const { models } = yield* collectUsageBuckets(sql, "2026-08-11T09:06:00Z");
+
+        // The quiet thread adds nothing; the active one adds only its growth
+        // over the pre-window counter, not the counter itself.
+        expect(models).toEqual([
+          {
+            minute: "2026-08-11T09:06:00Z",
+            provider: "codex",
+            model: "gpt-5-codex",
+            reasoning: null,
+            tokens: 300,
+            turns: 0,
+            prompts: 0,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("counts rows whose stored spelling sorts below the window start", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        // Server writers store `...:00.123Z`, which sorts below the window's
+        // `...:00Z` start; each row here is its thread's only one in the window.
+        yield* seedThread(sql, "first-minute", '{"provider":"codex","model":"gpt-5-codex"}');
+        yield* seedTokenActivity(sql, {
+          activityId: "first-1",
+          threadId: "first-minute",
+          turnId: null,
+          sequence: 1,
+          createdAt: "2026-08-11T08:00:00.000Z",
+          payloadJson: '{"totalProcessedTokens":1000}',
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "first-2",
+          threadId: "first-minute",
+          turnId: null,
+          sequence: 2,
+          createdAt: "2026-08-11T09:06:00.123Z",
+          payloadJson: '{"totalProcessedTokens":1200}',
+        });
+        yield* seedUserMessage(sql, {
+          messageId: "first-msg",
+          threadId: "first-minute",
+          turnId: "first-turn",
+          createdAt: "2026-08-11T09:06:00.500Z",
+        });
+        yield* seedTurnStartEvent(sql, {
+          eventId: "first-evt",
+          threadId: "first-minute",
+          streamVersion: 1,
+          occurredAt: "2026-08-11T09:06:00.500Z",
+          payloadJson:
+            '{"threadId":"first-minute","messageId":"first-msg","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+        });
+        // Client-supplied spellings SQLite still reads as in-window times: a
+        // -09:00 offset (09:06:30 UTC) and a space separator.
+        yield* seedThread(sql, "spelled", '{"provider":"codex","model":"gpt-5.6"}');
+        yield* seedUserMessage(sql, {
+          messageId: "spelled-msg",
+          threadId: "spelled",
+          turnId: null,
+          createdAt: "2026-08-11T00:06:30-09:00",
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "spelled-1",
+          threadId: "spelled",
+          turnId: null,
+          sequence: 1,
+          createdAt: "2026-08-11T08:00:00.000Z",
+          payloadJson: '{"totalProcessedTokens":100}',
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "spelled-2",
+          threadId: "spelled",
+          turnId: null,
+          sequence: 2,
+          createdAt: "2026-08-11 09:06:40",
+          payloadJson: '{"totalProcessedTokens":150}',
+        });
+
+        const { models } = yield* collectUsageBuckets(sql, "2026-08-11T09:06:00Z");
+
+        expect(models).toHaveLength(2);
+        expect(models).toEqual(
+          expect.arrayContaining([
+            {
+              minute: "2026-08-11T09:06:00Z",
+              provider: "codex",
+              model: "gpt-5-codex",
+              reasoning: null,
+              tokens: 200,
+              turns: 1,
+              prompts: 1,
+            },
+            {
+              minute: "2026-08-11T09:06:00Z",
+              provider: "codex",
+              model: "gpt-5.6",
+              reasoning: null,
+              tokens: 50,
+              turns: 0,
+              prompts: 1,
+            },
+          ]),
+        );
+      }),
+    );
+  });
+
+  it("counts a Claude turn result that is its thread's only token activity in the window", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedThread(sql, "claude", '{"provider":"claudeAgent","model":"claude-sonnet-5"}');
+        yield* seedTokenActivity(sql, {
+          activityId: "claude-old",
+          threadId: "claude",
+          turnId: "turn-old",
+          sequence: 1,
+          createdAt: "2026-08-11T08:01:00.000Z",
+          kind: "turn.completed",
+          payloadJson: '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":900}',
+        });
+        yield* seedTokenActivity(sql, {
+          activityId: "claude-new",
+          threadId: "claude",
+          turnId: "turn-new",
+          sequence: 2,
+          createdAt: "2026-08-11T09:06:20.000Z",
+          kind: "turn.completed",
+          payloadJson: '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":70}',
+        });
+
+        const { models } = yield* collectUsageBuckets(sql, "2026-08-11T09:06:00Z");
+
+        expect(models).toEqual([
+          {
+            minute: "2026-08-11T09:06:00Z",
+            provider: "claudeAgent",
+            model: "claude-sonnet-5",
+            reasoning: null,
+            tokens: 70,
+            turns: 0,
+            prompts: 0,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("never reads the payload of a turn-start event from before the window", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+        // SQLite's JSON functions throw on this payload, so the flush only
+        // succeeds if the old event is dropped before any of them runs.
+        yield* seedThread(sql, "old-thread", null);
+        yield* seedTurnStartEvent(sql, {
+          eventId: "evt-old",
+          threadId: "old-thread",
+          streamVersion: 1,
+          occurredAt: "2026-07-01T00:00:00.000Z",
+          payloadJson: "{not json",
+        });
+
+        const { models } = yield* collectUsageBuckets(sql, "2026-08-11T09:00:00Z");
+        expect(models.reduce((sum, bucket) => sum + bucket.turns, 0)).toBe(2);
+      }),
+    );
+  });
+});
+
+describe("rawTimestampLowerBound", () => {
+  it("keeps every stored spelling SQLite reads as inside the window", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const fromMinute = "2026-03-04T14:59:00Z";
+        const bound = rawTimestampLowerBound(fromMinute);
+        expect(bound).toBe("2026-02-27");
+        const spellings = [
+          "2026-03-04T14:59:00.123Z",
+          "2026-03-04 14:59:30",
+          "2026-03-04T14:59Z",
+          "2026-03-04T00:59:00-14:00",
+          // SQLite rolls 31 February and hour 24 forward: 2026-03-04T14:59Z.
+          "2026-02-31T24:00:00-14:59",
+        ];
+        const rows = yield* sql<{ inWindow: number; kept: number; plainKept: number }>`
+          SELECT
+            STRFTIME('%Y-%m-%dT%H:%M:00Z', value) >= ${fromMinute} AS inWindow,
+            value >= ${bound} AS kept,
+            value >= ${fromMinute} AS plainKept
+          FROM json_each(${JSON.stringify(spellings)})
+        `;
+        expect(rows.map((row) => row.inWindow)).toEqual([1, 1, 1, 1, 1]);
+        expect(rows.map((row) => row.kept)).toEqual([1, 1, 1, 1, 1]);
+        // Comparing the column with the window start directly drops all of
+        // them except the one without seconds.
+        expect(rows.map((row) => row.plainKept)).toEqual([0, 0, 1, 0, 0]);
+      }),
+    );
+  });
+});
+
+describe("usage bucket query plans", () => {
+  const planOf = (sql: SqlClient.SqlClient, statement: Statement.Fragment) =>
+    sql<{ readonly detail: string }>`EXPLAIN QUERY PLAN ${statement}`.pipe(
+      Effect.map((rows) => rows.map((row) => row.detail)),
+    );
+  const fromMinute = "2026-08-11T09:06:00Z";
+
+  it("derives token deltas only for the window's threads", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const plan = yield* planOf(sql, usageBucketQueries(sql, fromMinute).tokens);
+
+        // The scope is one (thread_id, created_at) seek per thread...
+        expect(plan).toContain(
+          "SEARCH a EXISTS USING INDEX idx_projection_thread_activities_thread_created (thread_id=? AND created_at>?)",
+        );
+        // ...and no activity or event read runs over more than a scoped thread.
+        expect(plan.filter((detail) => /^SCAN (a|e)\b/.test(detail))).toEqual([]);
+        const activityReads = plan.filter((detail) =>
+          detail.includes("idx_projection_thread_activities"),
+        );
+        expect(activityReads.length).toBeGreaterThan(0);
+        for (const detail of activityReads) expect(detail).toContain("thread_id=?");
+        const eventReads = plan.filter((detail) => detail.includes("idx_orchestration_events"));
+        expect(eventReads.length).toBeGreaterThan(0);
+        for (const detail of eventReads) expect(detail).toContain("stream_id=?");
+      }),
+    );
+  });
+
+  it("filters turn-start events by time before joining or parsing them", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const plan = yield* planOf(sql, usageBucketQueries(sql, fromMinute).turns);
+
+        // No index holds occurred_at, so the events are the outer loop, read
+        // by event type, and the raw time bound applies there.
+        const eventLoop = plan.indexOf(
+          "SEARCH e USING INDEX idx_orchestration_events_profile_turn_events (event_type=?)",
+        );
+        expect(eventLoop).toBe(0);
+        expect(plan.filter((detail) => detail.startsWith("SCAN "))).toEqual([]);
+      }),
+    );
+  });
+
+  it("seeks recent prompts and their turn-start events by index", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const queries = usageBucketQueries(sql, fromMinute);
+        const prompts = yield* planOf(sql, queries.prompts);
+        expect(prompts).toContain(
+          "SEARCH m USING INDEX idx_projection_thread_messages_profile_prompt_activity (role=? AND source=? AND created_at>?)",
+        );
+        expect(prompts).toContain(
+          "SEARCH e USING INDEX idx_orchestration_events_profile_turn_events (event_type=? AND stream_id=?) LEFT-JOIN",
+        );
+        const skills = yield* planOf(sql, queries.skillMessages);
+        expect(skills).toContain(
+          "SEARCH m USING INDEX idx_projection_thread_messages_profile_prompt_activity (role=? AND source=? AND created_at>?)",
+        );
+      }),
+    );
+  });
 });
 
 describe("chunkByMinute", () => {
@@ -824,6 +1136,113 @@ describe("createAccountUsageReporter", () => {
         yield* Effect.promise(() => sleep(150));
 
         expect(pushes).toHaveLength(1);
+        reporter.stop();
+      }),
+    );
+  });
+
+  // The incident: usage events keep arriving while a long flush runs, so the
+  // next flush used to start one debounce after the last one ended and the
+  // reporter held the event loop almost all the time.
+  it("waits ten times the last flush's local work before the next debounced flush", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+
+        let clock = Date.parse("2026-08-11T09:10:30.000Z");
+        let localWorkRuns = 0;
+        // Resolving the identity is part of a flush's local work: here each
+        // flush spends 50 ms of the injected clock on it, and activity arrives
+        // while it runs. The construction-time catch-up starts the first one.
+        const harness: { notify?: () => void } = {};
+        const { reporter } = makeReporterHarness(sql, {
+          debounceMs: 5,
+          now: () => clock,
+          accountIdentity: async () => {
+            localWorkRuns += 1;
+            clock += 50;
+            harness.notify?.();
+            return "https://accounts.example.com#org_1";
+          },
+        });
+        harness.notify = () => reporter.notifyActivity();
+
+        // 50 ms of local work holds the next flush back for 500 ms.
+        yield* Effect.promise(() => sleep(200));
+        expect(localWorkRuns).toBe(1);
+        yield* Effect.promise(() => sleep(600));
+        expect(localWorkRuns).toBe(2);
+
+        reporter.stop();
+      }),
+    );
+  });
+
+  it("lets flushNow bypass the pacing gap", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+
+        let clock = Date.parse("2026-08-11T09:10:30.000Z");
+        let localWorkRuns = 0;
+        const { reporter } = makeReporterHarness(sql, {
+          debounceMs: 5,
+          now: () => clock,
+          accountIdentity: async () => {
+            localWorkRuns += 1;
+            clock += 50;
+            return "https://accounts.example.com#org_1";
+          },
+        });
+
+        yield* Effect.promise(() => reporter.flushNow());
+        reporter.notifyActivity();
+        // The sign-in nudge runs at once instead of waiting out the gap.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(localWorkRuns).toBe(2);
+
+        reporter.stop();
+      }),
+    );
+  });
+
+  it("logs slow local work at most once per interval, with only its duration and window", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+
+        const startedAt = Date.parse("2026-08-11T09:10:30.000Z");
+        let clock = startedAt;
+        const logs: Array<{ message: string; data: Record<string, unknown> | undefined }> = [];
+        const { reporter } = makeReporterHarness(sql, {
+          now: () => clock,
+          accountIdentity: async () => {
+            clock += 1_500;
+            return "https://accounts.example.com#org_1";
+          },
+          log: (message, data) => logs.push({ message, data }),
+        });
+
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(logs).toHaveLength(1);
+        expect(logs[0]?.data).toEqual({
+          durationMs: 1_500,
+          fromMinute: minuteStartIso(startedAt - 20 * 365 * 86_400_000),
+        });
+
+        // A second slow flush right after stays quiet...
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(logs).toHaveLength(1);
+
+        // ...until the interval has passed.
+        clock += 10 * 60_000;
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(logs).toHaveLength(2);
+        expect(Object.keys(logs[1]?.data ?? {})).toEqual(["durationMs", "fromMinute"]);
+
         reporter.stop();
       }),
     );

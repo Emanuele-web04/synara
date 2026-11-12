@@ -123,3 +123,37 @@ it("orders durable disconnect after an already-started desired-state write and s
   expect(discoveries).toBe(1);
   expect(registry.hasConnector("host")).toBe(false);
 });
+
+it("reads the host list once per connection attempt", async () => {
+  const registry = new HostConnectionRegistry();
+  let discoveries = 0;
+  let dials = 0;
+  const port = makeHostConnectionsPort({
+    registry,
+    accountSession: {
+      listHosts: async () => {
+        discoveries++;
+        return { hosts: [host] };
+      },
+      requestGrant: async () => {
+        throw new Error("Unused");
+      },
+      dialIdentity: async () => {
+        dials++;
+        throw new Error("Host offline");
+      },
+    },
+    readTrust: async () => ({
+      environmentId: "mini",
+      rootCertificate: "fixture",
+      rootFingerprint: "fixture",
+      executionScope: scope,
+    }),
+    listPaired: async () => [],
+    listDesired: async () => [],
+    setDesired: async () => {},
+  });
+  await expect(port.connect({ hostId: "host" })).rejects.toThrow("Host offline");
+  expect(dials).toBe(1);
+  expect(discoveries).toBe(1);
+});

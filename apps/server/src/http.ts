@@ -80,7 +80,7 @@ import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/expo
 import type { ServerReadiness } from "./server/readiness";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
-import { isTrustedLocalServerToken } from "./auth/remoteAccess";
+import { decideWithBillingPolicy, isTrustedLocalServerToken } from "./auth/remoteAccess";
 import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import {
   attachmentPrincipalForSession,
@@ -432,11 +432,9 @@ export function isLegacyTokenAuthorized(input: {
 const isLocalHttpRequest = (config: ServerConfigShape, url: URL) =>
   Effect.gen(function* () {
     const remoteSessions = yield* RemoteSessionRegistryService;
-    return isLegacyTokenAuthorized({
-      config,
-      url,
-      remoteBillingEnforced: remoteSessions.remoteBillingEnforced,
-    });
+    return yield* decideWithBillingPolicy(remoteSessions, (remoteBillingEnforced) =>
+      isLegacyTokenAuthorized({ config, url, remoteBillingEnforced }),
+    );
   });
 
 function encodeCookie(input: {
@@ -1073,13 +1071,14 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
-  const paidLocalToken =
-    (yield* RemoteSessionRegistryService).remoteBillingEnforced &&
-    isTrustedLocalServerToken(config, url.searchParams.get("token"));
-  const mutationSession =
-    paidLocalToken || (!request.headers.authorization && (yield* isLocalHttpRequest(config, url)))
-      ? null
-      : yield* requireAuthenticatedMutationRequest;
+  const localMutation = yield* decideWithBillingPolicy(
+    yield* RemoteSessionRegistryService,
+    (remoteBillingEnforced) =>
+      (remoteBillingEnforced && isTrustedLocalServerToken(config, url.searchParams.get("token"))) ||
+      (!request.headers.authorization &&
+        isLegacyTokenAuthorized({ config, url, remoteBillingEnforced })),
+  );
+  const mutationSession = localMutation ? null : yield* requireAuthenticatedMutationRequest;
   const attachmentPrincipal =
     mutationSession === null
       ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL

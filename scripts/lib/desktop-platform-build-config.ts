@@ -15,6 +15,7 @@ import {
   createDesktopBundleFilePatterns,
   preserveDependencyDiagnostics,
 } from "./desktop-bundle-files.ts";
+import { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET } from "./mac-icon-catalog.ts";
 
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
@@ -41,11 +42,9 @@ export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
 // Remote must install alongside Stable and Beta without owning their uninstaller.
 const REMOTE_WINDOWS_INSTALLER_GUID = "7639a24e-c753-4f4c-b4e3-37b259bdc793";
-// Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
-// CFBundleIconName out of Assets.car and renders that layered icon with the
-// Liquid Glass material; older releases ignore it and keep using the ICNS.
-export const MAC_ICON_ASSET_NAME = "Synara";
-export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
+// Asset catalog name and deployment target of the compiled Icon Composer icon,
+// shared with the dependency-free release catalog fingerprint.
+export { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET };
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };

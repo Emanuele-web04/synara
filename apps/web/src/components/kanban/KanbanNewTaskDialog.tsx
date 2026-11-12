@@ -48,6 +48,7 @@ import {
 } from "~/components/ui/dialog";
 import { Switch } from "~/components/ui/switch";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { useComposerDropzone } from "~/hooks/useComposerDropzone";
@@ -122,7 +123,8 @@ export function KanbanNewTaskDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(
     () => initialProjectId ?? projectOptions[0]?.id ?? null,
   );
-  const draft = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider, settings });
+  const newChatDefault = useNewChatDefault(settings);
+  const draft = useKanbanTaskScratchDraft({ newChatDefault, settings });
   const {
     scratchThreadId,
     prompt,
@@ -230,7 +232,7 @@ export function KanbanNewTaskDialog({
     envMode,
     sendAsDraft,
     sendAsGoal,
-    defaultProvider: settings.defaultProvider,
+    newChatDefault,
     assistantDeliveryMode,
     providerOptionsForDispatch,
     providerInstances,

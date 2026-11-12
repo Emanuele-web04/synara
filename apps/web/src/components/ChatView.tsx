@@ -56,6 +56,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -159,6 +160,7 @@ import {
 } from "../computerStateStore";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import { resolveDraftFallbackModelSelection } from "../lib/draftFallbackModelSelection";
 import { isGroupContainerProject } from "../lib/groupProjects";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
@@ -250,7 +252,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 import { retryThreadDetailSync } from "../threadDetailSyncRetry";
-import { SETTINGS_TARGETS } from "../settingsNavigation";
+import { providerAccountsSectionId } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -278,7 +280,6 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
-  resolveDraftFallbackModelSelection,
   resolveEnvironmentPanelOpen,
   resolveComposerHighlightedItemId,
   resolveEnvironmentPanelPreferenceUpdate,
@@ -364,12 +365,10 @@ import {
   subagentRunPhaseStatusKind,
   summarizeRunningAgents,
 } from "./chat/SubagentRunCard.logic";
+import { useOpenSubagentThread } from "./chat/useOpenSubagentThread";
 import { useSubagentRunControls } from "./chat/useSubagentRunControls";
 import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
-import {
-  collectForegroundRunningSubagentStripItems,
-  collectRunningSubagentStripItems,
-} from "./chat/ComposerSubagentStrip.logic";
+import { collectForegroundRunningSubagentStripItems } from "./chat/ComposerSubagentStrip.logic";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ExpandedImageOverlay } from "./chat/ExpandedImageOverlay";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -665,6 +664,7 @@ export default function ChatView({
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings, updateSettings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -838,9 +838,9 @@ export default function ChatView({
     () =>
       resolveDraftFallbackModelSelection({
         projectDefault: fallbackDraftProject?.defaultModelSelection,
-        settingsDefaultProvider: settings.defaultProvider,
+        newChatDefault,
       }),
-    [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider],
+    [fallbackDraftProject?.defaultModelSelection, newChatDefault],
   );
 
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -1511,6 +1511,7 @@ export default function ChatView({
     activeProject,
     composerDraft,
     settings,
+    newChatDefault,
     resolvedThreadWorktreePath,
     // Same gate as the Hand off menu: a coordinator is one per-group identity.
     allowProviderHandoff: isServerThread && !isCoordinatorConversation,
@@ -1926,10 +1927,6 @@ export default function ChatView({
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
-  const hasRunningSubagents = useMemo(
-    () => collectRunningSubagentStripItems(composerSubagentStripItems).length > 0,
-    [composerSubagentStripItems],
-  );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
   const isComposerEditorDisabled =
@@ -3683,15 +3680,15 @@ export default function ChatView({
     isCenteredEmptyLanding,
   ]);
   // Started threads get the single-row composer while the draft is one plain line. Anything
-  // that needs the block's room (approvals, questions, plan follow-up, banners, attachment
-  // chips) keeps the block layout.
+  // that needs the block's room (approvals, plan follow-up, banners, attachment chips) keeps
+  // the block layout. A pending question keeps the row: its card above holds the choices, and
+  // the row only takes an optional typed answer, measured instead of the parked draft.
   const composerSingleRow = useComposerSingleRow({
     formRef: composerFormRef,
-    prompt,
+    prompt: activePendingProgress ? activePendingProgress.customAnswer : prompt,
     eligible:
       !isCenteredEmptyLanding &&
       !isComposerApprovalState &&
-      pendingUserInputs.length === 0 &&
       !showPlanFollowUpPrompt &&
       !(pendingAutomationConversation && pendingAutomationConversation.threadId === threadId) &&
       !(serverThread?.snoozedUntil != null && serverThread.archivedAt == null) &&
@@ -4151,9 +4148,8 @@ export default function ChatView({
     void navigate({
       to: "/settings",
       search: {
-        section: "providers",
-        target: SETTINGS_TARGETS.providerInstalls,
-        provider: selectedProvider,
+        section: "accounts",
+        target: providerAccountsSectionId(selectedProvider),
       },
     });
   }, [navigate, selectedProvider]);
@@ -5187,7 +5183,7 @@ export default function ChatView({
     hasNativeUserMessages,
     composerEditorRef,
     scheduleComposerFocus,
-    defaultProvider: settings.defaultProvider,
+    newChatDefault,
   });
 
   const {
@@ -5502,6 +5498,12 @@ export default function ChatView({
   // What the transcript's subagent cards read from this chat. Stop and
   // background go through the same per-row dispatches the keyboard uses.
   const activeThreadIdForSubagentRuns = activeThread?.id ?? null;
+  // A subagent opens in a split beside this chat instead of replacing it.
+  const onOpenSubagentThread = useOpenSubagentThread({
+    hostThreadId: activeThreadIdForSubagentRuns,
+    splitViewId: rawSearch.splitViewId ?? null,
+    onNavigate: onNavigateToThread,
+  });
   const subagentRunContext = useMemo(
     () =>
       activeThreadIdForSubagentRuns
@@ -5512,7 +5514,7 @@ export default function ChatView({
             backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
             taskEndByToolUseId: subagentTaskEnds,
             runtimeRetired: subagentRuntimeRetired,
-            onOpenThread: onNavigateToThread,
+            onOpenThread: onOpenSubagentThread,
             onStop: onStopSubagentStripItem,
             onBackground: onBackgroundSubagentStripItem,
           }
@@ -5525,7 +5527,7 @@ export default function ChatView({
       subagentRuntimeRetired,
       backgroundedSubagentToolUseIds,
       onBackgroundSubagentStripItem,
-      onNavigateToThread,
+      onOpenSubagentThread,
       onStopSubagentStripItem,
       subagentRunThreads,
     ],
@@ -5761,9 +5763,9 @@ export default function ChatView({
     () =>
       resolveDraftFallbackModelSelection({
         projectDefault: activeProject?.defaultModelSelection,
-        settingsDefaultProvider: settings.defaultProvider,
+        newChatDefault,
       }),
-    [activeProject?.defaultModelSelection, settings.defaultProvider],
+    [activeProject?.defaultModelSelection, newChatDefault],
   );
 
   const handlePromptChange = useStableCallback(onPromptChange);
@@ -5776,12 +5778,13 @@ export default function ChatView({
   const handleConfirmWorktreeHandoff = useStableCallback(confirmWorktreeHandoff);
   const handleResetInteractionMode = useStableCallback(resetInteractionMode);
   const closeAgentActivityDetail = useStableCallback(() => setOpenAgentActivityId(null));
-  const runningAgentsTargetEntryId = runningAgents.targetEntryId;
+  // The capsule opens the same Subagents list as the Environment panel: every
+  // agent with its live state, a click away from opening it beside this chat.
   const onShowRunningAgents = useStableCallback(() => {
-    if (!runningAgentsTargetEntryId) return;
-    // The timeline is hidden under an open agent detail.
-    closeAgentActivityDetail();
-    timelineControllerRef.current?.scrollToWorkEntry(runningAgentsTargetEntryId);
+    if (!activeThreadId) return;
+    openRightDockPane(activeThreadId, { kind: "subagents" });
+    // As from the Environment panel: the list takes the right side.
+    closeEnvironmentPanelAfterAction();
   });
 
   // Empty state: no active thread
@@ -6423,7 +6426,7 @@ export default function ChatView({
               {runningAgents.count > 0 ? (
                 <ComposerRunningAgentsCapsule
                   count={runningAgents.count}
-                  onShow={runningAgentsTargetEntryId ? onShowRunningAgents : undefined}
+                  onShow={onShowRunningAgents}
                 />
               ) : null}
               {showComposerComputerControlEffortHint ? (
@@ -6740,7 +6743,7 @@ export default function ChatView({
                         : activePendingProgress
                           ? activePendingProgress.activeQuestion?.options.length === 0
                             ? t("chat:placeholder_typeAnswer")
-                            : t("chat:placeholder_typeOwnAnswer")
+                            : t("chat:orTypeYourOwnAnswer")
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? t("chat:placeholder_refinePlan")
                             : activeThread?.parentThreadId
@@ -7150,7 +7153,7 @@ export default function ChatView({
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
-                    subagentsRunning={hasRunningSubagents}
+                    liveSubagentRunEntryIds={subagentCardScan.liveCardEntryIds}
                     subagentRun={subagentRunContext}
                     // The composer's "N agents running" capsule already counts and
                     // scrolls to these agents; one indicator is enough.

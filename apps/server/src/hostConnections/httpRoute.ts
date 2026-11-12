@@ -42,6 +42,7 @@ import {
 } from "../trustedOrigins";
 import { parseWsNegotiateSearchParams } from "../wsCompatibility";
 import { authenticateRpcWebSocketUpgrade } from "../wsRpc";
+import { decideWithBillingPolicy } from "../auth/remoteAccess";
 import { RemoteSessionRegistryService } from "../remoteSessions/sessionRegistry";
 import {
   HOST_CONNECTION_WS_PATH_PREFIX,
@@ -82,12 +83,13 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           );
         // Match the controller's auth-optional loopback policy. Explicit credentials
         // always retain their role; public/SSH-forwarded servers still require auth.
-        const session =
-          hasCredential ||
-          requiresWebSocketAuthentication(config) ||
-          (yield* RemoteSessionRegistryService).remoteBillingEnforced
-            ? yield* serverAuth.authenticateHttpRequest(authRequest)
-            : null;
+        const session = (yield* decideWithBillingPolicy(
+          yield* RemoteSessionRegistryService,
+          (remoteBillingEnforced) =>
+            hasCredential || requiresWebSocketAuthentication(config) || remoteBillingEnforced,
+        ))
+          ? yield* serverAuth.authenticateHttpRequest(authRequest)
+          : null;
         if (
           (session !== null && session.role !== "owner") ||
           shouldRejectUntrustedRequestOrigin({

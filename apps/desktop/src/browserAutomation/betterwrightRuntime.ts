@@ -5,22 +5,7 @@ import { getBetterwrightNetworkGuard } from "./betterwrightNetworkGuard";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserAutomationHostError } from "./hostErrors";
-
-const UNAVAILABLE_SCRIPT_API_ERRORS = new Set([
-  ...[
-    "getByRole",
-    "getByLabel",
-    "getByText",
-    "getByPlaceholder",
-    "getByTestId",
-    "locator",
-    "document",
-    "window",
-    "location",
-    "waitForTimeout",
-  ].map((name) => `${name} is not defined`),
-  "page.snapshot is not a function",
-]);
+import { describeBetterwrightFailure } from "./betterwrightFailure";
 
 export interface BetterwrightRunOptions {
   readonly home: string;
@@ -108,24 +93,33 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
     // script's returned value cannot relax timeout, cancellation, or transport cleanup.
     executionSettled = result.ok || result.executionSettled === true;
     if (!result.ok) {
-      // Only fixed host-owned guidance crosses the boundary, never worker error text.
+      // Fixed host-owned guidance, plus a cause rebuilt from allowlisted error
+      // shapes. Free-form worker text never crosses the boundary.
       const credentialTarget =
         typeof result.error === "string" &&
         /^credential form (?:not-found:|ambiguous:|detection found no password field\.|submit detection failed:)/u.test(
           result.error,
         );
+      if (
+        credentialTarget ||
+        result.error === BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable
+      ) {
+        throw new BrowserAutomationHostError({
+          code: credentialTarget
+            ? "BrowserCredentialTargetRequired"
+            : "BrowserCredentialUseUnavailable",
+          retryable: false,
+          phase: "evaluate",
+          effectMayHaveCommitted: true,
+        });
+      }
+      const failure = describeBetterwrightFailure(result.error);
       throw new BrowserAutomationHostError({
-        code:
-          result.error === BrowserAutomationErrorMessages.BrowserCredentialUseUnavailable
-            ? "BrowserCredentialUseUnavailable"
-            : typeof result.error === "string" && UNAVAILABLE_SCRIPT_API_ERRORS.has(result.error)
-              ? "BrowserScriptApiUnavailable"
-              : credentialTarget
-                ? "BrowserCredentialTargetRequired"
-                : "BrowserEvaluationFailed",
+        code: failure.code,
         retryable: false,
         phase: "evaluate",
         effectMayHaveCommitted: true,
+        cause: failure.cause,
       });
     }
     return result.result as T;

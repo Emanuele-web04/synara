@@ -28,7 +28,7 @@ import {
   publicProfileDisplayUrl,
   readAccountErrorCode,
 } from "~/lib/accountLogic";
-import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBillingFlag";
 import { useOpenSynaraPlan } from "../settings/BillingSettingsPanel";
 import { cn } from "~/lib/utils";
 import { normalizeHandle } from "@synara/profile-ui/formatting";

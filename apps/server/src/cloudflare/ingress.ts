@@ -3,18 +3,31 @@ import { WebSocketServer } from "ws";
 import { REMOTE_OUTER_PATH, type RemoteTlsServer } from "../remoteTransport/tunnel";
 import { reportReliabilityIssue } from "../reliability";
 
-/** This listener has no local RPC/admin handler; forwarded headers confer no authority. */
-export async function startCloudflareIngress(tunnel: RemoteTlsServer, available: () => boolean) {
+/**
+ * This listener has no local RPC/admin handler; forwarded headers confer no authority.
+ * `prepare` runs before `available` is read, for a request addressed to this
+ * host, so admission can first fetch a fresh authorization; it must not reject.
+ */
+export async function startCloudflareIngress(
+  tunnel: RemoteTlsServer,
+  available: () => boolean,
+  prepare: () => Promise<void> = async () => {},
+) {
   let hostname: string | undefined;
-  const allowed = (request: http.IncomingMessage) =>
-    hostname !== undefined && request.headers.host === hostname && available();
+  const allowed = async (request: http.IncomingMessage) => {
+    if (hostname === undefined || request.headers.host !== hostname) return false;
+    await prepare();
+    return available();
+  };
   const server = http.createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
-    response
-      .writeHead(
-        allowed(request) && request.method === "GET" && request.url === "/health" ? 200 : 404,
-      )
-      .end();
+    void allowed(request)
+      .catch(() => false)
+      .then((admitted) =>
+        response
+          .writeHead(admitted && request.method === "GET" && request.url === "/health" ? 200 : 404)
+          .end(),
+      );
   });
   const websocket = new WebSocketServer({
     noServer: true,
@@ -22,18 +35,30 @@ export async function startCloudflareIngress(tunnel: RemoteTlsServer, available:
     perMessageDeflate: false,
   });
   server.on("upgrade", (request, socket, head) => {
-    if (!allowed(request) || request.url !== REMOTE_OUTER_PATH || request.method !== "GET") {
-      // Node removes its HTTP socket error listener when handing off an upgrade.
-      socket.on("error", () => {
-        reportReliabilityIssue("remote.ingress_socket_error");
-        socket.destroy();
-      });
-      socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    // Node removes its HTTP socket error listener when handing off an upgrade.
+    const onError = () => {
+      reportReliabilityIssue("remote.ingress_socket_error");
+      socket.destroy();
+    };
+    socket.on("error", onError);
+    const refuse = () => socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    if (request.url !== REMOTE_OUTER_PATH || request.method !== "GET") {
+      refuse();
       return;
     }
-    websocket.handleUpgrade(request, socket, head, (outer) =>
-      tunnel.accept(outer, { via: "cloudflare" }),
-    );
+    void allowed(request)
+      .catch(() => false)
+      .then((admitted) => {
+        if (socket.destroyed) return;
+        if (!admitted) {
+          refuse();
+          return;
+        }
+        socket.off("error", onError);
+        websocket.handleUpgrade(request, socket, head, (outer) =>
+          tunnel.accept(outer, { via: "cloudflare" }),
+        );
+      });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

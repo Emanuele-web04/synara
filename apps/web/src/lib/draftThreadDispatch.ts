@@ -29,7 +29,7 @@ import {
 } from "./composerPastedText";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
-import type { ProviderInstanceOption } from "../appSettings";
+import type { NewChatDefault, ProviderInstanceOption } from "../appSettings";
 import { composerDraftHasAttachments, composerDraftsMatchForCleanup } from "../composerDraftDomain";
 import {
   resolvePreferredComposerModelSelection,
@@ -110,7 +110,7 @@ interface DraftThreadDispatchInput {
   projectId: ProjectId;
   /** Backing summary; null for local-only draft threads not yet promoted. */
   thread: SidebarThreadSummary | null;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
@@ -140,7 +140,7 @@ export function resolveDraftThreadDispatchTarget(input: {
   threadId: ThreadId;
   projectId: ProjectId;
   thread: SidebarThreadSummary | null;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
 }): DraftThreadDispatchTarget {
   const composerStore = useComposerDraftStore.getState();
@@ -154,7 +154,7 @@ export function resolveDraftThreadDispatchTarget(input: {
     draft: draftComposerState,
     threadModelSelection: input.thread?.modelSelection ?? null,
     projectModelSelection: project?.defaultModelSelection ?? null,
-    defaultProvider: input.defaultProvider,
+    newChatDefault: input.newChatDefault,
     resolveProviderForInstanceId: resolveConfiguredProvider,
   });
   return {
@@ -418,7 +418,7 @@ async function dispatchDraftThreadOnce(
       const creationState = resolveTerminalThreadCreationState({
         activeDraftThread: null,
         activeThread: null,
-        defaultProvider: input.defaultProvider,
+        newChatDefault: input.newChatDefault,
         draftComposerState,
         draftThread,
         options: undefined,

@@ -109,7 +109,11 @@ import {
 } from "./projectAgent/libraryGit";
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
-import { isTrustedLocalServerToken, runWithRemoteAdmission } from "./auth/remoteAccess";
+import {
+  decideWithBillingPolicy,
+  isTrustedLocalServerToken,
+  runWithRemoteAdmission,
+} from "./auth/remoteAccess";
 import {
   ServerAuth,
   AuthError,
@@ -3672,33 +3676,36 @@ export function authenticateRpcWebSocketUpgrade(input: {
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
   readonly remoteSessions: RemoteSessionRegistry;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
-  // The local desktop retains its private-token authority even with a stale browser cookie.
-  if (
-    input.remoteSessions.remoteBillingEnforced &&
-    isTrustedLocalServerToken(input.config, input.legacyToken)
-  )
-    return Effect.succeed(null);
-  // An explicit client ticket must retain its client role even on an otherwise
-  // accountless loopback server. Never promote an authenticated remote bridge.
-  if (
+  const explicitCredential =
     input.request.url?.searchParams.has("wsToken") ||
     input.request.headers.authorization ||
     Object.entries(input.request.cookies).some(
       ([name, value]) => /^synara_session(?:_\d+)?$/.test(name) && Boolean(value),
+    );
+  const route = (remoteBillingEnforced: boolean): "local" | "authenticate" => {
+    // The local desktop retains its private-token authority even with a stale browser cookie.
+    if (remoteBillingEnforced && isTrustedLocalServerToken(input.config, input.legacyToken))
+      return "local";
+    // An explicit client ticket must retain its client role even on an otherwise
+    // accountless loopback server. Never promote an authenticated remote bridge.
+    if (explicitCredential) return "authenticate";
+    if (
+      !remoteBillingEnforced &&
+      (!requiresWebSocketAuthentication(input.config) ||
+        (isLoopbackHost(input.config.host) &&
+          !input.config.publicUrl &&
+          input.legacyToken === input.config.authToken))
     )
-  ) {
-    return input.serverAuth.authenticateWebSocketUpgrade(input.request);
-  }
-  if (
-    !input.remoteSessions.remoteBillingEnforced &&
-    (!requiresWebSocketAuthentication(input.config) ||
-      (isLoopbackHost(input.config.host) &&
-        !input.config.publicUrl &&
-        input.legacyToken === input.config.authToken))
-  ) {
-    return Effect.succeed(null);
-  }
-  return input.serverAuth.authenticateWebSocketUpgrade(input.request);
+      return "local";
+    return "authenticate";
+  };
+  return decideWithBillingPolicy(input.remoteSessions, route).pipe(
+    Effect.flatMap((decision) =>
+      decision === "local"
+        ? Effect.succeed(null)
+        : input.serverAuth.authenticateWebSocketUpgrade(input.request),
+    ),
+  );
 }
 
 /**
