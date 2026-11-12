@@ -204,6 +204,115 @@ describe("Betterwright runtime errors", () => {
     expect(mocks.connectionClose).toHaveBeenCalledWith(true);
   });
 
+  it.each([
+    ["setTimeout", "wait with locator.waitFor()"],
+    ["setInterval", "page.waitForTimeout(ms)"],
+    ["requestAnimationFrame", "page.waitForFunction()"],
+    ["navigator", "inside page.evaluate"],
+    ["getByRole", "call page.getByRole(...)"],
+    ["require", "without Node.js APIs"],
+  ])("fails fast with a specific cause for the unavailable %s global", async (name, hint) => {
+    mocks.run.mockResolvedValue({ ok: false, error: `${name} is not defined` });
+    await expect(run()).rejects.toMatchObject({
+      browserError: {
+        code: "BrowserScriptApiUnavailable",
+        message: BrowserAutomationErrorMessages.BrowserScriptApiUnavailable,
+        cause: { name: "ReferenceError", message: expect.stringContaining(hint) },
+      },
+    });
+  });
+
+  it.each([
+    [
+      "locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n  - waiting for locator('[data-timeline-row-kind=\"message\"]').first() to be visible\n  - locator resolved to <div>private-page-text</div>",
+      {
+        name: "TimeoutError",
+        api: "locator.waitFor",
+        message: "locator.waitFor: Timeout 15000ms exceeded.",
+      },
+    ],
+    [
+      "page.waitForFunction: Timeout 5000ms exceeded.",
+      {
+        name: "TimeoutError",
+        api: "page.waitForFunction",
+        message: "page.waitForFunction: Timeout 5000ms exceeded.",
+      },
+    ],
+    [
+      "page.evaluate: TypeError: Cannot read properties of null (reading 'textContent')\n    at eval (eval at evaluate (:303:30), <anonymous>:1:38)",
+      {
+        name: "TypeError",
+        api: "page.evaluate",
+        message: "page.evaluate: Cannot read properties of null (reading 'textContent')",
+      },
+    ],
+    [
+      "page.evaluate: Error: private-page-text\n    at eval (eval at evaluate (:303:30), <anonymous>:1:15)",
+      {
+        name: "Error",
+        api: "page.evaluate",
+        message: expect.stringContaining("message was withheld because page code controls it"),
+      },
+    ],
+    [
+      "page.waitForFunction: private-page-text",
+      { api: "page.waitForFunction", message: expect.stringContaining("withheld") },
+    ],
+    [
+      "locator.click: Error: strict mode violation: getByRole('button') resolved to 2 elements:\n    1) <button>private-page-text</button>",
+      {
+        name: "Error",
+        api: "locator.click",
+        message:
+          "locator.click: strict mode violation: the locator resolved to 2 elements. Use a more specific locator, .first() or .nth(i).",
+      },
+    ],
+    [
+      "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3000/private-path?token=private-token",
+      {
+        api: "page.goto",
+        message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3000/…",
+      },
+    ],
+    [
+      "Playwright code timed out after 15000ms",
+      { name: "TimeoutError", message: expect.stringContaining("exceeded its 15000 ms budget") },
+    ],
+    ["Unexpected token ';'", { name: "SyntaxError", message: "Unexpected token ';'" }],
+    [
+      "Cannot read properties of undefined (reading 'foo')",
+      { name: "TypeError", message: "Cannot read properties of undefined (reading 'foo')" },
+    ],
+    [
+      "human.type needs about 33421 ms to type 350 characters at human pace, but about 18712 ms remain in this call. Nothing was typed. Use locator.fill(text) or page.keyboard.insertText(text) for long text, or raise timeoutMs.",
+      { message: expect.stringContaining("page.keyboard.insertText(text)") },
+    ],
+  ])("returns a sanitized cause for %j", async (error, expected) => {
+    mocks.run.mockResolvedValue({ ok: false, error, executionSettled: true });
+    const failure = await run().catch((value: unknown) => value);
+    expect(failure).toMatchObject({
+      browserError: {
+        code: "BrowserEvaluationFailed",
+        message: BrowserAutomationErrorMessages.BrowserEvaluationFailed,
+        cause: expected,
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain("private");
+    expect(mocks.connectionClose).toHaveBeenCalledWith(false);
+  });
+
+  it("bounds causes built from long first lines", async () => {
+    mocks.run.mockResolvedValue({
+      ok: false,
+      error: `locator.fill: Error: ${"é".repeat(600)}`,
+    });
+    const failure = (await run().catch((value: unknown) => value)) as {
+      browserError: { cause: { message: string } };
+    };
+    expect(Buffer.byteLength(failure.browserError.cause.message, "utf8")).toBeLessThanOrEqual(320);
+  });
+
   it("points page.snapshot callers to the global snapshot helper", async () => {
     mocks.run.mockResolvedValue({ ok: false, error: "page.snapshot is not a function" });
     await expect(run()).rejects.toMatchObject({
