@@ -725,6 +725,54 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.label).toBe("Pi extension");
   });
 
+  it("hides stored Claude warnings the adapter now only logs", () => {
+    const retry = (id: string, attempt: number, error = "overloaded") =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: {
+          message: `Request retry ${attempt}/3 in 2s (HTTP 503).`,
+          detail: { type: "system", subtype: "api_retry", attempt, max_retries: 3, error },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unhandled",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Unhandled Claude system message subtype 'notification'." },
+        }),
+        makeActivity({
+          id: "uncached",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message:
+              "Claude reported ~60k input tokens outside cache in one request, plus ~2k cache writes and ~0 cache reads.",
+          },
+        }),
+        retry("retry-1", 1),
+        retry("retry-2-rate-limit", 2, "rate_limit"),
+        retry("retry-3", 3),
+        makeActivity({
+          id: "denied",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Bash was denied: outside the workspace" },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "denied",
+      "retry-2-rate-limit",
+      "retry-3",
+    ]);
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [
