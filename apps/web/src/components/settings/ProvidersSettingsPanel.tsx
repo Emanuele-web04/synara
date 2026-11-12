@@ -4,7 +4,6 @@ import { Translation } from "~/i18n/Translation";
 // Layer: Settings panel
 
 import {
-  DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
@@ -291,7 +290,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         kind: "boolean",
         settingsKey: "claudeConfirmColdCacheResume",
         label: "settings:askBeforeResumingALongIdleSession",
-        description: "settings:offByDefaultLikeClaudeCodeWhenOnAfter",
+        description: "settings:onByDefaultAfter70MinutesWithoutA",
       },
     ],
   },
@@ -589,23 +588,15 @@ export function isProviderInstallSettingsDirty(
   );
 }
 
+// Provider defaults should keep the initial disclosure closed, even when enabled.
 function createProviderInstallDisclosureState(
   settings: AppSettings,
+  defaults: AppSettings,
 ): Record<ProviderKind, boolean> {
   return Object.fromEntries(
     PROVIDER_INSTALL_SETTINGS.map((config) => [
       config.provider,
-      config.fields.some((field) =>
-        field.kind === "password"
-          ? settings[field.configuredKey]
-          : Boolean(settings[field.settingsKey]),
-      ) ||
-        Object.values(settings.providerInstances).some(
-          (instance) => instance.driver === config.provider,
-        ) ||
-        (config.provider === "codex" &&
-          (settings.codexAccounts.length > 0 ||
-            settings.selectedCodexAccountId !== DEFAULT_CODEX_ACCOUNT_ID)),
+      isProviderInstallConfigDirty(config, settings, defaults),
     ]),
   ) as Record<ProviderKind, boolean>;
 }
@@ -2026,7 +2017,7 @@ export function ProvidersSettingsPanel({
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
     () => ({
-      ...createProviderInstallDisclosureState(settings),
+      ...createProviderInstallDisclosureState(settings, defaults),
       ...(providerTarget ? { [providerTarget]: true } : {}),
     }),
   );

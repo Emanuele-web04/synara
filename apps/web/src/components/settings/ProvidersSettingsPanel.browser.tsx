@@ -129,6 +129,25 @@ function activityRow(provider: string) {
     .closest('[data-slot="settings-row"]')!;
 }
 
+it.each([
+  { name: "default", confirm: true, expanded: "false" },
+  { name: "opt-out", confirm: false, expanded: "true" },
+])(
+  "uses the $name cold-cache preference for initial Claude disclosure",
+  async ({ confirm, expanded }) => {
+    await render(
+      <ProvidersSettingsPanel
+        {...props}
+        settings={{ ...props.settings, claudeConfirmColdCacheResume: confirm }}
+      />,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: /^Claude(?: Custom)?$/u }))
+      .toHaveAttribute("aria-expanded", expanded);
+  },
+);
+
 it("saves provider CPU priority opt-out and exposes reset to the default", async () => {
   const updateSettings = vi.fn();
   const result = await render(
