@@ -714,7 +714,7 @@ describe("deriveWorkLogEntries", () => {
         makeActivity({
           id: "pi-notice",
           kind: "runtime.warning",
-          summary: "Pi extension",
+          summary: "Runtime warning",
           payload: { message: "\u001b[31mEnabled [full] mode\u001b[0m" },
         }),
       ],
@@ -722,7 +722,57 @@ describe("deriveWorkLogEntries", () => {
     );
 
     expect(entry?.detail).toBe("Enabled [full] mode");
-    expect(entry?.label).toBe("Pi extension");
+  });
+
+  it("hides persisted Pi info notices and unsupported-UI warnings that are now log-only", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-info",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "Indexing finished", nativeEventType: "info" },
+        }),
+        makeActivity({
+          id: "pi-unsupported",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Pi extension UI API 'setWidget' is not supported in Synara yet." },
+        }),
+        makeActivity({
+          id: "pi-warning",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Extension could not load its config", nativeEventType: "warning" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["pi-warning"]);
+  });
+
+  it("applies the plain-line error heuristic only to persisted Codex stderr rows", () => {
+    const stderr = (id: string, message: string, nativeEventType?: string) =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: { message, ...(nativeEventType ? { nativeEventType } : {}) },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        stderr("codex-chatter", "Loading plugins from cache", "codex.process/stderr"),
+        stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
+        stderr("other-provider", "Bash was denied: outside workspace"),
+        stderr("other-plain", "Falling back to the default model"),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "codex-error",
+      "other-plain",
+      "other-provider",
+    ]);
   });
 
   it("does not expose unmapped diagnostic data as a transcript preview", () => {

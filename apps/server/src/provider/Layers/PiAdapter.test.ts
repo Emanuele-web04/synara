@@ -26,6 +26,7 @@ import {
   makePiBashProcessSupervisor,
   makePiExtensionModeCoordinator,
   makePiRuntimeEventBase,
+  shouldSurfacePiNotification,
   makePiUserInputOptions,
   toPiProviderModelDescriptor,
   resolvePiStartInstanceId,
@@ -1503,6 +1504,12 @@ describe("Pi extension UI helpers", () => {
       turnId: "turn-pi",
       lifecycleGeneration: "generation-pi-7",
     });
+  });
+
+  it("surfaces Pi extension warnings and errors but keeps info notices in the log", () => {
+    expect(shouldSurfacePiNotification("info")).toBe(false);
+    expect(shouldSurfacePiNotification("warning")).toBe(true);
+    expect(shouldSurfacePiNotification("error")).toBe(true);
   });
 
   it("keeps original select values while showing normalized unique labels", () => {

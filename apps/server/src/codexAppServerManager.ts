@@ -1035,7 +1035,9 @@ export function classifyCodexStderrLine(
   rawLine: string,
   mirroredUserConfigPath?: string,
 ): { message: string } | null {
-  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath);
+  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath, {
+    errorLikePlainLinesOnly: true,
+  });
   if (diagnostic?.kind === "user-mcp-oauth") {
     if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
       loggedUserMcpOAuthServers.add(diagnostic.server);

@@ -1,5 +1,6 @@
 import {
   classifyCodexStderr,
+  CODEX_STDERR_NATIVE_EVENT_TYPE,
   normalizeCodexUserVisibleErrorMessage,
 } from "@synara/shared/codexStderr";
 import {
@@ -537,6 +538,14 @@ export function isMissingCheckpointBaselineActivity(
   return checkpoint !== "captured" && checkpoint !== "not-applicable";
 }
 
+// Pi info notifications and unsupported-UI notices are log-only now; hide the rows old hosts stored.
+const PI_UNSUPPORTED_UI_WARNING = /^Pi extension UI API '[^']+' is not supported in Synara yet\.$/;
+function isLogOnlyPiWarning(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.warning") return false;
+  if (activity.summary === "Pi extension") return true;
+  return PI_UNSUPPORTED_UI_WARNING.test(asTrimmedString(asRecord(activity.payload)?.message) ?? "");
+}
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -554,6 +563,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => !isLogOnlyPiWarning(activity))
     // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
     .filter((activity) => {
       if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
@@ -566,7 +576,13 @@ export function deriveWorkLogEntries(
       )
         return true;
       const message = asTrimmedString(payload?.message);
-      return !message || classifyCodexStderr(message)?.kind === "notice";
+      // Only Codex stderr rows are judged by the error-like heuristic; other warnings keep their text.
+      return (
+        !message ||
+        classifyCodexStderr(message, undefined, {
+          errorLikePlainLinesOnly: payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE,
+        })?.kind === "notice"
+      );
     })
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
