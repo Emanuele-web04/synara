@@ -5,7 +5,7 @@ import { createApp } from "../app";
 import { createBillingService } from "../billing/service";
 import { createLiveActivityService } from "../liveActivities/service";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
-import { createDb, POOL_CONNECTION_TIMEOUT_MS } from "./index";
+import { createDb, POOL_CONNECTION_TIMEOUT_MS, POOL_IDLE_TIMEOUT_MS } from "./index";
 
 /**
  * A database that accepts TCP connections and never answers: every pooled
@@ -55,10 +55,29 @@ describe("database pool connection acquire timeout", () => {
   it("bounds acquisition below the client's 15 s timeout and changes nothing else", () => {
     const { pool } = createDb(databaseUrl);
     expect(POOL_CONNECTION_TIMEOUT_MS).toBeLessThan(15_000);
-    expect(pool.options).toMatchObject({ connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS });
+    expect(pool.options).toMatchObject({
+      connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
+      idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+      keepAlive: true,
+    });
     expect(pool.options.max).toBe(10);
     expect(pool.options).not.toHaveProperty("statement_timeout");
     expect(pool.options).not.toHaveProperty("query_timeout");
+  });
+
+  it("survives a dropped idle connection and logs only a fixed line", () => {
+    const { pool } = createDb(databaseUrl);
+    expect(pool.listenerCount("error")).toBe(1);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Without a listener, emitting `error` throws: the process would crash.
+    expect(() =>
+      pool.emit(
+        "error",
+        new Error(`terminating connection: ${databaseUrl}`),
+        {} as Parameters<typeof pool.emit>[2],
+      ),
+    ).not.toThrow();
+    expect(log).toHaveBeenCalledExactlyOnceWith("[api] Idle database connection closed");
   });
 
   it("fails a Drizzle transaction without running it", async () => {

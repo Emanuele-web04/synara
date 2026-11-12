@@ -13,6 +13,13 @@ import * as schema from "./schema";
  */
 export const POOL_CONNECTION_TIMEOUT_MS = 5_000;
 
+/**
+ * How long an idle client stays open. Polls arrive further apart than pg's
+ * default 10 s, which closed and reopened a connection (a pooler
+ * authentication and a DISCARD ALL) for most of them.
+ */
+export const POOL_IDLE_TIMEOUT_MS = 60_000;
+
 export function createDb(databaseUrl: string): {
   db: NodePgDatabase<typeof schema>;
   pool: pg.Pool;
@@ -20,6 +27,15 @@ export function createDb(databaseUrl: string): {
   const pool = new pg.Pool({
     connectionString: databaseUrl,
     connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
+    idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+    keepAlive: true,
+  });
+  // An idle client the server or pooler drops emits `error` on the pool;
+  // without a listener that is an unhandled event that crashes the process.
+  // pg removes the broken client itself. The error text can carry connection
+  // details, so only a fixed line is logged.
+  pool.on("error", () => {
+    console.error("[api] Idle database connection closed");
   });
   const db = drizzle(pool, { schema });
   return { db, pool };
