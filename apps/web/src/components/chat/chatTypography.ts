@@ -11,6 +11,12 @@ import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSet
 export const INLINE_COMMAND_CHIP_CLASS_NAME =
   "rounded-[0.4rem] bg-[var(--app-user-message-background)] px-[0.35rem] py-[0.05rem] font-chat-code text-chat-code text-foreground/80";
 
+// Transcript work rhythm: work rows are 24px and stack 6px apart, and text keeps
+// 16px from a stack, live or folded into "Worked for" (see MessagesTimeline).
+export const WORK_ROW_STACK_CLASS_NAME = "flex flex-col gap-1.5";
+// The rows a summary or group row discloses, hung 6px under it.
+export const WORK_ROW_DISCLOSED_CLASS_NAME = "flex flex-col gap-1.5 pt-1.5";
+
 // index.css shares composer corner smoothing; keep the radius as the browser fallback.
 export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME =
   "chat-user-message-bubble squircle rounded-[var(--radius-user-message)]";

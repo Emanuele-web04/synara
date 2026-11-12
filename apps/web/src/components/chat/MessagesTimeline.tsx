@@ -188,6 +188,8 @@ import {
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
   USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME,
   userMessageBubbleBorderClassName,
+  WORK_ROW_DISCLOSED_CLASS_NAME,
+  WORK_ROW_STACK_CLASS_NAME,
 } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -1599,8 +1601,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return (
         <div
           key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
-          // Rows sit flush; narration keeps the ~10px a live turn gives text.
-          className={cn("py-2 first:pt-0.5", MUTED_LABEL_TEXT_CLASS_NAME)}
+          // With the stack's 6px gap, narration keeps the 16px a live turn gives text.
+          className={cn("py-2.5 first:pt-0.5", MUTED_LABEL_TEXT_CLASS_NAME)}
           data-chat-find-narration-id={item.message.id}
           data-chat-find-document-id={item.message.id}
         >
@@ -1653,7 +1655,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
           fontSizePx={normalizedChatFontSizePx}
           renderChildren={() => (
-            <div className="pt-0.5">
+            <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>
               {chunk.entries.map((entry) =>
                 renderCollapsedTurnItem({ kind: "work", id: entry.id, entry }, keyPrefix),
               )}
@@ -1673,7 +1675,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             className="pointer-events-none mb-3 select-none"
             data-settled-turn-collapse-transition="true"
           >
-            <DisclosureRegion open={settledCollapseTransition.open} contentClassName="pb-2.5">
+            <DisclosureRegion
+              open={settledCollapseTransition.open}
+              contentClassName={cn(WORK_ROW_STACK_CLASS_NAME, "pb-2.5")}
+            >
               {chunkCollapsedTurnItems(settledCollapseTransition.items).map((chunk) =>
                 renderCollapsedTurnChunk(chunk, "settling-turn-close"),
               )}
@@ -1713,7 +1718,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     }}
                   />
                   <CollapsiblePanel>
-                    <div className={disclosureContentClassName(isCollapsedWorkExpanded, "mb-2.5")}>
+                    <div
+                      className={disclosureContentClassName(
+                        isCollapsedWorkExpanded,
+                        cn(WORK_ROW_STACK_CLASS_NAME, "mb-2.5"),
+                      )}
+                    >
                       {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
                         renderCollapsedTurnChunk(chunk, "collapsed-panel"),
                       )}
@@ -1729,7 +1739,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 />
               ) : null}
               {pinnedSubagentEntries.length > 0 ? (
-                <div className="pt-2">
+                <div className={cn(WORK_ROW_STACK_CLASS_NAME, "pt-2.5")}>
                   {pinnedSubagentEntries.map((entry) =>
                     renderCollapsedTurnItem(
                       { kind: "work", id: entry.id, entry },
@@ -1739,7 +1749,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               ) : null}
               {pinnedBackgroundEntries.length > 0 ? (
-                <div className={pinnedSubagentEntries.length > 0 ? undefined : "pt-2"}>
+                <div
+                  className={cn(
+                    WORK_ROW_STACK_CLASS_NAME,
+                    pinnedSubagentEntries.length > 0 ? "pt-1.5" : "pt-2.5",
+                  )}
+                >
                   {pinnedBackgroundEntries.length >= MIN_BACKGROUND_TASK_GROUP_SIZE ? (
                     <BackgroundTaskGroupRow
                       entries={pinnedBackgroundEntries}
@@ -1786,7 +1801,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             row.id === tailContentRowId)
           ? "pb-1"
           : row.kind === "work" || row.kind === "message-segment"
-            ? "pb-2.5"
+            ? "pb-4"
             : row.kind === "working-header" ||
                 (row.kind === "message" && row.message.role === "assistant") ||
                 row.kind === "inline-visual"
@@ -1895,8 +1910,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const hasCollapsedChunk = renderChunks.some(isFoldedWorkEntryChunk);
           if (hasCollapsedChunk) {
             return (
-              <div>
-                <div>
+              <div className={WORK_ROW_STACK_CLASS_NAME}>
+                <div className={WORK_ROW_STACK_CLASS_NAME}>
                   {renderChunks.map((chunk) => {
                     if (chunk.backgroundGroup) {
                       const groupKey = `${groupId}:background:${chunk.id}`;
@@ -1923,7 +1938,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
-                          <div className="pt-0.5">{fold.entries.map(renderEntryRow)}</div>
+                          <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>
+                            {fold.entries.map(renderEntryRow)}
+                          </div>
                         )}
                       />
                     );
@@ -1959,8 +1976,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showOverflowToggle = hasOverflow;
 
           return (
-            <div>
-              <div>{visibleEntries.map(renderEntryRow)}</div>
+            <div className={WORK_ROW_STACK_CLASS_NAME}>
+              <div className={WORK_ROW_STACK_CLASS_NAME}>{visibleEntries.map(renderEntryRow)}</div>
               {showOverflowToggle && (
                 <div className="py-0.5">
                   <button
@@ -2552,12 +2569,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             const showStatusBlock = !hasCollapsedWork && display.statusEntries.length > 0;
             if (!showSummaryBlock && !showToolBlock && !showStatusBlock) return null;
             // Tool rows and status rows (subagents, notices) read as one stack of
-            // 24px rows; only the text around the stack gets the ~10px gap.
+            // 24px rows 6px apart; the text around the stack keeps 16px.
             return (
-              <div className={placement === "leading" ? "mb-2.5" : "mt-2.5"}>
+              <div
+                className={cn(WORK_ROW_STACK_CLASS_NAME, placement === "leading" ? "mb-4" : "mt-4")}
+              >
                 {showSummaryBlock && (
-                  <div>
-                    <div>
+                  <div className={WORK_ROW_STACK_CLASS_NAME}>
+                    <div className={WORK_ROW_STACK_CLASS_NAME}>
                       {renderChunks.map((chunk) => {
                         if (chunk.backgroundGroup) {
                           const groupKey = `${placement}:${row.message.id}:background:${chunk.id}`;
@@ -2592,7 +2611,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                             fontSizePx={normalizedChatFontSizePx}
                             renderChildren={() => (
-                              <div className="pt-0.5">{fold.entries.map(renderInlineToolRow)}</div>
+                              <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>
+                                {fold.entries.map(renderInlineToolRow)}
+                              </div>
                             )}
                           />
                         );
@@ -2620,8 +2641,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {showToolBlock && (
-                  <div>
-                    <div>{display.visibleRenderableToolEntries.map(renderInlineToolRow)}</div>
+                  <div className={WORK_ROW_STACK_CLASS_NAME}>
+                    <div className={WORK_ROW_STACK_CLASS_NAME}>
+                      {display.visibleRenderableToolEntries.map(renderInlineToolRow)}
+                    </div>
                     {display.toolGroupId && display.hasToolOverflow && (
                       <div className="py-0.5">
                         <button
@@ -2644,7 +2667,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {showStatusBlock && (
-                  <div>
+                  <div className={WORK_ROW_STACK_CLASS_NAME}>
                     {display.statusEntries.map((workEntry) => (
                       <TimelineWorkEntryRow
                         key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
