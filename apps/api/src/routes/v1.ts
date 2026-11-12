@@ -1923,9 +1923,10 @@ export function createV1Routes(deps: {
   /**
    * Refuses a host whose owner has left its workspace. Freshness is the
    * caller's explicit choice: admission and publication pass
-   * `freshMembership: true` so removal stops them immediately; read-only host
-   * polls pass false and accept the ≤60s membership cache, the documented
-   * read-path SLA.
+   * `freshMembership: true` so removal stops them immediately; the read-only
+   * watch poll passes false and accepts the ≤60s membership cache, the
+   * documented read-path SLA. The authorization snapshot does its own live
+   * read, because the host acts on its `ownerInOrg` answer.
    */
   async function requireRemoteHostMembership(
     host: { ownerUserId: string; ownerOrgId: string },
@@ -2037,8 +2038,8 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      // A read-only poll: the snapshot it returns changes nothing, so it takes
-      // the cached membership like every other read.
+      // A read-only poll: the watch list it returns changes nothing, so it
+      // takes the cached membership like every other read.
       await requireRemoteHostMembership(host, { freshMembership: false });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
@@ -2260,16 +2261,10 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (authenticated) => authenticated,
       );
-      // Cached membership (≤60s), the documented read SLA: this snapshot is
-      // advisory and the host re-verifies on signal. Device revocations are
-      // delivered separately as revocation events and are read from the
-      // database below on every poll, so only `ownerInOrg` can lag. Grants,
-      // pairing, tunnels and publication for this host still read membership
-      // live, so a removed owner is refused there immediately.
       let organizations: OrganizationRef[];
       try {
         organizations = await grants.listUserOrganizations(host.ownerUserId, {
-          freshMembership: false,
+          freshMembership: true,
         });
       } catch (error) {
         console.error("[api] host authorization membership lookup failed:", error);

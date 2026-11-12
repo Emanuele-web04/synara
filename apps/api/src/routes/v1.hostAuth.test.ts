@@ -1716,9 +1716,6 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         const owner = await signIn();
         const host = await linkHost(app, owner);
         workos.removeMembership(owner.orgId, owner.userId);
-        // The snapshot reads membership through the ≤60s cache that linking
-        // just filled; expire it, standing in for the TTL.
-        clearOrgCache();
         const response = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
           headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
         });
@@ -1730,7 +1727,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         expect(access).not.toHaveBeenCalled();
       });
 
-      it("serves repeat host polls with no WorkOS or Polar call and no billing transaction", async () => {
+      it("serves repeat host polls with no Polar call or billing transaction, and watch polls with no WorkOS call", async () => {
         // Billing on its own pool, so every statement it issues is observable
         // apart from the host-proof and live-activity queries.
         const billingDb = createDb(databaseUrl);
@@ -1765,13 +1762,16 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           expect(providerReads(cold)).toBe(1);
           expect(provider.state).toHaveBeenCalledTimes(1);
 
-          const warm = workos.requests.length;
           const checkouts = vi.spyOn(billingDb.pool, "connect");
           const statements = vi.spyOn(billingDb.pool, "query");
           const polls = ["authorization", "live-activities", "authorization", "live-activities"];
-          for (const suffix of polls as Array<"authorization" | "live-activities">)
+          for (const suffix of polls as Array<"authorization" | "live-activities">) {
+            const before = workos.requests.length;
             expect((await poll(suffix)).status).toBe(200);
-          expect(workos.requests.length).toBe(warm);
+            // The authorization snapshot reads membership live on every poll
+            // (the host acts on `ownerInOrg`); the watch poll reuses the cache.
+            expect(providerReads(before)).toBe(suffix === "authorization" ? 1 : 0);
+          }
           expect(provider.state).toHaveBeenCalledTimes(1);
           // One read-only statement per poll. pool.query checks a client out
           // through connect(callback) internally; a transaction would need an
@@ -2078,7 +2078,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       });
       expect(await snapshot.json()).toMatchObject({ ownerInOrg: false });
     });
-    it("refuses a removed owner on host publication at once while read-only polls may answer from cache", async () => {
+    it("keeps the authorization snapshot and host publication live while the watch poll may answer from cache", async () => {
       const { app } = buildApp();
       const owner = await signIn();
       const host = await linkHost(app, owner);
@@ -2099,25 +2099,32 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           })
         ).status;
 
-      expect(await snapshot()).toMatchObject({ ownerInOrg: true });
-      workos.removeMembership(owner.orgId, owner.userId);
-      // Inside the TTL the read-only polls may still answer from the cache...
-      expect(await snapshot()).toMatchObject({ ownerInOrg: true });
       expect(await watches()).toBe(200);
-      // ...and once it expires (cleared here, standing in for the TTL) they
-      // see the removal.
+      workos.removeMembership(owner.orgId, owner.userId);
+      // Inside the TTL the read-only watch poll may still answer from the
+      // cache...
+      expect(await watches()).toBe(200);
+      // ...and once it expires (cleared here, standing in for the TTL) it
+      // sees the removal.
       clearOrgCache();
+      expect(await watches()).toBe(403);
+
+      // Restore, warm the cache, remove again: the authorization snapshot
+      // reads membership live, reports the loss at once, and its fresh answer
+      // refills the cache the watch poll reads.
+      workos.addMembership(owner.orgId, owner.userId);
+      clearOrgCache();
+      expect(await watches()).toBe(200);
+      workos.removeMembership(owner.orgId, owner.userId);
+      expect(await watches()).toBe(200);
       expect(await snapshot()).toMatchObject({ ownerInOrg: false });
       expect(await watches()).toBe(403);
 
-      // Restore, warm the cache, remove again: publication reads membership
-      // live and refuses at once, and its fresh answer refills the cache the
-      // polls read.
+      // Same for publication: live, refused at once.
       workos.addMembership(owner.orgId, owner.userId);
       clearOrgCache();
-      expect(await snapshot()).toMatchObject({ ownerInOrg: true });
+      expect(await watches()).toBe(200);
       workos.removeMembership(owner.orgId, owner.userId);
-      expect(await snapshot()).toMatchObject({ ownerInOrg: true });
       const published = await app.request(`/api/v1/hosts/${host.id}/live-activities`, {
         method: "PUT",
         headers: await hostHeaders(),
@@ -2125,7 +2132,6 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       });
       expect(published.status).toBe(403);
       expect(await published.json()).toMatchObject({ error: "not_host_owner" });
-      expect(await snapshot()).toMatchObject({ ownerInOrg: false });
       expect(await watches()).toBe(403);
     });
     it("refuses grants and authorization snapshots when the account loses the explicit test entitlement", async () => {

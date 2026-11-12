@@ -511,9 +511,14 @@ Membership lists are cached per process for 60 seconds, so a burst of requests
 costs one round trip while an added or removed member still takes effect on its
 own. The WorkOS user behind a session is cached the same way, and read once per
 request. Plain reads (`/me`, host listing, usage push and summary, member count)
-accept both caches, and the read-only host polls (`GET /hosts/:id/authorization`
-and `GET /hosts/:id/live-activities`) accept the membership cache, so a removed
-member or a user deleted in WorkOS can keep read access for at most 60 seconds.
+accept both caches, and the read-only watch poll (`GET /hosts/:id/live-activities`)
+accepts the membership cache, so a removed member or a user deleted in WorkOS
+can keep read access for at most 60 seconds. `GET /hosts/:id/authorization`
+reads membership live on every poll, because the host pauses itself on its
+`ownerInOrg` answer. When a WorkOS user lookup fails with anything but a 404, a
+plain read is answered from the last known user for up to 10 minutes; a 404, a
+mutating route and an older entry are never answered that way. Concurrent cold
+lookups for one user share one call, and entries past that window are pruned.
 Every mutating or admission route (profile, workspace and account writes, host
 linking and grants, pairing, tunnels, host publication) resolves membership
 live, and the user too when one is signed in, so it refuses at once. Account
@@ -799,9 +804,9 @@ egress, proof verification projects only identity and heartbeat fields under the
 existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
 less than a minute old. Authorization reads all three bounded revocation sources
 in one statement, retaining pending-delivery precedence on equal timestamps and
-requiring acknowledgements even beyond ordinary event retention. The owner's
-membership comes from the 60-second cache described above, so a warm poll makes
-no WorkOS call. Billing access projects only entitlement fields: a grant
+requiring acknowledgements even beyond ordinary event retention. The
+authorization snapshot reads the owner's membership live; the watch poll takes
+it from the 60-second cache described above. Billing access projects only entitlement fields: a grant
 reconciled within 30 seconds, with no pending webhook or erasure request, is
 read in one statement with no transaction or write, and everything else keeps
 the locked path with its deletion check, pending-webhook check and provider

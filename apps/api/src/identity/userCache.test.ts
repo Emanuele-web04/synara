@@ -4,6 +4,7 @@ import {
   clearUserCache,
   getCachedUser,
   invalidateUserCache,
+  userCacheSize,
   type UserCacheDeps,
 } from "./userCache";
 
@@ -35,6 +36,22 @@ function makeDeps(start = 1_000_000) {
       failure = error;
     },
   };
+}
+
+/**
+ * A provider stand-in whose every lookup stays pending until the test settles
+ * it, so overlapping reads can be staged deterministically.
+ */
+function deferredLookup(user: IdentityUser) {
+  const calls: Array<{ resolve(): void; reject(error: Error): void }> = [];
+  const deps: UserCacheDeps = {
+    getUser: () =>
+      new Promise<IdentityUser>((resolve, reject) => {
+        calls.push({ resolve: () => resolve({ ...user }), reject });
+      }),
+    now: () => 1_000_000,
+  };
+  return { deps, calls };
 }
 
 beforeEach(() => {
@@ -146,6 +163,173 @@ describe("user cache", () => {
       email: "ada@example.com",
     });
     expect(provider.lookups).toHaveLength(3);
+  });
+
+  it("answers a plain read from the expired entry when the provider fails", async () => {
+    const provider = makeDeps();
+    provider.users.set("user_1", { id: "user_1", email: "ada@example.com" });
+    await getCachedUser(provider.deps, "user_1");
+
+    for (const failure of [
+      new IdentityProviderError(503, "Provider outage"),
+      new IdentityProviderError(504, "Provider timed out"),
+      new Error("The operation was aborted due to timeout"),
+    ]) {
+      provider.clock.now += 60_000;
+      provider.failNext(failure);
+      // Expired, so the provider is still asked; its failure is absorbed.
+      const asked = provider.lookups.length;
+      await expect(getCachedUser(provider.deps, "user_1")).resolves.toMatchObject({
+        email: "ada@example.com",
+      });
+      expect(provider.lookups).toHaveLength(asked + 1);
+    }
+
+    // The fallback is not a refill: once the provider answers, its answer wins.
+    provider.failNext(undefined);
+    provider.users.set("user_1", { id: "user_1", email: "renamed@example.com" });
+    await expect(getCachedUser(provider.deps, "user_1")).resolves.toMatchObject({
+      email: "renamed@example.com",
+    });
+  });
+
+  it("stops answering from an expired entry once it is older than the stale window", async () => {
+    const provider = makeDeps();
+    provider.users.set("user_1", { id: "user_1", email: "ada@example.com" });
+    await getCachedUser(provider.deps, "user_1");
+    provider.failNext(new IdentityProviderError(503, "Provider outage"));
+
+    provider.clock.now += 10 * 60_000 - 1;
+    await expect(getCachedUser(provider.deps, "user_1")).resolves.toMatchObject({
+      email: "ada@example.com",
+    });
+    provider.clock.now += 1;
+    await expect(getCachedUser(provider.deps, "user_1")).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("never answers a fresh read from an expired or current entry", async () => {
+    const provider = makeDeps();
+    provider.users.set("user_1", { id: "user_1", email: "ada@example.com" });
+    await getCachedUser(provider.deps, "user_1");
+    provider.failNext(new IdentityProviderError(503, "Provider outage"));
+
+    await expect(getCachedUser(provider.deps, "user_1", { fresh: true })).rejects.toMatchObject({
+      status: 503,
+    });
+    provider.clock.now += 60_000;
+    await expect(getCachedUser(provider.deps, "user_1", { fresh: true })).rejects.toMatchObject({
+      status: 503,
+    });
+  });
+
+  it("does not answer a deleted account from the expired entry", async () => {
+    const provider = makeDeps();
+    provider.users.set("user_1", { id: "user_1", email: "ada@example.com" });
+    await getCachedUser(provider.deps, "user_1");
+    provider.users.delete("user_1");
+    provider.clock.now += 60_000;
+
+    await expect(getCachedUser(provider.deps, "user_1")).rejects.toMatchObject({ status: 404 });
+    // Evicted as well: a later outage has nothing to fall back to.
+    provider.failNext(new IdentityProviderError(503, "Provider outage"));
+    await expect(getCachedUser(provider.deps, "user_1")).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("shares one provider call between concurrent cold reads", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const reads = [
+      getCachedUser(gate.deps, "user_1"),
+      getCachedUser(gate.deps, "user_1"),
+      getCachedUser(gate.deps, "user_1"),
+    ];
+    expect(gate.calls).toHaveLength(1);
+    gate.calls[0]!.resolve();
+    for (const user of await Promise.all(reads))
+      expect(user).toMatchObject({ email: "ada@example.com" });
+    // Settled: the flight is released and the entry answers from cache.
+    await getCachedUser(gate.deps, "user_1");
+    expect(gate.calls).toHaveLength(1);
+  });
+
+  it("gives every sharer of a failed cold read the failure, and retries afterwards", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const reads = [getCachedUser(gate.deps, "user_1"), getCachedUser(gate.deps, "user_1")];
+    gate.calls[0]!.reject(new IdentityProviderError(503, "Provider outage"));
+    for (const result of await Promise.allSettled(reads))
+      expect(result).toMatchObject({ status: "rejected", reason: { status: 503 } });
+
+    const retry = getCachedUser(gate.deps, "user_1");
+    expect(gate.calls).toHaveLength(2);
+    gate.calls[1]!.resolve();
+    await expect(retry).resolves.toMatchObject({ email: "ada@example.com" });
+  });
+
+  it("makes a fresh read ask the provider itself while a plain read is in flight", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const plain = getCachedUser(gate.deps, "user_1");
+    const fresh = getCachedUser(gate.deps, "user_1", { fresh: true });
+    expect(gate.calls).toHaveLength(2);
+
+    // The plain read's provider call fails; the fresh one must not inherit it.
+    gate.calls[0]!.reject(new IdentityProviderError(503, "Provider outage"));
+    await expect(plain).rejects.toMatchObject({ status: 503 });
+    gate.calls[1]!.resolve();
+    await expect(fresh).resolves.toMatchObject({ email: "ada@example.com" });
+
+    // Two fresh reads never share a call either.
+    const both = [
+      getCachedUser(gate.deps, "user_1", { fresh: true }),
+      getCachedUser(gate.deps, "user_1", { fresh: true }),
+    ];
+    expect(gate.calls).toHaveLength(4);
+    gate.calls[2]!.resolve();
+    gate.calls[3]!.resolve();
+    await Promise.all(both);
+  });
+
+  it("lets a plain read share a fresh read already in flight", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const fresh = getCachedUser(gate.deps, "user_1", { fresh: true });
+    const plain = getCachedUser(gate.deps, "user_1");
+    expect(gate.calls).toHaveLength(1);
+    gate.calls[0]!.resolve();
+    await expect(Promise.all([fresh, plain])).resolves.toHaveLength(2);
+  });
+
+  it("does not re-cache a user from a lookup that was in flight when the entry was invalidated", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const racing = getCachedUser(gate.deps, "user_1");
+    invalidateUserCache("user_1");
+    // A reader arriving after the invalidation does not share the older call.
+    const later = getCachedUser(gate.deps, "user_1");
+    expect(gate.calls).toHaveLength(2);
+    gate.calls[0]!.resolve();
+    await racing;
+    expect(userCacheSize()).toBe(0);
+    gate.calls[1]!.resolve();
+    await later;
+    expect(userCacheSize()).toBe(1);
+  });
+
+  it("evicts entries older than the stale window as later lookups pass by", async () => {
+    const provider = makeDeps();
+    for (let index = 0; index < 40; index += 1) {
+      const id = `user_${index}`;
+      provider.users.set(id, { id, email: `${id}@example.com` });
+      await getCachedUser(provider.deps, id);
+    }
+    expect(userCacheSize()).toBe(40);
+
+    // Expired for reads, but still inside the stale window: kept.
+    provider.clock.now += 10 * 60_000 - 1;
+    for (let pass = 0; pass < 10; pass += 1) await getCachedUser(provider.deps, "user_0");
+    expect(userCacheSize()).toBe(40);
+
+    // Past the stale window nothing can use them; each lookup reclaims a few
+    // and only the user still being read remains.
+    provider.clock.now += 1;
+    for (let pass = 0; pass < 10; pass += 1) await getCachedUser(provider.deps, "user_0");
+    expect(userCacheSize()).toBe(1);
   });
 
   it("invalidateUserCache forces only that user's next lookup back to the provider", async () => {
