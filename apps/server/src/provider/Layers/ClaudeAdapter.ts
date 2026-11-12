@@ -1514,14 +1514,18 @@ const QUIET_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
   "worker_shutting_down",
   "elicitation_complete",
   "control_request_progress",
-  "mirror_error",
   "plugin_install",
   "turn_duration",
   "agents_killed",
   "permission_retry",
-  "instruction_size_warning",
-  "session_writes_lost",
-  "file_attachments_missing",
+]);
+
+// SDK events about missing context or session data need a visible warning.
+const CLAUDE_DATA_WARNINGS: ReadonlyMap<string, string> = new Map([
+  ["mirror_error", "Claude could not sync part of this session's transcript."],
+  ["instruction_size_warning", "Some Claude instructions exceeded the size limit."],
+  ["session_writes_lost", "Claude reported that some session data could not be saved."],
+  ["file_attachments_missing", "Claude reported that some file attachments are missing."],
 ]);
 
 export function isQuietClaudeSystemSubtype(subtype: string): boolean {
@@ -5544,6 +5548,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
         if (isQuietClaudeSystemSubtype(message.subtype)) {
+          return;
+        }
+        const dataWarning = CLAUDE_DATA_WARNINGS.get(message.subtype);
+        if (dataWarning) {
+          yield* emitRuntimeWarning(context, dataWarning);
           return;
         }
         if (

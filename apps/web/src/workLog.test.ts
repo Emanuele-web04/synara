@@ -733,7 +733,7 @@ describe("deriveWorkLogEntries", () => {
         summary: "Runtime warning",
         payload: {
           message: `Request retry ${attempt}/3 in 2s (HTTP 503).`,
-          detail: { type: "system", subtype: "api_retry", attempt, max_retries: 3, error },
+          data: { type: "system", subtype: "api_retry", attempt, max_retries: 3, error },
         },
       });
     const entries = deriveWorkLogEntries(
@@ -743,6 +743,14 @@ describe("deriveWorkLogEntries", () => {
           kind: "runtime.warning",
           summary: "Runtime warning",
           payload: { message: "Unhandled Claude system message subtype 'notification'." },
+        }),
+        makeActivity({
+          id: "attachment-missing",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message: "Unhandled Claude system message subtype 'file_attachments_missing'.",
+          },
         }),
         makeActivity({
           id: "uncached",
@@ -767,6 +775,7 @@ describe("deriveWorkLogEntries", () => {
     );
 
     expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "attachment-missing",
       "denied",
       "retry-2-rate-limit",
       "retry-3",

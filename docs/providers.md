@@ -500,8 +500,9 @@ expanded rows show per-child controls, with Message on hover or keyboard focus. 
 subagents separately; their rows start collapsed. The sidebar lists top-level threads only;
 child threads are reached from the card, Environment and the Subagents dock. Opening one shows it
 in a split to the right of the chat that launched it, in place of the Subagents list, so that chat
-keeps its width; opening another subagent swaps that pane, and a subagent already on screen gets
-focus. Child threads link back to
+keeps its width. If the adjacent column already contains two chats, the child opens below its
+launcher. Opening another subagent swaps the available subagent pane, and a subagent already on
+screen gets focus. Child threads link back to
 their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.

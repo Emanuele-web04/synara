@@ -7317,6 +7317,27 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
+        harness.query.emit({
+          type: "system",
+          subtype: "mirror_error",
+          error: "SessionStore append failed",
+          key: { projectKey: "test", sessionId: "sdk-session-mirror" },
+          session_id: "sdk-session-mirror",
+          uuid: "00000000-0000-4000-8000-000000000002",
+        } satisfies SDKMessage);
+        for (const subtype of [
+          "instruction_size_warning",
+          "session_writes_lost",
+          "file_attachments_missing",
+        ]) {
+          harness.query.emit({
+            type: "system",
+            subtype,
+            session_id: "sdk-session-mirror",
+            uuid: `${subtype}-warning`,
+          } as unknown as SDKMessage);
+        }
+
         // A refusal nothing retried ends the reply, so it says why.
         harness.query.emit({
           type: "system",
@@ -7361,6 +7382,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           "Claude API error (rate limited), retrying.",
           "PostToolUse hook flagged lint errors",
           "Stop says: tests still fail",
+          "Claude could not sync part of this session's transcript.",
+          "Some Claude instructions exceeded the size limit.",
+          "Claude reported that some session data could not be saved.",
+          "Claude reported that some file attachments are missing.",
           "The model declined this request.",
         ]);
       }).pipe(

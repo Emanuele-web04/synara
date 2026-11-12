@@ -149,6 +149,32 @@ describe("resolveSubagentOpenPlan", () => {
     ).toEqual({ kind: "replace-pane", splitViewId: "split", paneId: "right", threadId: childA });
   });
 
+  it("keeps the launcher and the two other chats when the adjacent column is split", () => {
+    const adjacentColumn: Pane = {
+      kind: "split",
+      id: "adjacent",
+      direction: "vertical",
+      first: leaf("right-top", other),
+      second: leaf("right-bottom", ThreadId.makeUnsafe("third")),
+      ratio: 0.5,
+    };
+
+    expect(
+      resolveSubagentOpenPlan({
+        targetThreadId: childA,
+        hostThreadId: parent,
+        splitView: splitView(horizontal(leaf("left", parent), adjacentColumn)),
+        readThread,
+      }),
+    ).toEqual({
+      kind: "split-pane",
+      splitViewId: "split",
+      paneId: "left",
+      direction: "vertical",
+      threadId: childA,
+    });
+  });
+
   it("keeps a subagent on screen when it opens a subagent it launched", () => {
     // Opened full-width, the launcher goes on the left, not its own parent.
     expect(

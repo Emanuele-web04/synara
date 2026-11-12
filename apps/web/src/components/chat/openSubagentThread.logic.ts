@@ -97,12 +97,17 @@ export function resolveSubagentOpenPlan(input: {
         threadId: targetThreadId,
       };
     }
-    // A subagent with no room for another column keeps its pane and shows the
-    // child it launched under it. The root chat instead hands the pane beside it
-    // to the subagent below, so subagents keep opening on its right.
+    const parentNode = findParentSplitNode(splitView.root, hostLeaf.id);
+    const sibling = parentNode
+      ? parentNode.first.id === hostLeaf.id
+        ? parentNode.second
+        : parentNode.first
+      : null;
+    // Nested launches and an already divided neighboring column use the space
+    // below the launcher. A root chat with a single neighbor uses that pane.
     if (
       hostLaunchedTarget &&
-      isSubagent(hostLeaf.threadId) &&
+      (isSubagent(hostLeaf.threadId) || sibling?.kind === "split") &&
       canSubdividePane(splitView.root, hostLeaf.id, "vertical")
     ) {
       return {
@@ -115,12 +120,6 @@ export function resolveSubagentOpenPlan(input: {
     }
     // No room for another column: the pane beside the launcher takes the subagent,
     // so the launcher itself always stays on screen.
-    const parentNode = findParentSplitNode(splitView.root, hostLeaf.id);
-    const sibling = parentNode
-      ? parentNode.first.id === hostLeaf.id
-        ? parentNode.second
-        : parentNode.first
-      : null;
     if (sibling?.kind === "leaf") {
       return {
         kind: "replace-pane",
