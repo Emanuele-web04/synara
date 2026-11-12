@@ -213,6 +213,7 @@ export async function createApp(
       await accountDeletion.flush();
       await createPairingRendezvous(db, config.apiPublicUrl).cleanup();
       await tunnels?.cleanup();
+      await liveActivities?.prune();
     },
   };
 }

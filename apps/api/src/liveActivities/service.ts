@@ -640,12 +640,19 @@ export function createLiveActivityService(options: {
           );
         }
       }
-      await pool.query("DELETE FROM live_activities WHERE expires_at<now()-interval '1 day'");
-      await pool.query("DELETE FROM live_activity_hosts WHERE updated_at<now()-interval '1 day'");
     })().finally(() => {
       flushing = undefined;
     });
     return flushing;
+  }
+  /**
+   * Retention, a day past expiry or the last host report. Not part of the
+   * 5 s push sweep: these rows are long dead, so the 30 s maintenance sweep
+   * removes them without two extra statements every few seconds.
+   */
+  async function prune(): Promise<void> {
+    await pool.query("DELETE FROM live_activities WHERE expires_at<now()-interval '1 day'");
+    await pool.query("DELETE FROM live_activity_hosts WHERE updated_at<now()-interval '1 day'");
   }
   return {
     register,
@@ -656,6 +663,7 @@ export function createLiveActivityService(options: {
     previewWatches,
     publish,
     flush,
+    prune,
   };
 }
 export type LiveActivityService = ReturnType<typeof createLiveActivityService>;

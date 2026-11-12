@@ -486,6 +486,41 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     expect(f.notifications).toHaveLength(0);
   });
 
+  it("leaves retention to the maintenance sweep instead of every push flush", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    await f.publish(0, 1, "running");
+    const [old, fresh] = [f.hosts[0]!.id, f.hosts[1]!.id];
+    await f.publish(1, 1, "running");
+    await pool.query(
+      "UPDATE live_activities SET ended=true, expires_at=now()-interval '25 hours' WHERE id=$1",
+      [f.request.activityId],
+    );
+    await pool.query(
+      "UPDATE live_activity_hosts SET updated_at=now()-interval '25 hours' WHERE host_id=$1",
+      [old],
+    );
+    const remaining = async () => ({
+      activities: Number(
+        (
+          await pool.query("SELECT count(*) FROM live_activities WHERE id=$1", [
+            f.request.activityId,
+          ])
+        ).rows[0].count,
+      ),
+      hosts: (
+        await pool.query(
+          "SELECT host_id FROM live_activity_hosts WHERE host_id=ANY($1::uuid[]) ORDER BY host_id",
+          [[old, fresh]],
+        )
+      ).rows.map((row: { host_id: string }) => row.host_id),
+    });
+    await f.live.flush();
+    expect(await remaining()).toEqual({ activities: 1, hosts: [old, fresh].toSorted() });
+    await f.live.prune();
+    expect(await remaining()).toEqual({ activities: 0, hosts: [fresh] });
+  });
+
   it("reads membership and billing without holding the activity row lock", async () => {
     const f = await fixture("sandbox", "sandbox", true);
     await f.live.register(f.owner, f.request);
