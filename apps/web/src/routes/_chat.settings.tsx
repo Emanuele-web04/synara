@@ -521,6 +521,9 @@ function SettingsRouteView() {
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["settings:automationRuns"]
       : []),
+    ...(settings.nestAgentCreatedThreads !== defaults.nestAgentCreatedThreads
+      ? ["settings:childThreads"]
+      : []),
     ...(settings.showAsciiBackground !== defaults.showAsciiBackground ? ["ASCII background"] : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["settings:changed_uiDensity"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["settings:chatWidth"] : []),
@@ -971,6 +974,15 @@ function SettingsRouteView() {
           description: t("settings:showTheThreadEachStandaloneAutomationRunCreatesRuns"),
           resetLabel: t("settings:automationRuns2"),
           ariaLabel: t("settings:showAutomationRunThreadsInTheSidebar"),
+        })}
+
+        {renderBooleanSettingRow({
+          id: "setting-nest-child-threads",
+          settingKey: "nestAgentCreatedThreads",
+          title: "settings:childThreads",
+          description: t("settings:nestAgentCreatedThreadsDescription"),
+          resetLabel: t("settings:childThreadsReset"),
+          ariaLabel: t("settings:nestAgentCreatedThreadsAria"),
         })}
       </SettingsSection>
 

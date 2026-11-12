@@ -8,9 +8,11 @@ export { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import type { SidebarThreadSummary } from "../types";
 import {
+  groupSidebarThreadFamilies,
   hasUnseenCompletion,
   hasUnseenSnoozeReturn,
   isThreadActivelyWorking,
+  nestAgentCreatedThreadEntries,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 
@@ -398,6 +400,116 @@ export function resolveActivityPriorityTier(
 }
 
 type ActivityPriorityTierResolver = (thread: SidebarThreadSummary) => ActivityPriorityTier | null;
+
+/** The more urgent of two tiers (waiting, then unread, then working); null means no tier. */
+export function mostUrgentActivityPriorityTier(
+  left: ActivityPriorityTier | null,
+  right: ActivityPriorityTier | null,
+): ActivityPriorityTier | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return ACTIVITY_PRIORITY_TIER_RANK[right] < ACTIVITY_PRIORITY_TIER_RANK[left] ? right : left;
+}
+
+/** Most urgent tier among a parent's agent-created children. */
+export function resolveChildThreadsTier(
+  children: readonly SidebarThreadSummary[],
+  resolveTier: ActivityPriorityTierResolver,
+): ActivityPriorityTier | null {
+  let tier: ActivityPriorityTier | null = null;
+  for (const child of children) {
+    tier = mostUrgentActivityPriorityTier(tier, resolveTier(child));
+    if (tier === "waiting") break;
+  }
+  return tier;
+}
+
+/** A folded parent's chip tint: a child waits on the user, a child has news, or all quiet. */
+export type ChildThreadsTone = "waiting" | "active" | "quiet";
+
+export function resolveChildThreadsTone(tier: ActivityPriorityTier | null): ChildThreadsTone {
+  if (tier === "waiting") return "waiting";
+  return tier === null ? "quiet" : "active";
+}
+
+export interface ActivityChildFamilies {
+  /** The feed without agent-created threads whose creator is also in the feed. */
+  roots: SidebarThreadSummary[];
+  /** Each root's agent-created descendants, depth-first in creation order. */
+  childrenByRootId: ReadonlyMap<ThreadId, readonly SidebarThreadSummary[]>;
+}
+
+const NO_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+
+/**
+ * Folds agent-created threads under the top-most creator present in `threads`, the same tree
+ * the project list nests. A detached thread (pinned) keeps its own row and its children.
+ */
+export function groupActivityChildFamilies(
+  threads: readonly SidebarThreadSummary[],
+  detachedIds: ReadonlySet<ThreadId> = NO_THREAD_IDS,
+): ActivityChildFamilies {
+  // Snooze belongs to one chat. Keep it in Snoozed and let its active children remain visible.
+  const snoozedIds = new Set(
+    threads.filter((thread) => thread.snoozedUntil != null).map((thread) => thread.id),
+  );
+  const familyDetachedIds = new Set([...detachedIds, ...snoozedIds]);
+  for (const thread of threads) {
+    if (thread.sourceThreadId && snoozedIds.has(thread.sourceThreadId)) {
+      familyDetachedIds.add(thread.id);
+    }
+  }
+  const families = groupSidebarThreadFamilies(
+    nestAgentCreatedThreadEntries(threads, NO_THREAD_IDS, familyDetachedIds),
+  );
+  const roots: SidebarThreadSummary[] = [];
+  const childrenByRootId = new Map<ThreadId, readonly SidebarThreadSummary[]>();
+  for (const [root, ...descendants] of families) {
+    if (!root) continue;
+    roots.push(root.thread);
+    if (descendants.length > 0) {
+      childrenByRootId.set(
+        root.rowId,
+        descendants.map((entry) => entry.thread),
+      );
+    }
+  }
+  return { roots, childrenByRootId };
+}
+
+/**
+ * An unfolded family's rows: children with news (waiting, unread, working) always show, as
+ * does the open one; quiet children wait behind a "+N done" row until `showQuiet`.
+ */
+export function splitActivityFamilyChildren(
+  children: readonly SidebarThreadSummary[],
+  input: {
+    resolveTier: ActivityPriorityTierResolver;
+    activeThreadId: ThreadId | null;
+    showQuiet: boolean;
+  },
+): { visible: SidebarThreadSummary[]; quietCount: number } {
+  if (input.showQuiet) return { visible: [...children], quietCount: 0 };
+  const visible: SidebarThreadSummary[] = [];
+  let quietCount = 0;
+  for (const child of children) {
+    if (input.resolveTier(child) !== null || child.id === input.activeThreadId) {
+      visible.push(child);
+    } else {
+      quietCount += 1;
+    }
+  }
+  return { visible, quietCount };
+}
+
+/** Feed order for keyboard jumps: each root followed by its visible children. */
+export function expandActivityFamilyThreadIds(
+  threadIds: readonly ThreadId[],
+  visibleChildIdsByRootId: ReadonlyMap<ThreadId, readonly ThreadId[]>,
+): ThreadId[] {
+  if (visibleChildIdsByRootId.size === 0) return [...threadIds];
+  return threadIds.flatMap((id) => [id, ...(visibleChildIdsByRootId.get(id) ?? [])]);
+}
 
 function compareActivityPriority(
   left: SidebarThreadSummary,
