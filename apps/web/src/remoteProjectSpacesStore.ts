@@ -8,8 +8,8 @@ import { getExecutionStorage } from "./lib/hosts/executionStorage";
 import { checkoutKey, type CheckoutRef } from "./lib/projectCatalog/model";
 
 interface RemoteProjectSpacesState {
-  spaceByCheckout: Readonly<Record<string, SpaceId>>;
-  assignSpace: (checkout: CheckoutRef, spaceId: SpaceId) => void;
+  spaceByCheckout: Readonly<Record<string, SpaceId | null>>;
+  assignSpace: (checkout: CheckoutRef, spaceId: SpaceId | null) => void;
 }
 
 export const useRemoteProjectSpacesStore = create<RemoteProjectSpacesState>()(

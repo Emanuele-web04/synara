@@ -81,7 +81,7 @@ A checkout is `{environmentId, projectId}`; a thread remains `{environmentId, th
 
 GitHub suggestions normalize SSH/HTTPS and `.git` conservatively and require confirmation. Fork owners remain distinct; multiple repository identities do not produce suggestions. Other Git servers and no-remote projects can be linked manually. The normalization utility preserves significant case and ports on self-hosted servers. Dismissed suggestions and unlink/split corrections persist. Two clones remain two members even on the same computer.
 
-When you add a project on a connected computer from a named Space, the controlling computer remembers that placement locally. The project and its chats stay on the connected computer. If the Space is removed, its projects are listed in Void on the controller.
+When you add a project on a connected computer from a named Space, the controlling computer remembers that placement locally. Use the project row’s **Move to space** menu to file an existing Remote project or return it to Void. The project and its chats stay on the connected computer. If the Space is removed, its projects are listed in Void on the controller.
 
 ## Unsupported remote surfaces
 

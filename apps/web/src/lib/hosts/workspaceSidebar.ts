@@ -37,11 +37,17 @@ export function deriveWorkspaceProjectThreadRows(input: {
   sortOrder: SidebarThreadSortOrder;
   activeThreadId?: ThreadId | undefined;
   extraPages: number;
+  includePinned?: boolean;
 }) {
-  const threads = getUnpinnedThreadsForSidebar(
-    input.entry.threads.filter((thread) => !thread.parentThreadId && !thread.archivedAt),
-    input.entry.threads.filter((thread) => thread.isPinned).map((thread) => thread.id),
+  const eligible = input.entry.threads.filter(
+    (thread) => !thread.parentThreadId && !thread.archivedAt,
   );
+  const threads = input.includePinned
+    ? eligible
+    : getUnpinnedThreadsForSidebar(
+        eligible,
+        eligible.filter((thread) => thread.isPinned).map((thread) => thread.id),
+      );
   const rows = sortThreadsForSidebar(threads, input.sortOrder).map((thread) => ({ thread }));
   const activeRootId = resolveSidebarRootThreadId(
     input.activeThreadId ?? null,
