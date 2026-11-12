@@ -84,16 +84,19 @@ export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
 /** Left padding of a thread row (`pl-8` above), where its provider glyph starts. */
 export const SIDEBAR_THREAD_ROW_PADDING_PX = 32;
 
-/**
- * A thread row with a second line (a folded parent's child-count badge). Top padding puts the
- * 20px title line exactly where a single-line row centres it, so the title never moves.
- */
-export const SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME =
-  "h-auto flex-wrap items-start gap-y-1 pt-[calc((var(--app-density-row-height,1.75rem)-1.25rem)/2)] pb-1.5";
-
 /** Centres an absolutely placed control on a thread row's first line, at any row height. */
 export const SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME =
   "top-[calc(var(--app-density-row-height,1.75rem)/2)]";
+
+/** A parent's stem: one hairline hung from the glyph centre, never covering row content. */
+export const SIDEBAR_CHILD_STEM_CLASS_NAME =
+  "pointer-events-none absolute z-10 border-foreground/14";
+
+/** Width of the child-count chip (`SidebarChildThreadsChip`) at one digit. */
+export const SIDEBAR_CHILD_CHIP_WIDTH_PX = 18;
+
+/** Gap between the child-count chip and the provider glyph it precedes. */
+export const SIDEBAR_CHILD_CHIP_GAP_PX = 4;
 
 /** Indent per level for agent-created child threads, under the parent's title. */
 export const SIDEBAR_CHILD_INDENT_PX = 24;

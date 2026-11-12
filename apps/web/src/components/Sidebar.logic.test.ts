@@ -5,6 +5,7 @@ import {
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   nestAgentCreatedThreadEntries,
+  collectAgentCreatedDescendants,
   groupAgentCreatedChildren,
   groupSidebarThreadFamilies,
   agentCreatedAncestorIds,
@@ -2706,5 +2707,22 @@ describe("nestAgentCreatedThreadEntries", () => {
     const data = deriveFor([mk("c", "p"), mk("p")], {});
     expect(data?.orderedProjectThreadIds).toEqual([tid("c"), tid("p")]);
     expect(data?.visibleEntries.every((entry) => entry.depth === undefined)).toBe(true);
+  });
+});
+
+describe("collectAgentCreatedDescendants", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const mk = (id: string) => ({ id: tid(id) }) as unknown as SidebarThreadSummary;
+
+  it("collects every level, nearest first, and stops at cycles", () => {
+    const childrenByParent = new Map([
+      [tid("p"), [mk("c1"), mk("c2")]],
+      [tid("c1"), [mk("g")]],
+      [tid("g"), [mk("p")]],
+    ]);
+    expect(
+      collectAgentCreatedDescendants(tid("p"), childrenByParent).map((thread) => thread.id),
+    ).toEqual([tid("c1"), tid("c2"), tid("g")]);
+    expect(collectAgentCreatedDescendants(tid("p"), null)).toEqual([]);
   });
 });

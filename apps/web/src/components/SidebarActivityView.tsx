@@ -33,6 +33,7 @@ import {
 import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
 import {
+  SIDEBAR_CHILD_STEM_CLASS_NAME,
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -68,17 +69,26 @@ import {
   excludeActivityPriorityThreads,
   resolveActivitySectionRows,
   groupActivityThreadsByProject,
+  expandActivityFamilyThreadIds,
+  groupActivityChildFamilies,
+  isActivityThread,
   isThreadSettledForActivity,
+  mostUrgentActivityPriorityTier,
   resolveActivityPriority,
   resolveActivityPriorityTier,
   resolveActivityScope,
+  resolveChildThreadsTier,
+  resolveChildThreadsTone,
+  splitActivityFamilyChildren,
   resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
   type ActivityGroupMode,
   type ActivityPriorityState,
+  type ActivityPriorityTier,
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
+  type ChildThreadsTone,
 } from "./SidebarActivityView.logic";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
@@ -87,6 +97,7 @@ import {
   type SidebarRowContextMenuPosition,
   type SidebarThreadRowGestureProps,
 } from "./sidebarThreadRowGestures";
+import { SidebarChildThreadsChip } from "./SidebarChildThreadsChip";
 import { SidebarIconButton } from "./SidebarIconButton";
 import {
   SidebarCollapsibleSection,
@@ -114,6 +125,16 @@ const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 const EMPTY_THREADS: SidebarThreadSummary[] = [];
+
+/** What a family's parent row needs to draw its child-count chip. */
+interface ActivityRowChildThreads {
+  count: number;
+  collapsed: boolean;
+  tone: ChildThreadsTone;
+  /** Folded only: the most urgent hidden state, e.g. "1 needs you". */
+  summary: string | null;
+  onToggle: () => void;
+}
 
 interface ExternalActivityRow {
   hostName: string;
@@ -145,6 +166,7 @@ export function ActivityThreadRow({
   onContextMenu,
   renderHoverCard,
   rowRef,
+  childThreads,
 }: {
   thread: SidebarThreadSummary;
   project: Project | undefined;
@@ -168,6 +190,11 @@ export function ActivityThreadRow({
   onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
   rowRef?: Ref<HTMLButtonElement>;
+  /**
+   * A parent of agent-created threads: its count chip takes the meta line's leading slot,
+   * under the provider glyph, and the family's stem drops from it while unfolded.
+   */
+  childThreads?: ActivityRowChildThreads | undefined;
 }) {
   const { t } = useTranslation();
 
@@ -283,23 +310,40 @@ export function ActivityThreadRow({
             />
           ) : null}
         </span>
-        <span className="flex min-w-0 items-center gap-1.5">
-          {project?.cwd && !external ? (
-            <ProjectSidebarIcon
-              cwd={project.cwd}
-              expanded={false}
-              appearance={project.appearance}
-              glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-            />
-          ) : (
-            <FolderIcon
-              className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              aria-hidden
-            />
-          )}
-          <span className="mr-auto min-w-0 truncate text-ui-sm text-muted-foreground/80">
+        <span className={cn("flex min-w-0 items-center gap-1.5", childThreads && "min-h-5")}>
+          <span className={cn("inline-flex shrink-0", childThreads && "invisible")}>
+            {project?.cwd && !external ? (
+              <ProjectSidebarIcon
+                cwd={project.cwd}
+                expanded={false}
+                appearance={project.appearance}
+                glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+              />
+            ) : (
+              <FolderIcon
+                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                aria-hidden
+              />
+            )}
+          </span>
+          <span
+            className={cn(
+              "min-w-0 truncate text-ui-sm text-muted-foreground/80",
+              !childThreads?.summary && "mr-auto",
+            )}
+          >
             {resolveThreadProjectLabel(project)}
           </span>
+          {childThreads?.summary ? (
+            <span
+              className={cn(
+                "mr-auto shrink-0 text-ui-sm",
+                childThreads.tone === "waiting" ? "text-warning" : "text-muted-foreground/70",
+              )}
+            >
+              {childThreads.summary}
+            </span>
+          ) : null}
           {isWorktree ? (
             <WorktreeIcon
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
@@ -330,6 +374,23 @@ export function ActivityThreadRow({
           </span>
         ) : null}
       </button>
+      {childThreads ? (
+        <>
+          <SidebarChildThreadsChip
+            count={childThreads.count}
+            collapsed={childThreads.collapsed}
+            tone={childThreads.tone}
+            onToggle={childThreads.onToggle}
+            className="absolute top-[33px] left-[7px]"
+          />
+          {childThreads.collapsed ? null : (
+            <span
+              aria-hidden="true"
+              className={cn(SIDEBAR_CHILD_STEM_CLASS_NAME, "top-[51px] -bottom-px left-4 border-l")}
+            />
+          )}
+        </>
+      ) : null}
       {trailingStatus ? (
         <span
           data-slot="activity-completion-status"
@@ -397,6 +458,122 @@ export function ActivityThreadRow({
     );
   }
   return withHoverCard(rowContent, external ? undefined : rowGestures);
+}
+
+/**
+ * One agent-created child under its parent in the Activity feed: a single line (glyph, title,
+ * status) hung on the family's stem, which hooks into the last row.
+ */
+function ActivityChildThreadRow({
+  thread,
+  isLast,
+  isActive,
+  isOpen,
+  hasPendingDraft,
+  threadJumpLabel,
+  status,
+  onOpen,
+  onRename,
+  onRenamePointerUp,
+  onContextMenu,
+  renderHoverCard,
+  rowRef,
+}: {
+  thread: SidebarThreadSummary;
+  isLast: boolean;
+  isActive: boolean;
+  isOpen: boolean;
+  hasPendingDraft: boolean;
+  threadJumpLabel: string | null;
+  status: ThreadStatusPill | null;
+  onOpen: () => void;
+  onRename: (threadId: ThreadId) => void;
+  onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
+  onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
+  renderHoverCard: (anchorId: string) => ReactNode;
+  rowRef?: Ref<HTMLButtonElement>;
+}) {
+  const provider = thread.session?.provider ?? thread.modelSelection.provider;
+  const hoverAnchorId = createSidebarThreadHoverAnchorId({
+    scope: "activity",
+    threadId: thread.id,
+  });
+  const trailingStatus = resolveThreadStatusTrailingIndicator({
+    status,
+    isActive: isOpen,
+    slotOccupied: Boolean(threadJumpLabel),
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+        render={
+          <div
+            data-thread-hover-anchor={hoverAnchorId}
+            className="group/activity-row relative"
+            data-thread-item
+            {...createSidebarThreadRowGestures({
+              threadId: thread.id,
+              onRename,
+              onRenamePointerUp,
+              onContextMenu,
+            })}
+          />
+        }
+      >
+        <span
+          aria-hidden="true"
+          className={cn(
+            SIDEBAR_CHILD_STEM_CLASS_NAME,
+            "left-4",
+            isLast ? "top-0 h-1/2 w-2.5 rounded-bl-md border-b border-l" : "-inset-y-px border-l",
+          )}
+        />
+        <button
+          ref={rowRef}
+          type="button"
+          aria-current={isActive ? "page" : undefined}
+          onClick={onOpen}
+          draggable
+          onDragStart={(event) => beginThreadDrag(event, thread.id)}
+          onDragEnd={endThreadDrag}
+          data-testid={`activity-child-thread-${thread.id}`}
+          className={cn(
+            "flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-lg pr-2 pl-7.5 text-left select-none",
+            SIDEBAR_ROW_FOCUS_CLASS_NAME,
+            isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
+            trailingStatus && !threadJumpLabel && "pr-6",
+          )}
+        >
+          <ProviderIcon
+            provider={provider}
+            className="size-3 shrink-0"
+            fallback={
+              <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
+            }
+          />
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-ui leading-5 font-normal",
+              isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+            )}
+          >
+            {thread.title}
+          </span>
+          {hasPendingDraft ? <SidebarDraftGlyph /> : null}
+          {threadJumpLabel ? (
+            <ShortcutKbd shortcutLabel={threadJumpLabel} title={threadJumpLabel} />
+          ) : null}
+        </button>
+        {trailingStatus && !threadJumpLabel ? (
+          <span className="pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center">
+            <SidebarStatusTrailingGlyph status={trailingStatus} />
+          </span>
+        ) : null}
+      </TooltipTrigger>
+      {renderHoverCard(hoverAnchorId)}
+    </Tooltip>
+  );
 }
 
 /** The same accessible Snoozed section serves Activity and the classic sidebar. */
@@ -616,7 +793,7 @@ export function SidebarActivityView({
   activeThreadId,
   visualActiveThreadId = activeThreadId,
   pinnedThreadIdSet,
-  settledOverrideByThreadId,
+  settledOverrideByThreadId: ownSettledOverrideByThreadId,
   threadsHydrated,
   scopeSelection,
   onScopeSelectionChange,
@@ -640,6 +817,7 @@ export function SidebarActivityView({
   onChangeGroupMode,
   onCreateChat,
   onAddProject,
+  childThreadNesting = null,
 }: {
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
@@ -686,6 +864,14 @@ export function SidebarActivityView({
   onCreateChat: () => void;
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
+  /**
+   * Agent-created threads fold under their creator, sharing the project list's fold state.
+   * Null while the "Child threads" setting is off: every thread keeps its own row.
+   */
+  childThreadNesting?: {
+    collapsedParentIds: ReadonlySet<ThreadId>;
+    onToggleCollapsed: (threadId: ThreadId) => void;
+  } | null;
 }) {
   const { t } = useTranslation();
 
@@ -697,6 +883,10 @@ export function SidebarActivityView({
   const [snoozedVisibleThreadIds, setSnoozedVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
+  );
+  // Families whose quiet (done, read) children were revealed with "+N done".
+  const [quietChildrenShownRootIds, setQuietChildrenShownRootIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
   );
   // Priority's order lives as long as this view. "Clear read" bumps the generation for a
   // fresh sort; so do scope and grouping changes, through the key.
@@ -733,6 +923,54 @@ export function SidebarActivityView({
       ),
     [threads, resolveRowStatus],
   );
+  const resolveOwnTier = useCallback(
+    (thread: SidebarThreadSummary) => resolveActivityPriorityTier(resolveRowStatus(thread)),
+    [resolveRowStatus],
+  );
+  // Agent-created threads ride under their creator as one family. Only same-project
+  // children nest, as in the project list, so a project scope never hides a thread.
+  const childFamilies = useMemo(() => {
+    if (!childThreadNesting) return null;
+    const eligible = threads.filter((thread) =>
+      isActivityThread(thread, preparingThreadIdSet.has(thread.id)),
+    );
+    const projectIdByThreadId = new Map(eligible.map((thread) => [thread.id, thread.projectId]));
+    const detachedIds = new Set(pinnedThreadIdSet);
+    for (const thread of eligible) {
+      const creatorProjectId = thread.sourceThreadId
+        ? projectIdByThreadId.get(thread.sourceThreadId)
+        : undefined;
+      if (creatorProjectId !== undefined && creatorProjectId !== thread.projectId) {
+        detachedIds.add(thread.id);
+      }
+    }
+    return groupActivityChildFamilies(eligible, detachedIds);
+  }, [childThreadNesting, pinnedThreadIdSet, preparingThreadIdSet, threads]);
+  const childTierByRootId = useMemo(() => {
+    const tiers = new Map<ThreadId, ActivityPriorityTier | null>();
+    for (const [rootId, children] of childFamilies?.childrenByRootId ?? []) {
+      tiers.set(rootId, resolveChildThreadsTier(children, resolveOwnTier));
+    }
+    return tiers;
+  }, [childFamilies, resolveOwnTier]);
+  // A family ranks by its most urgent member, so a child waiting on the user lifts its parent.
+  const resolveRowTier = useCallback(
+    (thread: SidebarThreadSummary) =>
+      mostUrgentActivityPriorityTier(
+        resolveOwnTier(thread),
+        childTierByRootId.get(thread.id) ?? null,
+      ),
+    [childTierByRootId, resolveOwnTier],
+  );
+  // ...and a child waiting on the user reopens a parent already marked done.
+  const settledOverrideByThreadId = useMemo(() => {
+    const reopened = [...childTierByRootId].filter(([, tier]) => tier === "waiting");
+    if (reopened.length === 0) return ownSettledOverrideByThreadId;
+    const overrides = new Map(ownSettledOverrideByThreadId);
+    for (const [rootId] of reopened) overrides.set(rootId, false);
+    return overrides;
+  }, [childTierByRootId, ownSettledOverrideByThreadId]);
+  const feedThreads = childFamilies?.roots ?? threads;
   const scopeOptions = useMemo(
     () => collectActivityScopeOptions(threads, isRealProject, preparingThreadIdSet),
     [isRealProject, threads, preparingThreadIdSet],
@@ -752,7 +990,7 @@ export function SidebarActivityView({
   const model = useMemo(
     () =>
       buildActivityViewModel({
-        threads,
+        threads: feedThreads,
         pinnedThreadIdSet,
         draftThreadIdSet,
         preparingThreadIdSet,
@@ -763,11 +1001,11 @@ export function SidebarActivityView({
     [
       activeThreadId,
       draftThreadIdSet,
+      feedThreads,
       preparingThreadIdSet,
       pinnedThreadIdSet,
       projectFilterIds,
       settledOverrideByThreadId,
-      threads,
     ],
   );
   const priorityKey = `${groupMode}:${activeScope ?? "all"}:${priorityGeneration}`;
@@ -784,12 +1022,12 @@ export function SidebarActivityView({
               ...model.drafts,
               ...model.active,
             ],
-            resolveTier: (thread) => resolveActivityPriorityTier(resolveRowStatus(thread)),
+            resolveTier: resolveRowTier,
             previous: previousPriority,
             nowMs: Date.now(),
           })
         : null,
-    [groupMode, model, previousPriority, resolveRowStatus, settledOverrideByThreadId],
+    [groupMode, model, previousPriority, resolveRowTier, settledOverrideByThreadId],
   );
   useEffect(() => {
     // Before hydration every thread is missing; storing that would sort later rows as
@@ -813,7 +1051,7 @@ export function SidebarActivityView({
     [model, priorityThreads],
   );
   const clearReadPriorityDisabled = !priorityThreads.some(
-    (thread) => resolveActivityPriorityTier(resolveRowStatus(thread)) === null,
+    (thread) => resolveRowTier(thread) === null,
   );
   const clearReadPriority = () => setPriorityGeneration((generation) => generation + 1);
   // Coarse clock so the date bucketing memo stays effective across renders that
@@ -897,26 +1135,62 @@ export function SidebarActivityView({
     }),
     [earlierRows.revealed, groupMode, pinnedRows.revealed, settledRows.revealed],
   );
+  const familyChildRowsByRootId = useMemo(() => {
+    const rows = new Map<
+      ThreadId,
+      { collapsed: boolean; visible: SidebarThreadSummary[]; quietCount: number }
+    >();
+    if (!childFamilies || !childThreadNesting) return rows;
+    for (const [rootId, children] of childFamilies.childrenByRootId) {
+      const collapsed = childThreadNesting.collapsedParentIds.has(rootId);
+      rows.set(rootId, {
+        collapsed,
+        ...(collapsed
+          ? { visible: [], quietCount: 0 }
+          : splitActivityFamilyChildren(children, {
+              resolveTier: resolveOwnTier,
+              activeThreadId: visualActiveThreadId,
+              showQuiet: quietChildrenShownRootIds.has(rootId),
+            })),
+      });
+    }
+    return rows;
+  }, [
+    childFamilies,
+    childThreadNesting,
+    quietChildrenShownRootIds,
+    resolveOwnTier,
+    visualActiveThreadId,
+  ]);
   const visibleThreadIds = useMemo(
     () => [
-      ...collectVisibleActivityThreadIds({
-        groupMode,
-        pinnedOpen,
-        pinned: scopedPinnedThreads,
-        priority: priorityThreads,
-        drafts: draftThreads,
-        today: dateBuckets.today,
-        yesterday: dateBuckets.yesterday,
-        earlierOpen,
-        earlier: earlierRows.visible,
-        projectGroups: pagedProjectGroups.map((group) => group.threads),
-        settledOpen,
-        settled: settledRows.visible,
-        revealed: revealedThreads,
-      }),
+      ...expandActivityFamilyThreadIds(
+        collectVisibleActivityThreadIds({
+          groupMode,
+          pinnedOpen,
+          pinned: scopedPinnedThreads,
+          priority: priorityThreads,
+          drafts: draftThreads,
+          today: dateBuckets.today,
+          yesterday: dateBuckets.yesterday,
+          earlierOpen,
+          earlier: earlierRows.visible,
+          projectGroups: pagedProjectGroups.map((group) => group.threads),
+          settledOpen,
+          settled: settledRows.visible,
+          revealed: revealedThreads,
+        }),
+        new Map(
+          [...familyChildRowsByRootId].map(([rootId, rows]) => [
+            rootId,
+            rows.visible.map((child) => child.id),
+          ]),
+        ),
+      ),
       ...snoozedVisibleThreadIds,
     ],
     [
+      familyChildRowsByRootId,
       dateBuckets.today,
       dateBuckets.yesterday,
       draftThreads,
@@ -984,13 +1258,91 @@ export function SidebarActivityView({
     }
   };
 
+  const resolveRowChildThreads = (
+    thread: SidebarThreadSummary,
+  ): ActivityRowChildThreads | undefined => {
+    const children = childFamilies?.childrenByRootId.get(thread.id);
+    const rows = familyChildRowsByRootId.get(thread.id);
+    if (!children || !rows || !childThreadNesting) return undefined;
+    const tier = childTierByRootId.get(thread.id) ?? null;
+    const tierCount = (wanted: ActivityPriorityTier) =>
+      children.filter((child) => resolveOwnTier(child) === wanted).length;
+    const summary = !rows.collapsed
+      ? null
+      : tier === "waiting"
+        ? t("workspace:childThreadsWaiting", { count: tierCount("waiting") })
+        : tier === "unread"
+          ? t("workspace:childThreadsUnread", { count: tierCount("unread") })
+          : tier === "working"
+            ? t("workspace:childThreadsWorking", { count: tierCount("working") })
+            : null;
+    return {
+      count: children.length,
+      collapsed: rows.collapsed,
+      tone: resolveChildThreadsTone(tier),
+      summary,
+      onToggle: () => childThreadNesting.onToggleCollapsed(thread.id),
+    };
+  };
+
+  const renderChildRows = (rootId: ThreadId) => {
+    const rows = familyChildRowsByRootId.get(rootId);
+    if (!rows || rows.collapsed) return null;
+    return (
+      <div className="flex flex-col">
+        {rows.visible.map((child, index) => (
+          <ActivityChildThreadRow
+            key={child.id}
+            thread={child}
+            isLast={index === rows.visible.length - 1 && rows.quietCount === 0}
+            {...(visualActiveThreadId === child.id ? { rowRef: activeRowRef } : {})}
+            isActive={visualActiveThreadId === child.id}
+            isOpen={activeThreadId === child.id}
+            hasPendingDraft={draftThreadIdSet.has(child.id)}
+            threadJumpLabel={threadJumpLabelByThreadId.get(child.id) ?? null}
+            status={resolveThreadStatus(child)}
+            onOpen={() => onOpenThread(child.id)}
+            onRename={onRenameThread}
+            onRenamePointerUp={onThreadRenamePointerUp}
+            onContextMenu={onThreadContextMenu}
+            renderHoverCard={(anchorId) => renderThreadHoverCard(child, anchorId)}
+          />
+        ))}
+        {rows.quietCount > 0 ? (
+          <div className="relative">
+            <span
+              aria-hidden="true"
+              className={cn(
+                SIDEBAR_CHILD_STEM_CLASS_NAME,
+                "top-0 left-4 h-1/2 w-2.5 rounded-bl-md border-b border-l",
+              )}
+            />
+            <button
+              type="button"
+              className={cn(
+                "flex h-6 w-full cursor-pointer items-center rounded-lg pr-2 pl-7.5 text-left text-ui-sm text-muted-foreground/70 hover:text-foreground",
+                SIDEBAR_ROW_FOCUS_CLASS_NAME,
+              )}
+              onClick={() =>
+                setQuietChildrenShownRootIds((current) => new Set(current).add(rootId))
+              }
+            >
+              {t("workspace:childThreadsDoneCount", { count: rows.quietCount })}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderRow = (
     thread: SidebarThreadSummary,
     isSettled: boolean,
     registerActiveRow = true,
   ) => {
     const external = externalRows?.get(thread.id);
-    return (
+    const childThreads = external ? undefined : resolveRowChildThreads(thread);
+    const row = (
       <ActivityThreadRow
         key={thread.id}
         thread={thread}
@@ -1034,7 +1386,15 @@ export function SidebarActivityView({
         onRenamePointerUp={onThreadRenamePointerUp}
         onContextMenu={onThreadContextMenu}
         renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
+        childThreads={childThreads}
       />
+    );
+    if (!childThreads) return row;
+    return (
+      <div key={thread.id} className="flex flex-col">
+        {row}
+        {renderChildRows(thread.id)}
+      </div>
     );
   };
   const renderActiveRow = (thread: SidebarThreadSummary) =>

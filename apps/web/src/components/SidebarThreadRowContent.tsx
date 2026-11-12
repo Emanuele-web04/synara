@@ -129,7 +129,7 @@ export function SidebarThreadRowContent({
   variant,
   pendingStatusColorClass,
   suffix,
-  glyphSlotClassName,
+  hideLeadingGlyph = false,
 }: {
   thread: SidebarThreadSummary;
   terminalEntryPoint: boolean;
@@ -140,10 +140,10 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
   /**
-   * Wraps the leading glyph in a title-height slot, so it stays on the first line of a row that
-   * wraps (a folded parent's badge) and can be faded under an overlaid control.
+   * Keeps the glyph's space but hides it, for a pinned parent whose child-count chip sits on
+   * top of it. Rows without a glyph still reserve one, so the chip never covers the title.
    */
-  glyphSlotClassName?: string | undefined;
+  hideLeadingGlyph?: boolean;
 }) {
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
   const hasPendingDraft = useThreadHasPendingDraft(thread.id);
@@ -160,9 +160,9 @@ export function SidebarThreadRowContent({
 
   return (
     <>
-      {glyphSlotClassName !== undefined && leadingGlyph ? (
-        <span className={cn("flex h-5 shrink-0 items-center", glyphSlotClassName)}>
-          {leadingGlyph}
+      {hideLeadingGlyph ? (
+        <span aria-hidden="true" className="invisible flex shrink-0 items-center">
+          {leadingGlyph ?? <span className="size-3" />}
         </span>
       ) : (
         leadingGlyph

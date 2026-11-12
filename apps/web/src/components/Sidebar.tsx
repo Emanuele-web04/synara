@@ -307,6 +307,8 @@ import {
   findNextThreadNeedingAttention,
   hasActivityNeedingAttention,
   resolveActivityPriorityTier,
+  resolveChildThreadsTier,
+  resolveChildThreadsTone,
 } from "./SidebarActivityView.logic";
 import {
   ActivityThreadRow,
@@ -389,7 +391,7 @@ import { Button } from "./ui/button";
 import { Popover, PopoverPopup } from "./ui/popover";
 import { StatusDot } from "./ui/status-chip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
-import { ProviderIcon } from "./ProviderIcon";
+import { SidebarChildThreadsChip } from "./SidebarChildThreadsChip";
 import { Input } from "./ui/input";
 import {
   Dialog,
@@ -470,6 +472,7 @@ import {
   type SidebarDerivedProjectData,
   type SidebarProjectEntry,
   agentCreatedAncestorIds,
+  collectAgentCreatedDescendants,
   groupAgentCreatedChildren,
   groupSidebarThreadFamilies,
   nestAgentCreatedThreadEntries,
@@ -504,13 +507,15 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
+  SIDEBAR_CHILD_CHIP_GAP_PX,
+  SIDEBAR_CHILD_CHIP_WIDTH_PX,
   SIDEBAR_CHILD_INDENT_PX,
+  SIDEBAR_CHILD_STEM_CLASS_NAME,
   SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
   SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
   SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME,
   SIDEBAR_THREAD_GLYPH_CENTER_PX,
   SIDEBAR_THREAD_ROW_PADDING_PX,
-  SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
@@ -1375,8 +1380,6 @@ export function SidebarSurfacePicker({
 
 /** Pinned rows sit flush (`px-2`), with no gutter before the glyph. */
 const PINNED_ROW_PADDING_PX = 8;
-/** A parent's stem: one hairline hung from the glyph centre, never covering row content. */
-const SIDEBAR_CHILD_STEM_CLASS_NAME = "pointer-events-none absolute z-10 border-foreground/14";
 
 export default function Sidebar() {
   const { t, formatLocale } = useTranslation();
@@ -5104,6 +5107,17 @@ export default function Sidebar() {
             `/${entry.thread.id}` === activeWorkspaceParams.get("path")?.split("?")[0],
         )?.[0] ?? null)
       : activeSidebarThreadId;
+  // Activity folds agent-created threads under their creator with the project list's state.
+  const activityChildThreadNesting = useMemo(
+    () =>
+      nestChildThreads
+        ? {
+            collapsedParentIds: collapsedChildParentIds,
+            onToggleCollapsed: toggleChildParentCollapsed,
+          }
+        : null,
+    [collapsedChildParentIds, nestChildThreads, toggleChildParentCollapsed],
+  );
   const activityVisualActiveThreadId = useMemo(
     () =>
       resolveSidebarRootThreadId(activityActiveThreadId, {
@@ -6176,10 +6190,11 @@ export default function Sidebar() {
         >
           {renderChildThreadStems(nesting, PINNED_ROW_PADDING_PX)}
           {childCount > 0
-            ? renderChildThreadsDisclosure({
+            ? renderChildThreadsChip({
                 threadId: thread.id,
+                count: childCount,
                 collapsed: childrenCollapsed,
-                left: PINNED_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX,
+                glyphLeftPx: PINNED_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX,
                 overlaysGlyph: true,
               })
             : null}
@@ -6200,7 +6215,6 @@ export default function Sidebar() {
                     SIDEBAR_ROW_HOVER_CLASS_NAME,
                     threadStatus?.label === "Reminder" && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
                   ),
-              childrenCollapsed && SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
             )}
             style={
               nestDepth > 0
@@ -6236,9 +6250,8 @@ export default function Sidebar() {
               terminalCount={terminalCount}
               isActive={isActive}
               variant="pinned"
-              glyphSlotClassName={
-                childCount === 0 ? undefined : sidebarHoverRevealHideClassName("thread-row")
-              }
+              // Pinned rows have no slot before the glyph; the child-count chip takes its place.
+              hideLeadingGlyph={childCount > 0}
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -6256,7 +6269,7 @@ export default function Sidebar() {
                 ) : null
               }
             />
-            <div className={cn("flex min-w-0 items-center", childrenCollapsed && "h-5")}>
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 threadJumpLabel,
                 rightMetaChips,
@@ -6270,35 +6283,10 @@ export default function Sidebar() {
                 }),
               })}
             </div>
-            {childrenCollapsed ? renderChildThreadsCluster(thread.id, childCount) : null}
           </div>
         </TooltipTrigger>
         {renderThreadHoverCardPopup(thread, hoverAnchorId, activeSidebarThreadId === thread.id)}
       </Tooltip>
-    );
-  }
-
-  // Folded parent: its children's agents as overlapping avatars plus a count, on a second
-  // line that starts under the row's glyph.
-  function renderChildThreadsCluster(threadId: ThreadId, count: number) {
-    const children = agentChildrenByThreadId?.get(threadId) ?? [];
-    return (
-      <div className="flex basis-full items-center gap-1.5 text-ui-xs text-muted-foreground">
-        <span className="flex items-center" aria-hidden="true">
-          {children.slice(0, 3).map((child) => (
-            <span
-              key={child.id}
-              className="-ml-1.5 grid size-4 place-items-center rounded-full bg-secondary ring-[1.5px] ring-[var(--sidebar)] first:ml-0"
-            >
-              <ProviderIcon
-                provider={child.session?.provider ?? child.modelSelection.provider}
-                className="size-2.5"
-              />
-            </span>
-          ))}
-        </span>
-        {t("workspace:childThreadClusterCount", { count })}
-      </div>
     );
   }
 
@@ -6369,37 +6357,37 @@ export default function Sidebar() {
     return stems;
   }
 
-  // Fold/unfold chevron for a parent's agent-created children. Project rows keep it in the
-  // gutter; pinned rows have no gutter, so it takes over the glyph slot on hover instead.
-  function renderChildThreadsDisclosure(input: {
+  // Fold/unfold chip for a parent's agent-created children, in the empty slot before the
+  // glyph. Folded, it takes the tint of the most urgent descendant it hides.
+  function renderChildThreadsChip(input: {
     threadId: ThreadId;
+    count: number;
     collapsed: boolean;
-    left: number;
+    /** Left edge of the row's provider glyph. */
+    glyphLeftPx: number;
+    /** Pinned rows have no slot before the glyph, so the chip is centred over it instead. */
     overlaysGlyph: boolean;
   }) {
+    const tone = input.collapsed
+      ? resolveChildThreadsTone(
+          resolveChildThreadsTier(
+            collectAgentCreatedDescendants(input.threadId, agentChildrenByThreadId),
+            (thread) => resolveActivityPriorityTier(resolveThreadStatusForSidebar(thread)),
+          ),
+        )
+      : "quiet";
+    const left = input.overlaysGlyph
+      ? input.glyphLeftPx + SIDEBAR_THREAD_GLYPH_CENTER_PX - SIDEBAR_CHILD_CHIP_WIDTH_PX / 2
+      : input.glyphLeftPx - SIDEBAR_CHILD_CHIP_GAP_PX - SIDEBAR_CHILD_CHIP_WIDTH_PX;
     return (
-      <button
-        type="button"
-        aria-expanded={!input.collapsed}
-        aria-label={t("workspace:toggleChildThreads")}
-        title={t("workspace:toggleChildThreads")}
-        className={cn(
-          SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
-          SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME,
-          "text-muted-foreground/70",
-          input.collapsed && !input.overlaysGlyph
-            ? "opacity-100"
-            : "pointer-events-none opacity-0 md:group-hover/thread-row:pointer-events-auto md:group-hover/thread-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-        )}
-        style={{ left: input.left }}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          toggleChildParentCollapsed(input.threadId);
-        }}
-      >
-        <DisclosureChevron open={!input.collapsed} className="size-3.5" />
-      </button>
+      <SidebarChildThreadsChip
+        count={input.count}
+        collapsed={input.collapsed}
+        tone={tone}
+        onToggle={() => toggleChildParentCollapsed(input.threadId)}
+        className={cn("absolute -translate-y-1/2", SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME)}
+        style={{ left }}
+      />
     );
   }
 
@@ -6466,11 +6454,11 @@ export default function Sidebar() {
       >
         {renderChildThreadStems(nesting, SIDEBAR_THREAD_ROW_PADDING_PX)}
         {childCount > 0
-          ? renderChildThreadsDisclosure({
+          ? renderChildThreadsChip({
               threadId: thread.id,
+              count: childCount,
               collapsed: childrenCollapsed,
-              // Sits in the gutter right against the glyph, clear of ancestor stems.
-              left: SIDEBAR_THREAD_ROW_PADDING_PX - 16 + nestDepth * SIDEBAR_CHILD_INDENT_PX,
+              glyphLeftPx: SIDEBAR_THREAD_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX,
               overlaysGlyph: false,
             })
           : null}
@@ -6493,9 +6481,6 @@ export default function Sidebar() {
                   }),
                   topLevel ? "pl-2" : null,
                   "pr-2",
-                  // A folded parent grows downward to fit its child-count badge; the title
-                  // keeps the first-line position of a normal row so folding never shifts it.
-                  childrenCollapsed && SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
                 )}
                 style={
                   nestDepth > 0
@@ -6555,7 +6540,6 @@ export default function Sidebar() {
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
-              glyphSlotClassName={childCount > 0 ? "" : undefined}
               suffix={
                 isTemporaryThread ? (
                   <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
@@ -6577,7 +6561,7 @@ export default function Sidebar() {
                 ) : undefined
               }
             />
-            <div className={cn("flex min-w-0 items-center", childrenCollapsed && "h-5")}>
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 threadJumpLabel,
                 rightMetaChips,
@@ -6591,7 +6575,6 @@ export default function Sidebar() {
                 }),
               })}
             </div>
-            {childrenCollapsed ? renderChildThreadsCluster(thread.id, childCount) : null}
           </TooltipTrigger>
           {renderThreadHoverCardPopup(thread, hoverAnchorId, activeSidebarThreadId === thread.id)}
         </Tooltip>
@@ -8357,6 +8340,7 @@ export default function Sidebar() {
                         pinnedThreadIdSet={activityPinnedThreadIdSet}
                         visualActiveThreadId={activityVisualActiveThreadId}
                         settledOverrideByThreadId={activitySettledOverrideByThreadId}
+                        childThreadNesting={activityChildThreadNesting}
                         threadsHydrated={threadsHydrated}
                         scopeSelection={activityScope}
                         onScopeSelectionChange={setActivityScope}

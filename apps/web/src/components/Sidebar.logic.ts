@@ -402,6 +402,29 @@ export function groupAgentCreatedChildren(
   return children;
 }
 
+/** Every agent-created descendant of a thread, nearest first; stops at cycles. */
+export function collectAgentCreatedDescendants(
+  threadId: ThreadId,
+  childrenByParent: ReadonlyMap<ThreadId, readonly SidebarThreadSummary[]> | null,
+): SidebarThreadSummary[] {
+  const descendants: SidebarThreadSummary[] = [];
+  if (!childrenByParent) {
+    return descendants;
+  }
+  const seen = new Set<ThreadId>([threadId]);
+  const queue = [...(childrenByParent.get(threadId) ?? [])];
+  for (let index = 0; index < queue.length; index += 1) {
+    const thread = queue[index]!;
+    if (seen.has(thread.id)) {
+      continue;
+    }
+    seen.add(thread.id);
+    descendants.push(thread);
+    queue.push(...(childrenByParent.get(thread.id) ?? []));
+  }
+  return descendants;
+}
+
 /**
  * Reorders threads depth-first so agent-created threads (synara_mcp) sit under the thread that
  * created them. A thread whose creator is not in `threads`, or that is in `detachedIds` (pinned

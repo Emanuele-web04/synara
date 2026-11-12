@@ -138,6 +138,8 @@ function renderActivity(input: {
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   threadsHydrated?: boolean;
+  /** Turns on agent-created child nesting, with the fold state kept in the harness. */
+  nestChildThreads?: boolean;
   /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
   scope?: {
     selection: ActivityScopeSelection;
@@ -151,6 +153,9 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
+  const [collapsedParentIds, setCollapsedParentIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
   return (
     <SidebarActivityView
       threads={input.threads}
@@ -185,6 +190,19 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       renderThreadHoverCard={input.renderThreadHoverCard ?? (() => null)}
       onCreateChat={() => {}}
       onAddProject={() => {}}
+      childThreadNesting={
+        input.nestChildThreads
+          ? {
+              collapsedParentIds,
+              onToggleCollapsed: (threadId) =>
+                setCollapsedParentIds((current) => {
+                  const next = new Set(current);
+                  if (!next.delete(threadId)) next.add(threadId);
+                  return next;
+                }),
+            }
+          : null
+      }
     />
   );
 }
@@ -317,6 +335,46 @@ describe("SidebarActivityView", () => {
     remoteFixture.open.mockClear();
     remoteFixture.href = "/";
     document.body.innerHTML = "";
+  });
+
+  it("folds agent-created children under their creator and ranks the family by its most urgent child", async () => {
+    const parent = makeThread(1, { title: "Refactor sidebar nesting" });
+    const agentChild = (index: number, overrides: Partial<SidebarThreadSummary>) =>
+      makeThread(index, {
+        creationSource: "synara_mcp",
+        sourceThreadId: parent.id,
+        ...overrides,
+      });
+    const running = agentChild(2, { title: "Audit Activity feed", hasLiveTailWork: true });
+    const waiting = agentChild(3, { title: "Fix pinned row indent", hasPendingApprovals: true });
+    const done = agentChild(4, { title: "Check Windows paths" });
+    await render(
+      <SidebarProvider>
+        {renderActivity({
+          threads: [parent, running, waiting, done],
+          resolveThreadStatus: realThreadStatus,
+          nestChildThreads: true,
+        })}
+      </SidebarProvider>,
+    );
+
+    // The waiting child lifts its parent into Priority; children never get their own rows.
+    await vi.waitFor(() => expect(activityLayout()).toEqual(["# Priority", "activity-thread-1"]));
+    const childRowIds = () =>
+      [...document.querySelectorAll('[data-testid^="activity-child-thread-"]')].map((element) =>
+        element.getAttribute("data-testid")!.replace("activity-child-thread-activity-thread-", ""),
+      );
+    expect(childRowIds()).toEqual(["2", "3"]);
+
+    // Quiet children wait behind "+1 done".
+    await page.getByRole("button", { name: "+1 done" }).click();
+    await vi.waitFor(() => expect(childRowIds()).toEqual(["2", "3", "4"]));
+
+    // Folding hides the children; the chip and summary carry the urgent one.
+    await page.getByRole("button", { name: "Hide 3 child threads" }).click();
+    await vi.waitFor(() => expect(childRowIds()).toEqual([]));
+    await expect.element(page.getByRole("button", { name: "Show 3 child threads" })).toBeVisible();
+    await expect.element(page.getByText("1 needs you")).toBeVisible();
   });
 
   it("keeps remote pinned rows in the feed without sending them to local actions", async () => {

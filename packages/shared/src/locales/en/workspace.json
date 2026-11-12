@@ -1036,7 +1036,16 @@
   "unknownSpace": "Unknown space",
   "childThreadCount_one": "{{count}} child thread",
   "childThreadCount_other": "{{count}} child threads",
-  "childThreadClusterCount_one": "{{count}} thread",
-  "childThreadClusterCount_other": "{{count}} threads",
-  "toggleChildThreads": "Toggle child threads"
+  "showChildThreads_one": "Show {{count}} child thread",
+  "showChildThreads_other": "Show {{count}} child threads",
+  "hideChildThreads_one": "Hide {{count}} child thread",
+  "hideChildThreads_other": "Hide {{count}} child threads",
+  "childThreadsWaiting_one": "{{count}} needs you",
+  "childThreadsWaiting_other": "{{count}} need you",
+  "childThreadsUnread_one": "{{count}} new",
+  "childThreadsUnread_other": "{{count}} new",
+  "childThreadsWorking_one": "{{count}} running",
+  "childThreadsWorking_other": "{{count}} running",
+  "childThreadsDoneCount_one": "+{{count}} done",
+  "childThreadsDoneCount_other": "+{{count}} done"
 }
