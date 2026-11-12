@@ -324,23 +324,40 @@ five of them GitHub could not acquire a hosted macOS runner: the icon compile on
 `macos-26` (3 times), macOS Cua preparation on `macos-15` (3 jobs) and one macOS
 packaging leg.
 
-None of the changes below has been measured on hosted runners yet. The
-numbers are the audit's baseline; the next release is the first measurement.
 Signing, notarization, stapling, provenance and the quality and publication
-gates are unchanged.
+gates are unchanged. Two build-only release runs of version 1.5.2
+(`publish_release=false`, signed and notarized),
+[A1](https://github.com/Emanuele-web04/synara/actions/runs/43120433988) and
+[A2](https://github.com/Emanuele-web04/synara/actions/runs/43123721500), measured
+the changes against the
+[v1.5.2 tag run](https://github.com/Emanuele-web04/synara/actions/runs/43100375555).
+Seconds:
 
 ```text
-Change                          Baseline (audit)                         Effect expected, unmeasured
-Linux arm64 Cua pre-warm        cold cargo build 271 s (job 327 s);      arm64 leg restores like the others;
-                                packaging started at 417 s, not ~219 s   packaging no longer waits for it
-Icon catalog restore on Linux   macos-26 job (34 s of work); 3 of the    no macOS runner on an exact hit
-                                lost acquisitions
-DMG notarization || update ZIP  update-zip 40-50 s after DMG wait        up to 40-50 s per macOS leg
-                                (119-179 s), serial
-AppSnap || production deps      appsnap 18-24 s, then deps 12-14 s       up to 12-14 s per macOS leg
-Intel qualification install     75 s, all workspaces but marketing       smaller install; see below
-Release checkout depth          32-38 s per leg, Windows p90 141 s       shallow fetch of one commit
+Segment                                              v1.5.2     A1     A2
+macOS arm64 packaging job                               756    675    721
+macOS arm64 Build desktop artifact step                 602    546    574
+macOS x64 packaging job                                 755    784    925
+macOS x64 Build desktop artifact step                   660    664    699
+macOS x64 Install dependencies (unchanged here)          21     31     77
+Windows packaging job                                   617    718    670
+Windows Build desktop artifact (unchanged; p50 406)     337    418    403
+Linux x64 packaging job                                 283    159    156
+Linux arm64 packaging job                               177    151    149
+Intel qualify job                                       151    110    154
+Intel qualify install step                               68     36     43
+First packaging leg start after run creation            415    548    490
+Whole run (v1.5.2 includes 67 s of publication)        1474   1450   1584
 ```
+
+The macOS x64 leg did not get faster in these two samples. Hosted-runner
+variance on that leg is larger than the expected saving: its install step, which
+this work did not change, took 21, 31 and 77 s. The Windows build step, also
+unchanged, ranged 337–418 s against a 20-release p50 of 406 s. No overall
+release percentage is claimed. A1 and A2 also ran the native-helper overlap that
+was then reverted (see the rejected experiments), so their macOS build steps
+include it. Packaging started later in both branch runs because they compiled
+every Cua driver from source and took the icon miss path (see below).
 
 ### Linux arm64 Cua pre-warm
 
@@ -351,6 +368,10 @@ now also runs `ubuntu-24.04-arm`/`arm64`, the pair the release matrix uses.
 `scripts/lib/release-build-scope.test.ts` fails when the producer's runner and
 target pairs stop matching the release Cua matrix. The cache key is unchanged
 in shape, so the first hit needs one successful producer run on `main`.
+
+The pre-warm is still unmeasured. It takes effect only after the producer has
+run on `main`. Both branch runs built Cua from source on all four legs (296–468 s each),
+because changing `find-cua-artifact.mjs` changed every Cua key.
 
 ### macOS icon catalog
 
@@ -392,6 +413,11 @@ Changing `find-cua-artifact.mjs` changes every Cua cache key. Its push to `main`
 triggers the producer; let that run finish before the next tag, or that release
 compiles Cua from source once.
 
+The hit path is still unmeasured: it needs a producer run on `main`. Both branch
+runs took the miss path. The Linux restore job took 12–16 s, then the `macos-26`
+compile took 38 s after a 130 s queue in A1 and 31 s after a 3 s queue in A2.
+Both runs packaged and qualified with the compiled catalog.
+
 ### macOS Cua preparation stays on macOS
 
 Running exact-hit macOS Cua restores on Linux was evaluated and rejected. The
@@ -418,29 +444,35 @@ dmg-notary-wait                     119-179 s
 update-zip                           40-50 s
 ```
 
-`scripts/build-desktop-artifact.ts` now runs two pairs concurrently through
-`scripts/lib/settle-concurrently.ts`. Both sides of a pair always finish before
-a failure is reported, so no subprocess keeps writing into the stage.
-
-- Signed DMG finalization and the update ZIP. The app is notarized and stapled
-  during packaging; DMG finalization verifies, notarizes and staples only the
-  disk image, while the ZIP reads that app and writes its own ZIP and feed.
-  `ditto` and `unzip` now run asynchronously, so a long archive no longer blocks
-  the event loop that watches `notarytool wait`; the two short `codesign`
-  checks stay synchronous. Signature checks, ZIP contents, names and the feed
-  are unchanged. Unsigned builds stay serial.
-- The AppSnap helper and window-material builds and the staged production
-  install. The native builds compile repository sources in private temporary
-  directories and write only `apps/desktop/native/*/build` in the stage; the
-  install writes `node_modules` from copied manifests. Neither reads the other's
-  output or uses a keychain.
+`scripts/build-desktop-artifact.ts` now runs signed DMG finalization and the
+update ZIP concurrently through `scripts/lib/settle-concurrently.ts`. Both sides
+always finish before a failure is reported, so no subprocess keeps writing into
+the stage. The app is notarized and stapled during packaging; DMG finalization
+verifies, notarizes and staples only the disk image, while the ZIP reads that
+app and writes its own ZIP and feed. `ditto` and `unzip` now run asynchronously,
+so a long archive no longer blocks the event loop that watches
+`notarytool wait`; the two short `codesign` checks stay synchronous. Signature
+checks, ZIP contents, names and the feed are unchanged. Unsigned builds stay
+serial. Running the native helper builds beside the production install was
+measured and reverted; see the rejected experiments below.
 
 Each stage keeps its `[build-timing]` line, so those lines now overlap. The new
-`dmg-notarization-and-update-zip` and `native-helpers-and-production-dependencies`
-lines record each pair's wall time. Compare them with the sum of their stages
-in the audit. `update-zip` may include up to the DMG upload (17–24 s) because
-that upload still runs synchronously. `mac-update-zip-finalize.test.ts` fails
-if the ZIP blocks the event loop again.
+`dmg-notarization-and-update-zip` line records the pair's wall time.
+`update-zip` may include up to the DMG upload (17–24 s) because that upload
+still runs synchronously. `mac-update-zip-finalize.test.ts` fails if the ZIP
+blocks the event loop again. Before is the serial sum of `dmg-notary-upload`,
+`dmg-notary-wait` and `update-zip`; after is the pair's wall time (seconds):
+
+```text
+Leg      v1.5.0  v1.5.1  v1.5.2      A1    A2
+arm64       234     186     196     155   145
+x64           -       -     194     145   178
+```
+
+Other macOS stages were noisy and unchanged by this work: `electron-packaging`
+took 487 / 434 / 358 s on arm64 before (v1.5.0 / v1.5.1 / v1.5.2) and 355 / 392 s
+after, and 425 s on x64 before (v1.5.2) and 475 / 450 s after.
+`app-signing-and-preparation` ranged 77–161 s in both periods.
 
 ### Intel qualification install
 
@@ -458,8 +490,9 @@ all but marketing (previous)                     1404     2.7 GB      resolve
 ```
 
 The smoke command is unchanged. `release-smoke.ts` rejects a filtered
-verification install without both workspaces. The Intel install time has not
-been measured.
+verification install without both workspaces. On hosted Intel runners the
+install step took 68 s in v1.5.2 and 36 and 43 s in A1 and A2; the whole job
+took 151, 110 and 154 s.
 
 ### Release checkout depth
 
@@ -469,7 +502,17 @@ bytes); provenance and checkpoint scripts use no git history. Packaging now
 fetches one commit, like the quality jobs already do. `prepare_cua` keeps full
 history only for the paired Cua benchmark, whose script archives an older
 baseline commit; `release-smoke.ts` evaluates that expression. Preflight's tag
-check, `finalize` and `cut_next_beta` are unchanged.
+check, `finalize` and `cut_next_beta` are unchanged. Packaging checkout steps
+(seconds):
+
+```text
+Leg            v1.5.2   A1   A2
+macOS arm64        45    8   10
+macOS x64          26   10   20
+Windows            39   11   12
+Linux x64          50    6    6
+Linux arm64        35    5    3
+```
 
 ## Rejected experiments and external-service limits
 
@@ -499,6 +542,25 @@ An earlier [timing-aware server sequencer](https://github.com/Emanuele-web04/syn
 was also rejected. It preserved the then-collected suite but worsened slower-shard
 time 9.9% and combined time 2.1%. The prototype/timing hints remain removed. The
 accepted server change uses Vitest's native shard assignment instead.
+
+Running the macOS AppSnap helper and window-material builds concurrently with the
+staged production install was measured in release runs
+[A1](https://github.com/Emanuele-web04/synara/actions/runs/43120433988) and
+[A2](https://github.com/Emanuele-web04/synara/actions/runs/43123721500) and
+reverted in November 2026. The stages share no files, but they contend for CPU
+on the hosted runners. Seconds, serial sum of `appsnap-helper`,
+`window-material-addon` and `production-dependencies` before, concurrent wall
+time after, with the slowed parts in brackets:
+
+```text
+Leg     Serial before (v1.5.0 / v1.5.1 / v1.5.2)   Concurrent after (A1 / A2)
+arm64   40 / 31 / 38                               25 (24+1+11) / 31 (29+1+15)
+x64     - / - / 31                                 38 (36+2+20) / 58 (55+3+31)
+```
+
+It gained about 10 s on arm64 and lost 7–27 s on x64, the leg that, with Intel
+qualification, is Stable's critical path. The three stages run serially again,
+in their original order.
 
 Root-only installation measured 2.07 seconds but cannot own release smoke. Root +
 shared also failed because Bun's isolated scripts links were absent. Only the

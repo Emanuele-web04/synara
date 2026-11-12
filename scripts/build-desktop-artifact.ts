@@ -1287,6 +1287,31 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ),
     );
   }
+  if (options.platform === "mac") {
+    yield* timedBuildStage(
+      "appsnap-helper",
+      stageMacNativeBuild(
+        "AppSnap helper",
+        "build-appsnap-helper.mjs",
+        MAC_APPSNAP_HELPER_STAGE_PATH,
+        stageAppDir,
+        options.arch,
+        options.verbose,
+      ),
+    );
+    yield* timedBuildStage(
+      "window-material-addon",
+      stageMacNativeBuild(
+        "window-material addon",
+        "build-window-material-addon.mjs",
+        MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
+        stageAppDir,
+        options.arch,
+        options.verbose,
+      ),
+    );
+  }
+
   yield* timedBuildStage(
     "cloudflared-provision",
     Effect.tryPromise({
@@ -1345,7 +1370,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     },
   };
 
-  const productionDependencies = timedBuildStage(
+  yield* timedBuildStage(
     "production-dependencies",
     installFrozenStageDependencies(
       repoRoot,
@@ -1355,42 +1380,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.verbose,
     ),
   );
-  if (options.platform === "mac") {
-    // The native builds compile repository sources in private temporary
-    // directories and write only apps/desktop/native/*/build in the stage. The
-    // staged install reads copied manifests and writes node_modules. Neither
-    // reads the other's output, signs with a keychain, or touches resources.
-    const nativeHelpers = Effect.andThen(
-      timedBuildStage(
-        "appsnap-helper",
-        stageMacNativeBuild(
-          "AppSnap helper",
-          "build-appsnap-helper.mjs",
-          MAC_APPSNAP_HELPER_STAGE_PATH,
-          stageAppDir,
-          options.arch,
-          options.verbose,
-        ),
-      ),
-      timedBuildStage(
-        "window-material-addon",
-        stageMacNativeBuild(
-          "window-material addon",
-          "build-window-material-addon.mjs",
-          MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
-          stageAppDir,
-          options.arch,
-          options.verbose,
-        ),
-      ),
-    );
-    yield* timedBuildStage(
-      "native-helpers-and-production-dependencies",
-      settleConcurrently(nativeHelpers, productionDependencies),
-    );
-  } else {
-    yield* productionDependencies;
-  }
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
