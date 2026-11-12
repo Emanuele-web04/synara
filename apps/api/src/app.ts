@@ -16,6 +16,7 @@ import { createAvatarStorage } from "./avatarStorage";
 import type { ApiConfig } from "./config";
 import { createDb } from "./db";
 import { createIdentityAdapters } from "./identity";
+import type { PerfRecorder } from "./perf";
 import type { IdentityAdapters } from "./identity/interfaces";
 import { AVATAR_MAX_BYTES, createV1Routes } from "./routes/v1";
 
@@ -34,7 +35,11 @@ export const API_MAX_BODY_BYTES = 64 * 1024;
 
 export async function createApp(
   config: ApiConfig,
-  dependencies: { createTunnels?: typeof createTunnelCoordinator } = {},
+  dependencies: {
+    createTunnels?: typeof createTunnelCoordinator;
+    /** Opt-in instrumentation (SYNARA_API_PERF=1); absent means no overhead and no headers. */
+    perf?: PerfRecorder;
+  } = {},
 ): Promise<{
   app: Hono;
   identity: IdentityAdapters;
@@ -45,6 +50,7 @@ export async function createApp(
   flushBilling?: () => Promise<void>;
 }> {
   const { db, pool } = createDb(config.databaseUrl);
+  dependencies.perf?.instrumentPool(pool);
   const identity = await createIdentityAdapters(config, db);
   const avatarStorage = config.avatarStorage
     ? createAvatarStorage(config.avatarStorage)
@@ -98,6 +104,7 @@ export async function createApp(
         })
       : undefined;
   const app = new Hono();
+  if (dependencies.perf) app.use("*", dependencies.perf.middleware);
 
   // Before the routes, so no handler ever parses an oversized body. 413 in
   // the documented error shape: `validation_failed` because the cure is the

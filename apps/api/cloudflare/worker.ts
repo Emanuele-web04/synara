@@ -41,6 +41,7 @@ type OptionalSecrets = Partial<
     | "REMOTE_TEST_USER_IDS"
     | "REMOTE_TEST_ADDITIONAL_USER_IDS"
     | "REMOTE_BETA_ACCESS_ENABLED"
+    | "SYNARA_API_PERF"
     | "S3_ENDPOINT"
     | "S3_BUCKET"
     | "S3_ACCESS_KEY_ID"
@@ -97,6 +98,8 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
           "CLOUDFLARE_TUNNEL_DOMAIN",
           "REMOTE_TEST_USER_IDS",
           "REMOTE_BETA_ACCESS_ENABLED",
+          // Opt-in request timings; unset keeps the API uninstrumented.
+          "SYNARA_API_PERF",
           "S3_ENDPOINT",
           "S3_BUCKET",
           "S3_ACCESS_KEY_ID",

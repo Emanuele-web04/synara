@@ -2,13 +2,22 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app";
 import { loadApiConfig } from "./config";
 import { runMigrations } from "./db/migrate";
+import { createPerfRecorder, isPerfEnabled } from "./perf";
 
 async function main(): Promise<void> {
   const config = loadApiConfig(process.env);
   await runMigrations(config.databaseUrl);
 
-  const { app, identity, pool, cleanup, flushLiveActivities, flushBilling } =
-    await createApp(config);
+  // Opt-in (SYNARA_API_PERF=1): per-route timings in the log and a Server-Timing header.
+  const perf = isPerfEnabled(process.env) ? createPerfRecorder() : undefined;
+  perf?.instrumentFetch();
+  const stopPerfReporting = perf?.startReporting();
+  const timed = <A>(name: string, run: () => Promise<A>) => (perf ? perf.job(name, run) : run());
+
+  const { app, identity, pool, cleanup, flushLiveActivities, flushBilling } = await createApp(
+    config,
+    perf ? { perf } : {},
+  );
 
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
@@ -18,7 +27,7 @@ async function main(): Promise<void> {
   let maintenance: Promise<void> | undefined;
   const sweep = () => {
     if (maintenance) return;
-    maintenance = cleanup()
+    maintenance = timed("cleanup", cleanup)
       .catch(() => console.warn("[api] Maintenance pending"))
       .finally(() => {
         maintenance = undefined;
@@ -27,7 +36,7 @@ async function main(): Promise<void> {
   let pushMaintenance: Promise<void> | undefined;
   const pushSweep = () => {
     if (pushMaintenance) return;
-    pushMaintenance = flushLiveActivities()
+    pushMaintenance = timed("push-flush", flushLiveActivities)
       .catch(() => console.warn("[api] Push delivery pending"))
       .finally(() => {
         pushMaintenance = undefined;
@@ -37,7 +46,7 @@ async function main(): Promise<void> {
   let billingMaintenance: Promise<void> | undefined;
   const billingSweep = () => {
     if (shuttingDown || !flushBilling || billingMaintenance) return;
-    billingMaintenance = flushBilling()
+    billingMaintenance = timed("billing-flush", flushBilling)
       .catch(() => console.warn("[api] Billing reconciliation pending"))
       .finally(() => {
         billingMaintenance = undefined;
@@ -62,6 +71,7 @@ async function main(): Promise<void> {
     clearInterval(cleanupTimer);
     clearInterval(pushTimer);
     if (billingTimer) clearInterval(billingTimer);
+    stopPerfReporting?.();
     await pushMaintenance;
     await billingMaintenance;
     await maintenance;
