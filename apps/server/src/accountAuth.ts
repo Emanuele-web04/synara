@@ -26,7 +26,6 @@ import {
 import {
   AccountApiError,
   ACCOUNT_URL_ENV_NAME,
-  createAccountClient,
   GRANT_REQUEST_TIMEOUT_MS,
   OrganizationRequiredError,
   resolveConfiguredAccountUrl,
@@ -35,6 +34,7 @@ import {
 import { Effect, Path } from "effect";
 
 import { withCredentialFileLock } from "./accountCredentialLock";
+import { createServerAccountClient } from "./accountHttp";
 import { createFileStringExclusively, writeFileStringAtomically } from "./atomicWrite";
 import { deriveServerPaths } from "./config";
 import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
@@ -469,7 +469,7 @@ export interface AccountFlowOptions {
 }
 
 function clientFor(accountUrl: string, injected: AccountClient | undefined): AccountClient {
-  return injected ?? createAccountClient({ baseUrl: accountUrl });
+  return injected ?? createServerAccountClient(accountUrl);
 }
 
 /**

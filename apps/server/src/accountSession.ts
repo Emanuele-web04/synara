@@ -65,7 +65,6 @@ import type {
 } from "@synara/contracts";
 import {
   AccountApiError,
-  createAccountClient,
   DEFAULT_ACCOUNT_URL,
   resolveAccountUrl,
   type AccountClient,
@@ -103,6 +102,7 @@ import {
   startSsoCallbackListener,
   type SsoCallbackListener,
 } from "./accountSsoCallback";
+import { createServerAccountClient } from "./accountHttp";
 import { createSignInTiming, type SignInTiming } from "./accountSignInTiming";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
 import { noteRemoteAccessGranted, nudgeHostAuthorization } from "./hostConnectivitySignals";
@@ -398,7 +398,7 @@ export function createAccountSession(
   }
 
   function clientFor(accountUrl: string): AccountClient {
-    return options.client ?? createAccountClient({ baseUrl: accountUrl });
+    return options.client ?? createServerAccountClient(accountUrl);
   }
 
   /**

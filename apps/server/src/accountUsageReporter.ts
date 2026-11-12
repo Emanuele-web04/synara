@@ -34,7 +34,8 @@ import {
   type UsageModelBucket,
   type UsageSkillBucket,
 } from "@synara/contracts";
-import { createAccountClient, resolveAccountUrl, type AccountClient } from "@synara/shared/account";
+import { resolveAccountUrl, type AccountClient } from "@synara/shared/account";
+import { createServerAccountClient } from "./accountHttp";
 
 import {
   readAccountCredentials,
@@ -803,7 +804,7 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       )
         throw new Error("Usage account changed");
       const accountUrl = stored.accountUrl ?? deps.accountUrl ?? resolveAccountUrl();
-      const client = deps.client ?? createAccountClient({ baseUrl: accountUrl });
+      const client = deps.client ?? createServerAccountClient(accountUrl);
       await withFreshAccessToken(
         { baseDir: credentialDir, client, expectedIdentity: stored },
         async (accessToken) => {

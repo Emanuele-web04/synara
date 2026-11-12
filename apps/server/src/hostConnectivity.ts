@@ -15,7 +15,8 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
 import { acceptRemotePairing } from "./remotePairing/gateway";
 
-import { AccountApiError, createAccountClient } from "@synara/shared/account";
+import { AccountApiError } from "@synara/shared/account";
+import { createServerAccountClient } from "./accountHttp";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   loadRemoteTlsIdentity,
@@ -84,7 +85,7 @@ export async function startHostConnectivity(
   const identity = await readHostIdentity(options.config.hostIdentityPath);
   if (!identity) return async () => {};
   const environmentId = await resolveEnvironmentId(options.config.baseDir, options.config.devUrl);
-  const client = createAccountClient({ baseUrl: credentials.accountUrl });
+  const client = createServerAccountClient(credentials.accountUrl);
   const hostProof = () =>
     mintHostProof({
       identity,

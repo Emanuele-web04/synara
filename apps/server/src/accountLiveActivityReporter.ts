@@ -8,6 +8,7 @@ import {
   resolveEnvironmentId,
 } from "./accountAuth";
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
+import { accountFetch } from "./accountHttp";
 import { exponentialBackoffMs, jitterMs } from "./backoff";
 import { accountLiveActivityEnabled } from "./remoteFeaturePolicy";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
@@ -239,7 +240,7 @@ export function createAccountLiveActivityReporter(options: {
     });
     const url = `${accountApiIssuer(account.accountUrl)}/hosts/${encodeURIComponent(account.hostId)}/live-activities`;
     const headers = { authorization: `HostProof ${proof}`, "content-type": "application/json" };
-    const response = await fetch(url, {
+    const response = await accountFetch(url, {
       headers,
       redirect: "error",
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
@@ -324,7 +325,7 @@ export function createAccountLiveActivityReporter(options: {
     if (lastReport?.fingerprint === fingerprint && performance.now() - lastReport.at < HEARTBEAT_MS)
       return WATCHED_POLL_MS;
     const sentAt = performance.now();
-    const updated = await fetch(url, {
+    const updated = await accountFetch(url, {
       method: "PUT",
       headers,
       body: JSON.stringify(snapshot),
