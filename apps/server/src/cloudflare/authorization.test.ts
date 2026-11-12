@@ -4,6 +4,7 @@ import type { AccountErrorCode, HostAuthorizationSnapshot } from "@synara/contra
 import {
   REMOTE_AUTHORIZATION_LEASE_MS,
   REMOTE_PERMANENT_DENIAL_MS,
+  requestAuthorizationSnapshot,
   startRemoteAuthorization,
 } from "./authorization";
 
@@ -571,5 +572,106 @@ describe("remote authorization lease", () => {
       "retire",
     ]);
     expect(poll.available()).toBe(false);
+  });
+});
+
+describe("authorization snapshot request", () => {
+  /** A real account client whose responses come from `answers`, in order; "stall" hangs until aborted. */
+  function clientAnswering(answers: Array<"stall" | "reset" | Response>) {
+    const fetch = vi.fn(
+      (_input: unknown, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const answer = answers.shift() ?? "stall";
+          if (answer === "reset") return reject(new TypeError("fetch failed"));
+          if (answer !== "stall") return resolve(answer);
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), {
+            once: true,
+          });
+        }),
+    );
+    const client = createAccountClient({
+      baseUrl: "https://account.example.test",
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+    const request = (signal: AbortSignal) =>
+      client.getHostAuthorization("fixture-host-proof", "fixture-host", signal);
+    return { fetch, request };
+  }
+
+  it("gives up on a stalled request after the attempt timeout and retries it once at once", async () => {
+    const { fetch, request } = clientAnswering(["stall", Response.json(snapshot)]);
+    const startedAt = performance.now();
+    await expect(
+      requestAuthorizationSnapshot(request, {
+        signal: new AbortController().signal,
+        attemptTimeoutMs: 50,
+      }),
+    ).resolves.toEqual(snapshot);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    // One attempt timeout, not the client's general 15 s bound.
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it("retries a dropped connection once", async () => {
+    const { fetch, request } = clientAnswering(["reset", Response.json(snapshot)]);
+    await expect(
+      requestAuthorizationSnapshot(request, { signal: new AbortController().signal }),
+    ).resolves.toEqual(snapshot);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails as a timeout after two stalled attempts", async () => {
+    const { fetch, request } = clientAnswering(["stall", "stall"]);
+    await expect(
+      requestAuthorizationSnapshot(request, {
+        signal: new AbortController().signal,
+        attemptTimeoutMs: 20,
+      }),
+    ).rejects.toMatchObject({ status: 408 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Denial confirmation and refusal backoff count answers; a retry must not add any.
+  it.each([
+    [403, "not_host_owner"],
+    [403, "subscription_required"],
+    [404, "host_not_found"],
+    [503, "internal_error"],
+  ])("returns a %i %s answer without retrying", async (status, error) => {
+    const { fetch, request } = clientAnswering([
+      Response.json({ error, message: "Refused" }, { status }),
+      Response.json(snapshot),
+    ]);
+    await expect(
+      requestAuthorizationSnapshot(request, { signal: new AbortController().signal }),
+    ).rejects.toMatchObject({ status, code: error });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("passes on an answer that lands as the attempt bound elapses", async () => {
+    const attempt = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      throw new AccountApiError({
+        status: 403,
+        code: "subscription_required",
+        message: "Refused",
+      });
+    });
+    await expect(
+      requestAuthorizationSnapshot(attempt, {
+        signal: new AbortController().signal,
+        attemptTimeoutMs: 10,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "subscription_required" });
+    expect(attempt).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry once its owner has stopped", async () => {
+    const { fetch, request } = clientAnswering(["stall", Response.json(snapshot)]);
+    const stop = new AbortController();
+    const pending = requestAuthorizationSnapshot(request, { signal: stop.signal });
+    stop.abort();
+    await expect(pending).rejects.toMatchObject({ status: 408 });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

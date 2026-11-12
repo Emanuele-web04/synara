@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SaveInboxRecapRequest } from "@synara/contracts";
-import { createAccountClient } from "@synara/shared/account";
+import { createServerAccountClient } from "./accountHttp";
 import { ACCOUNT_INBOX_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { recapInputForRange, resolveInboxDay } from "@synara/shared/inboxDay";
 import { accountStateDirectory, readAccountCredentials, withFreshAccessToken } from "./accountAuth";
@@ -47,7 +47,7 @@ export function createAccountInboxReporter(options: {
       .digest("hex");
     const cursorPath = join(credentialDir, "inbox-sync", `${identity}.json`);
     const today = resolveInboxDay(Date.now());
-    const client = createAccountClient({ baseUrl: account.accountUrl });
+    const client = createServerAccountClient(account.accountUrl);
     let cursor: number;
     let eventSequence = 0;
     try {

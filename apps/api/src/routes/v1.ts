@@ -741,11 +741,26 @@ export function createV1Routes(deps: {
     let user: IdentityUser;
     let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
-      user = await getCachedUser(userLookup, session.userId, {
-        fresh: options?.freshMembership === true,
-      });
-      requestUsers.set(c, { userId: session.userId, user });
-      scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      if (options?.freshMembership === true) {
+        // Both reads are live and independent; only provisioning a first
+        // workspace needs the email, and it waits for the user read. The
+        // user read keeps precedence: its failure answers even if the
+        // membership read also failed.
+        const userRead = getCachedUser(userLookup, session.userId, { fresh: true });
+        const scopeRead = grants.resolveEnvironmentScope(
+          session,
+          async () => (await userRead).email,
+          options,
+        );
+        scopeRead.catch(() => {});
+        user = await userRead;
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await scopeRead;
+      } else {
+        user = await getCachedUser(userLookup, session.userId, { fresh: false });
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      }
     } catch (error) {
       if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
@@ -2033,13 +2048,13 @@ export function createV1Routes(deps: {
     c.header("Cache-Control", "no-store");
     if (!deps.liveActivities) return c.json({ turns: [] });
     try {
-      const host = await hostKeys.withAuthenticatedHost(
+      // A read-only poll: the watch list it returns changes nothing, so it
+      // verifies the host without a row lock and takes the cached membership
+      // like every other read.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (host) => host,
       );
-      // A read-only poll: the watch list it returns changes nothing, so it
-      // takes the cached membership like every other read.
       await requireRemoteHostMembership(host, { freshMembership: false });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
@@ -2251,25 +2266,23 @@ export function createV1Routes(deps: {
 
   v1.get("/hosts/:id/authorization", async (c) => {
     try {
-      // The host row lock is released before the provider call: a WorkOS
-      // round trip can take up to its 15s timeout, and holding an exclusive
-      // lock across it would stall every grant/patch/unlink for that host —
-      // and, with a small pool, the whole API. The snapshot is advisory
-      // (the host re-verifies on signal), so a lock-free read is correct.
-      const host = await hostKeys.withAuthenticatedHost(
+      // No host row lock: a WorkOS round trip can take up to its 15s timeout,
+      // and holding an exclusive lock across it would stall every
+      // grant/patch/unlink for that host — and, with a small pool, the whole
+      // API. The snapshot is advisory (the host re-verifies on signal), so a
+      // lock-free verified read is correct.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (authenticated) => authenticated,
       );
-      let organizations: OrganizationRef[];
-      try {
-        organizations = await grants.listUserOrganizations(host.ownerUserId, {
-          freshMembership: true,
-        });
-      } catch (error) {
-        console.error("[api] host authorization membership lookup failed:", error);
-        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
-      }
+      // The live membership read and the revocation snapshot are independent,
+      // so they run together. Their results are applied in the old order: a
+      // provider failure answers 502 before a database failure surfaces.
+      // Billing still waits for ownership: a lost owner must never cause a
+      // commercial provider call.
+      const membershipRead = grants.listUserOrganizations(host.ownerUserId, {
+        freshMembership: true,
+      });
       // Device thumbprints revoked within the session-credential lifetime:
       // any older revocation cannot still have a live session to kill, and a
       // host that missed the push event recovers from this list on reconnect.
@@ -2281,7 +2294,7 @@ export function createV1Routes(deps: {
       // tenants' churn from leaking or consuming the bounded snapshot.
       // One fresh database snapshot and one result description per poll, including
       // empty feeds. Keep each source's tenant scope, retention and bound intact.
-      const revocations = await unionAll(
+      const revocationsQuery = unionAll(
         db
           .select({
             jkt: sql<string | null>`${deviceRows.jkt}`,
@@ -2334,6 +2347,18 @@ export function createV1Routes(deps: {
           .orderBy(desc(sql`max(${revocationEvents.createdAt})`))
           .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
       );
+      // Drizzle queries are lazy; resolving it starts the statement now.
+      const revocationsRead = Promise.resolve(revocationsQuery);
+      // Awaited below in precedence order; neither may reject unobserved meanwhile.
+      for (const pending of [membershipRead, revocationsRead]) pending.catch(() => {});
+      let organizations: OrganizationRef[];
+      try {
+        organizations = await membershipRead;
+      } catch (error) {
+        console.error("[api] host authorization membership lookup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+      }
+      const revocations = await revocationsRead;
       const revokedDeviceJkts: string[] = [];
       const seenRevokedDevices = new Set<string>();
       // Raw timestamp/aggregate expressions can arrive as strings, unlike
@@ -2837,22 +2862,27 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.models) {
-        await tx.insert(usageModelStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          provider: bucket.provider,
-          model: bucket.model,
-          // '' is the stored spelling of "no reasoning setting": NULL would
-          // be distinct-per-row under the unique index and duplicate the
-          // bucket on every push.
-          reasoning: bucket.reasoning ?? "",
-          tokens: bucket.tokens,
-          turns: bucket.turns,
-          prompts: bucket.prompts,
-        });
+      // One multi-row INSERT per table (at most USAGE_PUSH_MAX_BUCKETS rows,
+      // well under PostgreSQL's bind-parameter limit). A duplicate key in
+      // the payload still fails the whole push, as the per-row inserts did.
+      if (parsed.models.length > 0) {
+        await tx.insert(usageModelStats).values(
+          parsed.models.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            provider: bucket.provider,
+            model: bucket.model,
+            // '' is the stored spelling of "no reasoning setting": NULL would
+            // be distinct-per-row under the unique index and duplicate the
+            // bucket on every push.
+            reasoning: bucket.reasoning ?? "",
+            tokens: bucket.tokens,
+            turns: bucket.turns,
+            prompts: bucket.prompts,
+          })),
+        );
       }
       if (skillMinutes.length > 0) {
         await tx
@@ -2865,16 +2895,18 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.skills) {
-        await tx.insert(usageSkillStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          name: bucket.name,
-          kind: bucket.kind,
-          runs: bucket.runs,
-        });
+      if (parsed.skills.length > 0) {
+        await tx.insert(usageSkillStats).values(
+          parsed.skills.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            name: bucket.name,
+            kind: bucket.kind,
+            runs: bucket.runs,
+          })),
+        );
       }
     });
 

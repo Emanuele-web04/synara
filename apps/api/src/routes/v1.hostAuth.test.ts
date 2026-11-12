@@ -26,6 +26,7 @@ import { createWorkosIdentityProvider } from "../identity/workos";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createBillingService } from "../billing/service";
 import type { BillingProvider, BillingSnapshot } from "../billing/polar";
+import { createPerfRecorder } from "../perf";
 import { createV1Routes, LINK_APPROVE_RATE_LIMIT_PER_MINUTE } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -822,6 +823,78 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       expect(snapshot.revokedDeviceJkts).toContain(ownerDevice.jkt);
       expect(snapshot.revokedDeviceJkts).toContain(memberDevice.jkt);
       expect(snapshot.revokedDeviceJkts).not.toContain(unrelatedDevice.jkt);
+    });
+
+    it("reads the revocation snapshot while the live membership read is outstanding", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      // A spy without an implementation still calls through and records each statement.
+      const query = vi.spyOn(pool, "query");
+      const statements = () =>
+        query.mock.calls.map(([first]) =>
+          typeof first === "string" ? first : ((first as { text?: string }).text ?? ""),
+        );
+      const membership = workos.holdNext("GET", "/user_management/organization_memberships");
+      try {
+        const pending = app.request(`/api/v1/hosts/${host.id}/authorization`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        await membership.arrived;
+        await vi.waitFor(() =>
+          expect(statements().some((text) => /\bunion all\b/i.test(text))).toBe(true),
+        );
+        membership.release();
+        const response = await pending;
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ ownerInOrg: true });
+      } finally {
+        membership.release();
+        query.mockRestore();
+      }
+    });
+
+    it("verifies the read polls in one round trip without waiting on the host row lock", async () => {
+      const { app, db } = buildApp();
+      const owner = await signIn();
+      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      await db.update(hosts).set({ lastSeenAt: new Date() }).where(eq(hosts.id, host.id));
+      const proof = `HostProof ${await hostProof(host.key, host)}`;
+
+      // Round trips counted by the Phase 0 recorder on a pool it instruments from the start.
+      const perf = createPerfRecorder();
+      const counted = createDb(databaseUrl);
+      perf.instrumentPool(counted.pool);
+      try {
+        const registry = createHostKeyRegistry(counted.db, config.apiPublicUrl);
+        await perf.job("read", () => registry.readAuthenticatedHost(proof, host.id));
+        await perf.job("locked", () =>
+          registry.withAuthenticatedHost(proof, host.id, async (verified) => verified),
+        );
+        const rows = Object.fromEntries(
+          perf.snapshot().rows.map((row) => [row.key, row.dbRoundTripsPerCall]),
+        );
+        // BEGIN, SELECT ... FOR UPDATE, COMMIT before: one SELECT now.
+        expect(rows).toEqual({ "job:read": 1, "job:locked": 3 });
+      } finally {
+        await counted.pool.end();
+      }
+
+      // A mutation holding the row no longer stalls either poll.
+      const holder = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT id FROM hosts WHERE id=$1 FOR UPDATE", [host.id]);
+        for (const path of ["authorization", "live-activities"]) {
+          const response = await app.request(`/api/v1/hosts/${host.id}/${path}`, {
+            headers: { authorization: proof },
+          });
+          expect(response.status).toBe(200);
+        }
+      } finally {
+        await holder.query("ROLLBACK");
+        holder.release();
+      }
     });
 
     it("accepts valid proof and rejects stale expiry, audience, generation, and unlink", async () => {

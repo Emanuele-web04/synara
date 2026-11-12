@@ -9,10 +9,13 @@ vi.mock("@cloudflare/containers", () => ({
       public env: unknown,
     ) {}
     envVars: Record<string, string> = {};
-    startAndWaitForPorts() {
-      return (this.ctx as { start: (env: Record<string, string>) => Promise<void> }).start(
+    onStart() {}
+    renewActivityTimeout() {}
+    async startAndWaitForPorts() {
+      await (this.ctx as { start: (env: Record<string, string>) => Promise<void> }).start(
         this.envVars,
       );
+      this.onStart();
     }
     stop(signal: string) {
       return (this.ctx as { stop: (signal: string) => Promise<void> }).stop(signal);
@@ -186,6 +189,10 @@ function refresh(
     ...(method === "POST" ? { body: '{"refreshToken":"synthetic-refresh-token"}' } : {}),
     headers: { "content-type": "application/json" },
   });
+}
+
+function instance(method = "GET") {
+  return new Request("https://api.example/api/v1/instance", { method });
 }
 
 function runtime(running = false) {
@@ -497,6 +504,101 @@ describe("Cloudflare account API container configuration", () => {
       expect(response.status).toBe(503);
       expect(await response.text()).not.toContain("synthetic-private");
       expect(state.forward).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("GET /api/v1/instance", () => {
+    const instanceBody = '{"version":"1","authMode":"workos","remoteBillingEnforced":false}';
+    function instanceRuntime() {
+      vi.spyOn(console, "info").mockImplementation(() => {});
+      const state = runtime();
+      state.forward.mockImplementation(async () =>
+        Response.json(JSON.parse(instanceBody), {
+          headers: { "Cache-Control": "no-store", "Server-Timing": "app;dur=1" },
+        }),
+      );
+      return state;
+    }
+    async function expectInstance(response: Response) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.text()).toBe(instanceBody);
+    }
+
+    it("is answered from the Durable Object after the first read", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      const renew = vi.spyOn(container, "renewActivityTimeout");
+      for (let read = 0; read < 3; read += 1)
+        await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(1);
+      expect(state.start).toHaveBeenCalledTimes(1);
+      expect(renew).toHaveBeenCalledTimes(2);
+      // Other routes and methods still reach the API process.
+      await container.fetch(instance("HEAD"));
+      await container.fetch(new Request("https://api.example/api/v1/instance/"));
+      await container.fetch(new Request("https://api.example/api/v1/me"));
+      expect(state.forward).toHaveBeenCalledTimes(4);
+    });
+
+    it("is fetched again after the configuration fingerprint changes", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      await expectInstance(await new AccountApi(state.context, env).fetch(instance()));
+      const next = new AccountApi(state.context, { ...env, ...billingBindings("sandbox") });
+      await expectInstance(await next.fetch(instance()));
+      await expectInstance(await next.fetch(instance()));
+      expect(state.stop).toHaveBeenCalledTimes(1);
+      expect(state.forward).toHaveBeenCalledTimes(2);
+    });
+
+    it("is fetched again after the container restarts", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      await expectInstance(await container.fetch(instance()));
+      state.process.running = false;
+      await expectInstance(await container.fetch(instance()));
+      expect(state.start).toHaveBeenCalledTimes(2);
+      expect(state.forward).toHaveBeenCalledTimes(2);
+      // An SDK-driven restart also drops the cached answer.
+      container.onStart();
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not keep an answer from a process that restarted while it was in flight", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      const forward = state.forward.getMockImplementation()!;
+      state.forward.mockImplementationOnce(async (request) => {
+        container.onStart();
+        return forward(request);
+      });
+      await expectInstance(await container.fetch(instance()));
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a 503", () => Response.json({ error: "internal_error" }, { status: 503 })],
+      ["a 429", () => Response.json({ error: "rate_limited" }, { status: 429 })],
+      ["a raw transport error", () => new Response("Failed to start container", { status: 500 })],
+      ["a non-JSON 200", () => new Response("Synara account API", { status: 200 })],
+    ])("never caches %s", async (_name, answer) => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      state.forward.mockImplementationOnce(async () => answer());
+      const container = new AccountApi(state.context, env);
+      const first = await container.fetch(instance());
+      expect(first.status).toBe(answer().status);
+      expect(await first.text()).toBe(await answer().text());
+      await expectInstance(await container.fetch(instance()));
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(2);
     });
   });
 

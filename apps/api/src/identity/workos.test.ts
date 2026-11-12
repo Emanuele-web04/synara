@@ -49,6 +49,36 @@ describe("verifyAccessToken", () => {
     );
   });
 
+  it("asks for a lazily read email only to provision, and never provisions when that read fails", async () => {
+    const member = workos.addUser({ id: "user_lazy_email_member" });
+    const org = workos.addOrganization({ name: "Lazy email workspace" });
+    workos.addMembership(org.id, member.id);
+    const { verifier, grants } = createWorkosIdentityProvider(workos.config());
+    const unused = vi.fn(async () => member.email);
+    await expect(
+      grants.resolveEnvironmentScope(
+        { userId: member.id, sessionId: "session_lazy", orgId: org.id },
+        unused,
+        { freshMembership: true },
+      ),
+    ).resolves.toMatchObject({ kind: "scoped", organization: { orgId: org.id } });
+    expect(unused).not.toHaveBeenCalled();
+
+    const orphan = workos.addUser({ id: "user_lazy_email_deleted" });
+    await verifier.deleteUser!(orphan.id);
+    const requestsBefore = workos.requests.length;
+    await expect(
+      grants.resolveEnvironmentScope(
+        { userId: orphan.id, sessionId: "session_lazy_deleted" },
+        async () => (await verifier.getUser(orphan.id)).email,
+        { freshMembership: true },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(workos.requests.slice(requestsBefore)).not.toContainEqual(
+      expect.objectContaining({ method: "POST", path: "/organizations" }),
+    );
+  });
+
   it("preserves migrated ownership across email/SSO grants, refresh, membership and revocation", async () => {
     const user = workos.addUser({
       id: "user_production_migration",

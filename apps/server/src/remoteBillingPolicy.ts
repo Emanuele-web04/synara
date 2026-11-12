@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createAccountClient } from "@synara/shared/account";
+import { accountFetch } from "./accountHttp";
 import { Effect } from "effect";
 
 import { accountApiIssuer } from "./accountAuth";
@@ -243,7 +244,7 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
         const client = createAccountClient({
           baseUrl: options.accountUrl,
           fetch: ((input, init) =>
-            (options.fetch ?? fetch)(input, {
+            (options.fetch ?? accountFetch)(input, {
               ...init,
               cache: "no-store",
               redirect: "error",

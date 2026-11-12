@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { installCloudflared, CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
 import { startCloudflareIngress } from "./cloudflare/ingress";
 import { startCloudflareConnector } from "./cloudflare/connector";
-import { startRemoteAuthorization } from "./cloudflare/authorization";
+import { requestAuthorizationSnapshot, startRemoteAuthorization } from "./cloudflare/authorization";
 import { recordRemoteBillingPolicyHint } from "./remoteBillingPolicy";
 import { registerHostAuthorizationNudge } from "./hostConnectivitySignals";
 import { accountStateDirectory } from "./accountAuth";
@@ -15,7 +15,8 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
 import { acceptRemotePairing } from "./remotePairing/gateway";
 
-import { AccountApiError, createAccountClient } from "@synara/shared/account";
+import { AccountApiError } from "@synara/shared/account";
+import { createServerAccountClient } from "./accountHttp";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   loadRemoteTlsIdentity,
@@ -84,7 +85,7 @@ export async function startHostConnectivity(
   const identity = await readHostIdentity(options.config.hostIdentityPath);
   if (!identity) return async () => {};
   const environmentId = await resolveEnvironmentId(options.config.baseDir, options.config.devUrl);
-  const client = createAccountClient({ baseUrl: credentials.accountUrl });
+  const client = createServerAccountClient(credentials.accountUrl);
   const hostProof = () =>
     mintHostProof({
       identity,
@@ -122,14 +123,23 @@ export async function startHostConnectivity(
     );
     if (!enforced) options.remoteSessions.setRemoteBillingEnforced(false);
   };
+  /**
+   * The poll and admission paths bound each request and retry a stalled one
+   * once (`requestAuthorizationSnapshot`); the startup read keeps the client's
+   * general bound. Every attempt mints its own proof.
+   */
   const readAuthorization = async (signal?: AbortSignal) => {
-    const requestedAt = performance.now();
-    try {
-      const authorization = await client.getHostAuthorization(
-        await hostProof(),
-        credentials.hostId!,
-        signal,
+    let requestedAt = performance.now();
+    const request = (attemptSignal?: AbortSignal) => {
+      requestedAt = performance.now();
+      return hostProof().then((proof) =>
+        client.getHostAuthorization(proof, credentials.hostId!, attemptSignal),
       );
+    };
+    try {
+      const authorization = await (signal
+        ? requestAuthorizationSnapshot(request, { signal })
+        : request());
       if (typeof authorization.remoteBillingEnforced === "boolean")
         await rememberBillingPolicy(authorization.remoteBillingEnforced, requestedAt);
       else {
