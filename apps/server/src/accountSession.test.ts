@@ -19,6 +19,7 @@ import {
   writeAccountCredentials,
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
+import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistry.ts";
 import { registerRemoteAccessGrantedWake } from "./hostConnectivitySignals.ts";
 import type { AccountBillingStatus } from "@synara/contracts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
@@ -633,18 +634,18 @@ describe("OTP sign-in", () => {
       const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
       expect(lines).toHaveLength(1);
       const detail = lines[0]![1] as Record<string, unknown>;
-      expect(Object.keys(detail)).toEqual([
-        "path",
-        "outcome",
-        "instance_ms",
+      expect(Object.keys(detail).toSorted()).toEqual([
         "code_exchange_ms",
-        "workspace_probe_ms",
-        "workspace_refresh_ms",
         "credentials_ms",
         "device_registration_ms",
-        "host_link_ms",
         "final_me_ms",
+        "host_link_ms",
+        "instance_ms",
+        "outcome",
+        "path",
         "returned_ms",
+        "workspace_probe_ms",
+        "workspace_refresh_ms",
       ]);
       expect(detail).toMatchObject({ path: "otp", outcome: "signed_in" });
       for (const [key, value] of Object.entries(detail))
@@ -687,6 +688,79 @@ describe("OTP sign-in", () => {
       expect(lines[0]![1]).toMatchObject({ outcome: "failed" });
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  it("answers before a stalled enrollment finishes; host reads and status wait for it", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let failRegistration!: (error: Error) => void;
+    const registerDevice = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          failRegistration = reject;
+        }),
+    );
+    const startHostLink = vi.fn(accountServiceUnavailable);
+    const listHosts = vi.fn(async () => ({ hosts: [] }));
+    const session = createAccountSession({
+      baseDir,
+      accountUrl: ACCOUNT_URL,
+      client: otpClient({
+        registerDevice,
+        startHostLink,
+        listHosts,
+        countOrganizationMembers: async () => 1,
+      }),
+      signInEnrollmentWaitMs: 20,
+    });
+    try {
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      await vi.waitFor(() => expect(registerDevice).toHaveBeenCalledOnce());
+      expect(startHostLink).not.toHaveBeenCalled();
+
+      const enrollment = session.enrollment();
+      const hosts = session.listHosts();
+      const status = session.status();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(listHosts).not.toHaveBeenCalled();
+
+      failRegistration(new Error("Account service unavailable"));
+      expect(await enrollment).toMatchObject({ host: null });
+      expect(await hosts).toEqual({ hosts: [] });
+      expect(await status).toMatchObject({ state: "signed-in" });
+      // The status read joined the sign-in's enrollment instead of linking twice.
+      expect(startHostLink).toHaveBeenCalledOnce();
+      expect(startHostLink.mock.invocationCallOrder[0]).toBeLessThan(
+        listHosts.mock.invocationCallOrder[0]!,
+      );
+
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      const detail = lines[0]![1] as Record<string, number>;
+      expect(detail).toHaveProperty("host_link_ms");
+      expect(detail.returned_ms).toBeLessThan(detail.device_registration_ms!);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("nudges the usage reporter only after the sign-in has answered", async () => {
+    const nudge = vi.fn();
+    registerAccountUsageReporterNudge(nudge);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = sessionFor(makeBaseDir(), otpClient());
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      expect(nudge).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(nudge).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nudge).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      registerAccountUsageReporterNudge(undefined);
     }
   });
 

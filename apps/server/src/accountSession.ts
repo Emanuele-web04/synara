@@ -140,6 +140,24 @@ const MAX_TRACKED_SSO_ATTEMPTS = 4;
 const SSO_CALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
+ * How long a sign-in waits for device registration and host linking before
+ * answering; they finish in the background after that. Enrollment is two or
+ * three account requests (`POST /devices`, host link start and complete),
+ * measured at 100-250 ms each and under 900 ms at p95, so it normally ends
+ * well inside this and the sign-in answers exactly as before. A stalled
+ * request (15 s client timeout each) no longer holds the sign-in past this.
+ */
+const SIGN_IN_ENROLLMENT_WAIT_MS = 5_000;
+
+/**
+ * How long after a sign-in answers the usage reporter is nudged. Its first
+ * flush runs synchronous SQLite over the whole local history (hundreds of
+ * milliseconds on a large database), so it waits until the sign-in result and
+ * the app's follow-up reads are out; the reporter's own debounce is the same.
+ */
+const SIGN_IN_USAGE_NUDGE_DELAY_MS = 5_000;
+
+/**
  * What a slow provider surfaces when nothing was persisted. Deliberately not
  * "unavailable": the grant may still have completed upstream, so the message
  * must promise neither failure nor a dead code.
@@ -179,6 +197,8 @@ export interface AccountSessionOptions {
   readonly hostname?: string;
   readonly appVersion?: string;
   readonly devUrl?: URL;
+  /** Overrides {@link SIGN_IN_ENROLLMENT_WAIT_MS}; tests only. */
+  readonly signInEnrollmentWaitMs?: number;
 }
 
 export interface AccountSession {
@@ -295,6 +315,24 @@ function isSignedOut(error: unknown): boolean {
   return error instanceof SessionExpiredError || error instanceof WorkspaceAccessChangedError;
 }
 
+/** Resolves when `promise` settles or after `ms`, whichever is first. Never rejects. */
+async function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise.then(
+        () => {},
+        () => {},
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createAccountSession(
   options: AccountSessionOptions,
 ): AccountSession & HostsAccountSession {
@@ -310,6 +348,14 @@ export function createAccountSession(
   let hostSecretsCoordinator:
     | { readonly sessionKey: string; readonly value: HostSecretsCoordinator }
     | undefined;
+  /** The enrollment running now, joined by status reads for the same user. */
+  let enrollmentInFlight: { readonly userId: string; readonly promise: Promise<void> } | undefined;
+  /**
+   * The enrollment a sign-in started, until it finishes. A sign-in may answer
+   * before it does, so host, device and enrollment reads wait for it and never
+   * report the pre-enrollment state the app could otherwise cache.
+   */
+  let signInEnrollment: Promise<void> | undefined;
 
   /**
    * Loopback PKCE attempts this process has started, keyed by the opaque
@@ -571,11 +617,28 @@ export function createAccountSession(
     }
   }
 
-  /** Enrollment is additive to sign-in: local use survives an account outage. */
-  async function ensureDesktopEnrollment(
-    knownUserId: string,
-    timing?: SignInTiming,
-  ): Promise<void> {
+  /**
+   * Enrollment is additive to sign-in: local use survives an account outage.
+   * One runs at a time: a status read joins the running one for the same
+   * user, and anything else waits for it before starting, so a sign-in
+   * finishing in the background never races a status read into two host links.
+   */
+  function ensureDesktopEnrollment(knownUserId: string, timing?: SignInTiming): Promise<void> {
+    const running = enrollmentInFlight;
+    if (running && running.userId === knownUserId && !timing) return running.promise;
+    const promise = (running?.promise ?? Promise.resolve()).then(() =>
+      enrollDesktop(knownUserId, timing),
+    );
+    const entry = { userId: knownUserId, promise };
+    enrollmentInFlight = entry;
+    void promise.finally(() => {
+      if (enrollmentInFlight === entry) enrollmentInFlight = undefined;
+    });
+    return promise;
+  }
+
+  /** Never rejects: both halves retry on a later status read. */
+  async function enrollDesktop(knownUserId: string, timing?: SignInTiming): Promise<void> {
     if (remoteConnectionsUnavailableReason()) return;
     const measure: SignInTiming["measure"] = timing
       ? (step, run) => timing.measure(step, run)
@@ -695,19 +758,43 @@ export function createAccountSession(
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
 
-    await ensureDesktopEnrollment(scoped.userId, timing);
-
-    // A fresh session means the machine's EXISTING local history can sync:
-    // the reporter's first flush has no watermark and backfills everything.
-    nudgeAccountUsageReporter();
-
-    // Not redundant on the common path: scoping's probe `/me` ran against the
-    // org-less token and was refused, so this is the first `/me` the scoped
-    // token answers (and it runs through withSession's renewal). Only the
-    // pre-scoped self-hoster path pays a second call.
-    return signedInStatus(
-      await timing.measure("final_me", () => withSession((accessToken, c) => c.me(accessToken))),
+    // Enrollment and the final `/me` are independent once the pair is on
+    // disk, so they run together. Enrollment gets a bounded wait and then
+    // finishes in the background; its failures were always swallowed and
+    // retried on the next status read.
+    const enrollment = ensureDesktopEnrollment(scoped.userId, timing);
+    timing.waitFor(enrollment);
+    const tracked: Promise<void> = enrollment.then(
+      () => {
+        if (signInEnrollment === tracked) signInEnrollment = undefined;
+      },
+      () => {
+        if (signInEnrollment === tracked) signInEnrollment = undefined;
+      },
     );
+    signInEnrollment = tracked;
+
+    try {
+      // Not redundant on the common path: scoping's probe `/me` ran against the
+      // org-less token and was refused, so this is the first `/me` the scoped
+      // token answers (and it runs through withSession's renewal). Only the
+      // pre-scoped self-hoster path pays a second call.
+      const [me] = await Promise.all([
+        timing.measure("final_me", () => withSession((accessToken, c) => c.me(accessToken))),
+        settleWithin(enrollment, options.signInEnrollmentWaitMs ?? SIGN_IN_ENROLLMENT_WAIT_MS),
+      ]);
+      return await signedInStatus(me);
+    } finally {
+      // A fresh session means the machine's EXISTING local history can sync:
+      // the reporter's first flush has no watermark and backfills everything.
+      // Deferred so its synchronous SQLite cannot delay this sign-in's answer.
+      setTimeout(nudgeAccountUsageReporter, SIGN_IN_USAGE_NUDGE_DELAY_MS).unref?.();
+    }
+  }
+
+  /** Waits for a sign-in's background enrollment, if one is still running. */
+  async function afterSignInEnrollment(): Promise<void> {
+    await signInEnrollment;
   }
 
   /** The `status()` body, callable from inside the session's own methods. */
@@ -1024,7 +1111,8 @@ export function createAccountSession(
       return withBillingSession((token, client) => client.billingPortal(token));
     },
 
-    listHosts() {
+    async listHosts() {
+      await afterSignInEnrollment();
       return withSession((token, client) => client.listHosts(token));
     },
 
@@ -1054,7 +1142,8 @@ export function createAccountSession(
       return withSession((token, client) => client.deleteHost(token, input.hostId));
     },
 
-    listDevices() {
+    async listDevices() {
+      await afterSignInEnrollment();
       return withSession((token, client) => client.listDevices(token));
     },
 
@@ -1089,6 +1178,7 @@ export function createAccountSession(
     },
 
     async enrollment() {
+      await afterSignInEnrollment();
       const stored = await readAccountFile(credentialDir);
       const { hosts, organizationMemberCount } = await withSession(async (token, client) => {
         const [listed, memberCount] = await Promise.all([

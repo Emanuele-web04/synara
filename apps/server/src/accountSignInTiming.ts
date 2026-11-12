@@ -23,6 +23,8 @@ export type SignInOutcome = "signed_in" | "signed_out" | "failed";
 export interface SignInTiming {
   /** Runs `run`, recording its duration under `step` whether it resolves or throws. */
   measure<A>(step: SignInStep, run: () => Promise<A>): Promise<A>;
+  /** Holds the log line until `work` settles, for steps that run after the answer. */
+  waitFor(work: Promise<unknown>): void;
   /**
    * Passes `result` through unchanged and writes the log line once it has
    * settled and every measured step has finished.
@@ -69,6 +71,14 @@ export function createSignInTiming(
         running -= 1;
         logWhenDone();
       }
+    },
+    waitFor(work) {
+      running += 1;
+      const done = () => {
+        running -= 1;
+        logWhenDone();
+      };
+      work.then(done, done);
     },
     settle(result) {
       const finish = (outcome: SignInOutcome) => {
