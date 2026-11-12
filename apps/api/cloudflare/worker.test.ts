@@ -177,6 +177,17 @@ function billingBindings(environment: "sandbox" | "production") {
   };
 }
 
+function refresh(
+  method = "POST",
+  path = "/api/v1/auth/refresh",
+): Request<unknown, IncomingRequestCfProperties> {
+  return new Request(`https://api.example${path}`, {
+    method,
+    ...(method === "POST" ? { body: '{"refreshToken":"synthetic-refresh-token"}' } : {}),
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function runtime(running = false) {
   const values = new Map<string, string>();
   let resolveExit: (() => void) | undefined;
@@ -401,6 +412,93 @@ describe("Cloudflare account API container configuration", () => {
       expect(state.values.size).toBe(0);
     },
   );
+
+  describe("a refresh that never reached the API process", () => {
+    async function expectNotAttempted(response: Response) {
+      expect(response.status).toBe(429);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("retry-after")).toBe("5");
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ error: "refresh_not_attempted" });
+      expect(body).not.toContain("synthetic-private");
+      expect(body).not.toContain("synthetic-refresh-token");
+    }
+
+    it.each([false, true])(
+      "is answered as not attempted when the restart fails, keeping the cleanup (new object: %s)",
+      async (newObject) => {
+        const { env, fetch } = setup();
+        const state = runtime();
+        const first = new AccountApi(state.context, env);
+        await first.fetch(new Request("https://api.example/"));
+        state.process.running = false;
+        state.start.mockRejectedValue(new Error("synthetic-private-startup-detail"));
+        const container = newObject ? new AccountApi(state.context, env) : first;
+        fetch.mockImplementation((request) => container.fetch(request));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await expectNotAttempted(await worker.fetch(refresh(), env));
+        expect(state.forward).toHaveBeenCalledTimes(1);
+        expect(state.remove).toHaveBeenCalledTimes(1);
+        expect(state.values.size).toBe(0);
+      },
+    );
+
+    it("is answered as not attempted when the configuration handover stalls", async () => {
+      vi.useFakeTimers();
+      const { env, fetch } = setup();
+      const state = runtime(true);
+      state.stop.mockImplementation(async () => {});
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const pending = worker.fetch(refresh(), env);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expectNotAttempted(await pending);
+      expect(state.forward).not.toHaveBeenCalled();
+      expect(state.put).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["GET", "/api/v1/auth/refresh"],
+      ["POST", "/api/v1/auth/refresh/"],
+      ["POST", "/api/v1/auth/authorize/token"],
+    ])("leaves %s %s on the generic retryable 503", async (method, path) => {
+      const { env, fetch } = setup();
+      const state = runtime();
+      state.start.mockRejectedValue(new Error("synthetic-private-startup-detail"));
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await worker.fetch(refresh(method, path), env);
+      expect(response.status).toBe(503);
+      expect(state.forward).not.toHaveBeenCalled();
+    });
+
+    // Once forwarded, the API may have spent the token: that outcome is unknown.
+    it.each([
+      ["throws", () => Promise.reject(new Error("synthetic-private-transport-detail"))],
+      [
+        "returns a raw transport error",
+        async () => new Response("synthetic-private-transport-detail", { status: 500 }),
+      ],
+    ] as const)("stays a retryable 503 when forwarding %s", async (_name, forward) => {
+      const { env, fetch } = setup();
+      const state = runtime();
+      state.forward.mockImplementation(forward);
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await worker.fetch(refresh(), env);
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain("synthetic-private");
+      expect(state.forward).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it("does not persist or forward a configuration whose API process cannot become ready", async () => {
     const { env } = setup();

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -10,7 +11,11 @@ import { type AccountHost, EnvironmentId } from "@synara/contracts";
 import { decodeJwt } from "jose";
 
 import type { AccountClient } from "@synara/shared/account";
-import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
+import {
+  AccountApiError,
+  createAccountClient,
+  OrganizationRequiredError,
+} from "@synara/shared/account";
 import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
 
 vi.mock("./tailscaleEndpoint", () => ({
@@ -228,6 +233,43 @@ function unauthorized(): AccountApiError {
   return new AccountApiError({ code: "unauthorized", status: 401, message: "Unauthorized" });
 }
 
+/**
+ * Renewal backs off on timers and measures its cooldown on the monotonic
+ * clock. Fake both, with jitter pinned to its midpoint so every delay is its
+ * nominal value (1s, 2s, 4s between attempts; 5s, then 10s, of cooldown).
+ */
+function useFakeRenewalClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+}
+
+/** Settles `promise`, letting real file I/O finish and skipping each backoff sleep it schedules. */
+async function settleSkippingSleeps<A>(promise: Promise<A>): Promise<A> {
+  const progress = { settled: false };
+  const tracked = promise.finally(() => {
+    progress.settled = true;
+  });
+  tracked.catch(() => {});
+  while (!progress.settled) {
+    const until = Date.now() + 5;
+    while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+    await vi.advanceTimersToNextTimerAsync();
+  }
+  return tracked;
+}
+
+function transportFailure(): TypeError {
+  return new TypeError("fetch failed");
+}
+
+function rotatedPair() {
+  return {
+    accessToken: "access-2",
+    refreshToken: "refresh-2",
+    user: { id: "user_1", email: "ada@example.com" },
+  };
+}
+
 describe("account credential store", () => {
   it("round-trips credentials and keeps the file private", async () => {
     const baseDir = makeBaseDir();
@@ -410,13 +452,20 @@ describe("withFreshAccessToken", () => {
       const expected = { ...credentials(), userId: "user_1", hostId: "host_1" };
       await writeAccountCredentials(baseDir, { ...expected, [field]: "changed" });
       const upload = vi.fn(async () => undefined);
-      await expect(
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const attempt = () =>
         withFreshAccessToken(
           { baseDir, client: makeClient({}), expectedIdentity: expected },
           upload,
-        ),
-      ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
+        );
+      await expect(attempt()).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
+      // A background poller repeating the refused call logs the fence once.
+      await expect(attempt()).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
       expect(upload).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session identity_fence", {
+        fence: "expected_identity_before_send",
+        field,
+      });
     },
   );
 
@@ -534,6 +583,59 @@ describe("withFreshAccessToken", () => {
       expect(sent).toEqual(["first", "first", "access-2", "access-2"]);
       expect(refreshAccessToken).toHaveBeenCalledOnce();
     });
+
+    // Waking a laptop renews before sending; being offline for that moment
+    // must not cost the session.
+    it.each([
+      { name: "this machine is offline", offline: transportFailure() },
+      {
+        name: "the account service is restarting",
+        offline: new AccountApiError({
+          code: "internal_error",
+          status: 503,
+          message: "Account service temporarily unavailable",
+        }),
+      },
+      {
+        name: "the account service never started the refresh",
+        offline: new AccountApiError({
+          code: "refresh_not_attempted",
+          status: 429,
+          message: "Account service temporarily unavailable — the refresh was not attempted",
+        }),
+      },
+    ])("keeps the session when the early renewal fails because $name", async ({ offline }) => {
+      useFakeRenewalClock();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const baseDir = makeBaseDir();
+      const token = jwt(Math.floor(Date.now() / 1_000));
+      const stored = credentials({ accessToken: token });
+      await writeAccountCredentials(baseDir, stored);
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(offline);
+      const client = makeClient({ refreshAccessToken });
+      const sent: string[] = [];
+      const send = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, async (accessToken) => {
+            sent.push(accessToken === token ? "first" : accessToken);
+          }),
+        );
+      await send();
+      vi.advanceTimersByTime(lifetimeSeconds * 1_000);
+
+      const caught = await send().catch((error: unknown) => error);
+      expect(caught).toBe(offline);
+      expect(caught).not.toBeInstanceOf(SessionExpiredError);
+      expect(sent).toEqual(["first"]);
+      expect(await readAccountFile(baseDir)).toEqual(stored);
+
+      refreshAccessToken.mockReset().mockResolvedValue(rotatedPair());
+      vi.advanceTimersByTime(5_000);
+      await send();
+      expect(sent).toEqual(["first", "access-2"]);
+    });
   });
 
   it("retries only once, surfacing a second rejection to the caller", async () => {
@@ -591,183 +693,395 @@ describe("withFreshAccessToken", () => {
     expect(await readAccountCredentials(baseDir)).toEqual(credentials());
   });
 
-  it("keeps the stored refresh token when the identity provider is merely unreachable", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials());
+  describe("when renewal fails without a terminal refusal", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    // The access token can still be used; an uncertain refresh cannot be replayed.
-    await expect(
-      withFreshAccessToken(
-        {
-          baseDir,
-          client: makeClient({
-            refreshAccessToken: () => Promise.reject(new Error("ECONNREFUSED")),
+    // WorkOS answers a replay of the just-rotated token with the same pair, so
+    // a lost reply is recovered by presenting the same token again.
+    it("replays the same refresh token after a lost rotation response and keeps the session", async () => {
+      useFakeRenewalClock();
+      const reports = vi.spyOn(reliability, "reportReliabilityIssue").mockImplementation(() => {});
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValueOnce(transportFailure())
+        .mockRejectedValueOnce(
+          new AccountApiError({ code: "internal_error", status: 503, message: "Unavailable" }),
+        )
+        .mockResolvedValueOnce(rotatedPair());
+
+      const result = await settleSkippingSleeps(
+        withFreshAccessToken(
+          { baseDir, client: makeClient({ refreshAccessToken }) },
+          (accessToken) =>
+            accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve("ok"),
+        ),
+      );
+
+      expect(result).toBe("ok");
+      expect(refreshAccessToken).toHaveBeenCalledTimes(3);
+      for (const call of refreshAccessToken.mock.calls)
+        expect(call).toEqual([{ refreshToken: "refresh-1", organizationId: ORGANIZATION.id }]);
+      expect(await readAccountFile(baseDir)).toEqual(
+        credentials({ accessToken: "access-2", refreshToken: "refresh-2", linkedHost: true }),
+      );
+      expect(reports).not.toHaveBeenCalled();
+    });
+
+    it("replays a rotated token within the provider grace when the first response stalls", async () => {
+      useFakeRenewalClock();
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+      const baseDir = makeBaseDir();
+      const stored = credentials();
+      await writeAccountCredentials(baseDir, stored);
+      let rotatedAt: number | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        expect(JSON.parse(String(init?.body)).refreshToken).toBe(stored.refreshToken);
+        if (rotatedAt === undefined) {
+          rotatedAt = performance.now();
+          const signal = init!.signal!;
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        }
+        if (performance.now() - rotatedAt >= 30_000)
+          return Response.json({ error: "unauthorized", message: "Spent" }, { status: 401 });
+        return Response.json(rotatedPair());
+      });
+      const client = createAccountClient({ baseUrl: stored.accountUrl });
+
+      await expect(
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, async (token) => {
+            if (token === stored.accessToken) throw unauthorized();
+            return token;
           }),
-        },
-        () => Promise.reject(unauthorized()),
-      ),
-    ).rejects.toThrow("ECONNREFUSED");
-
-    expect(await readAccountCredentials(baseDir)).toMatchObject({
-      ...credentials(),
-      refreshPendingTokenHash: expect.any(String),
-    });
-  });
-
-  it("never replays a refresh token after a lost rotation response, including a new caller", async () => {
-    const reports = vi.spyOn(reliability, "reportReliabilityIssue").mockImplementation(() => {});
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials());
-    let refreshCalls = 0;
-    const client = makeClient({
-      refreshAccessToken: async () => {
-        refreshCalls += 1;
-        // The identity provider consumed the token, but its reply did not arrive.
-        throw new Error("lost-response-after-rotation");
-      },
-    });
-    await expect(
-      withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized())),
-    ).rejects.toThrow("lost-response-after-rotation");
-    await expect(
-      withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized())),
-    ).rejects.toThrow(/uncertain.*sign in/i);
-    expect(refreshCalls).toBe(1);
-    expect(reports).toHaveBeenCalledExactlyOnceWith("account.refresh_uncertain");
-  });
-
-  it("renews on the next operation when the account API rejected refresh before dispatch", async () => {
-    const baseDir = makeBaseDir();
-    const stored = credentials({ linkedHost: true });
-    await writeAccountCredentials(baseDir, stored);
-    const rateLimit = new AccountApiError({
-      code: "refresh_not_attempted",
-      status: 429,
-      message: "Too many refresh attempts — wait a minute",
-    });
-    const refreshAccessToken = vi
-      .fn<AccountClient["refreshAccessToken"]>()
-      .mockRejectedValueOnce(rateLimit)
-      .mockResolvedValueOnce({
+        ),
+      ).resolves.toBe("access-2");
+      expect(await readAccountFile(baseDir)).toMatchObject({
         accessToken: "access-2",
         refreshToken: "refresh-2",
-        user: { id: "user_1", email: "ada@example.com" },
       });
-    const client = makeClient({ refreshAccessToken });
-    const operation = () =>
-      withFreshAccessToken({ baseDir, client }, async (token) => {
-        if (token === stored.accessToken) throw unauthorized();
-        return token;
-      });
-
-    await expect(operation()).rejects.toBe(rateLimit);
-    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
-    expect(await readAccountCredentials(baseDir)).toEqual(stored);
-
-    await expect(operation()).resolves.toBe("access-2");
-    expect(refreshAccessToken).toHaveBeenNthCalledWith(2, {
-      refreshToken: stored.refreshToken,
-      organizationId: stored.organizationId,
     });
-    expect(await readAccountCredentials(baseDir)).toEqual({
-      ...stored,
-      accessToken: "access-2",
-      refreshToken: "refresh-2",
-    });
-  });
 
-  it("keeps the stored refresh token when the identity provider returns a 5xx", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials());
-
-    const caught = await withFreshAccessToken(
+    // The failure must reach the caller unchanged: reporting it as an expired
+    // session would send the user to re-authenticate over an outage.
+    it.each([
+      { name: "a transport failure", error: transportFailure() },
       {
-        baseDir,
-        client: makeClient({
-          refreshAccessToken: () =>
-            Promise.reject(
-              new AccountApiError({
-                code: "internal_error",
-                status: 503,
-                message: "Identity provider is unavailable",
-              }),
-            ),
-        }),
+        name: "a client timeout",
+        error: new AccountApiError({ code: "internal_error", status: 408, message: "Timeout" }),
       },
-      () => Promise.reject(unauthorized()),
-    ).catch((error: unknown) => error);
+      {
+        name: "upstream contention",
+        error: new AccountApiError({ code: "rate_limited", status: 429, message: "Slow down" }),
+      },
+      {
+        name: "a provider outage",
+        error: new AccountApiError({ code: "internal_error", status: 503, message: "Down" }),
+      },
+    ])("keeps the stored pair after $name exhausts the retries", async ({ error }) => {
+      useFakeRenewalClock();
+      const reports = vi.spyOn(reliability, "reportReliabilityIssue").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(error);
 
-    // The upstream failure must reach the caller unchanged: reporting it as an
-    // expired session would send the user to re-authenticate over an outage.
-    expect(caught).toBeInstanceOf(AccountApiError);
-    expect(caught).not.toBeInstanceOf(SessionExpiredError);
-    expect(caught).toMatchObject({ status: 503 });
-    expect(await readAccountCredentials(baseDir)).toMatchObject({
-      ...credentials(),
-      refreshPendingTokenHash: expect.any(String),
+      const caught = await settleSkippingSleeps(
+        withFreshAccessToken({ baseDir, client: makeClient({ refreshAccessToken }) }, () =>
+          Promise.reject(unauthorized()),
+        ),
+      ).catch((failure: unknown) => failure);
+
+      expect(caught).toBe(error);
+      expect(caught).not.toBeInstanceOf(SessionExpiredError);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+      for (const call of refreshAccessToken.mock.calls)
+        expect(call).toEqual([{ refreshToken: "refresh-1", organizationId: ORGANIZATION.id }]);
+      expect(await readAccountFile(baseDir)).toEqual(credentials({ linkedHost: true }));
+      expect(reports).toHaveBeenCalledExactlyOnceWith("account.refresh_uncertain");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session refresh_failed", {
+        ...(error instanceof AccountApiError
+          ? { status: error.status, code: error.code }
+          : { failure: "TypeError" }),
+        outcome: "transient",
+        attempts: 4,
+        failedSeries: 1,
+        retryInMs: 5_000,
+        legacyPendingMarker: false,
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/refresh-1|access-1|user_1|org_1|ada@/);
     });
-  });
 
-  // A 408/429 does not prove that no rotation occurred behind the account proxy.
-  // Keep credentials and pending intent instead of treating this as invalid_grant.
-  it.each([
-    { status: 408, code: "internal_error", message: "Request timeout" },
-    { status: 429, code: "rate_limited", message: "Too many requests" },
-  ] as const)(
-    "keeps the stored refresh token when the identity provider answers $status",
-    async ({ status, code, message }) => {
+    it("makes later callers wait out a growing cooldown, then retries the same token", async () => {
+      useFakeRenewalClock();
       const baseDir = makeBaseDir();
       await writeAccountCredentials(baseDir, credentials());
-
-      const caught = await withFreshAccessToken(
-        {
-          baseDir,
-          client: makeClient({
-            refreshAccessToken: () =>
-              Promise.reject(new AccountApiError({ code, status, message })),
-          }),
-        },
-        () => Promise.reject(unauthorized()),
-      ).catch((error: unknown) => error);
-
-      expect(caught).toBeInstanceOf(AccountApiError);
-      expect(caught).not.toBeInstanceOf(SessionExpiredError);
-      expect(caught).toMatchObject({ status });
-      expect(await readAccountCredentials(baseDir)).toMatchObject({
-        ...credentials(),
-        refreshPendingTokenHash: expect.any(String),
+      // The account service answers but its identity provider does not, so a
+      // caller it just answered has no reason to expect a different outcome.
+      const outage = new AccountApiError({
+        code: "internal_error",
+        status: 502,
+        message: "Identity provider is unavailable",
       });
-    },
-  );
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(outage);
+      const client = makeClient({ refreshAccessToken });
+      const operation = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, (accessToken) =>
+            accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve("ok"),
+          ),
+        );
 
-  it("preserves credentials and pending intent when a proxy does not recognize the refresh endpoint", async () => {
-    const baseDir = makeBaseDir();
-    const stored = credentials({ linkedHost: true });
-    await writeAccountCredentials(baseDir, stored);
-    const refusal = new AccountApiError({
-      status: 404,
-      code: "internal_error",
-      message: "Refresh endpoint unavailable",
-    });
-    const refreshAccessToken = vi
-      .fn<AccountClient["refreshAccessToken"]>()
-      .mockRejectedValue(refusal);
-    const client = makeClient({ refreshAccessToken });
-    const operation = () =>
-      withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized()));
+      await expect(operation()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
 
-    await expect(operation()).rejects.toBe(refusal);
-    expect(await readAccountCredentials(baseDir)).toMatchObject({
-      ...stored,
-      refreshPendingTokenHash: expect.any(String),
+      // Pollers arriving during the cooldown fail fast without a request.
+      await expect(operation()).rejects.toBe(outage);
+      vi.advanceTimersByTime(4_999);
+      await expect(operation()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+
+      // The next series runs once it passes, and a second failure doubles the wait.
+      vi.advanceTimersByTime(1);
+      await expect(operation()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+      vi.advanceTimersByTime(9_999);
+      await expect(operation()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+
+      refreshAccessToken.mockReset().mockResolvedValue(rotatedPair());
+      vi.advanceTimersByTime(1);
+      await expect(operation()).resolves.toBe("ok");
+      expect(refreshAccessToken).toHaveBeenCalledExactlyOnceWith({
+        refreshToken: "refresh-1",
+        organizationId: ORGANIZATION.id,
+      });
+      expect(await readAccountFile(baseDir)).toEqual(
+        credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+      );
     });
-    await expect(operation()).rejects.toThrow(/uncertain.*sign in/i);
-    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+
+    it("renews early, once, when the service that was unreachable answers again", async () => {
+      useFakeRenewalClock();
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials());
+      const outage = transportFailure();
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(outage);
+      const client = makeClient({ refreshAccessToken });
+      // The service answering 401 is what makes the renewal run.
+      const answered = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, (accessToken) =>
+            accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve("ok"),
+          ),
+        );
+
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+
+      // Still inside the cooldown, the service answers this caller: one early series.
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+      // That early series is spent; later callers wait out the (doubled) cooldown.
+      await expect(answered()).rejects.toBe(outage);
+      vi.advanceTimersByTime(9_999);
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(8);
+
+      // The next ordinary series fails too, which allows one early series again.
+      vi.advanceTimersByTime(1);
+      await expect(answered()).rejects.toBe(outage);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(12);
+      refreshAccessToken.mockReset().mockResolvedValue(rotatedPair());
+      await expect(answered()).resolves.toBe("ok");
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(await readAccountFile(baseDir)).toEqual(
+        credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+      );
+    });
+
+    it("keeps the recovery probe available for a response received after the failure", async () => {
+      useFakeRenewalClock();
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials());
+      const outage = transportFailure();
+      const started = Promise.withResolvers<void>();
+      const queued = Promise.withResolvers<void>();
+      const refreshAccessToken = vi.fn<AccountClient["refreshAccessToken"]>(async () => {
+        started.resolve();
+        throw outage;
+      });
+      const client = makeClient({ refreshAccessToken });
+      const first = withFreshAccessToken({ baseDir, client }, async () => {
+        throw unauthorized();
+      });
+      await started.promise;
+      const second = withFreshAccessToken({ baseDir, client }, async () => {
+        queued.resolve();
+        throw unauthorized();
+      });
+      await queued.promise;
+      await settleSkippingSleeps(Promise.allSettled([first, second]));
+      expect(refreshAccessToken).toHaveBeenCalledTimes(4);
+
+      refreshAccessToken.mockResolvedValue(rotatedPair());
+      await expect(
+        withFreshAccessToken({ baseDir, client }, async (token) => {
+          if (token === "access-1") throw unauthorized();
+          return token;
+        }),
+      ).resolves.toBe("access-2");
+    });
+
+    it("waits for the next renewal, without an in-call retry, when the account API never sent the token", async () => {
+      useFakeRenewalClock();
+      const reports = vi.spyOn(reliability, "reportReliabilityIssue").mockImplementation(() => {});
+      const baseDir = makeBaseDir();
+      const stored = credentials({ linkedHost: true });
+      await writeAccountCredentials(baseDir, stored);
+      const rateLimit = new AccountApiError({
+        code: "refresh_not_attempted",
+        status: 429,
+        message: "Too many refresh attempts — wait a minute",
+      });
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValueOnce(rateLimit)
+        .mockResolvedValueOnce(rotatedPair());
+      const client = makeClient({ refreshAccessToken });
+      const operation = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, async (token) => {
+            if (token === stored.accessToken) throw unauthorized();
+            return token;
+          }),
+        );
+
+      await expect(operation()).rejects.toBe(rateLimit);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(reports).toHaveBeenCalledExactlyOnceWith("account.refresh_rate_limited");
+      expect(await readAccountFile(baseDir)).toEqual(stored);
+
+      vi.advanceTimersByTime(5_000);
+      await expect(operation()).resolves.toBe("access-2");
+      expect(refreshAccessToken).toHaveBeenNthCalledWith(2, {
+        refreshToken: stored.refreshToken,
+        organizationId: stored.organizationId,
+      });
+      expect(await readAccountFile(baseDir)).toEqual({
+        ...stored,
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+      });
+    });
+
+    it("keeps the session, without an in-call retry, when a proxy does not recognize the refresh endpoint", async () => {
+      useFakeRenewalClock();
+      const baseDir = makeBaseDir();
+      const stored = credentials({ linkedHost: true });
+      await writeAccountCredentials(baseDir, stored);
+      const refusal = new AccountApiError({
+        status: 404,
+        code: "internal_error",
+        message: "Refresh endpoint unavailable",
+      });
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockRejectedValue(refusal);
+      const client = makeClient({ refreshAccessToken });
+      const operation = () =>
+        settleSkippingSleeps(
+          withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized())),
+        );
+
+      await expect(operation()).rejects.toBe(refusal);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(await readAccountFile(baseDir)).toEqual(stored);
+      vi.advanceTimersByTime(5_000);
+      await expect(operation()).rejects.toBe(refusal);
+      expect(refreshAccessToken).toHaveBeenCalledTimes(2);
+      expect(await readAccountFile(baseDir)).toEqual(stored);
+    });
+  });
+
+  describe("a file left with a released version's pending-refresh marker", () => {
+    const legacyFile = () => ({
+      ...credentials({ linkedHost: true }),
+      refreshPendingTokenHash: createHash("sha256").update("refresh-1").digest("hex"),
+    });
+
+    it("loads, retries the same token and drops the marker with the rotation", async () => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, legacyFile());
+      expect(await readAccountCredentials(baseDir)).toEqual(legacyFile());
+      const refreshAccessToken = vi
+        .fn<AccountClient["refreshAccessToken"]>()
+        .mockResolvedValue(rotatedPair());
+
+      await expect(
+        withFreshAccessToken(
+          { baseDir, client: makeClient({ refreshAccessToken }) },
+          (accessToken) =>
+            accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve("ok"),
+        ),
+      ).resolves.toBe("ok");
+
+      expect(refreshAccessToken).toHaveBeenCalledExactlyOnceWith({
+        refreshToken: "refresh-1",
+        organizationId: ORGANIZATION.id,
+      });
+      expect(await readAccountFile(baseDir)).toEqual(
+        credentials({ accessToken: "access-2", refreshToken: "refresh-2", linkedHost: true }),
+      );
+      expect(fs.readFileSync(accountCredentialsPath(baseDir), "utf8")).not.toContain(
+        "refreshPendingTokenHash",
+      );
+    });
+
+    it("signs out, keeping the host fields, when the provider refuses that token", async () => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, legacyFile());
+
+      await expect(
+        withFreshAccessToken(
+          {
+            baseDir,
+            client: makeClient({ refreshAccessToken: () => Promise.reject(unauthorized()) }),
+          },
+          () => Promise.reject(unauthorized()),
+        ),
+      ).rejects.toBeInstanceOf(SessionExpiredError);
+
+      expect(await readAccountFile(baseDir)).toEqual({
+        accountUrl: "https://accounts.example.com",
+        workosClientId: CLIENT_ID,
+        workosApiUrl: WORKOS_API_URL,
+        hostId: "host_1",
+        hostOwnerUserId: "user_1",
+        hostKeyGeneration: 1,
+      });
+    });
   });
 
   it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(
       withFreshAccessToken(
@@ -796,6 +1110,13 @@ describe("withFreshAccessToken", () => {
       hostId: "host_1",
       hostOwnerUserId: "user_1",
       hostKeyGeneration: 1,
+    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session refresh_rejected", {
+      status: 401,
+      code: "unauthorized",
+      attempt: 1,
+      failedSeriesBefore: 0,
+      legacyPendingMarker: false,
     });
   });
 
@@ -930,27 +1251,33 @@ describe("withFreshAccessToken and workspace access", () => {
    * same dead organization, so the refresh is skipped entirely — a retry here
    * would be a guaranteed second failure and a spent refresh token.
    */
-  it("clears the session without refreshing when the workspace is no longer the caller's", async () => {
+  it.each([
+    { when: "on the original request", renewed: false },
+    { when: "after renewal", renewed: true },
+  ])("clears the session when the workspace is refused $when", async ({ renewed }) => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    let attempts = 0;
+    const refreshAccessToken = vi.fn().mockResolvedValue(rotatedPair());
     await expect(
       withFreshAccessToken(
         {
           baseDir,
-          client: makeClient({
-            refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
-          }),
+          client: makeClient({ refreshAccessToken }),
         },
-        () => {
-          attempts += 1;
+        (token) => {
+          if (renewed && token === "access-1") return Promise.reject(unauthorized());
           return Promise.reject(organizationRequired([]));
         },
       ),
     ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
 
-    expect(attempts).toBe(1);
+    expect(refreshAccessToken).toHaveBeenCalledTimes(renewed ? 1 : 0);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session workspace_refused", {
+      cleared: true,
+      organizations: 0,
+    });
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
     // The host registration survives, and so does everything but the session
     // — including the now-meaningless organization choice.

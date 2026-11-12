@@ -432,6 +432,84 @@ describe("status", () => {
 
     await expect(session.status()).rejects.toThrow("ECONNREFUSED");
   });
+
+  it("logs once, without secrets, why status reports signed out after a renewed token is refused", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let rotation = 1;
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        me: () =>
+          Promise.reject(
+            new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" }),
+          ),
+        refreshAccessToken: async () => {
+          rotation += 1;
+          return {
+            accessToken: `access-${rotation}`,
+            refreshToken: `refresh-${rotation}`,
+            user: { id: "user_1", email: "ada@example.com" },
+          };
+        },
+      }),
+    );
+    try {
+      // A status poller asks repeatedly; the log says why once.
+      expect(await session.status()).toEqual({ state: "signed-out" });
+      expect(await session.status()).toEqual({ state: "signed-out" });
+      expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session status_unauthorized", {
+        status: 401,
+        code: "unauthorized",
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/access-|refresh-|user_1|org_1|ada@/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // Renewal runs every few minutes; one that fails without a terminal refusal
+  // is an outage to retry, not a sign-out.
+  it.each([503, 401])("surfaces refresh errors with status %i", async (statusCode) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials(linkedHostFields));
+      const outage = new AccountApiError({
+        code: "internal_error",
+        status: statusCode,
+        message: "Account service temporarily unavailable",
+      });
+      const session = sessionFor(
+        baseDir,
+        makeClient({
+          me: () =>
+            Promise.reject(
+              new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" }),
+            ),
+          refreshAccessToken: () => Promise.reject(outage),
+        }),
+      );
+
+      const progress = { settled: false };
+      const status = session.status().finally(() => {
+        progress.settled = true;
+      });
+      status.catch(() => {});
+      // Skip the renewal's backoff sleeps, letting its real file I/O finish between them.
+      while (!progress.settled) {
+        const until = Date.now() + 5;
+        while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+        await vi.advanceTimersToNextTimerAsync();
+      }
+
+      await expect(status).rejects.toBe(outage);
+      expect(await readAccountFile(baseDir)).toEqual(credentials(linkedHostFields));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("OTP sign-in", () => {

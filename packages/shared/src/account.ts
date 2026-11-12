@@ -126,7 +126,7 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * Per-attempt deadline on the GRANT-consuming requests: OTP redemption, the
- * PKCE code exchange, and refresh.
+ * PKCE code exchange, and the one-off workspace exchange at sign-in.
  * Longer than {@link REQUEST_TIMEOUT_MS}, and deliberately longer than the
  * account service's own upstream grant deadline (45s): these requests spend a
  * single-use credential, so this client must never give up before the service
@@ -134,6 +134,10 @@ export const REQUEST_TIMEOUT_MS = 15_000;
  * shown to a user who is actually signed in.
  */
 export const GRANT_REQUEST_TIMEOUT_MS = 60_000;
+
+// Leave room for the API's 25-second WorkOS budget and for the desktop to
+// dispatch a replay before WorkOS's 30-second grace period closes.
+const SESSION_REFRESH_TIMEOUT_MS = 26_000;
 
 type FetchLike = typeof fetch;
 
@@ -212,6 +216,8 @@ export interface CreateAccountClientOptions {
 
 export interface RefreshAccessTokenOptions {
   refreshToken: string;
+  /** Override for the one-off exchange that scopes a new sign-in. */
+  timeoutMs?: number;
   /**
    * Which workspace to authenticate into. The resulting access token carries
    * the organization claim the account authorizes on — so a refresh without
@@ -999,8 +1005,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
             }),
           },
           RefreshTokenResponseSchema,
-          // Grant-consuming: the refresh token is single-use.
-          GRANT_REQUEST_TIMEOUT_MS,
+          refreshOptions.timeoutMs ?? SESSION_REFRESH_TIMEOUT_MS,
         ),
       );
       // Only meaningful when the service echoed the field; an absent echo is

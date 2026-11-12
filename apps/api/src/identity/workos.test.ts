@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type RequestListener } from "node:http";
 import { generateKeyPair, SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorkosApiConfig } from "../config";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import {
@@ -691,15 +691,31 @@ describe("refreshTokens", () => {
     }
   }
 
+  // A 2s budget fits three attempts (backoff 250ms, then 500ms) and not a
+  // fourth (1s more), with jitter pinned to its midpoint.
+  const SHORT_REFRESH_BUDGET = { workosGrantTimeoutMs: 2_000 };
+
   async function refreshAgainst(status: number, body: unknown) {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const respond = vi.fn<RequestListener>((_request, response) => {
       response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
     });
-    const error = await withRefreshServer(respond, (auth) =>
-      auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error),
+    const startedAt = performance.now();
+    const error = await withRefreshServer(
+      respond,
+      (auth) => auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error),
+      SHORT_REFRESH_BUDGET,
     );
-    return { error, attempts: respond.mock.calls.length };
+    return {
+      error,
+      attempts: respond.mock.calls.length,
+      elapsedMs: performance.now() - startedAt,
+    };
   }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   // Only the allowlisted OAuth refusal is terminal: HTTP 400 invalid_grant.
   it("classifies 400 invalid_grant as a terminal refusal", async () => {
@@ -712,16 +728,60 @@ describe("refreshTokens", () => {
   });
 
   it.each([
-    [408, 2, { message: "timeout" }],
-    [429, 2, { message: "slow down" }],
+    [408, 3, { message: "timeout" }],
+    [429, 3, { message: "slow down" }],
     [400, 1, { error: "invalid_request", error_description: "malformed" }],
     [403, 1, { message: "forbidden" }],
-    [502, 2, { message: "bad gateway" }],
+    [502, 3, { message: "bad gateway" }],
+    [503, 3, { message: "unavailable" }],
   ])("surfaces provider status %i after %i attempts", async (status, attempts, body) => {
-    await expect(refreshAgainst(status, body)).resolves.toMatchObject({
-      attempts,
-      error: { name: "IdentityProviderError", status },
+    const result = await refreshAgainst(status, body);
+    expect(result).toMatchObject({ attempts, error: { name: "IdentityProviderError", status } });
+    expect(result.elapsedMs).toBeLessThan(SHORT_REFRESH_BUDGET.workosGrantTimeoutMs);
+  });
+
+  // WorkOS answers short-lived refresh contention with 429 and asks callers
+  // to back off briefly and present the same token again.
+  it("backs off contention and replays the same request until WorkOS answers", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const requests: Array<{ body: string; at: number }> = [];
+    const tokens = await withRefreshServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push({ body, at: performance.now() });
+          if (requests.length < 3) {
+            response
+              .writeHead(429, { "content-type": "application/json" })
+              .end(JSON.stringify({ message: "slow down" }));
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              access_token: "access_rotated",
+              refresh_token: "refresh_rotated",
+              user: { id: "user_1", email: "ada@example.com" },
+            }),
+          );
+        });
+      },
+      (auth) => auth.refreshTokens({ refreshToken: "refresh_initial" }),
+      SHORT_REFRESH_BUDGET,
+    );
+
+    expect(tokens).toMatchObject({
+      accessToken: "access_rotated",
+      refreshToken: "refresh_rotated",
     });
+    expect(requests).toHaveLength(3);
+    expect(new Set(requests.map(({ body }) => body)).size).toBe(1);
+    const [first, second, third] = requests.map(({ at }) => at);
+    expect(second! - first!).toBeGreaterThanOrEqual(200);
+    expect(third! - second!).toBeGreaterThanOrEqual(450);
   });
 
   it("recovers the original rotated pair after the provider response is interrupted", async () => {
