@@ -54,7 +54,7 @@ interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
-  /** Subagent rows with a child still at work stay pinned under their folded turn's header. */
+  /** Subagent rows with a child still at work, shown at the end of their answer. */
   liveSubagentRunEntryIds?: ReadonlySet<string>;
   /** What the transcript's subagent cards read from the chat (child threads, controls). */
   subagentRun?: Omit<SubagentRunContextValue, "visibility"> | null;

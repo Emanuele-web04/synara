@@ -501,8 +501,8 @@ function isSubagentRunWorkRow(entries: ReadonlyArray<WorkLogEntry>): boolean {
 }
 
 /**
- * A folded subagent row with a child still at work stays visible under its
- * turn's header until every child settles. `liveEntryIds` are the scanned cards
+ * A folded subagent row with a child still at work stays visible at the end
+ * of its turn's answer until every child settles. `liveEntryIds` are the scanned cards
  * with a live row; a merged row is live when any of its launches is.
  */
 export function isPinnedSubagentRunEntry(
@@ -1371,7 +1371,7 @@ export function deriveMessagesTimelineRows(input: {
       terminalAssistantMessageIds,
       collapseWork: input.collapseFinishedTurns !== false,
       // A turn folds when the agent's own turn ends. Background subagents that
-      // outlive it fold too; the header keeps the live ones pinned under it.
+      // outlive it fold too; live ones stay at the end of the answer.
       activeTurnInProgress: input.activeTurnInProgress ?? false,
       activeTurnId: input.activeTurnId ?? null,
       activeResponseStartedAt: liveBoundary.resumedStartedAt,
@@ -1667,7 +1667,7 @@ function collapseSettledTurns(
         }
         // Standalone rows stay visible without stopping the fold of nearby work.
         // Subagent rows fold with the turn: the Environment panel and the
-        // Subagents dock list them, and the header pins the ones still at work.
+        // Subagents dock list them; the ones still at work close the answer.
         if (
           !isSubagentRunWorkRow(prev.groupedEntries) &&
           prev.groupedEntries.some(isStandaloneWorkEntry)

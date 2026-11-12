@@ -231,7 +231,7 @@ const answer = {
   streaming: false,
 };
 
-it("pins adjacent live launches as one compact row under the folded turn and keeps each controller target", async () => {
+it("shows adjacent live launches as one compact row at the end of the folded turn's answer", async () => {
   const second: WorkLogEntry = {
     ...entry,
     id: "subagent-run:second",
@@ -292,10 +292,13 @@ it("pins adjacent live launches as one compact row under the folded turn and kee
   const header = screen.getByTestId("subagent-run-card").element().querySelector("button")!;
   expect(header).toHaveAttribute("aria-expanded", "false");
   expect(header.textContent).toContain("Created 2 subagents");
-  // The turn folded into "Worked for"; the live row stays visible under its header.
-  expect(screen.getByTestId("subagent-run-card").element().closest('[aria-hidden="true"]')).toBe(
-    null,
-  );
+  // The turn folded into "Worked for"; the live row closes the answer, after its text.
+  const liveCard = screen.getByTestId("subagent-run-card").element();
+  expect(liveCard.closest('[aria-hidden="true"]')).toBe(null);
+  const answerText = screen.getByText(answer.text, { exact: true }).element();
+  expect(
+    answerText.compareDocumentPosition(liveCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   const cardTarget = screen.getByTestId("subagent-run-card").element();
   const scroll = vi.spyOn(cardTarget, "scrollIntoView");
   await screen.getByRole("button", { name: "Show subagents" }).click();

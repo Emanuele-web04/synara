@@ -5776,12 +5776,13 @@ export default function ChatView({
   const handleConfirmWorktreeHandoff = useStableCallback(confirmWorktreeHandoff);
   const handleResetInteractionMode = useStableCallback(resetInteractionMode);
   const closeAgentActivityDetail = useStableCallback(() => setOpenAgentActivityId(null));
-  const runningAgentsTargetEntryId = runningAgents.targetEntryId;
+  // The capsule opens the same Subagents list as the Environment panel: every
+  // agent with its live state, a click away from opening it beside this chat.
   const onShowRunningAgents = useStableCallback(() => {
-    if (!runningAgentsTargetEntryId) return;
-    // The timeline is hidden under an open agent detail.
-    closeAgentActivityDetail();
-    timelineControllerRef.current?.scrollToWorkEntry(runningAgentsTargetEntryId);
+    if (!activeThreadId) return;
+    openRightDockPane(activeThreadId, { kind: "subagents" });
+    // As from the Environment panel: the list takes the right side.
+    closeEnvironmentPanelAfterAction();
   });
 
   // Empty state: no active thread
@@ -6423,7 +6424,7 @@ export default function ChatView({
               {runningAgents.count > 0 ? (
                 <ComposerRunningAgentsCapsule
                   count={runningAgents.count}
-                  onShow={runningAgentsTargetEntryId ? onShowRunningAgents : undefined}
+                  onShow={onShowRunningAgents}
                 />
               ) : null}
               {showComposerComputerControlEffortHint ? (

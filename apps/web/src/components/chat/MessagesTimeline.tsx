@@ -450,7 +450,7 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   workingLabel?: WorkingLabel | undefined;
   activeTurnInProgress: boolean;
-  /** Subagent rows with a child still at work stay pinned under their folded turn's header. */
+  /** Subagent rows with a child still at work, shown at the end of their answer. */
   liveSubagentRunEntryIds?: ReadonlySet<string>;
   /** User setting: false keeps every finished turn expanded instead of folding it. */
   collapseFinishedTurns?: boolean;
@@ -1552,12 +1552,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         ? [item.entry]
         : [],
     );
-    // Subagents still at work after the turn ended stay under the header.
-    const pinnedSubagentEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
-      item.kind === "work" && isPinnedSubagentRunEntry(item.entry, liveSubagentRunEntryIds)
-        ? [item.entry]
-        : [],
-    );
     const collapsedTurnItems = row.collapsedTurnItems?.filter(
       (item) =>
         item.kind !== "work" ||
@@ -1601,8 +1595,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return (
         <div
           key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
-          // With the stack's 6px gap, narration keeps the 16px a live turn gives text.
-          className={cn("py-2.5 first:pt-0.5", MUTED_LABEL_TEXT_CLASS_NAME)}
+          // The stack's 14px gap is the same step a live turn gives text.
+          className={cn("first:pt-0.5", MUTED_LABEL_TEXT_CLASS_NAME)}
           data-chat-find-narration-id={item.message.id}
           data-chat-find-document-id={item.message.id}
         >
@@ -1688,7 +1682,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         {row.turnHeader &&
           (hasCollapsedWork ||
             pinnedBackgroundEntries.length > 0 ||
-            pinnedSubagentEntries.length > 0 ||
             row.turnHeader.outcome !== "completed") &&
           !conversationOnly && (
             <div className="mb-3">
@@ -1738,23 +1731,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   fontSize={chatTypographyStyle.fontSize}
                 />
               ) : null}
-              {pinnedSubagentEntries.length > 0 ? (
-                <div className={cn(WORK_ROW_STACK_CLASS_NAME, "pt-2.5")}>
-                  {pinnedSubagentEntries.map((entry) =>
-                    renderCollapsedTurnItem(
-                      { kind: "work", id: entry.id, entry },
-                      "pinned-subagent",
-                    ),
-                  )}
-                </div>
-              ) : null}
               {pinnedBackgroundEntries.length > 0 ? (
-                <div
-                  className={cn(
-                    WORK_ROW_STACK_CLASS_NAME,
-                    pinnedSubagentEntries.length > 0 ? "pt-1.5" : "pt-2.5",
-                  )}
-                >
+                <div className={cn(WORK_ROW_STACK_CLASS_NAME, "pt-2.5")}>
                   {pinnedBackgroundEntries.length >= MIN_BACKGROUND_TASK_GROUP_SIZE ? (
                     <BackgroundTaskGroupRow
                       entries={pinnedBackgroundEntries}
@@ -1801,7 +1779,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             row.id === tailContentRowId)
           ? "pb-1"
           : row.kind === "work" || row.kind === "message-segment"
-            ? "pb-4"
+            ? "pb-3.5"
             : row.kind === "working-header" ||
                 (row.kind === "message" && row.message.role === "assistant") ||
                 row.kind === "inline-visual"
@@ -2490,6 +2468,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // Computer setup/denied cards carry the only affordance to unblock the
           // agent, so a settled turn shows the latest of each after the answer
           // instead of burying it inside the closed "Worked for" disclosure.
+          // Subagents still at work after the turn ended close the answer, right
+          // before its actions and timestamp, until they settle into "Worked for".
+          const pinnedSubagentEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
+            item.kind === "work" && isPinnedSubagentRunEntry(item.entry, liveSubagentRunEntryIds)
+              ? [item.entry]
+              : [],
+          );
           const collapsedComputerActionEntries = [
             ...new Map(
               (row.collapsedTurnItems ?? []).flatMap((item) =>
@@ -2569,10 +2554,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             const showStatusBlock = !hasCollapsedWork && display.statusEntries.length > 0;
             if (!showSummaryBlock && !showToolBlock && !showStatusBlock) return null;
             // Tool rows and status rows (subagents, notices) read as one stack of
-            // 24px rows 6px apart; the text around the stack keeps 16px.
+            // 24px rows 14px apart; the text around the stack keeps the same 14px.
             return (
               <div
-                className={cn(WORK_ROW_STACK_CLASS_NAME, placement === "leading" ? "mb-4" : "mt-4")}
+                className={cn(
+                  WORK_ROW_STACK_CLASS_NAME,
+                  placement === "leading" ? "mb-3.5" : "mt-3.5",
+                )}
               >
                 {showSummaryBlock && (
                   <div className={WORK_ROW_STACK_CLASS_NAME}>
@@ -2992,6 +2980,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
+                {pinnedSubagentEntries.length > 0 && !conversationOnly ? (
+                  <div
+                    className={cn(WORK_ROW_STACK_CLASS_NAME, "mt-3.5")}
+                    data-pinned-subagent-runs="true"
+                  >
+                    {pinnedSubagentEntries.map((workEntry) => (
+                      <TimelineWorkEntryRow
+                        key={`pinned-subagent:${row.message.id}:${workEntry.id}`}
+                        workEntry={workEntry}
+                        chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                        textFontSizePx={normalizedChatFontSizePx}
+                        density="compact"
+                        markdownCwd={markdownCwd}
+                        threadId={threadId}
+                        onImageExpand={onImageExpand}
+                        timestampFormat={timestampFormat}
+                      />
+                    ))}
+                  </div>
+                ) : null}
                 {(showPinToggle ||
                   showForkAction ||
                   assistantCopyState.visible ||

@@ -486,10 +486,13 @@ their launch position; assistant narration separates groups. The row reads like 
 children's avatars and "Created subagent" or "Created N subagents", with a shimmering running
 count while they work. It starts collapsed and preserves each invocation's status, elapsed time,
 current step and short result. A row with a child still at work stays visible after the parent
-turn ends, including while background children continue working; once every child settles, it
-folds into the turn's "Worked for" disclosure with the rest of that turn's work.
+turn ends, including while background children continue working, at the end of the answer just
+above its actions and time; once every child settles, it folds into the turn's "Worked for"
+disclosure with the rest of that turn's work. Work rows stack 14px apart and keep the same 14px
+from the text around them.
 While agents are active, an “N agents running” capsule above the composer counts them during
-and after the turn; selecting it brings the newest available running card or task into view.
+and after the turn; selecting it opens the Subagents list on the right, the same list the
+Environment panel opens.
 It replaces the duplicate floating running-card chip. In a child thread, it counts that child’s
 nested agents, not its siblings. Background commands and monitors remain in the transcript
 and sidebar background-work status; they do not count as agents. Stop all stays visible on a live header;
