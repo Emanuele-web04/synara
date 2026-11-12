@@ -325,6 +325,19 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       if (refreshQueue.get(userId) === turn) refreshQueue.delete(userId);
     }
   }
+  /**
+   * The locked ledger action for callers other than `refresh` (webhook flush,
+   * checkout, portal, erasure cleanup), queued in process like a refresh.
+   * They still call the provider under the lock, so a concurrent authorization
+   * check for the same user waits here instead of holding a pooled connection
+   * on the advisory lock.
+   */
+  function queuedAccount<T>(
+    userId: string,
+    action: (client: pg.PoolClient, row: Row) => Promise<T>,
+  ): Promise<T> {
+    return oneAtATime(userId, () => withAccount(userId, action));
+  }
   function assertAvailable(row: Pick<Row, "deleted_at">) {
     if (row.deleted_at) throw new BillingError(409, "This account is being deleted");
   }
@@ -385,7 +398,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     ): Promise<AccountBillingRedirect> {
       await initialize();
       await provider.plans();
-      const prepared = await withAccount(userId, async (client, row) => {
+      const prepared = await queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (current.has_subscription || current.access_granted)
@@ -456,7 +469,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         if (!(error instanceof BillingCheckoutNotCreatedError)) throw error;
         // A definitive schema refusal cannot have created a session. Clear only
         // this request's intent; a concurrently recovered/newer one remains fenced.
-        await withAccount(userId, async (client) => {
+        await queuedAccount(userId, async (client) => {
           await client.query(
             "UPDATE billing_accounts SET checkout_id=NULL,checkout_attempt_id=NULL,checkout_product_id=NULL,checkout_interval=NULL,checkout_url=NULL,checkout_expires_at=NULL WHERE user_id=$1 AND checkout_attempt_id=$2",
             [userId, prepared.attemptId],
@@ -467,7 +480,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           "The checkout could not validate your account details. Check your account information before trying again",
         );
       }
-      return withAccount(userId, async (client, row) => {
+      return queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         if (row.checkout_attempt_id !== prepared.attemptId)
           throw new BillingError(409, "Billing changed. Refresh the subscription status");
@@ -479,7 +492,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       });
     },
     async portal(userId: string): Promise<AccountBillingRedirect> {
-      return withAccount(userId, async (client, row) => {
+      return queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (!current.customer_id)
@@ -518,7 +531,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       );
       for (const { user_id: userId } of rows) {
         try {
-          await withAccount(userId, async (client, row) => {
+          await queuedAccount(userId, async (client, row) => {
             const pending = await client.query<{ event_id: string }>(
               "SELECT event_id FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL AND next_attempt_at <= now() LIMIT 100 FOR UPDATE",
               [userId],
@@ -544,7 +557,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       );
     },
     async cleanupDeletedAccount(userId: string) {
-      await withAccount(userId, async (client, row) => {
+      await queuedAccount(userId, async (client, row) => {
         if (!row.deleted_at) throw new BillingError(409, "Account erasure was not requested");
         if (row.checkout_attempt_id) {
           if (!row.checkout_product_id)

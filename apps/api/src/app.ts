@@ -210,10 +210,15 @@ export async function createApp(
     flushLiveActivities: () => liveActivities?.flush() ?? Promise.resolve(),
     ...(billing ? { flushBilling: () => billing.flush() } : {}),
     cleanup: async () => {
-      await accountDeletion.flush();
-      await createPairingRendezvous(db, config.apiPublicUrl).cleanup();
-      await tunnels?.cleanup();
-      await liveActivities?.prune();
+      try {
+        await accountDeletion.flush();
+        await createPairingRendezvous(db, config.apiPublicUrl).cleanup();
+        await tunnels?.cleanup();
+      } finally {
+        // Retention used to run with every push sweep; a failing sweep above
+        // must not stop it.
+        await liveActivities?.prune();
+      }
     },
   };
 }
