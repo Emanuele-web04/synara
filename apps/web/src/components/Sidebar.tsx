@@ -100,6 +100,7 @@ import {
   type ComponentType,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -1883,8 +1884,13 @@ export default function Sidebar() {
   const unfoldedForThreadIdRef = useRef<ThreadId | null>(null);
   useEffect(() => {
     const activeId = routeActiveSidebarThreadId;
-    if (!nestChildThreads || !activeId || unfoldedForThreadIdRef.current === activeId) return;
-    if (!sidebarThreads.some((thread) => thread.id === activeId)) return;
+    const alreadyUnfoldedForThisThread = !activeId || unfoldedForThreadIdRef.current === activeId;
+    if (!nestChildThreads || alreadyUnfoldedForThisThread) {
+      return;
+    }
+    if (!sidebarThreads.some((thread) => thread.id === activeId)) {
+      return;
+    }
     unfoldedForThreadIdRef.current = activeId;
     const ancestors = new Set(agentCreatedAncestorIds(activeId, sidebarThreads));
     setCollapsedChildParentIds((previous) =>
@@ -2280,7 +2286,9 @@ export default function Sidebar() {
   );
   // A pinned parent brings its agent-created children into the Pinned section.
   const pinnedFamilyByRootId = useMemo(() => {
-    if (!nestChildThreads || pinnedThreads.length === 0) return null;
+    if (!nestChildThreads || pinnedThreads.length === 0) {
+      return null;
+    }
     const pinned = new Set(pinnedThreadIds);
     const families = groupSidebarThreadFamilies(
       nestAgentCreatedThreadEntries(
@@ -2292,7 +2300,9 @@ export default function Sidebar() {
     const byRootId = new Map<ThreadId, SidebarProjectEntry[]>();
     for (const family of families) {
       const root = family[0];
-      if (root && pinned.has(root.rowId)) byRootId.set(root.rowId, family);
+      if (root && pinned.has(root.rowId)) {
+        byRootId.set(root.rowId, family);
+      }
     }
     return byRootId;
   }, [
@@ -6309,7 +6319,9 @@ export default function Sidebar() {
       rowPaddingPx + level * SIDEBAR_CHILD_INDENT_PX + SIDEBAR_THREAD_GLYPH_CENTER_PX;
     const stems: ReactNode[] = [];
     for (let level = 0; level < depth - 1; level += 1) {
-      if (nesting?.guideContinues?.[level] !== true) continue;
+      if (nesting?.guideContinues?.[level] !== true) {
+        continue;
+      }
       stems.push(
         <span
           key={level}
@@ -6322,6 +6334,11 @@ export default function Sidebar() {
     if (depth > 0) {
       const parentX = stemX(depth - 1);
       const isLast = nesting?.isLastChild === true;
+      // The hook stops 4px short of this row's glyph.
+      const hookWidthPx = stemX(depth) - SIDEBAR_THREAD_GLYPH_CENTER_PX - 4 - parentX;
+      const parentStemStyle: CSSProperties = isLast
+        ? { left: parentX, width: hookWidthPx }
+        : { left: parentX };
       stems.push(
         <span
           key="parent"
@@ -6332,13 +6349,7 @@ export default function Sidebar() {
               ? "-top-px h-[calc(var(--app-density-row-height,1.75rem)/2+1px)] rounded-bl-md border-b border-l"
               : "-inset-y-px border-l",
           )}
-          // The hook stops 4px short of this row's glyph.
-          style={{
-            left: parentX,
-            ...(isLast
-              ? { width: stemX(depth) - SIDEBAR_THREAD_GLYPH_CENTER_PX - 4 - parentX }
-              : {}),
-          }}
+          style={parentStemStyle}
         />,
       );
     }
