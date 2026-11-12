@@ -140,10 +140,7 @@ async function lookUp(deps: UserCacheDeps, userId: string, clock: () => number) 
   try {
     user = await deps.getUser(userId);
   } catch (error) {
-    if (error instanceof IdentityProviderError && error.status === 404) {
-      cache.delete(userId);
-      generation += 1;
-    }
+    if (error instanceof IdentityProviderError && error.status === 404) invalidateUserCache(userId);
     throw error;
   }
   if (startedIn === generation) cache.set(userId, { user, fetchedAt: clock() });

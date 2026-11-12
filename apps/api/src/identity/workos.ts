@@ -870,7 +870,11 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       const memberships = await ensurePersonalOrg(
         { listUserOrganizationMemberships, createOrganization, createOrganizationMembership },
         session.userId,
-        email,
+        // Cached identity is sufficient to read existing memberships. A new
+        // workspace needs a live user check before it can be created.
+        options?.freshMembership
+          ? email
+          : async () => (await verifier.getUser(session.userId)).email,
         options?.freshMembership ? { fresh: true } : undefined,
       );
       if (!session.orgId) {

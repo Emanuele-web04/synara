@@ -510,20 +510,21 @@ makes a revoked membership take effect without anything being purged.
 Membership lists are cached per process for 60 seconds, so a burst of requests
 costs one round trip while an added or removed member still takes effect on its
 own. The WorkOS user behind a session is cached the same way, and read once per
-request. Plain reads (`/me`, host listing, usage push and summary, member count)
+request. Routine requests (`/me`, host listing, usage push and summary, member count)
 accept both caches, and the read-only watch poll (`GET /hosts/:id/live-activities`)
-accepts the membership cache, so a removed member or a user deleted in WorkOS
-can keep read access for at most 60 seconds. `GET /hosts/:id/authorization`
+accepts the membership cache. When WorkOS is healthy, membership or user
+changes reach these routes within 60 seconds. `GET /hosts/:id/authorization`
 reads membership live on every poll, because the host pauses itself on its
 `ownerInOrg` answer. When a WorkOS user lookup fails with anything but a 404, a
-plain read is answered from the last known user for up to 10 minutes; a 404, a
-mutating route and an older entry are never answered that way. Concurrent cold
-lookups for one user share one call, and entries past that window are pruned.
-Every mutating or admission route (profile, workspace and account writes, host
-linking and grants, pairing, tunnels, host publication) resolves membership
-live, and the user too when one is signed in, so it refuses at once. Account
-erasure never depends on these caches: every signed-in request checks the
-durable deletion fence first.
+routine request can reuse the last known user for up to 10 minutes while the
+membership check still passes. A 404 during a cache lookup invalidates the user
+and any pending shared lookup. Concurrent cold lookups for one user share one
+call, and entries past that window are pruned. Creating a personal workspace
+requires a live user lookup. Routes that require fresh organization authorization
+(including profile and workspace writes, host linking and grants, pairing,
+tunnels, and host publication) resolve membership live and fetch the user live
+for bearer sessions. Every signed-in request checks the durable account deletion
+fence first.
 
 ## What WorkOS owning identity means in practice
 

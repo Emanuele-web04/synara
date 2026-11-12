@@ -287,6 +287,21 @@ describe("user cache", () => {
     await Promise.all(both);
   });
 
+  it("starts a new lookup after a live 404 even if an older lookup is pending", async () => {
+    const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
+    const earlier = getCachedUser(gate.deps, "user_1");
+    const fresh = getCachedUser(gate.deps, "user_1", { fresh: true });
+    const deleted = new IdentityProviderError(404, "User not found");
+    gate.calls[1]!.reject(deleted);
+    await expect(fresh).rejects.toBe(deleted);
+
+    const later = getCachedUser(gate.deps, "user_1");
+    gate.calls[2]?.reject(deleted);
+    gate.calls[0]!.resolve();
+    await expect(later).rejects.toBe(deleted);
+    await earlier;
+  });
+
   it("lets a plain read share a fresh read already in flight", async () => {
     const gate = deferredLookup({ id: "user_1", email: "ada@example.com" });
     const fresh = getCachedUser(gate.deps, "user_1", { fresh: true });
