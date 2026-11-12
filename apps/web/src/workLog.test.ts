@@ -725,6 +725,60 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.label).toBe("Pi extension");
   });
 
+  it("hides persisted Pi unsupported-UI warnings but keeps extension notifications", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-info",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "Indexing finished", nativeEventType: "info" },
+        }),
+        makeActivity({
+          id: "pi-unsupported",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Pi extension UI API 'setWidget' is not supported in Synara yet." },
+        }),
+        makeActivity({
+          id: "pi-warning",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Extension could not load its config", nativeEventType: "warning" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
+  });
+
+  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
+    const stderr = (id: string, message: string, nativeEventType?: string) =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: { message, ...(nativeEventType ? { nativeEventType } : {}) },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        // Stored only because ingestion kept it: a structured ERROR whose level
+        // the message normalization removed must not be judged again.
+        stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
+        stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
+        stderr("other-provider", "Bash was denied: outside workspace"),
+        stderr("other-plain", "Falling back to the default model"),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "codex-error",
+      "codex-structured-error",
+      "other-plain",
+      "other-provider",
+    ]);
+  });
+
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [

@@ -1,5 +1,6 @@
 import {
   classifyCodexStderr,
+  CODEX_STDERR_NATIVE_EVENT_TYPE,
   normalizeCodexUserVisibleErrorMessage,
 } from "@synara/shared/codexStderr";
 import {
@@ -537,6 +538,14 @@ export function isMissingCheckpointBaselineActivity(
   return checkpoint !== "captured" && checkpoint !== "not-applicable";
 }
 
+// Pi unsupported-UI notices are log-only now; hide the rows old hosts stored.
+// Extension notifications themselves (mode changes, saved settings) stay visible.
+const PI_UNSUPPORTED_UI_WARNING = /^Pi extension UI API '[^']+' is not supported in Synara yet\.$/;
+function isLogOnlyPiWarning(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.warning") return false;
+  return PI_UNSUPPORTED_UI_WARNING.test(asTrimmedString(asRecord(activity.payload)?.message) ?? "");
+}
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -554,6 +563,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => !isLogOnlyPiWarning(activity))
     // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
     .filter((activity) => {
       if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
@@ -565,6 +575,10 @@ export function deriveWorkLogEntries(
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
+      // Ingestion already judged the Codex stderr rows it marks, and stored their
+      // text normalized: judging that text again could hide a structured ERROR
+      // whose level the normalization removed.
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
       const message = asTrimmedString(payload?.message);
       return !message || classifyCodexStderr(message)?.kind === "notice";
     })

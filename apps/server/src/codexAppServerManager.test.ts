@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Effect, ServiceMap } from "effect";
+import { classifyCodexStderr } from "@synara/shared/codexStderr";
 import { ServerSettingsService } from "./serverSettings";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -1429,6 +1430,37 @@ describe("classifyCodexStderrLine", () => {
     expect(classifyCodexStderrLine(line)).toEqual({
       message: line,
     });
+  });
+
+  it.each([
+    "Loading plugins from cache",
+    "Connecting to MCP server stripe",
+    JSON.stringify({ level: "WARN", message: "Check the project configuration" }),
+  ])("keeps non-error plain stderr lines out of the transcript: %s", (line) => {
+    expect(classifyCodexStderrLine(line)).toBeNull();
+  });
+
+  it.each([
+    "thread/resume failed: no rollout found",
+    "FATAL: cannot open sandbox",
+    "thread 'main' panicked at src/lib.rs:10",
+    "Unhandled exception in worker",
+    "connection refused by upstream",
+    "Access denied for the workspace",
+  ])("keeps error-like plain stderr lines: %s", (line) => {
+    expect(classifyCodexStderrLine(line)).toEqual({ message: line });
+  });
+
+  it("leaves the shared classifier permissive unless the stderr policy is requested", () => {
+    expect(classifyCodexStderr("Falling back to the default model")).toEqual({
+      kind: "notice",
+      message: "Falling back to the default model",
+    });
+    expect(
+      classifyCodexStderr("Falling back to the default model", undefined, {
+        errorLikePlainLinesOnly: true,
+      }),
+    ).toBeNull();
   });
 
   it("normalizes duplicate tool argument parse failures", () => {
