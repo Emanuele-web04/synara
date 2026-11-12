@@ -399,6 +399,26 @@ it("keeps polling while idle when local access itself depends on the policy", as
   await vi.waitFor(() => expect(f.requests.length).toBeGreaterThanOrEqual(3), { timeout: 3_000 });
 });
 
+it("restores the newer true policy after a stale authenticated false reply and restart", async () => {
+  const f = await fixture(true);
+  const olderRequestStartedAt = performance.now();
+  const { policy } = await f.start(true);
+  await policy.refresh();
+  await recordRemoteBillingPolicyHint(
+    f.stateDir,
+    f.accountUrl,
+    false,
+    undefined,
+    olderRequestStartedAt,
+  );
+  await policy.stop();
+
+  f.reply.status = 503;
+  const restored = await f.start(true);
+  await restored.policy.refresh();
+  expect(restored.registry.canAdmitRemoteSession()).toBe(false);
+});
+
 it("never lets an authenticated false requested before a newer true clear enforcement", async () => {
   const f = await fixture(true);
   const requestedBeforePublicTrue = performance.now();

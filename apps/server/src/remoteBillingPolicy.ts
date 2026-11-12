@@ -22,7 +22,10 @@ interface PolicyHint {
 
 const pendingWrites = new Map<string, Promise<void>>();
 /** Running policies by hint file, so an authenticated snapshot can stand in for a public read. */
-const livePolicies = new Map<string, (hint: PolicyHint, requestedAt: number) => void>();
+const livePolicies = new Map<
+  string,
+  (hint: PolicyHint, requestedAt: number, persist: () => Promise<void>) => Promise<void>
+>();
 
 /** Monotonic time since an attempt started; never started counts as forever. */
 function elapsed(startedAt: number | undefined): number {
@@ -63,15 +66,17 @@ export async function recordRemoteBillingPolicyHint(
   }
   const filePath = policyFilePath(stateDir, accountUrl);
   const hint: PolicyHint = { apiIssuer: accountApiIssuer(accountUrl), enforced, checkedAt };
-  await withPolicyWrite(filePath, () =>
+  const persist = () =>
     Effect.runPromise(
       writeFileStringAtomically({
         filePath,
         contents: JSON.stringify(hint),
       }),
-    ),
+    );
+  const adopt = livePolicies.get(filePath);
+  await withPolicyWrite(filePath, () =>
+    adopt && requestedAt !== undefined ? adopt(hint, requestedAt, persist) : persist(),
   );
-  if (requestedAt !== undefined) livePolicies.get(filePath)?.(hint, requestedAt);
 }
 
 export interface RemoteBillingPolicyOptions {
@@ -313,8 +318,12 @@ export async function startRemoteBillingPolicy(options: RemoteBillingPolicyOptio
 
   // An authenticated snapshot carries the same deployment flag. Adopting it as a
   // read keeps the policy fresh without a public request while snapshots flow.
-  const adopt = (next: PolicyHint, requestedAt: number) => {
+  const adopt = async (next: PolicyHint, requestedAt: number, persist: () => Promise<void>) => {
     if (stopped || next.apiIssuer !== apiIssuer) return;
+    // Check while holding the write slot so a rejected snapshot cannot survive a restart.
+    if (!next.enforced && requestedAt < newestTrueRequestedAt) return;
+    await persist();
+    if (stopped) return;
     if (next.enforced) {
       newestTrueRequestedAt = Math.max(newestTrueRequestedAt, requestedAt);
       hint = next;
