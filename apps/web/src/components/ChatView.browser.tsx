@@ -3588,7 +3588,8 @@ describe("ChatView transcript geometry (full app)", () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(document.querySelector("[data-feature-tour]")).toBeNull();
       await page.getByTestId("composer-editor").click();
-      await remounted.router.navigate({ to: "/settings", search: { section: "advanced" } });
+      // The app tour lives under Settings › General › Getting started.
+      await remounted.router.navigate({ to: "/settings", search: { section: "general" } });
       await page.getByRole("button", { name: "Replay tour" }).click();
       await expect
         .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
@@ -12923,7 +12924,7 @@ describe("ChatView transcript geometry (full app)", () => {
           threadId: THREAD_ID,
           projectId: PROJECT_ID,
           thread: null,
-          defaultProvider: "codex",
+          newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
           assistantDeliveryMode: "buffered",
         });
       try {

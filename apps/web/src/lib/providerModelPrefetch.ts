@@ -17,8 +17,10 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   getProviderInstanceOptions,
   getProviderStartOptions,
+  newChatDefaultInstanceIdFor,
   resolveSelectableProviderInstanceId,
   type AppSettings,
+  type NewChatDefault,
 } from "../appSettings";
 import { isProviderKind } from "../providerOrdering";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
@@ -39,7 +41,6 @@ import {
 
 export type ProviderModelPrefetchSettings = Pick<
   AppSettings,
-  | "defaultProvider"
   | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
@@ -421,6 +422,8 @@ export function prefetchModelsForNewThread(
   queryClient: QueryClient,
   input: {
     settings: ProviderModelPrefetchSettings;
+    /** Agent and account the new chat starts on when nothing else picks one. */
+    newChatDefault: NewChatDefault;
     serverSettings?: ServerSettings | null;
     hiddenProviders?: ReadonlyArray<ProviderKind>;
     /** Normalized provider health (custom binary paths applied), see useProviderStatusesForLocalConfig. */
@@ -460,14 +463,21 @@ export function prefetchModelsForNewThread(
     draftActiveProvider: input.draftActiveProvider,
     stickyActiveProvider: input.stickyActiveProvider,
     projectDefaultProvider: input.projectDefaultProvider,
-    defaultProvider: input.settings.defaultProvider,
+    defaultProvider: input.newChatDefault.defaultProvider,
     resolveProviderForInstanceId,
   });
   const preferredInstanceId = input.providerOverride
     ? undefined
-    : [input.draftActiveProvider, input.stickyActiveProvider].find(
+    : ([input.draftActiveProvider, input.stickyActiveProvider].find(
         (instanceId) => instanceId && resolveProviderForInstanceId(instanceId) === resolvedProvider,
-      );
+      ) ??
+      // Nothing picked a provider, so the new chat starts on the default account.
+      newChatDefaultInstanceIdFor(
+        input.newChatDefault,
+        resolvedProvider,
+        input.projectDefaultProvider,
+      ) ??
+      undefined);
   // ChatView resolves the new thread's provider with the same availability
   // preference (resolveAvailableProviderPreference) once statuses are reconciled,
   // so the warm-first provider is the one the composer will actually show.

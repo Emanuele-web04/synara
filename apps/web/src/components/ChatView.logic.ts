@@ -3,7 +3,6 @@ import {
   type ComposerComputerControlMode,
 } from "../computerControlMode";
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
   type AssistantDeliveryMode,
@@ -22,7 +21,7 @@ import {
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
-import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
+import { normalizeModelSlug } from "@synara/shared/model";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
@@ -67,7 +66,7 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import { type ProviderModelOption } from "../providerModelOptions";
 import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
@@ -800,29 +799,6 @@ export function resolveThreadDetailHydration(input: {
     return "ready";
   }
   return input.detailSyncState === "failed" ? "failed" : "loading";
-}
-
-/**
- * Fallback model selection for a draft thread before the first server turn exists.
- * An explicit project default wins; otherwise the user's default provider is used
- * (pi and omp have no default model, so they are skipped), then codex. The model
- * comes from the project default only when it matches the chosen provider,
- * otherwise the provider's own default.
- */
-export function resolveDraftFallbackModelSelection(input: {
-  projectDefault: ModelSelection | null | undefined;
-  settingsDefaultProvider: ProviderKind;
-}): ModelSelection {
-  const settingsProvider =
-    input.settingsDefaultProvider === "pi" || input.settingsDefaultProvider === "omp"
-      ? null
-      : input.settingsDefaultProvider;
-  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
-  const model =
-    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
-    getDefaultModel(provider) ??
-    DEFAULT_MODEL_BY_PROVIDER.codex;
-  return buildModelSelection(provider, model);
 }
 
 /** Placeholder title for a thread that has not been sent yet (header, open-thread tabs). */

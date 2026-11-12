@@ -62,7 +62,7 @@ describe("Kanban task Debug mode", () => {
       threadId,
       projectId,
       thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 

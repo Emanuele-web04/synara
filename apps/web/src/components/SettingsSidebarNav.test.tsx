@@ -12,6 +12,7 @@ import {
   SETTINGS_SEARCH_ENTRIES,
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
 } from "../settingsSearchIndex";
 
 describe("settings labels", () => {
@@ -61,6 +62,23 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
   });
 
+  it("omits desktop-only Appearance controls in a browser", () => {
+    const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
+    const targets = results.map(settingsSearchEntryTarget);
+    expect(targets).toContain("setting-base-font-size");
+    expect(targets).not.toContain("setting-app-icon");
+    expect(targets).not.toContain("setting-use-custom-title-bar");
+  });
+
+  it("finds the agent keep-awake row only when the server supports it", () => {
+    const targets = (keepAwakeAvailable: boolean) =>
+      rankSettingsSearchEntries("keep computer awake", SETTINGS_SEARCH_ENTRIES.length, {
+        keepAwakeAvailable,
+      }).map(settingsSearchEntryTarget);
+    expect(targets(false)).not.toContain("setting-keep-computer-awake");
+    expect(targets(true)).toContain("setting-keep-computer-awake");
+  });
+
   it("respects the result limit", () => {
     expect(rankSettingsSearchEntries("e", 3)).toHaveLength(3);
   });
@@ -85,7 +103,7 @@ describe("rankSettingsSearchEntries", () => {
       rankSettingsSearchEntries(query, 12).map((entry) => t(entry.title));
     expect(titles("dictating")).toContain("Enter while dictating");
     expect(titles("diff colors")).toContain("Pull request diff colors");
-    expect(titles("enabled providers")).toContain("Enabled providers");
+    expect(titles("enabled providers")).toContain("Agents");
   });
 
   it("finds the Fold finished turns and Wait for subagents rows", () => {
@@ -100,9 +118,48 @@ describe("rankSettingsSearchEntries", () => {
     expect(targets("subagents")).toContain("setting-wait-for-subagents");
   });
 
-  it("deep-links the provider picker result to the Available CLIs row", () => {
+  it("deep-links the provider picker result to the merged Agents list", () => {
     const [top] = rankSettingsSearchEntries("picker order", 12);
-    expect(top && t(top.title)).toBe("Available CLIs");
-    expect(settingsSearchEntryTarget(top!)).toBe("setting-available-clis");
+    expect(top && t(top.title)).toBe("Agents");
+    expect(settingsSearchEntryTarget(top!)).toBe("setting-providers");
+  });
+});
+
+describe("account search", () => {
+  const context = {
+    accounts: [
+      {
+        instanceId: "codex_work",
+        label: "Work",
+        providerLabel: "Codex",
+        identity: "alex@acme.dev · Acme Labs",
+      },
+      { instanceId: "claudeAgent", label: "Personal", providerLabel: "Claude", identity: null },
+    ],
+  };
+
+  it("leads with the Accounts page for account, sign-in, and login queries", () => {
+    for (const query of ["account", "sign in", "login", "second account"]) {
+      const results = rankSettingsSearchEntries(query, 12, context);
+      expect(results.some((entry) => entry.id === "accounts:accounts")).toBe(true);
+    }
+  });
+
+  it("finds each account by name, email, or agent and opens its row", () => {
+    const [byEmail] = rankSettingsSearchEntries("acme.dev", 12, context);
+    expect(byEmail?.id).toBe("accounts:account:codex_work");
+    expect(settingsSearchEntryTitle(byEmail!)).toBe("Codex · Work");
+    expect(settingsSearchEntryTarget(byEmail!)).toBe("setting-account-codex-work");
+    const byAgent = rankSettingsSearchEntries("claude personal", 12, context);
+    expect(byAgent.some((entry) => entry.id === "accounts:account:claudeAgent")).toBe(true);
+  });
+
+  it("files moved rows under their new pages", () => {
+    const sectionOf = (query: string) => rankSettingsSearchEntries(query, 1)[0]?.section;
+    expect(sectionOf("thread tabs")).toBe("layout");
+    expect(sectionOf("time format")).toBe("general");
+    expect(sectionOf("rate limit warnings")).toBe("usage");
+    expect(sectionOf("share product analytics")).toBe("privacy");
+    expect(sectionOf("release history")).toBe("about");
   });
 });

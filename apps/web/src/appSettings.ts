@@ -617,6 +617,9 @@ export const AppSettingsSchema = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
+  // Local-only: the account (provider instance) of `defaultProvider` that new chats
+  // start on. Empty follows the agent's default, including a legacy Codex selection.
+  defaultProviderInstanceId: Schema.String.pipe(withDefaults(() => "")),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
@@ -1120,6 +1123,92 @@ export function getProviderInstanceOptions(
       }
       return left.label.localeCompare(right.label);
     });
+}
+
+export interface NewChatDefault {
+  readonly defaultProvider: ProviderKind;
+  /** Null means the agent's default account. */
+  readonly defaultProviderInstanceId: ProviderInstanceId | null;
+}
+
+export type NewChatDefaultSettings = Pick<
+  AppSettings,
+  | "codexAccounts"
+  | "codexHomePath"
+  | "defaultProvider"
+  | "defaultProviderInstanceId"
+  | "providerInstances"
+  | "selectedCodexAccountId"
+> &
+  Partial<Pick<AppSettings, "disabledProviders">>;
+
+// One shared object per (agent, account) pair, so equal defaults are the same
+// reference and memo dependencies on them survive unrelated settings writes.
+const newChatDefaultByKey = new Map<string, NewChatDefault>();
+const newChatDefaultBySettings = new WeakMap<NewChatDefaultSettings, NewChatDefault>();
+
+function internNewChatDefault(
+  defaultProvider: ProviderKind,
+  defaultProviderInstanceId: ProviderInstanceId | null,
+): NewChatDefault {
+  const key = `${defaultProvider}\u0000${defaultProviderInstanceId ?? ""}`;
+  let newChatDefault = newChatDefaultByKey.get(key);
+  if (!newChatDefault) {
+    newChatDefault = Object.freeze({ defaultProvider, defaultProviderInstanceId });
+    newChatDefaultByKey.set(key, newChatDefault);
+  }
+  return newChatDefault;
+}
+
+/**
+ * The agent and account new chats fall back to when nothing else picks one. The
+ * stored account is dropped when it no longer exists, is switched off, belongs to
+ * another agent, or its agent is disabled. Equal results are the same object.
+ */
+export function resolveNewChatDefault(settings: NewChatDefaultSettings): NewChatDefault {
+  const cached = newChatDefaultBySettings.get(settings);
+  if (cached) return cached;
+  const defaultProvider = settings.defaultProvider;
+  const storedInstanceId = settings.defaultProviderInstanceId?.trim();
+  const legacyInstanceId =
+    !storedInstanceId && defaultProvider === "codex"
+      ? resolveDefaultProviderInstanceId(settings, defaultProvider)
+      : null;
+  const requestedInstanceId =
+    storedInstanceId || (legacyInstanceId === defaultProvider ? null : legacyInstanceId);
+  let defaultProviderInstanceId: ProviderInstanceId | null = null;
+  if (requestedInstanceId && !settings.disabledProviders?.includes(defaultProvider)) {
+    const account = getProviderInstanceOptions(settings).find(
+      (option) => option.instanceId === requestedInstanceId,
+    );
+    if (account && account.enabled && account.provider === defaultProvider) {
+      defaultProviderInstanceId = account.instanceId;
+    }
+  }
+  const resolved = internNewChatDefault(defaultProvider, defaultProviderInstanceId);
+  newChatDefaultBySettings.set(settings, resolved);
+  return resolved;
+}
+
+/** A new-chat default pinned to `provider` on its default account, for explicit provider picks. */
+export function newChatDefaultForProvider(provider: ProviderKind): NewChatDefault {
+  return internNewChatDefault(provider, null);
+}
+
+/**
+ * The settings default account for a new chat on `provider`. It applies only when
+ * `provider` is the settings default agent and no project default chose the
+ * provider; otherwise the caller keeps its own (or the agent's default) account.
+ */
+export function newChatDefaultInstanceIdFor(
+  newChatDefault: NewChatDefault | null | undefined,
+  provider: ProviderKind | null | undefined,
+  projectDefaultProvider: ProviderKind | null | undefined,
+): ProviderInstanceId | null {
+  if (!newChatDefault || projectDefaultProvider || provider !== newChatDefault.defaultProvider) {
+    return null;
+  }
+  return newChatDefault.defaultProviderInstanceId;
 }
 
 export function getUnsupportedProviderInstanceOptions(

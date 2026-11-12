@@ -12,8 +12,8 @@ import {
   validateProviderAccountId,
 } from "~/lib/providerInstancePresentation";
 
-import { ProviderIcon } from "../ProviderIcon";
-import { Button } from "../ui/button";
+import { ProviderIcon } from "../../ProviderIcon";
+import { Button } from "../../ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -23,11 +23,11 @@ import {
   DialogPanel,
   DialogPopup,
   DialogTitle,
-} from "../ui/dialog";
-import { Input } from "../ui/input";
-import { SelectItem } from "../ui/select";
+} from "../../ui/dialog";
+import { Input } from "../../ui/input";
+import { SelectItem } from "../../ui/select";
 import { ProviderAccentColorControl } from "./ProviderAccentColorControl";
-import { SettingsSelectControl } from "./SettingControls";
+import { SettingsSelectControl } from "../SettingControls";
 import { useTranslation } from "~/i18n";
 
 export type AddProviderAccountConfigField = {

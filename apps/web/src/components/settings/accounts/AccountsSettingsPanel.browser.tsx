@@ -1,4 +1,4 @@
-import "../../index.css";
+import "../../../index.css";
 
 import {
   ThreadId,
@@ -16,7 +16,6 @@ import { StrictMode, useState } from "react";
 const harness = vi.hoisted(() => ({
   statuses: [] as ServerProviderStatus[],
   usage: [] as ServerProviderUsageSnapshot[],
-  reconciled: true,
   refresh: vi.fn(),
   invalidate: vi.fn(async () => {}),
   terminalListener: null as ((event: TerminalEvent) => void) | null,
@@ -50,8 +49,6 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/serverReactQuery")>()),
   serverConfigQueryOptions: () => ({}),
-  serverSettingsQueryOptions: () => ({}),
-  hasReconciledServerProviderStatuses: () => harness.reconciled,
   serverQueryKeys: {
     config: () => ["config"],
     settings: () => ["settings"],
@@ -65,6 +62,14 @@ vi.mock("~/hooks/useProviderStatusRefresh", () => ({
   useRefreshProviderStatusesNow: () => harness.refresh,
 }));
 
+// The account detail view shows the Usage page's card; its own data hooks are covered there.
+vi.mock("../ProviderUsageSettingsPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ProviderUsageSettingsPanel")>()),
+  ProviderUsageCard: (props: { accountLabel: string | null }) => (
+    <div data-testid="account-usage-card">{props.accountLabel}</div>
+  ),
+}));
+
 vi.mock("~/nativeApi", () => ({
   readNativeApi: () => harness.api,
   ensureNativeApi: () => harness.api,
@@ -73,23 +78,42 @@ vi.mock("~/nativeApi", () => ({
 }));
 
 import { AppSettingsSchema, type AppSettings } from "~/appSettings";
-import { ProvidersSettingsPanel } from "./ProvidersSettingsPanel";
-import TerminalViewport from "../terminal/TerminalViewport";
-import { terminalRuntimeRegistry } from "../terminal/terminalRuntimeRegistry";
+import TerminalViewport from "../../terminal/TerminalViewport";
+import { terminalRuntimeRegistry } from "../../terminal/terminalRuntimeRegistry";
+import { AccountsSettingsPanel } from "./AccountsSettingsPanel";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
 const props = {
   defaults,
-  settings: { ...defaults, disabledProviders: ["grok" as const] },
+  settings: defaults,
   updateSettings: vi.fn(),
   updateSettingsAndWait: vi.fn(async () => {}),
-  active: true,
-  resetEpoch: 0,
 };
+
+/** The Accounts page with its list ↔ account navigation held in local state. */
+function AccountsHarness(harnessProps: {
+  settings: AppSettings;
+  defaults: AppSettings;
+  updateSettings: (patch: Partial<AppSettings>) => void;
+  updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
+  initialAccountId?: string | null;
+}) {
+  const [accountId, setAccountId] = useState<string | null>(harnessProps.initialAccountId ?? null);
+  return (
+    <AccountsSettingsPanel
+      active
+      settings={harnessProps.settings}
+      defaults={harnessProps.defaults}
+      updateSettings={harnessProps.updateSettings}
+      updateSettingsAndWait={harnessProps.updateSettingsAndWait}
+      accountId={accountId}
+      onOpenAccount={setAccountId}
+    />
+  );
+}
 
 beforeEach(() => {
   harness.usage = [];
-  harness.reconciled = true;
   harness.refresh.mockReset();
   harness.api.terminal.open.mockReset().mockImplementation(async (input: TerminalOpenInput) => ({
     ...input,
@@ -122,230 +146,8 @@ beforeEach(() => {
   }));
 });
 
-function activityRow(provider: string) {
-  return page
-    .getByRole("switch", { name: `Disable ${provider}`, exact: true })
-    .element()
-    .closest('[data-slot="settings-row"]')!;
-}
-
-it.each([
-  { name: "default", confirm: true, expanded: "false" },
-  { name: "opt-out", confirm: false, expanded: "true" },
-])(
-  "uses the $name cold-cache preference for initial Claude disclosure",
-  async ({ confirm, expanded }) => {
-    await render(
-      <ProvidersSettingsPanel
-        {...props}
-        settings={{ ...props.settings, claudeConfirmColdCacheResume: confirm }}
-      />,
-    );
-
-    await expect
-      .element(page.getByRole("button", { name: /^Claude(?: Custom)?$/u }))
-      .toHaveAttribute("aria-expanded", expanded);
-  },
-);
-
-it("saves provider CPU priority opt-out and exposes reset to the default", async () => {
-  const updateSettings = vi.fn();
-  const result = await render(
-    <ProvidersSettingsPanel {...props} updateSettings={updateSettings} />,
-  );
-  const control = page.getByRole("switch", { name: "Keep Synara responsive" });
-  await expect.element(control).toBeChecked();
-  await control.click();
-  expect(updateSettings).toHaveBeenCalledWith({ lowerProviderProcessPriority: false });
-  await result.rerender(
-    <ProvidersSettingsPanel
-      {...props}
-      settings={{ ...props.settings, lowerProviderProcessPriority: false }}
-      updateSettings={updateSettings}
-    />,
-  );
-  await page.getByRole("button", { name: "Reset Keep Synara responsive to default" }).click();
-  expect(updateSettings).toHaveBeenLastCalledWith({ lowerProviderProcessPriority: true });
-  expect(control.element().closest('[data-slot="settings-row"]')?.textContent).toContain(
-    "Restart existing sessions",
-  );
-});
-
-it("shows installation and auth beside activity switches with visible setup guides", async () => {
-  await render(<ProvidersSettingsPanel {...props} />);
-  expect(activityRow("OpenCode").textContent).toContain("Unavailable");
-  expect(activityRow("OpenCode").textContent).toContain("not installed or not on PATH");
-  expect(activityRow("Claude").textContent).toContain("Needs sign-in");
-  expect(activityRow("Codex").textContent).toContain("Connected");
-  await page.getByRole("button", { name: /Disabled providers/u }).click();
-  expect(
-    page
-      .getByRole("switch", { name: "Enable Grok", exact: true })
-      .element()
-      .closest('[data-slot="settings-row"]')?.textContent,
-  ).toContain("Disabled · enable to check setup");
-  // Permission to run remains enabled even if the CLI is missing.
-  await expect
-    .element(page.getByRole("switch", { name: "Disable OpenCode", exact: true }))
-    .toBeChecked();
-  for (const descriptor of PROVIDER_DESCRIPTORS) {
-    const guide = page.getByRole("link", {
-      name: `${descriptor.displayName} setup guide`,
-      exact: true,
-    });
-    await expect.element(guide).toBeVisible();
-    expect(guide.element().getAttribute("href")).toBe(descriptor.setupDocsHref);
-  }
-});
-
-it("reports Claude as connected and visible when only a secondary account is ready", async () => {
-  harness.statuses = [
-    ...harness.statuses.filter((status) => status.provider !== "claudeAgent"),
-    {
-      provider: "claudeAgent",
-      driver: "claudeAgent",
-      instanceId: "claudeAgent",
-      enabled: false,
-      available: false,
-      authStatus: "unknown",
-      status: "warning",
-      checkedAt: "2026-09-16T21:46:18.000Z",
-    },
-    {
-      provider: "claudeAgent",
-      driver: "claudeAgent",
-      instanceId: "work_claude",
-      enabled: true,
-      available: true,
-      authStatus: "authenticated",
-      status: "ready",
-      checkedAt: "2026-09-16T21:46:18.000Z",
-    },
-  ];
-  await render(
-    <ProvidersSettingsPanel
-      {...props}
-      providerTarget="claudeAgent"
-      settings={{
-        ...props.settings,
-        providerInstances: {
-          claudeAgent: { driver: "claudeAgent", displayName: "Privat", enabled: false },
-          work_claude: { driver: "claudeAgent", displayName: "Work", enabled: true },
-        },
-      }}
-    />,
-  );
-
-  expect(activityRow("Claude").textContent).toContain("Connected");
-  await expect
-    .element(page.getByRole("switch", { name: "Show Claude in the provider picker" }))
-    .toBeChecked();
-  await expect.element(page.getByRole("switch", { name: "Enable Privat" })).not.toBeChecked();
-});
-
-it("keeps disabled providers only in a collapsed recovery list", async () => {
-  await render(<ProvidersSettingsPanel {...props} />);
-  expect(page.getByRole("switch", { name: "Enable Grok", exact: true }).elements()).toHaveLength(0);
-  expect(page.getByRole("button", { name: "Reorder Grok", exact: true }).elements()).toHaveLength(
-    0,
-  );
-  expect(page.getByRole("button", { name: "Grok", exact: true }).elements()).toHaveLength(0);
-  const recovery = page.getByRole("button", { name: /Disabled providers/u });
-  await expect.element(recovery).toHaveAttribute("aria-expanded", "false");
-  await recovery.click();
-  await expect
-    .element(page.getByRole("switch", { name: "Enable Grok", exact: true }))
-    .toBeVisible();
-  expect(page.getByRole("button", { name: "Reorder Grok", exact: true }).elements()).toHaveLength(
-    0,
-  );
-  expect(page.getByRole("button", { name: "Grok", exact: true }).elements()).toHaveLength(0);
-});
-
-it("restores provider options and saved configuration after re-enabling", async () => {
-  function Harness() {
-    const [settings, setSettings] = useState<AppSettings>({
-      ...defaults,
-      codexBinaryPath: "/custom/codex",
-      hiddenProviders: ["codex"],
-    });
-    const updateSettings = (patch: Partial<AppSettings>) =>
-      setSettings((current) => ({ ...current, ...patch }));
-    return (
-      <ProvidersSettingsPanel
-        {...props}
-        settings={settings}
-        updateSettings={updateSettings}
-        updateSettingsAndWait={async (patch) => updateSettings(patch)}
-      />
-    );
-  }
-  await render(<Harness />);
-  await page.getByRole("switch", { name: "Disable Codex", exact: true }).click();
-  expect(page.getByRole("button", { name: "Reorder Codex", exact: true }).elements()).toHaveLength(
-    0,
-  );
-  expect(page.getByRole("button", { name: /Codex Custom/u }).elements()).toHaveLength(0);
-  await page.getByRole("button", { name: /Disabled providers/u }).click();
-  await page.getByRole("switch", { name: "Enable Codex", exact: true }).click();
-  await expect
-    .element(page.getByRole("button", { name: "Reorder Codex", exact: true }))
-    .toBeVisible();
-  await expect
-    .element(page.getByRole("switch", { name: "Show Codex in the provider picker", exact: true }))
-    .not.toBeChecked();
-  await expect
-    .element(page.getByRole("button", { name: /Codex Custom/u }))
-    .toHaveAttribute("aria-expanded", "true");
-  const binaryPath = page
-    .getByRole("group", { name: "Codex account", exact: true })
-    .getByRole("textbox", { name: /^Codex binary path/u });
-  await expect.element(binaryPath).toHaveValue("/custom/codex");
-});
-
-it("allows recovering after every provider is disabled", async () => {
-  await render(
-    <ProvidersSettingsPanel
-      {...props}
-      settings={{ ...defaults, disabledProviders: [...defaults.providerOrder] }}
-    />,
-  );
-  expect(page.getByRole("button", { name: /^Reorder /u }).elements()).toHaveLength(0);
-  expect(page.getByRole("switch", { name: /^Disable /u }).elements()).toHaveLength(0);
-  await page.getByRole("button", { name: /Disabled providers/u }).click();
-  await expect
-    .element(page.getByRole("switch", { name: "Enable Codex", exact: true }))
-    .toBeVisible();
-});
-
-it("does not report cached provider health as connected before reconciliation", async () => {
-  harness.reconciled = false;
-  await render(<ProvidersSettingsPanel {...props} />);
-  expect(activityRow("Codex").textContent).toContain("Checking setup");
-  expect(activityRow("Codex").textContent).not.toContain("Connected");
-});
-
-it("allows rechecking setup after installing externally and blocks duplicate refreshes", async () => {
-  let finish!: () => void;
-  harness.refresh.mockImplementation(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
-  await render(<ProvidersSettingsPanel {...props} />);
-  await page.getByRole("button", { name: "Refresh status", exact: true }).click();
-  expect(harness.refresh).toHaveBeenCalledOnce();
-  await expect
-    .element(page.getByRole("button", { name: "Checking setup", exact: true }))
-    .toBeDisabled();
-  finish();
-  await expect
-    .element(page.getByRole("button", { name: "Refresh status", exact: true }))
-    .toBeEnabled();
-});
-
-// --- Accounts: one list per provider, default included, with an editor beside it. ---
+// --- Accounts page: one card per agent listing every account, default included; an
+// account opens its own detail view with the editor. ---
 
 const WORK_STATUS: ServerProviderStatus = {
   provider: "codex",
@@ -366,7 +168,6 @@ function accountProps(settings: Partial<typeof defaults> = {}) {
     props: {
       ...props,
       updateSettings,
-      providerTarget: "codex" as const,
       settings: {
         ...defaults,
         providerInstances: {
@@ -398,7 +199,8 @@ it("keeps the default account name when restoring its account defaults", async (
       codex: { driver: "codex", displayName: "Personal", accentColor: "#16a34a", enabled: false },
     },
   });
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await render(<AccountsHarness {...panelProps} />);
+  await page.getByRole("button", { name: "Select Personal", exact: true }).click();
   await page.getByRole("button", { name: /Reset Personal account/ }).click();
   expect(updateSettings).toHaveBeenLastCalledWith({
     providerInstances: {
@@ -434,12 +236,21 @@ it("shows a Claude usage authentication failure beside a locally signed-in accou
   const { props: panelProps } = accountProps({
     providerInstances: { claude_work: { driver: "claudeAgent", displayName: "Work", config: {} } },
   });
-  await render(<ProvidersSettingsPanel {...panelProps} providerTarget="claudeAgent" />);
+  await render(<AccountsHarness {...panelProps} />);
+  // The list already says so beside the account.
+  expect(
+    page
+      .getByRole("button", { name: "Select Claude", exact: true })
+      .element()
+      .closest('[role="listitem"]')?.textContent,
+  ).toContain("Usage needs attention");
+  await page.getByRole("button", { name: "Select Claude", exact: true }).click();
   const editor = page.getByRole("group", { name: "Claude account", exact: true });
   await expect.element(editor.getByText("Usage needs attention", { exact: true })).toBeVisible();
   await expect
     .element(editor.getByText("Claude usage credentials were rejected. Sign in again."))
     .toBeVisible();
+  await page.getByRole("button", { name: "Accounts", exact: true }).click();
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   await expect
     .element(
@@ -452,7 +263,7 @@ it("shows a Claude usage authentication failure beside a locally signed-in accou
 
 it("lists every account of a provider, default included, with a status title and a switch", async () => {
   harness.statuses = [...harness.statuses, WORK_STATUS];
-  await render(<ProvidersSettingsPanel {...accountProps().props} />);
+  await render(<AccountsHarness {...accountProps().props} />);
 
   await expect
     .element(page.getByRole("list", { name: "Codex accounts", exact: true }))
@@ -473,16 +284,31 @@ it("lists every account of a provider, default included, with a status title and
     .element(page.getByRole("switch", { name: "Enable Old", exact: true }))
     .not.toBeChecked();
 
-  // The default account opens first: its runtime paths, and no way to remove it.
+  // The default account keeps its own sign-in folder; the binary path and other CLI
+  // options are provider-wide and live under Providers. It cannot be removed.
+  await page.getByRole("button", { name: "Select Codex", exact: true }).click();
   const editor = page.getByRole("group", { name: "Codex account", exact: true });
-  await expect.element(editor.getByText("Codex binary path")).toBeVisible();
+  await expect.element(editor.getByText("CODEX_HOME path")).toBeVisible();
+  expect(editor.getByText("Codex binary path", { exact: true }).elements()).toHaveLength(0);
+  await expect.element(editor.getByText(/other CLI options are under Providers/u)).toBeVisible();
   expect(editor.getByRole("button", { name: "Remove" }).elements()).toHaveLength(0);
 });
 
-it("edits the selected account beside the list and offers one-click sign-in", async () => {
+it("enables accounts from the list and edits one in its own view with one-click sign-in", async () => {
   harness.statuses = [...harness.statuses, WORK_STATUS];
   const { props: panelProps, updateSettings } = accountProps();
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await render(<AccountsHarness {...panelProps} />);
+
+  // Unsigned accounts offer sign-in right in the list.
+  await expect
+    .element(page.getByRole("button", { name: "Sign in to Work", exact: true }))
+    .toBeVisible();
+  await page.getByRole("switch", { name: "Enable Work", exact: true }).click();
+  expect(updateSettings).toHaveBeenLastCalledWith({
+    providerInstances: expect.objectContaining({
+      codex_work: expect.objectContaining({ enabled: false, displayName: "Work" }),
+    }),
+  });
 
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   const editor = page.getByRole("group", { name: "Work account", exact: true });
@@ -493,16 +319,13 @@ it("edits the selected account beside the list and offers one-click sign-in", as
     .toBeVisible();
   await expect.element(editor.getByText("Environment variables")).toBeVisible();
 
-  await page.getByRole("switch", { name: "Enable Work", exact: true }).click();
-  expect(updateSettings).toHaveBeenLastCalledWith({
-    providerInstances: expect.objectContaining({
-      codex_work: expect.objectContaining({ enabled: false, displayName: "Work" }),
-    }),
-  });
-
   await editor.getByRole("button", { name: "Remove" }).click();
   const removal = updateSettings.mock.lastCall?.[0] as typeof defaults;
   expect(Object.keys(removal.providerInstances)).toEqual(["codex_old"]);
+  // Removing an account returns to the list.
+  await expect
+    .element(page.getByRole("list", { name: "Codex accounts", exact: true }))
+    .toBeVisible();
 });
 
 it("leaves Artifacts to the default Claude account and keeps another account's binary path", async () => {
@@ -521,7 +344,7 @@ it("leaves Artifacts to the default Claude account and keeps another account's b
       },
     },
   });
-  await render(<ProvidersSettingsPanel {...panelProps} providerTarget="claudeAgent" />);
+  await render(<AccountsHarness {...panelProps} />);
 
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   const editor = page.getByRole("group", { name: "Work account", exact: true });
@@ -535,7 +358,7 @@ it("leaves Artifacts to the default Claude account and keeps another account's b
 
 it("adds an account from a dialog that derives its id from the label", async () => {
   const { props: panelProps, updateSettings } = accountProps();
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await render(<AccountsHarness {...panelProps} />);
 
   await page.getByRole("button", { name: "Add account", exact: true }).first().click();
   const dialog = page.getByRole("dialog", { name: "Add account" });
@@ -574,12 +397,29 @@ it("adds an account from a dialog that derives its id from the label", async () 
   );
 });
 
+it("goes straight on to sign-in after adding an account without its own folder", async () => {
+  const { props: panelProps, updateSettings } = accountProps();
+  const save = vi.fn(async () => {});
+  await render(<AccountsHarness {...panelProps} updateSettingsAndWait={save} />);
+
+  await page.getByRole("button", { name: "Add account", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add account" });
+  await dialog.getByRole("textbox", { name: "Label" }).fill("Team EU");
+  await dialog.getByRole("button", { name: "Add account", exact: true }).click();
+
+  const added = updateSettings.mock.lastCall?.[0] as typeof defaults;
+  expect(added.providerInstances.codex_team_eu?.displayName).toBe("Team EU");
+  // The new account's settings are saved before its sign-in starts.
+  await expect.poll(() => save.mock.calls.length).toBeGreaterThan(0);
+  await expect.element(page.getByRole("dialog", { name: "Sign in to Team EU" })).toBeVisible();
+});
+
 it("routes a migrated Codex account's rename to its saved account entry", async () => {
   const { props: panelProps, updateSettings } = accountProps({
     providerInstances: {},
     codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
   });
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await render(<AccountsHarness {...panelProps} />);
 
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   const editor = page.getByRole("group", { name: "Work account", exact: true });
@@ -605,7 +445,7 @@ it("survives StrictMode, waits for account edits, and verifies selected-account 
   );
   await render(
     <StrictMode>
-      <ProvidersSettingsPanel {...accountProps().props} updateSettingsAndWait={save} />
+      <AccountsHarness {...accountProps().props} updateSettingsAndWait={save} />
     </StrictMode>,
   );
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
@@ -650,13 +490,12 @@ it("sends Pi's login selector only after startup and keeps cancellation failures
   const instanceId = "pi_work";
   const panelProps = {
     ...props,
-    providerTarget: "pi" as const,
     settings: {
       ...defaults,
       providerInstances: { [instanceId]: { driver: "pi", displayName: "Pi work", config: {} } },
     },
   };
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await render(<AccountsHarness {...panelProps} />);
   await page.getByRole("button", { name: "Select Pi work", exact: true }).click();
   await page.getByRole("button", { name: "Sign in to Pi work", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Sign in to Pi work" });
@@ -687,7 +526,7 @@ it("closes a late authentication open after the settings dialog is cancelled", a
         finishOpen = resolve;
       }),
   );
-  await render(<ProvidersSettingsPanel {...accountProps().props} />);
+  await render(<AccountsHarness {...accountProps().props} />);
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   await page.getByRole("button", { name: "Sign in to Work", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Sign in to Work" });
@@ -760,3 +599,25 @@ it.each(["ready", "error", "exited"] as const)(
     }
   },
 );
+
+it("summarizes an account's limits in its row and names it on its usage card", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  harness.usage = [
+    {
+      provider: "codex",
+      instanceId: "codex_work",
+      status: "ok",
+      source: "test",
+      updatedAt: new Date().toISOString(),
+      limits: [
+        { window: "5h", usedPercent: 42, windowDurationMins: 300 },
+        { window: "Weekly", usedPercent: 61, windowDurationMins: 10080 },
+      ],
+      usageLines: [],
+    },
+  ];
+  await render(<AccountsHarness {...accountProps().props} />);
+  expect(codexAccountRow("Work").textContent).toMatch(/58% left · .*39% left/u);
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  await expect.element(page.getByTestId("account-usage-card")).toHaveTextContent("Work");
+});

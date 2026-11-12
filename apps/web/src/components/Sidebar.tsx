@@ -151,6 +151,7 @@ import {
   type ProviderInstanceOption,
   useAppSettings,
 } from "../appSettings";
+import { useNewChatDefault } from "../hooks/useNewChatDefault";
 import { resolveTasksSurfaceSlot, type SidebarNavItemId } from "../sidebarNavOrdering";
 import { useTasksSurfaceEnabled } from "../tasksSurface";
 import {
@@ -361,6 +362,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import { summarizeProviderAccounts } from "../lib/providerAccountSummary";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
@@ -504,7 +506,11 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
-import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
+import {
+  normalizeSettingsSection,
+  settingsPageSearch,
+  type SettingsSectionId,
+} from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
   SIDEBAR_CHILD_CHIP_GAP_PX,
@@ -1518,6 +1524,7 @@ export default function Sidebar() {
     () => getProviderInstanceOptions(appSettings),
     [appSettings],
   );
+  const newChatDefault = useNewChatDefault(appSettings);
   // Projects is always available; Groups and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -1655,6 +1662,10 @@ export default function Sidebar() {
   });
   const serverCwd = serverCwdQuery.data ?? null;
   const providerStatuses = useProviderStatusesForLocalConfig();
+  // Settings navigation badges accounts that still need a sign-in and searches them by name.
+  const settingsAccountSummary = isOnSettings
+    ? summarizeProviderAccounts(appSettings, providerStatuses)
+    : null;
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   // Declared next to `keybindings` (rather than further down) because the project-row render
   // helpers above read these labels. A const declared after the closure that captures it
@@ -2982,7 +2993,7 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
-          defaultProvider: appSettings.defaultProvider,
+          newChatDefault,
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -3031,8 +3042,8 @@ export default function Sidebar() {
       await runExclusiveProjectAddition(projectAdditionLockRef, runAddProject);
     },
     [
-      appSettings.defaultProvider,
       handleNewThread,
+      newChatDefault,
       projects,
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
@@ -3089,6 +3100,7 @@ export default function Sidebar() {
         : null;
       prefetchModelsForNewThread(queryClient, {
         settings: appSettings,
+        newChatDefault,
         serverSettings: serverSettings ?? null,
         hiddenProviders: appSettings.hiddenProviders,
         draftActiveProvider: draftComposer?.activeProvider ?? null,
@@ -3109,7 +3121,15 @@ export default function Sidebar() {
         includeDroid: options?.includeDroid === true,
       });
     },
-    [appSettings, projects, providerStatuses, queryClient, serverCwd, serverSettings],
+    [
+      appSettings,
+      newChatDefault,
+      projects,
+      providerStatuses,
+      queryClient,
+      serverCwd,
+      serverSettings,
+    ],
   );
 
   const prefetchModelsForPrimaryNewThread = useCallback(() => {
@@ -8208,6 +8228,8 @@ export default function Sidebar() {
                 <SidebarPanelTitle title={t("workspace:toast_settings")} />
                 <SettingsSidebarNav
                   activeSection={activeSettingsSection}
+                  accountsNeedingSignIn={settingsAccountSummary?.needingSignIn}
+                  searchContext={{ accounts: settingsAccountSummary?.searchAccounts }}
                   onSelectSection={(section, options) => {
                     void navigate({
                       to: "/settings",
@@ -8215,8 +8237,7 @@ export default function Sidebar() {
                         ...(workspaceSurfaceHref === null
                           ? previous
                           : { computer: settingsSectionSearch.environment }),
-                        section: section === "general" ? undefined : section,
-                        target: options?.target,
+                        ...settingsPageSearch(section, options?.target),
                       }),
                     });
                   }}
@@ -9206,8 +9227,7 @@ export default function Sidebar() {
               search: (previous) => ({
                 ...previous,
                 ...(section === "usage" ? { computer: "local" } : {}),
-                section: section === "general" ? undefined : section,
-                target: options?.target,
+                ...settingsPageSearch(section, options?.target),
               }),
             });
           }}

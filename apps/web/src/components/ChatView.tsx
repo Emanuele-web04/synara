@@ -56,6 +56,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -159,6 +160,7 @@ import {
 } from "../computerStateStore";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import { resolveDraftFallbackModelSelection } from "../lib/draftFallbackModelSelection";
 import { isGroupContainerProject } from "../lib/groupProjects";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
@@ -250,7 +252,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 import { retryThreadDetailSync } from "../threadDetailSyncRetry";
-import { SETTINGS_TARGETS } from "../settingsNavigation";
+import { providerAccountsSectionId } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -278,7 +280,6 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
-  resolveDraftFallbackModelSelection,
   resolveEnvironmentPanelOpen,
   resolveComposerHighlightedItemId,
   resolveEnvironmentPanelPreferenceUpdate,
@@ -663,6 +664,7 @@ export default function ChatView({
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings, updateSettings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -836,9 +838,9 @@ export default function ChatView({
     () =>
       resolveDraftFallbackModelSelection({
         projectDefault: fallbackDraftProject?.defaultModelSelection,
-        settingsDefaultProvider: settings.defaultProvider,
+        newChatDefault,
       }),
-    [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider],
+    [fallbackDraftProject?.defaultModelSelection, newChatDefault],
   );
 
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -1509,6 +1511,7 @@ export default function ChatView({
     activeProject,
     composerDraft,
     settings,
+    newChatDefault,
     resolvedThreadWorktreePath,
     // Same gate as the Hand off menu: a coordinator is one per-group identity.
     allowProviderHandoff: isServerThread && !isCoordinatorConversation,
@@ -4145,9 +4148,8 @@ export default function ChatView({
     void navigate({
       to: "/settings",
       search: {
-        section: "providers",
-        target: SETTINGS_TARGETS.providerInstalls,
-        provider: selectedProvider,
+        section: "accounts",
+        target: providerAccountsSectionId(selectedProvider),
       },
     });
   }, [navigate, selectedProvider]);
@@ -5181,7 +5183,7 @@ export default function ChatView({
     hasNativeUserMessages,
     composerEditorRef,
     scheduleComposerFocus,
-    defaultProvider: settings.defaultProvider,
+    newChatDefault,
   });
 
   const {
@@ -5761,9 +5763,9 @@ export default function ChatView({
     () =>
       resolveDraftFallbackModelSelection({
         projectDefault: activeProject?.defaultModelSelection,
-        settingsDefaultProvider: settings.defaultProvider,
+        newChatDefault,
       }),
-    [activeProject?.defaultModelSelection, settings.defaultProvider],
+    [activeProject?.defaultModelSelection, newChatDefault],
   );
 
   const handlePromptChange = useStableCallback(onPromptChange);

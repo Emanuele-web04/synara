@@ -103,6 +103,50 @@ export function SettingsSection({
 }
 
 /**
+ * A titled block of on/off options inside a settings card, laid out two to a line. For a
+ * family of small switches that all say "show X here" (the Environment panel's sections),
+ * where a full row each would bury the card. Separators come from the parent card.
+ */
+export function SettingsToggleGroup({ title, children }: { title: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <div className={SETTINGS_CARD_ROW_CLASS_NAME} data-slot="settings-toggle-group">
+      <h3 className="text-ui-sm text-muted-foreground">{t(title)}</h3>
+      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One option in a {@link SettingsToggleGroup}: its name and switch on one line. The
+ * description stays available as the hover hint; `id` keeps search deep links working.
+ */
+export function SettingsToggleItem({
+  id,
+  title,
+  description,
+  control,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  control: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      id={id}
+      title={t(description)}
+      className="flex min-h-8 scroll-mt-24 items-center justify-between gap-3"
+      data-slot="settings-toggle"
+    >
+      <span className="min-w-0 truncate text-ui text-foreground">{t(title)}</span>
+      {control}
+    </div>
+  );
+}
+
+/**
  * Dashed placeholder block for "nothing here yet" / "nothing matched" / status copy.
  * `layout` picks the two shapes in use: a one-line left-aligned status strip, or a
  * taller centered empty block. `tone` switches to the destructive treatment for

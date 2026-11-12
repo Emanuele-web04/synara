@@ -14,7 +14,7 @@ import { useWorkspaceSessions, type WorkspaceSession } from "./workspaceSessions
 
 let selectedHost: WorkspaceSession["host"] | null = null;
 
-const FORWARDED_SEARCH_KEYS = ["section", "target", "provider"] as const;
+const FORWARDED_SEARCH_KEYS = ["section", "target", "provider", "account"] as const;
 
 function settingsPath(search: Record<string, unknown>): string {
   const params = new URLSearchParams();

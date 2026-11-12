@@ -19,7 +19,7 @@ import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
 } from "~/lib/serverReactQuery";
-import type { AppSettings } from "../../appSettings";
+import type { AppSettings, NewChatDefault } from "../../appSettings";
 import {
   getProviderInstanceOptions,
   getProviderStartOptions,
@@ -49,6 +49,8 @@ interface ChatProviderModelsInput {
   activeProject: Project | undefined;
   composerDraft: ReturnType<typeof useComposerThreadDraft>;
   settings: AppSettings;
+  /** Agent new chats start on (see useNewChatDefault). */
+  newChatDefault: NewChatDefault;
   resolvedThreadWorktreePath: string | null;
   // The picker may leave the thread's provider: picking another one hands the
   // thread off to it in place when the next message is sent.
@@ -61,6 +63,7 @@ export function useChatProviderModels({
   activeProject,
   composerDraft,
   settings,
+  newChatDefault,
   resolvedThreadWorktreePath,
   allowProviderHandoff,
 }: ChatProviderModelsInput) {
@@ -122,7 +125,7 @@ export function useChatProviderModels({
       resolveUnsentComposerProvider({
         explicitProvider: selectedProviderByThreadId,
         threadProvider,
-        defaultProvider: settings.defaultProvider,
+        defaultProvider: newChatDefault.defaultProvider,
         statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
@@ -133,7 +136,7 @@ export function useChatProviderModels({
       localProviderStatuses,
       providerStatusesReconciled,
       selectedProviderByThreadId,
-      settings.defaultProvider,
+      newChatDefault.defaultProvider,
       settings.hiddenProviders,
       settings.providerOrder,
       threadProvider,

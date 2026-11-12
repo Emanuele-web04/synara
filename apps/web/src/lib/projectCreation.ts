@@ -7,12 +7,12 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
-  type ProviderKind,
   type SpaceId,
 } from "@synara/contracts";
-import { getDefaultModel } from "@synara/shared/model";
 
+import type { NewChatDefault } from "../appSettings";
 import { readActiveSpaceId } from "../spacesUiStore";
+import { resolveDraftFallbackModelSelection } from "./draftFallbackModelSelection";
 import {
   extractDuplicateProjectCreateProjectId,
   isDuplicateProjectCreateError,
@@ -45,10 +45,10 @@ export async function createOrRecoverProjectFromPath(input: {
   createIfMissing?: boolean;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
-  /** Persisted default provider (settings.defaultProvider) that seeds the new
-   * project's default model selection. Defaults to codex when omitted, and pi
-   * falls back to codex because it has no default model slug. */
-  defaultProvider?: ProviderKind;
+  /** New-chat default (see resolveNewChatDefault) that seeds the new project's
+   * default model selection. pi and omp fall back to codex because they have no
+   * default model slug; the default account is kept only with its own agent. */
+  newChatDefault: NewChatDefault;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
   delayMs?: number;
@@ -71,10 +71,6 @@ export async function createOrRecoverProjectFromPath(input: {
   const additionalFolders = (input.additionalFolders ?? [])
     .map((folder) => folder.trim())
     .filter((folder) => folder.length > 0);
-  const seedProvider =
-    input.defaultProvider === "pi" || input.defaultProvider === "omp"
-      ? "codex"
-      : (input.defaultProvider ?? "codex");
 
   try {
     await input.api.orchestration.dispatchCommand({
@@ -86,10 +82,10 @@ export async function createOrRecoverProjectFromPath(input: {
       workspaceRoot,
       ...(additionalFolders.length > 0 ? { additionalFolders } : {}),
       createWorkspaceRootIfMissing: input.createIfMissing === true,
-      defaultModelSelection: {
-        provider: seedProvider,
-        model: getDefaultModel(seedProvider),
-      },
+      defaultModelSelection: resolveDraftFallbackModelSelection({
+        projectDefault: null,
+        newChatDefault: input.newChatDefault,
+      }),
       // A project created while a space is active belongs to that space — filing it
       // afterwards would bounce the sidebar back to Void to follow the new project.
       // Callers with an explicit destination (the Create Project dialog) override it.
