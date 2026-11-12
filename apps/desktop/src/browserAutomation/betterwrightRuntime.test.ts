@@ -286,17 +286,25 @@ describe("Betterwright runtime errors", () => {
       },
     ],
     [
+      "locator.fill: Error: private-page-detail",
+      {
+        name: "Error",
+        api: "locator.fill",
+        message: expect.stringContaining("withheld"),
+      },
+    ],
+    [
       "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3000/private-path?token=private-token",
       {
         api: "page.goto",
-        message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3000/…",
+        message: "page.goto: net::ERR_CONNECTION_REFUSED",
       },
     ],
     [
       "Playwright code timed out after 15000ms",
       { name: "TimeoutError", message: expect.stringContaining("exceeded its 15000 ms budget") },
     ],
-    ["Unexpected token ';'", { name: "SyntaxError", message: "Unexpected token ';'" }],
+    ["Unexpected token ';'", { name: "SyntaxError", message: "Unexpected token '…'" }],
     [
       "Cannot read properties of undefined (reading 'foo')",
       { name: "TypeError", message: "Cannot read properties of undefined (reading a property)" },
@@ -344,11 +352,13 @@ describe("Betterwright runtime errors", () => {
     "private-password is not defined",
     "getByRole is not defined: private-password",
     "private-password: document is not defined",
+    "page.privatePassword: unexpected failure",
   ])("does not classify or expose unknown error text: %s", async (error) => {
     mocks.run.mockResolvedValue({ ok: false, error });
     const failure = await run().catch((value: unknown) => value);
     expect(failure).toMatchObject({ browserError: { code: "BrowserEvaluationFailed" } });
     expect(JSON.stringify(failure)).not.toContain("private-password");
+    expect(JSON.stringify(failure)).not.toContain("privatePassword");
     expect(JSON.stringify(failure)).not.toContain("sign in manually");
   });
 

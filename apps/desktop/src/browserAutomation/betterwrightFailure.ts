@@ -108,6 +108,31 @@ const PAGE_EVALUATION_METHODS = new Set([
   "$$eval",
   "waitForFunction",
 ]);
+const PLAYWRIGHT_METHODS = new Set([
+  ...PAGE_EVALUATION_METHODS,
+  "check",
+  "click",
+  "dblclick",
+  "dragTo",
+  "fill",
+  "goto",
+  "hover",
+  "insertText",
+  "press",
+  "selectOption",
+  "uncheck",
+  "waitFor",
+  "waitForLoadState",
+  "waitForURL",
+]);
+const NAVIGATION_ERRORS = new Set([
+  "ERR_ABORTED",
+  "ERR_CERT_AUTHORITY_INVALID",
+  "ERR_CONNECTION_REFUSED",
+  "ERR_CONNECTION_RESET",
+  "ERR_NAME_NOT_RESOLVED",
+  "ERR_TIMED_OUT",
+]);
 type ScriptErrorName = NonNullable<BrowserAutomationErrorCause["name"]>;
 const ERROR_NAMES: ReadonlySet<string> = new Set<ScriptErrorName>([
   "Error",
@@ -140,7 +165,7 @@ const ENGINE_MESSAGE_SHAPES: ReadonlyArray<readonly [RegExp, ScriptErrorName]> =
 const FIXED_RUNTIME_MESSAGES: ReadonlyArray<RegExp> = [
   /^human\.type did not change the field\. The target may ignore synthetic key events \(common in Draft\.js and other rich-text editors\)\.$/,
   /^human\.type needs about \d{1,9} ms to type \d{1,9} characters at human pace, but about \d{1,9} ms remain in this call\. Nothing was typed\. Use locator\.fill\(text\) or page\.keyboard\.insertText\(text\) for long text, or raise timeoutMs\.$/,
-  /^getByRole name must be a string or RegExp, received [a-z]{1,16}\.$/,
+  /^getByRole name must be a string or RegExp, received (?:null|array|undefined|object|boolean|number|bigint|symbol|function)\.$/,
   /^No active page; call openPage\(url\)\.$/,
   /^(?:Open another|Close this) tab through the host\.$/,
   /^Host-owned tabs must be opened or closed by the host\.$/,
@@ -184,24 +209,27 @@ const engineMessageName = (message: string): ScriptErrorName | undefined =>
 const withoutPropertyName = (message: string): string =>
   message.replace(/\((reading|setting) '[^'\n]*'\)$/, "($1 a property)");
 
-// Inside page code every name and quoted value in an engine message may come
-// from the page, so only the kind of error survives.
-const withoutPageText = (message: string): string =>
+// The script can use page-derived values, so keep only the engine error shape.
+const withoutVariableErrorText = (message: string): string =>
   withoutPropertyName(message)
     .replace(/'[^'\n]*'/g, "'…'")
     .replace(/^[\w$.]{1,100}(?= is not (?:a function|iterable|a constructor)$)/, "a value")
     .replace(/^[A-Za-z_$][\w$]{0,63}(?= is not defined$)/, "a name");
 
-function playwrightApiCause(api: string, detail: string): BrowserAutomationErrorCause {
+function playwrightApiCause(
+  api: string,
+  method: string,
+  detail: string,
+): BrowserAutomationErrorCause {
   const timeout = /^Timeout (\d{1,9})ms exceeded\.?$/.exec(detail);
   if (timeout) return makeCause(`${api}: Timeout ${timeout[1]}ms exceeded.`, "TimeoutError", api);
   const thrown = /^([A-Za-z]{1,32}): (.*)$/.exec(detail);
   const name = thrown && ERROR_NAMES.has(thrown[1]!) ? (thrown[1] as ScriptErrorName) : undefined;
   const body = name ? thrown![2]! : detail;
-  if (PAGE_EVALUATION_METHODS.has(api.slice(api.indexOf(".") + 1))) {
+  if (PAGE_EVALUATION_METHODS.has(method)) {
     const engineName = engineMessageName(body);
     if (engineName) {
-      return makeCause(`${api}: ${withoutPageText(body)}`, name ?? engineName, api);
+      return makeCause(`${api}: ${withoutVariableErrorText(body)}`, name ?? engineName, api);
     }
     return makeCause(
       `${api}: ${name ?? "An error"} was thrown in the page; its message was withheld because page code controls it.`,
@@ -217,9 +245,12 @@ function playwrightApiCause(api: string, detail: string): BrowserAutomationError
       api,
     );
   }
-  // Playwright prefixes its own failures with the API. The first line holds
-  // framework text and the script's own locator; call logs are already dropped.
-  return makeCause(`${api}: ${body}`, name, api);
+  const navigationError =
+    method === "goto" ? /^net::(ERR_[A-Z_]+)(?: at |$)/.exec(body)?.[1] : undefined;
+  if (navigationError && NAVIGATION_ERRORS.has(navigationError)) {
+    return makeCause(`${api}: net::${navigationError}`, name, api);
+  }
+  return makeCause(`${api}: The operation failed. Its error text was withheld.`, name, api);
 }
 
 export interface BetterwrightFailure {
@@ -266,11 +297,11 @@ export function describeBetterwrightFailure(
     );
   }
   const api = /^([a-z][A-Za-z]{0,31})\.([$A-Za-z][\w$]{0,40}): (.+)$/.exec(line);
-  if (api && PLAYWRIGHT_OBJECTS.has(api[1]!)) {
-    return failed(playwrightApiCause(`${api[1]}.${api[2]}`, api[3]!));
+  if (api && PLAYWRIGHT_OBJECTS.has(api[1]!) && PLAYWRIGHT_METHODS.has(api[2]!)) {
+    return failed(playwrightApiCause(`${api[1]}.${api[2]}`, api[2]!, api[3]!));
   }
   const engineName = engineMessageName(line);
-  if (engineName) return failed(makeCause(withoutPropertyName(line), engineName));
+  if (engineName) return failed(makeCause(withoutVariableErrorText(line), engineName));
   if (FIXED_RUNTIME_MESSAGES.some((message) => message.test(line))) return failed(makeCause(line));
   return failed(makeCause(WITHHELD_ERROR[source]));
 }
