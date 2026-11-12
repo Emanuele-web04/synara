@@ -245,7 +245,8 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
       expect(connect.mock.calls.filter((args) => typeof args[0] !== "function")).toHaveLength(0);
       expect(query).toHaveBeenCalledTimes(1);
       expect(String(query.mock.calls[0]![0])).not.toMatch(
-        /\b(insert|update|delete|for update|begin|pg_advisory)/i,
+        // Whole keywords only: the statement reads the `deleted_at` column.
+        /\b(insert|update|delete|for update|begin|pg_advisory\w*)\b/i,
       );
       vi.setSystemTime(checkedAt + 30_001);
       expect(await service.access(userId)).toMatchObject({ access: "granted" });

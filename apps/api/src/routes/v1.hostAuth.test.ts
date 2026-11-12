@@ -1778,7 +1778,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           // explicit checkout, and none happened.
           expect(statements).toHaveBeenCalledTimes(polls.length);
           for (const [text] of statements.mock.calls)
-            expect(String(text)).not.toMatch(/\b(insert|update|delete|for update|pg_advisory)/i);
+            // Whole keywords only: the statement reads the `deleted_at` column.
+            expect(String(text)).not.toMatch(
+              /\b(insert|update|delete|for update|pg_advisory\w*)\b/i,
+            );
           expect(checkouts.mock.calls.filter((args) => typeof args[0] !== "function")).toEqual([]);
         } finally {
           await billingDb.pool.end();
