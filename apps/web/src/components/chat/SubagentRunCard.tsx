@@ -1,10 +1,11 @@
 // FILE: SubagentRunCard.tsx
-// Purpose: The transcript card a turn's subagents fold into, at the point the
-// parent launched them: a header ("2 subagents · 1 running · 12s", Stop all) and
-// one unboxed line per subagent (name, role, model, live state with the
-// current command, or the past-tense outcome with a one-line result). Nested
-// subagents sit collapsed under the row that launched them. Live cards start
-// expanded; finished ones fold into a single work row that expands on click.
+// Purpose: The transcript row a turn's subagents fold into, at the point the
+// parent launched them. It reads like a tool row: the subagents' avatars and
+// "Created 2 subagents · 1 running · 12s" (Stop all while live), with one
+// unboxed line per subagent underneath (avatar, name, role, model, live state
+// with the current command, or the past-tense outcome with a one-line result).
+// Nested subagents sit collapsed under the row that launched them. The row
+// starts collapsed and expands on click.
 // Layer: Chat transcript UI
 // Exports: SubagentRunCard, SubagentIdentityLine
 
@@ -13,23 +14,15 @@ import { pluralize } from "~/i18n/pluralize";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
-import {
-  BackgroundTrayIcon,
-  ChatBubbleIcon,
-  CheckIcon,
-  ChevronRightIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
-  StopIcon,
-} from "~/lib/icons";
+import { BackgroundTrayIcon, ChatBubbleIcon, ChevronRightIcon, StopIcon } from "~/lib/icons";
 import { subagentStatusTextToneClassName } from "~/lib/subagentPresentation";
 import { cn } from "~/lib/utils";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { retainThreadDetailSubscription } from "../../threadDetailSubscriptionRetention";
 import type { WorkLogEntry } from "../../session-logic";
 import { Button } from "../ui/button";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
-import { LiveStatusSpinner } from "../ui/spinner";
 import type { ComposerSubagentStripItem } from "./ComposerSubagentStrip.logic";
 import {
   collectLiveSubagentRunItems,
@@ -40,12 +33,15 @@ import {
   type SubagentRunAction,
   type SubagentRunRow,
 } from "./SubagentRunCard.logic";
+import { SubagentAvatar, SubagentAvatarStack } from "./SubagentAvatar";
 import { useSubagentRunContext, type SubagentRunContextValue } from "./subagentRunContext";
 import { useTranslation } from "~/i18n";
 
 const EMPTY_THREADS: SubagentRunContextValue["threads"] = [];
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const EMPTY_TASK_ENDS: SubagentRunContextValue["taskEndByToolUseId"] = new Map();
+// Avatars in the header before the rest collapse into "+N".
+const HEADER_AVATAR_LIMIT = 3;
 
 /** Name, role, and model of one subagent: the identity line every row shares. */
 export function SubagentIdentityLine({ item }: { item: ComposerSubagentStripItem }) {
@@ -134,16 +130,17 @@ function SubagentRunRowView({
           aria-label={t("workspace:open", { value0: row.item.primaryLabel })}
         >
           <span className="flex min-w-0 flex-1 items-center gap-2">
+            <SubagentAvatar
+              seed={row.item.key}
+              accentColor={row.item.accentColor}
+              className="size-3.5"
+            />
             <SubagentIdentityLine item={row.item} />
             <span className="chat-markdown flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground/70">
-              {live || row.phase === "starting" ? (
-                <LiveStatusSpinner
-                  className={cn("size-3 shrink-0", subagentStatusTextToneClassName("running"))}
-                />
-              ) : row.phase === "done" ? (
-                <CheckIcon className={cn("size-3 shrink-0", wordToneClassName)} />
-              ) : null}
-              <span className={cn("shrink-0", wordToneClassName)}>{description.word}</span>
+              {/* The avatar leads the row; a live word shimmers like the header count. */}
+              <span className={cn("shrink-0", wordToneClassName, live && "shimmer")}>
+                {description.word}
+              </span>
               {description.detail?.kind === "action" ? (
                 <ActionText action={description.detail.action} />
               ) : null}
@@ -258,7 +255,14 @@ function collectThreadIds(rows: ReadonlyArray<SubagentRunRow>): string[] {
   ]);
 }
 
-export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
+export function SubagentRunCard({
+  workEntry,
+  fontSizePx,
+}: {
+  workEntry: WorkLogEntry;
+  /** The transcript's tool-row size, so the row matches the tool rows around it. */
+  fontSizePx?: number;
+}) {
   const { t } = useTranslation();
 
   const context = useSubagentRunContext();
@@ -296,7 +300,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
   // Elapsed clocks tick locally so the transcript does not re-render each second.
   const nowMs = useNowMs(card.isLive);
   const [expanded, setExpandedChoice] = useState(false);
-  const header = describeSubagentRunHeader(card, nowMs);
+  const header = describeSubagentRunHeader(card, nowMs, t);
   const liveItems = collectLiveSubagentRunItems(card.rows);
   const onStop = context?.onStop;
 
@@ -346,77 +350,70 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
     };
   }, [visibilityIdsKey, visibility]);
 
-  const HeaderIcon = card.isLive
-    ? null
-    : card.counts.failed > 0
-      ? CircleAlertIcon
-      : card.allStopped || (card.counts.interrupted > 0 && card.counts.done === 0)
-        ? null
-        : CircleCheckIcon;
+  const avatars = card.rows.slice(0, HEADER_AVATAR_LIMIT).map((row) => row.item);
+  const hiddenAvatarCount = card.rows.length - avatars.length;
 
   return (
     <div
       ref={rootRef}
       data-testid="subagent-run-card"
       data-subagent-run-card={entryId}
+      data-live={card.isLive || undefined}
       data-expanded={expanded || undefined}
-      className="my-0.5 text-ui"
+      className={cn(fontSizePx === undefined && "text-ui")}
+      style={fontSizePx === undefined ? undefined : { fontSize: `${fontSizePx}px` }}
     >
-      <div className="flex min-w-0 items-center gap-1 py-0.5">
+      <div className="flex min-w-0 items-center gap-1">
+        {/* The same muted line as a tool row: the launch reads as one action,
+            not a status card. Liveness rides on the shimmering count. */}
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className={cn(
+            "inline-flex min-w-0 max-w-full items-center gap-1.5 py-0.5 text-left leading-5 transition-colors duration-200 hover:text-foreground",
+            MUTED_LABEL_TEXT_CLASS_NAME,
+          )}
           aria-expanded={expanded}
           onClick={() => setExpandedChoice(!expanded)}
         >
-          {card.isLive ? (
-            <LiveStatusSpinner
-              className={cn("size-3.5 shrink-0", subagentStatusTextToneClassName("running"))}
-            />
-          ) : HeaderIcon ? (
-            <HeaderIcon className={cn("size-3.5 shrink-0", "text-muted-foreground")} />
-          ) : (
-            <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
-              <span className="size-2 rounded-[2px] bg-muted-foreground/70" />
-            </span>
-          )}
-          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
-            <span className="font-medium text-foreground/88">{header.title}</span>
-            {header.nestedLabel ? (
-              <span className="rounded-md bg-[var(--color-background-button-secondary)] px-1.5 text-ui-sm text-muted-foreground/75">
-                {header.nestedLabel}
-              </span>
+          <span className="flex shrink-0 items-center gap-1" data-subagent-run-avatars="true">
+            <SubagentAvatarStack items={avatars} className="[&>svg]:size-3.5" />
+            {hiddenAvatarCount > 0 ? (
+              <span className="text-ui-xs tabular-nums">+{hiddenAvatarCount}</span>
             ) : null}
+          </span>
+          <span className="min-w-0 truncate">
+            <span>{header.title}</span>
+            {header.subject ? <span className="text-foreground/80"> {header.subject}</span> : null}
+            {header.nestedLabel ? <span> ({header.nestedLabel})</span> : null}
             {header.segments.map((segment) => (
               <Fragment key={segment.text}>
-                <Separator />
+                <span aria-hidden="true"> · </span>
                 <span
                   className={cn(
-                    "text-muted-foreground/75",
+                    segment.tone === "running" && "shimmer",
                     segment.tone === "failed" && subagentStatusTextToneClassName("failed"),
                   )}
+                  data-subagent-run-segment={segment.tone ?? undefined}
                 >
                   {segment.text}
                 </span>
               </Fragment>
             ))}
             {header.durationLabel ? (
-              <>
-                <Separator />
-                <span className="tabular-nums text-muted-foreground/75">
-                  {header.durationLabel}
-                </span>
-              </>
+              <span className="tabular-nums">
+                <span aria-hidden="true"> · </span>
+                {header.durationLabel}
+              </span>
             ) : null}
           </span>
-          <DisclosureChevron open={expanded} className="text-muted-foreground/55" />
+          <DisclosureChevron open={expanded} className="text-muted-foreground/70" />
         </button>
         {card.isLive && liveItems.length > 0 && onStop ? (
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            className="shrink-0"
+            className="shrink-0 text-foreground/80"
             onClick={() => void Promise.all(liveItems.map((item) => onStop(item)))}
           >
             <StopIcon className="size-2.5" />
@@ -425,8 +422,8 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
         ) : null}
       </div>
       <DisclosureRegion open={expanded}>
-        {/* Rows hang under the header's label, unboxed, like an expanded tool group. */}
-        <div className="ml-4 pb-0.5">
+        {/* Rows hang unboxed under the header, their avatars in its avatar column. */}
+        <div className="-mx-1.5 pt-0.5 pb-0.5">
           {card.rows.map((row) => (
             <SubagentRunRowView
               key={row.key}

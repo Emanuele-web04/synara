@@ -23,6 +23,7 @@ import {
   formatTurnHeaderLabel,
   formatTurnResumedBy,
   isPinnedBackgroundTaskEntry,
+  isPinnedSubagentRunEntry,
   normalizeCompactToolLabel,
   summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
@@ -947,7 +948,7 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
-  it("keeps adjacent child groups visible after parent completion without crossing narration", () => {
+  it("folds adjacent child groups into the settled turn without crossing narration", () => {
     const launch = (id: string, child: string, time: string): TimelineEntry => ({
       kind: "work",
       id,
@@ -988,11 +989,36 @@ describe("deriveMessagesTimelineRows", () => {
         }),
       ],
     });
+    // The Environment panel and Subagents dock list them; the transcript keeps
+    // them inside "Worked for", still one row per launch group.
+    expect(rows.filter((row) => row.kind === "work")).toEqual([]);
+    const done = messageRow(rows, "done")!;
+    expect(collapsedSignature(done)).toEqual(["work:a", "narration:narration", "work:c"]);
     expect(
-      rows
-        .filter((row) => row.kind === "work")
-        .map((row) => row.groupedEntries.map((entry) => entry.id)),
+      (done.collapsedTurnItems ?? []).flatMap((item) =>
+        item.kind === "work" ? [item.entry.subagentRun?.entryIds ?? [item.entry.id]] : [],
+      ),
     ).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("pins only subagent rows that still have a child at work", () => {
+    const entry = (id: string, entryIds?: string[]) => ({
+      id,
+      createdAt: "2026-01-01T00:00:00Z",
+      label: "Subagents",
+      tone: "info" as const,
+      subagentRun: { members: [], ...(entryIds ? { entryIds } : {}) },
+    });
+    expect(isPinnedSubagentRunEntry(entry("a"), new Set(["a"]))).toBe(true);
+    expect(isPinnedSubagentRunEntry(entry("a", ["a", "b"]), new Set(["b"]))).toBe(true);
+    expect(isPinnedSubagentRunEntry(entry("a"), new Set(["b"]))).toBe(false);
+    expect(isPinnedSubagentRunEntry(entry("a"), undefined)).toBe(false);
+    expect(
+      isPinnedSubagentRunEntry(
+        { id: "w", createdAt: "2026-01-01T00:00:00Z", label: "Read", tone: "tool" },
+        new Set(["w"]),
+      ),
+    ).toBe(false);
   });
 
   it("keeps async question cards visible after their originating turn settles", () => {
@@ -2540,10 +2566,11 @@ describe("deriveMessagesTimelineRows", () => {
     expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
   });
 
-  it("keeps a settled turn expanded while background subagents are still running", () => {
+  it("folds a settled turn while background subagents are still running", () => {
+    // SYN-143: an idle parent with live background subagents used to stay
+    // half-folded, leaving a "Used N tools" summary above its answer.
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
-      subagentsRunning: true,
       activeTurnId: TurnId.makeUnsafe("t1"),
       timelineEntries: [
         userEntry("u1", "2026-01-01T00:00:00Z"),
@@ -2564,8 +2591,12 @@ describe("deriveMessagesTimelineRows", () => {
     const visibleMessageIds = rows
       .filter((row): row is MessageTimelineRow => row.kind === "message")
       .map((row) => String(row.message.id));
-    expect(visibleMessageIds).toEqual(["u1", "a1", "a2"]);
-    expect(messageRow(rows, "a2")!.collapsedTurnItems).toBeUndefined();
+    expect(visibleMessageIds).toEqual(["u1", "a2"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+    expect(messageRow(rows, "a2")!.collapsedTurnItems?.map((item) => item.id)).toEqual([
+      "a1",
+      "w1",
+    ]);
   });
 
   it("keeps finished turns expanded when folding is turned off", () => {

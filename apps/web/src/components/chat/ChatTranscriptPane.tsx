@@ -54,7 +54,8 @@ interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
-  subagentsRunning?: boolean;
+  /** Subagent rows with a child still at work stay pinned under their folded turn's header. */
+  liveSubagentRunEntryIds?: ReadonlySet<string>;
   /** What the transcript's subagent cards read from the chat (child threads, controls). */
   subagentRun?: Omit<SubagentRunContextValue, "visibility"> | null;
   /** The newest card with subagents at work; drives the floating "N running" chip. */
@@ -166,7 +167,7 @@ export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
-  subagentsRunning,
+  liveSubagentRunEntryIds,
   subagentRun,
   runningSubagentRun,
   subagentThread,
@@ -418,7 +419,7 @@ export function ChatTranscriptPane({
               {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
-              subagentsRunning={subagentsRunning === true}
+              {...(liveSubagentRunEntryIds ? { liveSubagentRunEntryIds } : {})}
               collapseFinishedTurns={collapseFinishedTurns !== false}
               activeTurnStartedAt={activeTurnStartedAt}
               listRef={listRef}

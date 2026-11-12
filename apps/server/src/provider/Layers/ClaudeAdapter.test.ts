@@ -2345,6 +2345,7 @@ describe("ClaudeAdapterLive", () => {
         ["image_edit", "image_generation"],
         ["mcp__visuals__generate_image", "image_generation"],
         ["mcp__agent_image__image_edit", "image_generation"],
+        ["mcp__agentmail__send_message", "mcp_tool_call"],
         ["mcp__image_gen__view_image", "mcp_tool_call"],
         ["mcp__visuals__render__generate_image", "mcp_tool_call"],
         ["view_image", "image_view"],
@@ -3769,16 +3770,31 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg",
         uuid: "bg-change-1",
       } as unknown as SDKMessage);
-      // Same task again plus one addition: only the addition is announced.
+      // Same task again plus additions: only the non-ambient addition is
+      // announced, and the ambient task is left out of the notice's task list.
       harness.query.emit({
         type: "system",
         subtype: "background_tasks_changed",
         tasks: [
           { task_id: "bg-1", task_type: "local_bash", description: "sleep 120" },
           { task_id: "bg-2", task_type: "subagent", description: "beta" },
+          { task_id: "bg-amb", task_type: "monitor", description: "watch logs", ambient: true },
         ],
         session_id: "sdk-session-bg",
         uuid: "bg-change-2",
+      } as unknown as SDKMessage);
+      // An ambient-only addition announces nothing.
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          { task_id: "bg-1", task_type: "local_bash", description: "sleep 120" },
+          { task_id: "bg-2", task_type: "subagent", description: "beta" },
+          { task_id: "bg-amb", task_type: "monitor", description: "watch logs", ambient: true },
+          { task_id: "bg-amb-2", task_type: "local_bash", description: "index", ambient: true },
+        ],
+        session_id: "sdk-session-bg",
+        uuid: "bg-change-ambient",
       } as unknown as SDKMessage);
       // Removal-only change announces nothing.
       harness.query.emit({
@@ -3809,6 +3825,14 @@ describe("ClaudeAdapterLive", () => {
         // notices apart from plain runtime warnings.
         const detail = firstNotice.payload.detail as Record<string, unknown>;
         assert.equal(detail.subtype, "background_tasks_changed");
+      }
+      const secondNotice = warnings[1];
+      if (secondNotice?.type === "runtime.warning") {
+        const detail = secondNotice.payload.detail as { tasks?: Array<{ task_id: string }> };
+        assert.deepEqual(
+          detail.tasks?.map((task) => task.task_id),
+          ["bg-1", "bg-2"],
+        );
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

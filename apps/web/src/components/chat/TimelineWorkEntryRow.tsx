@@ -1,7 +1,7 @@
 // FILE: TimelineWorkEntryRow.tsx
 // Purpose: Renders transcript work/tool rows and their inline details.
 // Layer: Web chat presentation component
-// Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
+// Exports: TimelineWorkEntryRow, EditedFileRowContent
 
 import type { ModelSelection, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -275,6 +275,8 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
   if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
   if (workEntry.activityKind === "checkpoint.baseline.skipped") return CircleAlertIcon;
+  // Plain runtime notices share the tool-row look: a warning glyph, not italics.
+  if (isPlainRuntimeNoticeWorkEntry(workEntry)) return CircleAlertIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
   if (workEntry.monitorNotification)
@@ -388,32 +390,6 @@ function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
       fallbackLabel: workEntry.label,
       status: toolWorkEntryStatus(workEntry),
     }) !== null
-  );
-}
-
-// Render command, agent-task, file-change, and file-read rows at the tighter
-// compact density so every tool-call line shares one height regardless of whether
-// it carries a disclosure chevron.
-export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
-  if (isCodexActivityStatusWorkEntry(workEntry) || workEntry.monitorNotification) {
-    return true;
-  }
-  // Commands stay compact even when surfaced with a non-terminal icon (reads like
-  // `cat` wear the file icon, searches the magnifier).
-  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
-    return true;
-  }
-  const EntryIcon = workEntryIcon(workEntry);
-  return (
-    EntryIcon === TerminalIcon ||
-    EntryIcon === HammerIcon ||
-    EntryIcon === AgentTaskIcon ||
-    EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon ||
-    // File-read and search rows (e.g. `Read …`) have no disclosure chevron; keep
-    // them at the same compact height as command rows.
-    EntryIcon === FileReadIcon ||
-    EntryIcon === SearchIcon
   );
 }
 
@@ -807,7 +783,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
 
   // A turn's subagents fold into one entry that renders as the subagent card.
   if (workEntry.subagentRun) {
-    return <SubagentRunCard workEntry={workEntry} />;
+    return <SubagentRunCard workEntry={workEntry} fontSizePx={textFontSizePx} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.
@@ -955,7 +931,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              {!isCodexStatusRow && !isPlainRuntimeNoticeRow ? (
+              {!isCodexStatusRow ? (
                 <span
                   className={cn(
                     "flex shrink-0 items-center justify-center",
@@ -1019,7 +995,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       // Match the leading icon's tone so the row reads as one muted unit, and
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                      isPlainRuntimeNoticeRow && "italic",
                     )}
                     data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
                     data-codex-status-row={isCodexStatusRow ? "true" : undefined}

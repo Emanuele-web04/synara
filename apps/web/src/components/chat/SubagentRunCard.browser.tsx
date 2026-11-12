@@ -231,7 +231,7 @@ const answer = {
   streaming: false,
 };
 
-it("groups adjacent launches in one compact card while preserving each controller target after parent completion", async () => {
+it("pins adjacent live launches as one compact row under the folded turn and keeps each controller target", async () => {
   const second: WorkLogEntry = {
     ...entry,
     id: "subagent-run:second",
@@ -267,6 +267,8 @@ it("groups adjacent launches in one compact card while preserving each controlle
             <Timeline
               controllerRef={controller}
               onNavigate={onNavigate}
+              // ChatView's card scan: both background launches still have a child at work.
+              liveSubagentRunEntryIds={new Set([entry.id, second.id])}
               timelineEntries={[
                 { id: "brief", kind: "message", createdAt: brief.createdAt, message: brief },
                 { id: entry.id, kind: "work", createdAt: "2026-10-10T00:00:01.000Z", entry },
@@ -289,7 +291,11 @@ it("groups adjacent launches in one compact card while preserving each controlle
   expect(screen.container.querySelectorAll("[data-subagent-run-card]")).toHaveLength(1);
   const header = screen.getByTestId("subagent-run-card").element().querySelector("button")!;
   expect(header).toHaveAttribute("aria-expanded", "false");
-  expect(header.textContent).toContain("2 subagents");
+  expect(header.textContent).toContain("Created 2 subagents");
+  // The turn folded into "Worked for"; the live row stays visible under its header.
+  expect(screen.getByTestId("subagent-run-card").element().closest('[aria-hidden="true"]')).toBe(
+    null,
+  );
   const cardTarget = screen.getByTestId("subagent-run-card").element();
   const scroll = vi.spyOn(cardTarget, "scrollIntoView");
   await screen.getByRole("button", { name: "Show subagents" }).click();

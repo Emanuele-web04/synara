@@ -1396,7 +1396,11 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
   ) {
     return "plan";
   }
-  if (normalized.includes("agent")) {
+  // Subagent launches are Claude's own tools. An MCP tool whose server or name
+  // merely mentions "agent" never carries subagent routing data, so it would
+  // render as an unrouted agent task instead of a plain tool call.
+  const isMcpTool = mcpSeparator > "mcp__".length;
+  if (!isMcpTool && normalized.includes("agent")) {
     return "collab_agent_tool_call";
   }
   if (
@@ -6175,7 +6179,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               context.knownBackgroundTaskIds.add(task.task_id);
               context.foregroundTasks.delete(task.task_id);
             }
-            if (added.length === 0) {
+            // Ambient tasks are Claude's own housekeeping, which Claude Code keeps
+            // out of the transcript. They stay tracked above (turn-end settling
+            // reads the known set) but are never announced or listed.
+            const announced = added.filter((task) => task.ambient !== true);
+            if (announced.length === 0) {
               return;
             }
             // Each notice lands on the thread that owns the work: a subagent's
@@ -6183,10 +6191,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const ownerByTaskId = new Map(
               tasks.map((task) => [task.task_id, resolveBackgroundTaskOwner(context, task)]),
             );
-            const owners = new Set(added.map((task) => ownerByTaskId.get(task.task_id)!));
+            const owners = new Set(announced.map((task) => ownerByTaskId.get(task.task_id)!));
             for (const owner of owners) {
-              const ownedAdded = added.filter((task) => ownerByTaskId.get(task.task_id) === owner);
-              const ownedTasks = tasks.filter((task) => ownerByTaskId.get(task.task_id) === owner);
+              const ownedAdded = announced.filter(
+                (task) => ownerByTaskId.get(task.task_id) === owner,
+              );
+              const ownedTasks = tasks.filter(
+                (task) => ownerByTaskId.get(task.task_id) === owner && task.ambient !== true,
+              );
               const labels = ownedAdded.map((task) =>
                 task.description.trim().length > 0 ? task.description.trim() : task.task_type,
               );
