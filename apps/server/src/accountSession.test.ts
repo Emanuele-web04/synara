@@ -474,6 +474,72 @@ describe("status", () => {
     }
   });
 
+  it("backs off a refused device registration and retries at once for another workspace", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const registerDevice = vi.fn(() =>
+        Promise.reject(
+          new AccountApiError({
+            code: "subscription_required",
+            status: 403,
+            message: "Remote access needs a subscription",
+          }),
+        ),
+      );
+      const session = sessionFor(
+        baseDir,
+        makeClient({
+          me: async (token) =>
+            meResponse(token === "access-2" ? { organization: { id: "org_2", name: "Team" } } : {}),
+          registerDevice,
+          startHostLink: accountServiceUnavailable,
+        }),
+      );
+
+      // Status reads keep reporting signed in, but stop re-posting the refusal.
+      for (let read = 0; read < 3; read++)
+        expect(await session.status()).toMatchObject({ state: "signed-in" });
+      expect(registerDevice).toHaveBeenCalledOnce();
+
+      // The first retry waits at most a minute; the next refusal doubles it.
+      vi.advanceTimersByTime(60_000);
+      await session.status();
+      await session.status();
+      expect(registerDevice).toHaveBeenCalledTimes(2);
+
+      // Another workspace is another registration: no waiting.
+      await writeAccountCredentials(
+        baseDir,
+        credentials({ userId: "user_1", organizationId: "org_2", accessToken: "access-2" }),
+      );
+      expect(await session.status()).toMatchObject({ state: "signed-in" });
+      expect(registerDevice).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retrying a registration that failed without a refusal", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const registerDevice = vi.fn(accountServiceUnavailable);
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        me: async () => meResponse(),
+        registerDevice,
+        startHostLink: accountServiceUnavailable,
+      }),
+    );
+    await session.status();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+  });
+
   // Renewal runs every few minutes; one that fails without a terminal refusal
   // is an outage to retry, not a sign-out.
   it.each([503, 401])("surfaces refresh errors with status %i", async (statusCode) => {

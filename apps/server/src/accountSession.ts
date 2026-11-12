@@ -105,6 +105,8 @@ import {
 import { createServerAccountClient } from "./accountHttp";
 import { createSignInTiming, type SignInTiming } from "./accountSignInTiming";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
+import { isAccountRefusal } from "./accountRefusal";
+import { exponentialBackoffMs, jitterMs } from "./backoff";
 import { noteRemoteAccessGranted, nudgeHostAuthorization } from "./hostConnectivitySignals";
 import { Effect, Path as EffectPath } from "effect";
 import { deriveServerPaths } from "./config";
@@ -156,6 +158,15 @@ const SIGN_IN_ENROLLMENT_WAIT_MS = 5_000;
  * the app's follow-up reads are out; the reporter's own debounce is the same.
  */
 const SIGN_IN_USAGE_NUDGE_DELAY_MS = 5_000;
+
+/**
+ * After the account refuses this shell's device registration (a 403), status
+ * reads stop re-posting it: the first retry waits a minute, each further
+ * refusal doubles that, up to an hour. A change of account, workspace or
+ * device, a new sign-in, or remote access being granted retries at once.
+ */
+const REFUSED_REGISTRATION_RETRY_BASE_MS = 60_000;
+const REFUSED_REGISTRATION_RETRY_MAX_MS = 60 * 60_000;
 
 /**
  * What a slow provider surfaces when nothing was persisted. Deliberately not
@@ -356,6 +367,10 @@ export function createAccountSession(
    * report the pre-enrollment state the app could otherwise cache.
    */
   let signInEnrollment: Promise<void> | undefined;
+  /** The last refused device registration, for the status-read backoff. */
+  let registrationRefusal:
+    | { readonly identity: string; readonly refusals: number; readonly retryAt: number }
+    | undefined;
 
   /**
    * Loopback PKCE attempts this process has started, keyed by the opaque
@@ -637,6 +652,48 @@ export function createAccountSession(
     return promise;
   }
 
+  /**
+   * Enrollment's device registration, skipped while a refusal for the same
+   * account, workspace and device is backing off. Explicit uses of the device
+   * (dialing, grants) call `ensureShellDevice` directly and never wait on this.
+   */
+  async function registerShellDeviceUnlessRefused(knownUserId: string): Promise<void> {
+    const stored = await readAccountCredentials(credentialDir);
+    if (!stored) return;
+    const identity = JSON.stringify([
+      stored.accountUrl,
+      stored.organizationId,
+      knownUserId,
+      stored.deviceId ?? null,
+      stored.deviceJkt ?? null,
+    ]);
+    const refused = registrationRefusal?.identity === identity ? registrationRefusal : undefined;
+    if (refused && performance.now() < refused.retryAt) return;
+    try {
+      await ensureShellDevice(knownUserId);
+      registrationRefusal = undefined;
+    } catch (error) {
+      if (isAccountRefusal(error)) {
+        const refusals = (refused?.refusals ?? 0) + 1;
+        registrationRefusal = {
+          identity,
+          refusals,
+          retryAt:
+            performance.now() +
+            jitterMs(
+              exponentialBackoffMs(
+                refusals,
+                REFUSED_REGISTRATION_RETRY_BASE_MS,
+                REFUSED_REGISTRATION_RETRY_MAX_MS,
+              ),
+              { towards: "shorter" },
+            ),
+        };
+      }
+      throw error;
+    }
+  }
+
   /** Never rejects: both halves retry on a later status read. */
   async function enrollDesktop(knownUserId: string, timing?: SignInTiming): Promise<void> {
     if (remoteConnectionsUnavailableReason()) return;
@@ -644,7 +701,7 @@ export function createAccountSession(
       ? (step, run) => timing.measure(step, run)
       : (_step, run) => run();
     try {
-      await measure("device_registration", () => ensureShellDevice(knownUserId));
+      await measure("device_registration", () => registerShellDeviceUnlessRefused(knownUserId));
     } catch {
       // A later status read retries; the durable user session remains valid.
     }
@@ -757,6 +814,8 @@ export function createAccountSession(
     // this line — the status `/me` below included — can fail without losing
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
+    // A new sign-in retries a refused registration at once.
+    registrationRefusal = undefined;
 
     // Enrollment and the final `/me` are independent once the pair is on
     // disk, so they run together. Enrollment gets a bounded wait and then
@@ -1101,7 +1160,10 @@ export function createAccountSession(
     async billingStatus() {
       const status = await withBillingSession((token, client) => client.billingStatus(token));
       // A host refused for lack of access may retry its own authorization now.
-      if (status.access === "granted") noteRemoteAccessGranted();
+      if (status.access === "granted") {
+        registrationRefusal = undefined;
+        noteRemoteAccessGranted();
+      }
       return status;
     },
     billingCheckout(input) {
@@ -1163,6 +1225,7 @@ export function createAccountSession(
         const { deviceId: _deviceId, deviceJkt: _deviceJkt, ...remaining } = stored;
         await writeAccountCredentials(credentialDir, remaining);
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
       });
     },
 
@@ -1241,6 +1304,7 @@ export function createAccountSession(
 
     async recoverDeviceRegistration({ expectedAccount, revokedJkt }) {
       deviceRegistrationAttempt = undefined;
+      registrationRefusal = undefined;
       hostSecretsCoordinator = undefined;
       try {
         return await recoverAccountDeviceRegistration(
@@ -1249,6 +1313,7 @@ export function createAccountSession(
         );
       } finally {
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
         hostSecretsCoordinator = undefined;
       }
     },
@@ -1288,6 +1353,7 @@ export function createAccountSession(
         );
         await deleteHostIdentity(hostIdentityPath);
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
         hostSecretsCoordinator = undefined;
       });
     },
@@ -1300,6 +1366,7 @@ export function createAccountSession(
         stdout: () => {},
       });
       deviceRegistrationAttempt = undefined;
+      registrationRefusal = undefined;
       hostSecretsCoordinator = undefined;
     },
 
