@@ -368,6 +368,8 @@ export {
   InboxIcon,
   Camera01Icon,
   CornerDownRightIcon as SteerIcon,
+  // Agent-created child threads nested under their creator.
+  CornerDownRightIcon as ChildThreadsIcon,
   Key01Icon,
   MoreHorizontalIcon,
   LinkSquare02Icon as ExternalLinkIcon,

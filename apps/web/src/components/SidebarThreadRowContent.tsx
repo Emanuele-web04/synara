@@ -129,6 +129,7 @@ export function SidebarThreadRowContent({
   variant,
   pendingStatusColorClass,
   suffix,
+  glyphSlotClassName,
 }: {
   thread: SidebarThreadSummary;
   terminalEntryPoint: boolean;
@@ -138,21 +139,34 @@ export function SidebarThreadRowContent({
   variant: "pinned" | "standard";
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
+  /**
+   * Wraps the leading glyph in a title-height slot, so it stays on the first line of a row that
+   * wraps (a folded parent's badge) and can be faded under an overlaid control.
+   */
+  glyphSlotClassName?: string | undefined;
 }) {
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
   const hasPendingDraft = useThreadHasPendingDraft(thread.id);
 
+  const leadingGlyph = terminalEntryPoint ? (
+    <SidebarGlyph icon={TerminalIcon} variant="chrome" />
+  ) : showThreadProviderAvatar ? (
+    <ProviderAvatarWithTerminal
+      thread={thread}
+      terminalStatus={terminalStatus}
+      terminalCount={terminalCount}
+    />
+  ) : null;
+
   return (
     <>
-      {terminalEntryPoint ? (
-        <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-      ) : showThreadProviderAvatar ? (
-        <ProviderAvatarWithTerminal
-          thread={thread}
-          terminalStatus={terminalStatus}
-          terminalCount={terminalCount}
-        />
-      ) : null}
+      {glyphSlotClassName !== undefined && leadingGlyph ? (
+        <span className={cn("flex h-5 shrink-0 items-center", glyphSlotClassName)}>
+          {leadingGlyph}
+        </span>
+      ) : (
+        leadingGlyph
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
         <span
           className={cn(
