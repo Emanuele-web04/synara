@@ -349,7 +349,9 @@ export type SidebarProjectEntry = {
   thread: SidebarThreadSummary;
   /** Nesting level (0 = top level); only set when agent-created threads are nested. */
   depth?: number;
+  /** Direct agent-created children, when nesting is on. 0 when this entry has none. */
   childCount?: number;
+  /** Whether this entry's children are folded away. Always false when childCount is 0. */
   childrenCollapsed?: boolean;
 };
 
@@ -374,8 +376,11 @@ export function nestAgentCreatedThreadEntries(
       ids.has(parentId)
     ) {
       const siblings = childrenByParent.get(parentId);
-      if (siblings) siblings.push(thread);
-      else childrenByParent.set(parentId, [thread]);
+      if (siblings) {
+        siblings.push(thread);
+      } else {
+        childrenByParent.set(parentId, [thread]);
+      }
     } else {
       roots.push(thread);
     }
@@ -384,19 +389,29 @@ export function nestAgentCreatedThreadEntries(
   const entries: SidebarProjectEntry[] = [];
   const visited = new Set<ThreadId>();
   const containsActive = (id: ThreadId, seen: Set<ThreadId>): boolean => {
-    if (id === activeThreadId) return true;
-    if (seen.has(id)) return false;
+    if (id === activeThreadId) {
+      return true;
+    }
+    if (seen.has(id)) {
+      return false;
+    }
     seen.add(id);
     return (childrenByParent.get(id) ?? []).some((child) => containsActive(child.id, seen));
   };
   // Hidden subtrees count as visited so the cycle fallback below doesn't resurrect them.
   const markHidden = (thread: SidebarThreadSummary) => {
-    if (visited.has(thread.id)) return;
+    if (visited.has(thread.id)) {
+      return;
+    }
     visited.add(thread.id);
-    for (const child of childrenByParent.get(thread.id) ?? []) markHidden(child);
+    for (const child of childrenByParent.get(thread.id) ?? []) {
+      markHidden(child);
+    }
   };
   const visit = (thread: SidebarThreadSummary, depth: number) => {
-    if (visited.has(thread.id)) return;
+    if (visited.has(thread.id)) {
+      return;
+    }
     visited.add(thread.id);
     const children = childrenByParent.get(thread.id) ?? [];
     const collapsed = children.length > 0 && collapsedParentIds.has(thread.id);
@@ -405,19 +420,25 @@ export function nestAgentCreatedThreadEntries(
       rowId: thread.id,
       thread,
       depth,
-      ...(children.length > 0 ? { childCount: children.length, childrenCollapsed: collapsed } : {}),
+      childCount: children.length,
+      childrenCollapsed: collapsed,
     });
     for (const child of children) {
-      if (collapsed && !containsActive(child.id, new Set())) {
+      const childIsHidden = collapsed && !containsActive(child.id, new Set());
+      if (childIsHidden) {
         markHidden(child);
         continue;
       }
       visit(child, depth + 1);
     }
   };
-  for (const root of roots) visit(root, 0);
+  for (const root of roots) {
+    visit(root, 0);
+  }
   // Cycles (A↔B) have no root; surface any unvisited thread at the top level.
-  for (const thread of threads) visit(thread, 0);
+  for (const thread of threads) {
+    visit(thread, 0);
+  }
   return entries;
 }
 

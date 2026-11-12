@@ -1837,7 +1837,10 @@ export default function Sidebar() {
   const toggleChildParentCollapsed = useCallback((threadId: ThreadId) => {
     setCollapsedChildParentIds((previous) => {
       const next = new Set(previous);
-      if (!next.delete(threadId)) next.add(threadId);
+      const wasExpanded = next.delete(threadId);
+      if (!wasExpanded) {
+        next.add(threadId);
+      }
       return next;
     });
   }, []);
@@ -6225,23 +6228,24 @@ export default function Sidebar() {
     });
 
     const childCount = nesting?.childCount ?? 0;
+    const isNested = nestDepth > 0;
+    // Each nesting level indents 12px; the guide line sits 6px left of the row's own indent.
+    const nestedRowStyle: CSSProperties | undefined = isNested
+      ? ({
+          paddingLeft: `${nestDepth * 12}px`,
+          "--child-guide-left": `${nestDepth * 12 - 6}px`,
+        } as CSSProperties)
+      : undefined;
     const row = (
       <SidebarMenuSubItem
         key={thread.id}
         data-thread-hover-anchor={hoverAnchorId}
         className={cn(
           "group/thread-row w-full",
-          nestDepth > 0 &&
+          isNested &&
             "relative before:pointer-events-none before:absolute before:inset-y-0 before:left-[var(--child-guide-left)] before:w-px before:bg-border/60",
         )}
-        style={
-          nestDepth > 0
-            ? ({
-                paddingLeft: `${nestDepth * 12}px`,
-                "--child-guide-left": `${nestDepth * 12 - 6}px`,
-              } as CSSProperties)
-            : undefined
-        }
+        style={nestedRowStyle}
         data-thread-item
       >
         <Tooltip>
@@ -6354,15 +6358,14 @@ export default function Sidebar() {
         </Tooltip>
       </SidebarMenuSubItem>
     );
-    if (childCount === 0) return row;
+    if (childCount === 0) {
+      return row;
+    }
     const collapsed = nesting?.childrenCollapsed === true;
     return (
       <Fragment key={thread.id}>
         {row}
-        <SidebarMenuSubItem
-          className="w-full"
-          style={nestDepth > 0 ? { paddingLeft: `${nestDepth * 12}px` } : undefined}
-        >
+        <SidebarMenuSubItem className="w-full" style={nestedRowStyle}>
           <SidebarMenuSubButton
             render={<button type="button" />}
             size="sm"
