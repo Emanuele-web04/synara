@@ -189,3 +189,16 @@ export function derivePendingUserInputProgress(
     canAdvance: Boolean(resolvedAnswer),
   };
 }
+
+const RECOMMENDED_LABEL_SUFFIX = /\s*\(recommended\)\s*$/i;
+
+/** Splits a trailing "(Recommended)" off an option label for display, so the card can show it
+ *  as a tag. Selection and the submitted answer keep the provider's original label. */
+export function splitRecommendedOptionLabel(label: string): {
+  label: string;
+  recommended: boolean;
+} {
+  const stripped = label.replace(RECOMMENDED_LABEL_SUFFIX, "");
+  if (stripped === label || stripped.length === 0) return { label, recommended: false };
+  return { label: stripped, recommended: true };
+}

@@ -6,6 +6,7 @@ import {
   hasCompletePendingUserInputAnswers,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
+  splitRecommendedOptionLabel,
   togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
 
@@ -220,6 +221,30 @@ describe("pending user input question progress", () => {
       isLastQuestion: false,
       isComplete: false,
       canAdvance: true,
+    });
+  });
+});
+
+describe("splitRecommendedOptionLabel", () => {
+  it("strips a trailing (Recommended) in any case", () => {
+    expect(splitRecommendedOptionLabel("16px everywhere (Recommended)")).toEqual({
+      label: "16px everywhere",
+      recommended: true,
+    });
+    expect(splitRecommendedOptionLabel("Keep it (recommended) ")).toEqual({
+      label: "Keep it",
+      recommended: true,
+    });
+  });
+
+  it("leaves other labels unchanged", () => {
+    expect(splitRecommendedOptionLabel("Recommended defaults")).toEqual({
+      label: "Recommended defaults",
+      recommended: false,
+    });
+    expect(splitRecommendedOptionLabel("(Recommended)")).toEqual({
+      label: "(Recommended)",
+      recommended: false,
     });
   });
 });
