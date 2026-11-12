@@ -153,6 +153,12 @@ describe("browser automation catalogue projection", () => {
     );
     expect(batch.description).toContain("persist each batch before continuing");
     expect(batch.description).toContain("Boundary is start/end only when observed");
+    expect(batch.description).toContain(
+      "Wait with locator.waitFor, page.waitForURL, page.waitForFunction or page.waitForTimeout(ms); setTimeout does not exist.",
+    );
+    expect(batch.description).toContain(
+      "For long text use locator.fill or page.keyboard.insertText",
+    );
   });
 
   it("keeps the provider-facing tool catalogue below its context budget", () => {
@@ -166,7 +172,7 @@ describe("browser automation catalogue projection", () => {
       providerCatalogue.reduce((sum, tool) => sum + tool.description.length, 0),
     ).toBeLessThanOrEqual(11_000);
     expect(BROWSER_TOOL_DEFINITIONS_BY_NAME.browser_run.description.length).toBeLessThanOrEqual(
-      2_900,
+      3_050,
     );
   });
 

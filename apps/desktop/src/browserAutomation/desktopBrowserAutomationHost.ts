@@ -52,6 +52,7 @@ import {
   type BrowserNavigationObservation,
 } from "./navigationTracker";
 import { runBetterwright } from "./betterwrightRuntime";
+import { describeBetterwrightFailure } from "./betterwrightFailure";
 import type { BrowserVault } from "./browserVault";
 import type { BrowserVaultCapture } from "./browserVaultCapture";
 
@@ -1131,6 +1132,7 @@ export class DesktopBrowserAutomationHost {
               retryable: false,
               phase: "evaluate",
               effectMayHaveCommitted: true,
+              cause: describeBetterwrightFailure(error, "runtime").cause,
             });
           }
           const correlation = await this.reconcileWindowOpen(
