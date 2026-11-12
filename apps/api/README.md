@@ -107,6 +107,11 @@ the last read is older than fifteen seconds. A loopback server without an auth
 token keeps the fifteen-second cadence, because the policy decides each of its
 unauthenticated local requests.
 
+On Cloudflare the `/instance` body is answered by the Durable Object from the
+last `200` the running API process returned, without a request to the container.
+It is kept per runtime-configuration fingerprint and dropped whenever the
+container starts, so it is exactly as fresh as the process it describes.
+
 | Setting                                 | Runs on               | Default and rollout use                                                                                                                                                                            |
 | --------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SYNARA_ACCOUNT_URL`                    | Remote execution host | Set explicitly to the canonical account API origin for the actual Remote deployment. Match the intended account/host authority; do not copy a trial URL or infer it from a generic UI fallback.    |
@@ -877,6 +882,50 @@ release step.
 Other platforms work the same way: any host that can run `bun run start` with a
 Postgres URL and a persistent public origin is enough. There is no filesystem
 state — everything lives in Postgres.
+
+## Request cost and measurement
+
+Released desktops poll this API continuously, and the database plan bills by
+egress, so the hot paths are built to make few round trips and to hold no
+connection while a provider answers:
+
+- **Read-only host polls** (`GET /hosts/:id/authorization`,
+  `GET /hosts/:id/live-activities`) verify the host proof with one plain
+  `SELECT`; `last_seen_at` is written at most once a minute. Every route that
+  changes state, signs or issues something keeps the transaction and
+  `FOR UPDATE` on the host row.
+- **Authorization snapshot**: the live membership read and the revocation query
+  run together. Billing is checked after ownership, so a host whose owner left
+  never causes a provider call.
+- **Billing reconcile**: the stored authorization is one read-only statement
+  for 30 seconds. After that the provider is asked first, outside any
+  transaction; the ledger row is then locked and the snapshot written only if
+  the row is unchanged, otherwise it is re-decided under the lock. Concurrent
+  checks for one user queue in the process and share the result. Webhook
+  flush, checkout, portal and erasure cleanup take the same queue; they still
+  call the provider under the lock.
+- **Push delivery** reads membership and billing before the row transaction and
+  reads them again inside it if the transaction waited more than two seconds
+  for a connection. The send and its bookkeeping stay in the row-locked
+  transaction.
+- **Sweeps**: the five-second push sweep only looks for due deliveries;
+  retention of expired activities runs with the 30-second maintenance sweep.
+- **Pool**: a request waits at most 5 seconds for a connection and then fails
+  as a retryable `500`; idle connections are kept 60 seconds with TCP
+  keep-alive. No statement timeout is set.
+
+`SYNARA_API_PERF=1` turns on request timing (off by default; on Cloudflare,
+set it as a Worker variable, which restarts the container). Each response
+then carries a `Server-Timing` header and the process logs one `[api-perf]`
+JSON line a minute with, per route pattern and status class: count, latency
+p50/p95/max, database round trips and time, pool wait, outbound calls by
+provider, and bytes. Only route patterns, provider labels and numbers are
+recorded.
+
+`bun run scripts/measure-perf.ts public` times unauthenticated endpoints from
+the caller's machine; `bun run scripts/measure-perf.ts tail` aggregates live
+requests per route from `wrangler tail` (needs `wrangler login`). Both are
+read-only.
 
 ## Build and run
 

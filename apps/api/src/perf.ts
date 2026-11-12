@@ -59,6 +59,24 @@ function newScope(): Scope {
   return { dbCount: 0, dbMs: 0, poolWaitMs: 0, extCount: 0, extMs: 0, ext: new Map() };
 }
 
+/**
+ * The response body size. `c.json()` responses carry no `content-length`, so a
+ * JSON body without one is measured from a copy; that is opt-in work, done
+ * after the duration is taken. Streams and other types count as 0.
+ */
+async function responseBytes(response: Response | undefined): Promise<number> {
+  if (!response) return 0;
+  const declared = response.headers.get("content-length");
+  if (declared !== null) return Number(declared) || 0;
+  const type = response.headers.get("content-type") ?? "";
+  if (!response.body || !type.toLowerCase().startsWith("application/json")) return 0;
+  try {
+    return (await response.clone().arrayBuffer()).byteLength;
+  } catch {
+    return 0;
+  }
+}
+
 const SAMPLE_CAP = 2_048;
 
 type Bucket = {
@@ -176,7 +194,7 @@ export function createPerfRecorder(now: () => number = () => performance.now()):
       const status = c.res?.status ?? 500;
       const key = `${c.req.method} ${c.req.routePath} ${Math.floor(status / 100)}xx`;
       const bytesIn = Number(c.req.header("content-length") ?? 0) || 0;
-      const bytesOut = Number(c.res?.headers.get("content-length") ?? 0) || 0;
+      const bytesOut = await responseBytes(c.res);
       record(key, durationMs, scope, bytesIn, bytesOut);
       // Not on upgrades or immutable responses; timing must never fail a request.
       try {

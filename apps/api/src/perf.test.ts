@@ -87,6 +87,9 @@ describe("account API perf recorder", () => {
       externalCallsPerCall: 2,
     });
     expect(Object.keys(rows[0]!.externalPerMinute).toSorted()).toEqual(["other", "workos"]);
+    // `c.json()` sets no content-length; the body is still counted, and still readable.
+    expect(rows[0]!.bytesOut).toBe(2 * JSON.stringify({ ok: true }).length);
+    expect(await first.json()).toEqual({ ok: true });
     // No identifier, URL or query string survives into the aggregate.
     expect(JSON.stringify(rows)).not.toMatch(/secret-id|user_id|example\.test/);
   });

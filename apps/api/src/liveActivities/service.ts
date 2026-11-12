@@ -43,6 +43,13 @@ const key = (source: { threadId: string; turnId: string }) =>
 const sourceIdentity = ({ hostId, threadId, turnId }: LiveActivitySource) =>
   JSON.stringify([hostId, threadId, turnId]);
 const swiftEpoch = 978307200;
+/**
+ * How old a membership or billing read made before the row transaction may be
+ * when the send is decided. The reads normally precede it by milliseconds; a
+ * transaction that waited longer than this for a pooled connection reads again
+ * inside, so removal still stops a push as promptly as it did.
+ */
+const PROVIDER_READ_MAX_AGE_MS = 2_000;
 
 /** Durable, coalescing outbox: each activity owns the newest desired snapshot.
  * APNs is at-least-once. A row lock serializes sends, revision fences registration,
@@ -365,6 +372,7 @@ export function createLiveActivityService(options: {
             .catch(() => false)
         : undefined,
     ]);
+    const readAt = performance.now();
     await transaction(async (db) => {
       const activity = (
         await db.query<ActivityRow>(
@@ -374,8 +382,13 @@ export function createLiveActivityService(options: {
         )
       ).rows[0];
       if (!activity) return;
-      // Reads made for another owner do not apply; ask again, as before.
-      const sameOwner = activity.user_id === due.user_id && activity.org_id === due.org_id;
+      // Reads made for another owner do not apply, and reads that aged while
+      // this transaction waited for a connection are not fresh enough to send
+      // on; ask again in both cases, as before.
+      const sameOwner =
+        activity.user_id === due.user_id &&
+        activity.org_id === due.org_id &&
+        performance.now() - readAt <= PROVIDER_READ_MAX_AGE_MS;
       const isMember = async () => {
         if (!sameOwner) return options.isMember(activity.user_id, activity.org_id);
         // A membership lookup failure still fails this attempt, after the device check.

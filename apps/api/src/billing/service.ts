@@ -84,11 +84,13 @@ function isAccessReusable(row: AccessRow, now: number): boolean {
 
 /** Ledger columns are null when `present` is false: the row does not exist yet. */
 type Probe = AccessRow &
-  Pick<Row, "deleted_at" | "product_ids" | "checkout_attempt_id" | "checkout_product_id"> & {
+  Pick<Row, "deleted_at"> & {
     present: boolean;
     pending_webhook: boolean;
     deleting: boolean;
   };
+/** A probe plus the product and checkout scope a provider snapshot is requested for. */
+type LedgerProbe = Probe & Pick<Row, "product_ids" | "checkout_attempt_id" | "checkout_product_id">;
 
 /** The single-statement answer: reusable, no pending webhook, no erasure. */
 function isProbeReusable(probe: Probe, now: number): boolean {
@@ -106,7 +108,7 @@ function isProbeReusable(probe: Probe, now: number): boolean {
  * for: the same last check, product scope and open checkout attempt. A row
  * missing at probe time must still hold the defaults its upsert created.
  */
-function isUnchangedSince(row: Row, before: Probe): boolean {
+function isUnchangedSince(row: Row, before: LedgerProbe): boolean {
   return (
     (row.checked_at?.getTime() ?? null) === (before.checked_at?.getTime() ?? null) &&
     JSON.stringify(row.product_ids) === JSON.stringify(before.product_ids ?? []) &&
@@ -253,15 +255,15 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     return rows[0];
   }
   /**
-   * The ledger fields a refresh depends on, read without a transaction or
-   * lock. Always one row, so the erasure fence is seen before the ledger row
-   * exists.
+   * The stored authorization, read without a transaction or lock. Always one
+   * row, so the erasure fence is seen before the ledger row exists. This is
+   * the statement every authorization poll runs, so it returns only what the
+   * reuse decision needs; `detail` adds the scope a refresh is requested for.
    */
-  async function probe(userId: string): Promise<Probe> {
-    const { rows } = await pool.query<Probe>(
+  async function readProbe<T extends Probe>(userId: string, detail: string): Promise<T> {
+    const { rows } = await pool.query<T>(
       `SELECT b.user_id IS NOT NULL AS present,
-        b.access_granted, b.checked_at, b.valid_until, b.deleted_at,
-        b.product_ids, b.checkout_attempt_id, b.checkout_product_id,
+        b.access_granted, b.checked_at, b.valid_until, b.deleted_at,${detail}
         EXISTS(SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL) AS pending_webhook,
         EXISTS(SELECT 1 FROM account_deletions WHERE user_id=$1) AS deleting
       FROM (SELECT $1::text AS user_id) AS u LEFT JOIN billing_accounts AS b ON b.user_id=u.user_id`,
@@ -269,6 +271,9 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     );
     return rows[0]!;
   }
+  const probe = (userId: string) => readProbe<Probe>(userId, "");
+  const probeLedger = (userId: string) =>
+    readProbe<LedgerProbe>(userId, " b.product_ids, b.checkout_attempt_id, b.checkout_product_id,");
   /**
    * Reconciles without holding a pooled connection, transaction or lock while
    * the provider answers: read the ledger, ask the provider, then lock and
@@ -278,7 +283,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
    * `allowReuse` is the authorization path's 30 s reuse; the full status
    * read always reconciles.
    */
-  async function refresh(userId: string, before: Probe, allowReuse: boolean): Promise<Row> {
+  async function refresh(userId: string, before: LedgerProbe, allowReuse: boolean): Promise<Row> {
     const decideLocked = async (client: pg.PoolClient, row: Row) => {
       assertAvailable(row);
       if (allowReuse && isAccessReusable(row, Date.now())) {
@@ -310,7 +315,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
    * statements. The advisory lock still orders writers across processes.
    */
   const refreshQueue = new Map<string, Promise<void>>();
-  async function oneAtATime<T>(userId: string, run: (waited: boolean) => Promise<T>): Promise<T> {
+  async function oneAtATime<T>(userId: string, run: () => Promise<T>): Promise<T> {
     const previous = refreshQueue.get(userId);
     let release!: () => void;
     const turn = new Promise<void>((resolve) => {
@@ -319,7 +324,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     refreshQueue.set(userId, turn);
     try {
       if (previous) await previous;
-      return await run(previous !== undefined);
+      return await run();
     } finally {
       release();
       if (refreshQueue.get(userId) === turn) refreshQueue.delete(userId);
@@ -350,7 +355,11 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         throw error;
       });
       return oneAtATime(userId, async () =>
-        serialize(await refresh(userId, await probe(userId), false), plans, provider.environment),
+        serialize(
+          await refresh(userId, await probeLedger(userId), false),
+          plans,
+          provider.environment,
+        ),
       );
     },
     async access(userId: string): Promise<BillingAccess> {
@@ -364,11 +373,12 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       if (isProbeReusable(stored, Date.now())) return serializeAccess(stored);
       // Anything else re-decides under the same locks, tombstone check and
       // webhook freshness as the full ledger read.
-      return oneAtATime(userId, async (waited) => {
-        // A caller that queued behind another refresh sees its result first,
-        // as it did when it waited on the row lock.
-        const current = waited ? await probe(userId) : stored;
-        if (waited && isProbeReusable(current, Date.now())) return serializeAccess(current);
+      return oneAtATime(userId, async () => {
+        // Read again with the refresh's scope. A caller that queued behind
+        // another refresh sees its result here, as it did when it waited on
+        // the row lock.
+        const current = await probeLedger(userId);
+        if (isProbeReusable(current, Date.now())) return serializeAccess(current);
         return serializeAccess(await refresh(userId, current, true));
       });
     },

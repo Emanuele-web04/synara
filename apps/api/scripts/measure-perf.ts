@@ -163,14 +163,27 @@ async function tailOnce(worker: string, seconds: number) {
   const child = spawn("wrangler", ["tail", worker, "--format", "json"], {
     stdio: ["ignore", "pipe", "ignore"],
   });
+  // Registered before the window: a tail that exits early (not logged in,
+  // missing binary) has already closed by the time the window would end.
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
+  });
   let raw = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
     raw += chunk;
   });
-  await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    closed,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, seconds * 1000);
+    }),
+  ]);
+  clearTimeout(timer);
   child.kill("SIGINT");
-  await new Promise<void>((resolve) => child.once("close", () => resolve()));
+  await closed;
   const requests = parseConcatenatedJson(raw).filter(
     (event) => event.executionModel === "stateless" && event.event?.request?.url,
   );
