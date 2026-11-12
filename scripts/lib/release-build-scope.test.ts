@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { resolveReleaseBuildScope } from "./release-build-scope.ts";
+
+const runnerTargetPairs = (entries: ReadonlyArray<{ runner: string; arch: string }>) =>
+  entries.map(({ runner, arch }) => `${runner}/${arch}`).toSorted();
 describe("release validation scope", () => {
   it("qualifies every supported Remote platform without weakening publication gates", () => {
     for (const platform of ["all"]) {
@@ -150,6 +155,21 @@ describe("release validation scope", () => {
     expect(windows.prepare_cua).toBe(false);
     expect(windows.cua_matrix.include).toEqual([]);
     expect(windows.package_artifacts).toBe(true);
+  });
+  it("pre-warms exactly the runner and target pairs every release Cua leg restores", () => {
+    // The cache key binds the runner's OS, toolchain and target, so a missing or
+    // mismatched producer leg leaves that release leg compiling from source.
+    const producer = parse(
+      readFileSync(
+        new URL("../../.github/workflows/cua-release-cache.yml", import.meta.url),
+        "utf8",
+      ),
+    ) as { jobs: { prepare: { strategy: { matrix: { include: object[] } } } } };
+    expect(
+      runnerTargetPairs(
+        producer.jobs.prepare.strategy.matrix.include as { runner: string; arch: string }[],
+      ),
+    ).toEqual(runnerTargetPairs(resolveReleaseBuildScope("all", "artifact").cua_matrix.include));
   });
   it("rejects typos and unsupported Windows source compilation", () => {
     expect(() => resolveReleaseBuildScope("linux")).toThrow("Unknown build platform");
