@@ -169,6 +169,10 @@ const buildCmd = Command.make(
 // distribution staging (shared by publish and pack)
 // ---------------------------------------------------------------------------
 
+// npm always packs LICENSE; the notices file is listed in `files` so every
+// published copy carries the retained MIT notices too.
+const CLI_LEGAL_NOTICE_FILES = ["LICENSE", "THIRD_PARTY_NOTICES.md"] as const;
+
 const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function* (
   appVersion: Option.Option<string>,
 ) {
@@ -201,7 +205,7 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
     type: serverPackageJson.type,
     version,
     engines: serverPackageJson.engines,
-    files: serverPackageJson.files,
+    files: [...serverPackageJson.files, ...CLI_LEGAL_NOTICE_FILES],
     dependencies: resolveCatalogDependencies(
       serverPackageJson.dependencies as Record<string, unknown>,
       resolveRootWorkspaceCatalog(),
@@ -231,17 +235,17 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
     }
     yield* fs.chmod(stagedBinPath, 0o755);
   }
+  for (const file of CLI_LEGAL_NOTICE_FILES) {
+    yield* fs.copyFile(path.join(repoRoot, file), path.join(stagedPackageDir, file));
+  }
   yield* applyPublishIconOverrides(repoRoot, stagedPackageDir);
   yield* fs.writeFileString(
     path.join(stagedPackageDir, "package.json"),
     `${JSON.stringify(pkg, null, 2)}\n`,
   );
   const stagedRootEntries = (yield* fs.readDirectory(stagedPackageDir)).sort();
-  if (
-    stagedRootEntries.length !== 2 ||
-    stagedRootEntries[0] !== "dist" ||
-    stagedRootEntries[1] !== "package.json"
-  ) {
+  const expectedRootEntries = [...CLI_LEGAL_NOTICE_FILES, "dist", "package.json"].sort();
+  if (stagedRootEntries.join("\n") !== expectedRootEntries.join("\n")) {
     return yield* new CliError({
       message: `Unexpected CLI publish-stage entries: ${stagedRootEntries.join(", ")}`,
     });
@@ -309,13 +313,17 @@ const packCmd = Command.make(
 
       const tarballPath = path.join(outDir, `synara-server-${version}.tar.gz`);
       yield* runCommand(
-        ChildProcess.make("tar", ["-czf", tarballPath, "dist", "package.json"], {
-          cwd: stagedPackageDir,
-          stdout: "inherit",
-          stderr: "inherit",
-          // Windows needs shell mode to resolve .cmd shims.
-          shell: process.platform === "win32",
-        }),
+        ChildProcess.make(
+          "tar",
+          ["-czf", tarballPath, ...CLI_LEGAL_NOTICE_FILES, "dist", "package.json"],
+          {
+            cwd: stagedPackageDir,
+            stdout: "inherit",
+            stderr: "inherit",
+            // Windows needs shell mode to resolve .cmd shims.
+            shell: process.platform === "win32",
+          },
+        ),
       );
 
       yield* Effect.log(`[cli] Wrote server tarball: ${tarballPath}`);

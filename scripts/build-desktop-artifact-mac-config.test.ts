@@ -235,7 +235,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.afterSign?.endsWith("/mac-after-sign.cjs"));
   });
 
-  it("packages the Linux driver as an external executable and leaves Windows unchanged", () => {
+  it("packages the Linux driver as an external executable and ships legal notices on Linux and Windows", () => {
     const linux = createDesktopPlatformBuildConfig({
       platform: "linux",
       target: "AppImage",
@@ -251,6 +251,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(linux.extraResources, [
       { from: "apps/desktop/resources/cloudflared", to: "cloudflared" },
       { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+      { from: "LICENSE", to: "LICENSE" },
+      { from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
     ]);
     assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
     assert.ok(linux.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
@@ -271,6 +273,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(win.extraFiles, undefined);
     assert.deepStrictEqual(win.extraResources, [
       { from: "apps/desktop/resources/cloudflared", to: "cloudflared" },
+      { from: "LICENSE", to: "LICENSE" },
+      { from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
     ]);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
