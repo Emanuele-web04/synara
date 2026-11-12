@@ -714,7 +714,7 @@ describe("deriveWorkLogEntries", () => {
         makeActivity({
           id: "pi-notice",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          summary: "Pi extension",
           payload: { message: "\u001b[31mEnabled [full] mode\u001b[0m" },
         }),
       ],
@@ -722,9 +722,10 @@ describe("deriveWorkLogEntries", () => {
     );
 
     expect(entry?.detail).toBe("Enabled [full] mode");
+    expect(entry?.label).toBe("Pi extension");
   });
 
-  it("hides persisted Pi info notices and unsupported-UI warnings that are now log-only", () => {
+  it("hides persisted Pi unsupported-UI warnings but keeps extension notifications", () => {
     const entries = deriveWorkLogEntries(
       [
         makeActivity({
@@ -748,10 +749,10 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries.map((entry) => entry.id)).toEqual(["pi-warning"]);
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
   });
 
-  it("applies the plain-line error heuristic only to persisted Codex stderr rows", () => {
+  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
     const stderr = (id: string, message: string, nativeEventType?: string) =>
       makeActivity({
         id,
@@ -761,7 +762,9 @@ describe("deriveWorkLogEntries", () => {
       });
     const entries = deriveWorkLogEntries(
       [
-        stderr("codex-chatter", "Loading plugins from cache", "codex.process/stderr"),
+        // Stored only because ingestion kept it: a structured ERROR whose level
+        // the message normalization removed must not be judged again.
+        stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
         stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
         stderr("other-provider", "Bash was denied: outside workspace"),
         stderr("other-plain", "Falling back to the default model"),
@@ -770,6 +773,7 @@ describe("deriveWorkLogEntries", () => {
     );
     expect(entries.map((entry) => entry.id).toSorted()).toEqual([
       "codex-error",
+      "codex-structured-error",
       "other-plain",
       "other-provider",
     ]);

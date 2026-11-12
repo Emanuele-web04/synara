@@ -511,11 +511,6 @@ export function makePiExtensionModeCoordinator(
   };
 }
 
-// Info-level extension notifications are progress chatter; warnings and errors stay visible.
-export function shouldSurfacePiNotification(type: string): boolean {
-  return type !== "info";
-}
-
 export function makePiRuntimeEventBase(
   context: {
     readonly lifecycleGeneration?: string;
@@ -2268,15 +2263,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         notify(message, type = "info") {
           const normalized = trimPiDisplayText(message);
           if (!normalized) return;
-          if (!shouldSurfacePiNotification(type)) {
-            Effect.runFork(
-              Effect.logInfo("pi.extension_notify", {
-                threadId: context.session.threadId,
-                message: normalized,
-              }),
-            );
-            return;
-          }
           offerRuntimeEvent({
             ...makeEventBase(context),
             type: "runtime.warning",

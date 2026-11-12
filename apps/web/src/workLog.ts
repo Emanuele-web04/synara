@@ -538,11 +538,11 @@ export function isMissingCheckpointBaselineActivity(
   return checkpoint !== "captured" && checkpoint !== "not-applicable";
 }
 
-// Pi info notifications and unsupported-UI notices are log-only now; hide the rows old hosts stored.
+// Pi unsupported-UI notices are log-only now; hide the rows old hosts stored.
+// Extension notifications themselves (mode changes, saved settings) stay visible.
 const PI_UNSUPPORTED_UI_WARNING = /^Pi extension UI API '[^']+' is not supported in Synara yet\.$/;
 function isLogOnlyPiWarning(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind !== "runtime.warning") return false;
-  if (activity.summary === "Pi extension") return true;
   return PI_UNSUPPORTED_UI_WARNING.test(asTrimmedString(asRecord(activity.payload)?.message) ?? "");
 }
 
@@ -575,14 +575,12 @@ export function deriveWorkLogEntries(
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
+      // Ingestion already judged the Codex stderr rows it marks, and stored their
+      // text normalized: judging that text again could hide a structured ERROR
+      // whose level the normalization removed.
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
       const message = asTrimmedString(payload?.message);
-      // Only Codex stderr rows are judged by the error-like heuristic; other warnings keep their text.
-      return (
-        !message ||
-        classifyCodexStderr(message, undefined, {
-          errorLikePlainLinesOnly: payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE,
-        })?.kind === "notice"
-      );
+      return !message || classifyCodexStderr(message)?.kind === "notice";
     })
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
