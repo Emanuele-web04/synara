@@ -9,14 +9,18 @@ export const FilesystemBrowseInput = Schema.Struct({
 });
 export type FilesystemBrowseInput = typeof FilesystemBrowseInput.Type;
 
+// Directory names may legally start or end with whitespace ("Photos "). A trimming
+// schema rejects them when the server encodes the listing, failing the whole folder.
+const FilesystemPathString = Schema.String.check(Schema.isNonEmpty());
+
 export const FilesystemBrowseEntry = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  fullPath: TrimmedNonEmptyString,
+  name: FilesystemPathString,
+  fullPath: FilesystemPathString,
 });
 export type FilesystemBrowseEntry = typeof FilesystemBrowseEntry.Type;
 
 export const FilesystemBrowseResult = Schema.Struct({
-  parentPath: TrimmedNonEmptyString,
+  parentPath: FilesystemPathString,
   entries: Schema.Array(FilesystemBrowseEntry),
 });
 export type FilesystemBrowseResult = typeof FilesystemBrowseResult.Type;

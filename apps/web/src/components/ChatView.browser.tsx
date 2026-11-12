@@ -2307,7 +2307,8 @@ async function waitForMountedChatReady(options: {
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
-    { timeout: 20_000, interval: 16 },
+    // Give the first cold CI mount more time; readiness assertions stay unchanged.
+    { timeout: 45_000, interval: 16 },
   );
   await waitForLayout();
 }
