@@ -46,7 +46,6 @@ import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
 import { ModelCatalogRefresh } from "./ModelCatalogRefresh";
 import {
   buildProviderTabRows,
-  buildStarredModelOptionsPatch,
   buildStarredTabRows,
   type ComposerModelPickerRow as PickerRow,
   type ComposerModelPickerTab,
@@ -54,7 +53,6 @@ import {
   MODEL_PICKER_POPUP_ATTRIBUTE,
   MODEL_PICKER_SHORTCUT_ROW_LIMIT,
   modelPickerShortcutRowIndex,
-  resolveStarredTraits,
   STARRED_TAB,
 } from "./ComposerModelPicker.logic";
 import { ComposerModelPickerRow } from "./ComposerModelPickerRow";
@@ -407,9 +405,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               provider: activeProvider,
               instanceId: activeInstanceId,
               model: props.model,
-              ...resolveStarredTraits(currentTraitSelection),
             },
-            effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
           })
         : buildProviderTabRows({
             provider: tabAccount.provider,
@@ -461,18 +457,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
     const selection = traitSelectionFor(row.provider, model);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
-    // footer slider can set its effort. Presets already carry their effort, and picking
-    // the current model again is the "done" gesture, so both close.
-    const keepOpen =
-      usesEffortSlider && row.preset === null && !row.selected && selection.effortLevels.length > 0;
-    commitRow(
-      row,
-      model,
-      row.preset
-        ? buildStarredModelOptionsPatch({ provider: row.provider, selection, starred: row.preset })
-        : {},
-      keepOpen,
-    );
+    // footer slider can set its effort. Picking the current model again is the "done"
+    // gesture, so it closes.
+    const keepOpen = usesEffortSlider && !row.selected && selection.effortLevels.length > 0;
+    commitRow(row, model, {}, keepOpen);
   };
 
   // Pick a model and its effort in one gesture from the row's side block.

@@ -57,88 +57,6 @@ export function isModelPickerShortcutScopeActive(): boolean {
 /** Rows beyond this index get no ⌘N hint. */
 export const MODEL_PICKER_SHORTCUT_ROW_LIMIT = 9;
 
-// Snapshot the traits a star should restore. Controls the model does not expose stay
-// `null` so applying the preset never invents an option the provider would reject.
-export function resolveStarredTraits(
-  selection: Pick<
-    ComposerTraitSelection,
-    | "caps"
-    | "effort"
-    | "effortLevels"
-    | "fastModeDescriptor"
-    | "fastModeEnabled"
-    | "thinkingEnabled"
-  >,
-): Pick<StarredModel, "effort" | "fastMode" | "thinking"> {
-  return {
-    effort: selection.effortLevels.length > 0 ? selection.effort : null,
-    fastMode: supportsComposerFastModeControl(selection) ? selection.fastModeEnabled : null,
-    thinking: selection.thinkingEnabled,
-  };
-}
-
-// Option patch that restores a preset's traits on its model. `selection` must be the
-// target model's trait selection so option ids and supported levels come from it.
-export function buildStarredModelOptionsPatch(input: {
-  provider: ProviderKind;
-  selection: ComposerTraitSelection;
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">;
-}): Record<string, unknown> {
-  const { provider, selection, starred } = input;
-  const patch: Record<string, unknown> = {};
-  if (starred.effort !== null) {
-    const plan = planComposerEffortChange({
-      provider,
-      // A preset is applied independently of the prompt's Ultrathink lock.
-      selection: { ...selection, ultrathinkPromptControlled: false },
-      prompt: "",
-      value: starred.effort,
-    });
-    if (plan?.kind === "options") {
-      Object.assign(patch, plan.patch);
-    }
-  }
-  if (starred.fastMode !== null && supportsComposerFastModeControl(selection)) {
-    patch.fastMode = starred.fastMode;
-  }
-  if (starred.thinking !== null && selection.thinkingEnabled !== null) {
-    patch.thinking = starred.thinking;
-  }
-  return patch;
-}
-
-// "High · Fast" style summary of a preset, labelled through the target model's ladder.
-export function formatStarredTraitsLabel(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-  effortLevels: ComposerTraitSelection["effortLevels"],
-): string {
-  const effortLabel =
-    starred.effort !== null
-      ? (effortLevels.find((level) => level.value === starred.effort)?.label ?? starred.effort)
-      : null;
-  return [
-    effortLabel,
-    effortLabel === null && starred.thinking !== null
-      ? `Thinking ${starred.thinking ? "On" : "Off"}`
-      : null,
-    starred.fastMode ? "Fast" : null,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
-}
-
-// A preset counts as "current" when every trait it pins matches the composer's.
-export function starredTraitsMatch(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-  current: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-): boolean {
-  return (
-    (starred.effort === null || starred.effort === current.effort) &&
-    (starred.fastMode === null || starred.fastMode === current.fastMode) &&
-    (starred.thinking === null || starred.thinking === current.thinking)
-  );
-}
-
 // One row of the picker list, already resolved to what selecting it commits.
 export type ComposerModelPickerRow = {
   key: string;
@@ -206,14 +124,7 @@ export function buildStarredTabRows(input: {
   /** Name of the account a preset runs in; undefined while its provider has only one. */
   accountLabelFor?: (instanceId: string) => string | undefined;
   query: string;
-  current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
-    StarredModel,
-    "effort" | "fastMode" | "thinking"
-  >;
-  effortLevelsFor: (
-    provider: ProviderKind,
-    model: string,
-  ) => ComposerTraitSelection["effortLevels"];
+  current: { provider: ProviderKind; instanceId: string; model: string };
 }): ComposerModelPickerRow[] {
   return input.starredModels.flatMap((entry) => {
     const instanceId = starredModelInstanceId(entry);
@@ -234,10 +145,6 @@ export function buildStarredTabRows(input: {
     ) {
       return [];
     }
-    const traitsLabel = formatStarredTraitsLabel(
-      entry,
-      input.effortLevelsFor(entry.provider, entry.model),
-    );
     return [
       {
         key: starredModelKey(entry),
@@ -246,16 +153,12 @@ export function buildStarredTabRows(input: {
         model: entry.model,
         selectableModel,
         name,
-        detail:
-          selectableModel === null
-            ? "Unavailable"
-            : [accountLabel, traitsLabel].filter(Boolean).join(" · ") || null,
+        detail: selectableModel === null ? "Unavailable" : (accountLabel ?? null),
         selected:
           selectableModel !== null &&
           entry.provider === input.current.provider &&
           instanceId === input.current.instanceId &&
-          selectableModel === input.current.model &&
-          starredTraitsMatch(entry, input.current),
+          selectableModel === input.current.model,
         groupLabel: null,
         preset: entry,
       },

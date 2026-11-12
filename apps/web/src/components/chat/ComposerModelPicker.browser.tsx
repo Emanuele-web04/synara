@@ -314,7 +314,7 @@ describe("ComposerModelPicker", () => {
     }
   });
 
-  it("stars a model together with the traits composed in the footer rows", async () => {
+  it("stars a model without pinning any traits", async () => {
     const screen = await mountPicker({}, { reasoningEffort: "medium" });
     try {
       await page.getByRole("menuitem", { name: /^Effort/u }).click();
@@ -324,17 +324,17 @@ describe("ComposerModelPicker", () => {
         .click();
 
       expect(readStoredStars()).toEqual([
-        { provider: "codex", model: GPT_5_5, effort: "high", fastMode: false, thinking: null },
+        { provider: "codex", model: GPT_5_5, effort: null, fastMode: null, thinking: null },
       ]);
 
       await page.getByRole("tab", { name: "Starred" }).click();
-      await expect.element(page.getByRole("menuitem", { name: /GPT-5\.5.*High/u })).toBeVisible();
+      await expect.element(page.getByRole("menuitem", { name: /GPT-5\.5/u })).toBeVisible();
     } finally {
       await screen.unmount();
     }
   });
 
-  it("opens on starred presets and restores model + traits in one click", async () => {
+  it("opens on starred models and selects the model without touching traits", async () => {
     const onProviderModelChange = vi.fn();
     const screen = await mountPicker({ onProviderModelChange }, { reasoningEffort: "medium" }, [
       { provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null },
@@ -343,11 +343,8 @@ describe("ComposerModelPicker", () => {
       await expect
         .element(page.getByRole("tab", { name: "Starred" }))
         .toHaveAttribute("aria-selected", "true");
-      await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
-        modelOptions: { reasoningEffort: "low", fastMode: true },
-        instanceId: "codex",
-      });
+      await page.getByRole("menuitem", { name: /GPT-5\.4/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, { instanceId: "codex" });
     } finally {
       await screen.unmount();
     }
@@ -366,7 +363,7 @@ describe("ComposerModelPicker", () => {
       await page.getByRole("button", { name: "Remove GPT-5.4 from starred" }).click();
 
       expect(readStoredStars()).toEqual([
-        { provider: "codex", model: GPT_5_5, effort: "high", fastMode: false, thinking: null },
+        { provider: "codex", model: GPT_5_5, effort: null, fastMode: null, thinking: null },
       ]);
     } finally {
       await screen.unmount();
@@ -490,6 +487,28 @@ describe("ComposerModelPicker", () => {
       // Picking the model that is already current is the "done" gesture.
       await otherModel.click();
       await expect.element(slider).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the panel open after picking a starred row in slider mode", async () => {
+    const onProviderModelChange = vi.fn((_provider: ProviderKind, model: ModelSlug) => {
+      useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+        provider: "codex",
+        model,
+        options: { reasoningEffort: "medium" },
+      });
+    });
+    const screen = await mountPicker(
+      { effortControl: "slider", onProviderModelChange },
+      { reasoningEffort: "medium" },
+      [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null }],
+    );
+    try {
+      await page.getByRole("menuitem", { name: /GPT-5\.4/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, { instanceId: "codex" });
+      await expect.element(page.getByRole("slider", { name: "Reasoning effort" })).toBeVisible();
     } finally {
       await screen.unmount();
     }

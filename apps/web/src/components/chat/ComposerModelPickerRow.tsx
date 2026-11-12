@@ -23,7 +23,6 @@ import {
 import {
   type ComposerModelPickerRow as PickerRow,
   composerModelDisplayName,
-  resolveStarredTraits,
 } from "./ComposerModelPicker.logic";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
@@ -71,17 +70,17 @@ export function ComposerModelPickerRow(props: {
     provider: row.provider,
     ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     model: row.model,
-    ...resolveStarredTraits(selection),
+    effort: null,
+    fastMode: null,
+    thinking: null,
   };
   // Provider rows ignore the pinned traits: the provider's current traits are shared by
   // all of its models, so matching them would hide the star of every other preset.
   const starred = row.preset !== null || props.starredModelSlots.has(starredModelSlotKey(row));
-  // Starred rows already pin their effort; Ultrathink locks the ladder to the prompt.
+  // Ultrathink locks the ladder to the prompt.
   const onSelectEffort = props.onSelectEffort;
   const effortLevels =
-    onSelectEffort !== null && row.preset === null && !selection.ultrathinkPromptControlled
-      ? selection.effortLevels
-      : [];
+    onSelectEffort !== null && !selection.ultrathinkPromptControlled ? selection.effortLevels : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];
   const displayName = composerModelDisplayName(row.provider, row.name);
   const rowClassName = cn("pe-1", row.selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME);
@@ -94,9 +93,7 @@ export function ComposerModelPickerRow(props: {
           ? t("chat:removeFromStarred", { value0: row.name })
           : t("chat:starWithItsCurrentEffortAndSpeed", { value0: row.name })
       }
-      onToggle={() =>
-        row.preset === null && starred ? props.onUnstarModel(row) : props.onToggleStar(starEntry)
-      }
+      onToggle={() => (starred ? props.onUnstarModel(row) : props.onToggleStar(starEntry))}
     />
   );
 
