@@ -824,6 +824,35 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       expect(snapshot.revokedDeviceJkts).not.toContain(unrelatedDevice.jkt);
     });
 
+    it("reads the revocation snapshot while the live membership read is outstanding", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      // A spy without an implementation still calls through and records each statement.
+      const query = vi.spyOn(pool, "query");
+      const statements = () =>
+        query.mock.calls.map(([first]) =>
+          typeof first === "string" ? first : ((first as { text?: string }).text ?? ""),
+        );
+      const membership = workos.holdNext("GET", "/user_management/organization_memberships");
+      try {
+        const pending = app.request(`/api/v1/hosts/${host.id}/authorization`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        await membership.arrived;
+        await vi.waitFor(() =>
+          expect(statements().some((text) => /\bunion all\b/i.test(text))).toBe(true),
+        );
+        membership.release();
+        const response = await pending;
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ ownerInOrg: true });
+      } finally {
+        membership.release();
+        query.mockRestore();
+      }
+    });
+
     it("accepts valid proof and rejects stale expiry, audience, generation, and unlink", async () => {
       const { app, db } = buildApp();
       const owner = await signIn();

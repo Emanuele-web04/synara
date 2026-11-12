@@ -741,11 +741,26 @@ export function createV1Routes(deps: {
     let user: IdentityUser;
     let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
-      user = await getCachedUser(userLookup, session.userId, {
-        fresh: options?.freshMembership === true,
-      });
-      requestUsers.set(c, { userId: session.userId, user });
-      scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      if (options?.freshMembership === true) {
+        // Both reads are live and independent; only provisioning a first
+        // workspace needs the email, and it waits for the user read. The
+        // user read keeps precedence: its failure answers even if the
+        // membership read also failed.
+        const userRead = getCachedUser(userLookup, session.userId, { fresh: true });
+        const scopeRead = grants.resolveEnvironmentScope(
+          session,
+          async () => (await userRead).email,
+          options,
+        );
+        scopeRead.catch(() => {});
+        user = await userRead;
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await scopeRead;
+      } else {
+        user = await getCachedUser(userLookup, session.userId, { fresh: false });
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      }
     } catch (error) {
       if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
@@ -2261,15 +2276,14 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (authenticated) => authenticated,
       );
-      let organizations: OrganizationRef[];
-      try {
-        organizations = await grants.listUserOrganizations(host.ownerUserId, {
-          freshMembership: true,
-        });
-      } catch (error) {
-        console.error("[api] host authorization membership lookup failed:", error);
-        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
-      }
+      // The live membership read and the revocation snapshot are independent,
+      // so they run together. Their results are applied in the old order: a
+      // provider failure answers 502 before a database failure surfaces.
+      // Billing still waits for ownership: a lost owner must never cause a
+      // commercial provider call.
+      const membershipRead = grants.listUserOrganizations(host.ownerUserId, {
+        freshMembership: true,
+      });
       // Device thumbprints revoked within the session-credential lifetime:
       // any older revocation cannot still have a live session to kill, and a
       // host that missed the push event recovers from this list on reconnect.
@@ -2281,7 +2295,7 @@ export function createV1Routes(deps: {
       // tenants' churn from leaking or consuming the bounded snapshot.
       // One fresh database snapshot and one result description per poll, including
       // empty feeds. Keep each source's tenant scope, retention and bound intact.
-      const revocations = await unionAll(
+      const revocationsQuery = unionAll(
         db
           .select({
             jkt: sql<string | null>`${deviceRows.jkt}`,
@@ -2334,6 +2348,18 @@ export function createV1Routes(deps: {
           .orderBy(desc(sql`max(${revocationEvents.createdAt})`))
           .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
       );
+      // Drizzle queries are lazy; resolving it starts the statement now.
+      const revocationsRead = Promise.resolve(revocationsQuery);
+      // Awaited below in precedence order; neither may reject unobserved meanwhile.
+      for (const pending of [membershipRead, revocationsRead]) pending.catch(() => {});
+      let organizations: OrganizationRef[];
+      try {
+        organizations = await membershipRead;
+      } catch (error) {
+        console.error("[api] host authorization membership lookup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+      }
+      const revocations = await revocationsRead;
       const revokedDeviceJkts: string[] = [];
       const seenRevokedDevices = new Set<string>();
       // Raw timestamp/aggregate expressions can arrive as strings, unlike

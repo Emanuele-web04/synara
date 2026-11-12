@@ -300,7 +300,8 @@ export type EnvironmentGrantIssuer = {
    */
   resolveEnvironmentScope(
     session: VerifiedAccessToken,
-    email: string,
+    /** Needed only to name a first workspace; a function is called only then. */
+    email: string | (() => Promise<string>),
     options?: { freshMembership?: boolean },
   ): Promise<EnvironmentScopeResolution>;
   /**
