@@ -3719,8 +3719,8 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      // Mirrors Claude Code: the review is off unless the person turns it on, as
-      // embedded Claude Code never asks. When on, only a person is asked before
+      // The review is on unless the person turns it off; embedded Claude Code
+      // alone never asks. When on, only a person is asked before
       // resuming a long-idle, large conversation, never for /compact (the choice
       // the prompt recommends); agents and automations proceed as the SDK would.
       const reviewsColdCache =

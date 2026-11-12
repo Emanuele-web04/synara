@@ -572,9 +572,10 @@ the native resume cursor and incorporates native resume metadata when the runtim
 Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
 transcript file size and base64 image size are not model token counts.
 
-Like embedded Claude Code, Synara sends after a long pause without asking by default; the first
-request then re-caches the full history once. Turning on **Ask before resuming a long idle session** in
-Settings → Providers → Claude adds Claude Code's interactive resume prompt (checked against Claude Code
+Embedded Claude Code sends after a long pause without asking, and the first request then re-caches
+the full history once, which on a large session can take several percent of a usage window. Synara
+therefore asks by default: **Ask before resuming a long idle session** in Settings → Providers → Claude
+is on unless you turn it off, and adds Claude Code's interactive resume prompt (checked against Claude Code
 2.1.296): when Claude's context is at least 100,000 tokens and its last response is at least 70 minutes
 old, whatever the cache state, Synara holds the next message a person sends before delivering it to the runtime.
 The composer uses Claude Code's wording and choices: **Resume from summary (recommended)** compacts

@@ -24,7 +24,7 @@ An explicit expired observation takes precedence over a local warm estimate. Mis
 sessions without timing evidence, and invalid clocks remain unknown.
 
 Before sending a user message, the orchestration layer obtains a bounded local observation without
-queueing the prompt. The review is off by default, as embedded Claude Code never asks; when
+queueing the prompt. The review is on by default, although embedded Claude Code alone never asks; while
 **Ask before resuming a long idle session** is on, then, as in Claude Code's resume prompt, a context
 of at least 100,000 tokens whose last response is at least 70 minutes old requires a choice, whatever
 the cache state. This applies to

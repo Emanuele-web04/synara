@@ -291,7 +291,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         kind: "boolean",
         settingsKey: "claudeConfirmColdCacheResume",
         label: "settings:askBeforeResumingALongIdleSession",
-        description: "settings:offByDefaultLikeClaudeCodeWhenOnAfter",
+        description: "settings:onByDefaultAfter70MinutesWithoutA",
       },
     ],
   },

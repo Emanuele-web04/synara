@@ -1060,20 +1060,6 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(
         ServerSettingsService.layerTest({
           ...input?.serverSettings,
-          // The resume review is off by default. Harnesses that feed cache
-          // observations exercise it, so they turn it on unless a test sets it.
-          ...(input?.getClaudeCacheObservation &&
-          input.serverSettings?.providers?.claudeAgent?.confirmColdCacheResume === undefined
-            ? {
-                providers: {
-                  ...input.serverSettings?.providers,
-                  claudeAgent: {
-                    ...input.serverSettings?.providers?.claudeAgent,
-                    confirmColdCacheResume: true,
-                  },
-                },
-              }
-            : {}),
           ...(input?.gitWritingModelSelection
             ? { textGenerationModelSelection: input.gitWritingModelSelection }
             : {}),

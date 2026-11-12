@@ -1590,6 +1590,7 @@ export const buildEmbeddedClaudeSystemPromptAppend = (
     "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
     "Treat the current working directory as the active workspace for the task.",
     "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+    "Do the work yourself by default. Spawn subagents only when the user asks for them or when independent pieces of work clearly benefit from running in parallel; every subagent draws on the same usage limits as this conversation, whichever model it runs.",
     "When spawning subagents, set the Agent tool's `model` parameter and pick reasoning effort by choosing a worker-<tier> subagent type (worker-low, worker-medium, worker-high, worker-xhigh).",
     "Honor explicit user instructions about a subagent's model or effort verbatim; otherwise match task complexity: mechanical work → haiku or worker-low, standard work → sonnet or worker-medium, hard reasoning → opus or fable with worker-high and above.",
     renderSynaraHarnessPolicy({
