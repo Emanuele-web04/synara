@@ -9,12 +9,13 @@ import {
 } from "~/lib/starredModels";
 import {
   buildProviderTabRows,
+  buildStarredModelOptionsPatch,
   buildStarredTabRows,
   composerModelDisplayName,
   modelPickerShortcutRowIndex,
 } from "./ComposerModelPicker.logic";
+import { getComposerTraitSelection } from "./composerTraits";
 
-// Legacy entry that still carries traits; stars are plain models now.
 const CODEX_HIGH_FAST: StarredModel = {
   provider: "codex",
   model: "gpt-5.5",
@@ -22,21 +23,34 @@ const CODEX_HIGH_FAST: StarredModel = {
   fastMode: true,
   thinking: null,
 };
-const CODEX_PLAIN: StarredModel = { ...CODEX_HIGH_FAST, effort: null, fastMode: null };
 
 describe("starred model presets", () => {
-  it("collapses legacy entries that differ only in traits into one trait-less star", () => {
+  it("skips traits the target model does not expose", () => {
+    const selection = getComposerTraitSelection("codex", "gpt-5.5", "", undefined);
+    expect(
+      buildStarredModelOptionsPatch({
+        provider: "codex",
+        selection,
+        starred: { effort: "not-a-level", fastMode: null, thinking: false },
+      }),
+    ).toEqual({});
+  });
+
+  it("keeps one star per model + traits combination", () => {
     const lowEffort = { ...CODEX_HIGH_FAST, effort: "low" };
-    expect(starredModelKey(lowEffort)).toBe(starredModelKey(CODEX_HIGH_FAST));
-    expect(normalizeStarredModels([CODEX_HIGH_FAST, lowEffort])).toEqual([CODEX_PLAIN]);
-    expect(toggleStarredModel([CODEX_HIGH_FAST], lowEffort)).toEqual([]);
+    const both = toggleStarredModel(toggleStarredModel([], CODEX_HIGH_FAST), lowEffort);
+    expect(both.map(starredModelKey)).toEqual([
+      starredModelKey(CODEX_HIGH_FAST),
+      starredModelKey(lowEffort),
+    ]);
+    expect(toggleStarredModel(both, CODEX_HIGH_FAST)).toEqual([lowEffort]);
   });
 
   it("unstars every preset of a model and keeps the provider's other models", () => {
     const lowEffort = { ...CODEX_HIGH_FAST, effort: "low" };
     const otherModel = { ...CODEX_HIGH_FAST, model: "gpt-5.4" };
     expect(unstarModel([CODEX_HIGH_FAST, otherModel, lowEffort], CODEX_HIGH_FAST)).toEqual([
-      { ...otherModel, effort: null, fastMode: null },
+      otherModel,
     ]);
   });
 
@@ -47,7 +61,7 @@ describe("starred model presets", () => {
         CODEX_HIGH_FAST,
         { ...CODEX_HIGH_FAST, provider: "retired-provider" },
       ]),
-    ).toEqual([CODEX_PLAIN]);
+    ).toEqual([CODEX_HIGH_FAST]);
   });
 });
 
@@ -56,13 +70,13 @@ describe("account-scoped starred presets", () => {
 
   it("stars the same model and traits separately per account", () => {
     const both = toggleStarredModel(toggleStarredModel([], CODEX_HIGH_FAST), WORK_HIGH_FAST);
-    expect(both).toEqual([CODEX_PLAIN, { ...CODEX_PLAIN, instanceId: "codex_work" }]);
-    expect(unstarModel(both, WORK_HIGH_FAST)).toEqual([CODEX_PLAIN]);
+    expect(both).toEqual([CODEX_HIGH_FAST, WORK_HIGH_FAST]);
+    expect(unstarModel(both, WORK_HIGH_FAST)).toEqual([CODEX_HIGH_FAST]);
   });
 
   it("stores the default account implicitly so older presets keep their meaning", () => {
     expect(normalizeStarredModels([{ ...CODEX_HIGH_FAST, instanceId: "codex" }])).toEqual([
-      CODEX_PLAIN,
+      CODEX_HIGH_FAST,
     ]);
     expect(starredModelKey({ ...CODEX_HIGH_FAST, instanceId: "codex" })).toBe(
       starredModelKey(CODEX_HIGH_FAST),
@@ -82,14 +96,18 @@ describe("account-scoped starred presets", () => {
         provider: "codex",
         instanceId: "codex_work",
         model: "gpt-5.5",
+        effort: "high",
+        fastMode: true,
+        thinking: null,
       },
+      effortLevelsFor: () => [],
     });
 
     expect(rows.map((row) => [row.instanceId, row.name, row.selected])).toEqual([
       [undefined, "GPT-5.5", false],
       ["codex_work", "GPT-5.5 (work)", true],
     ]);
-    expect(rows[1]?.detail).toBe("Work");
+    expect(rows[1]?.detail?.startsWith("Work")).toBe(true);
   });
 });
 
@@ -161,6 +179,7 @@ describe("OMP picker rows", () => {
       ],
       query: "",
       current: { ...role, instanceId: "omp_work" },
+      effortLevelsFor: () => [],
     });
     expect(rows[0]).toMatchObject({
       provider: "omp",

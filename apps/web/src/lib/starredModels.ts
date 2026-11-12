@@ -46,11 +46,21 @@ export function starredModelInstanceId(
   return entry.instanceId?.trim() || entry.provider;
 }
 
-// Stars are plain models: legacy entries that differ only in traits share one key.
 export function starredModelKey(
-  entry: Pick<StoredStarredModel, "provider" | "instanceId" | "model">,
+  entry: Pick<
+    StoredStarredModel,
+    "provider" | "instanceId" | "model" | "effort" | "fastMode" | "thinking"
+  >,
 ): string {
-  return starredModelSlotKey(entry);
+  // JSON keeps the key unambiguous: model slugs may contain any separator character.
+  return JSON.stringify([
+    entry.provider,
+    starredModelInstanceId(entry),
+    entry.model,
+    entry.effort ?? "",
+    entry.fastMode === null ? "" : String(entry.fastMode),
+    entry.thinking === null ? "" : String(entry.thinking),
+  ]);
 }
 
 // Account + model only. A provider tab row shares its traits with every model of that
@@ -78,9 +88,6 @@ export function normalizeStarredModels(
     // Store the default account implicitly so older builds read the same preset.
     result.push({
       ...rest,
-      effort: null,
-      fastMode: null,
-      thinking: null,
       provider: entry.provider,
       ...(instanceId !== entry.provider ? { instanceId } : {}),
     });
@@ -96,7 +103,7 @@ export function toggleStarredModel(
   const normalized = normalizeStarredModels(current);
   return normalized.some((candidate) => starredModelKey(candidate) === key)
     ? normalized.filter((candidate) => starredModelKey(candidate) !== key)
-    : [...normalized, ...normalizeStarredModels([entry])];
+    : [...normalized, entry];
 }
 
 // Removes every preset of a model, whatever traits each one pins.
