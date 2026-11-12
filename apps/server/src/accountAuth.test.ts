@@ -116,6 +116,10 @@ const CLIENT_ID = "client_01ABC";
 const WORKOS_API_URL = "https://api.workos.example";
 
 /** A credentials file with a live session, as `synara auth` leaves it. */
+function base64UrlJson(value: object): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
 function credentials(overrides: Record<string, unknown> = {}) {
   const { linkedHost: linkedHostValue, ...currentOverrides } = overrides;
   return {
@@ -475,6 +479,61 @@ describe("withFreshAccessToken", () => {
     expect(onDiskDuringRetry).toEqual(
       credentials({ accessToken: "access-2", refreshToken: "refresh-2", linkedHost: true }),
     );
+  });
+
+  describe("renewing before a doomed request", () => {
+    const lifetimeSeconds = 300;
+    const jwt = (iatSeconds: number) =>
+      `${base64UrlJson({ alg: "none" })}.${base64UrlJson({
+        iat: iatSeconds,
+        exp: iatSeconds + lifetimeSeconds,
+      })}.fixture`;
+    const renewal = () =>
+      vi.fn(async () => ({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        user: { id: "user_1", email: "ada@example.com" },
+      }));
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps sending a token the wall clock calls expired when the account accepts it", async () => {
+      // This machine's clock runs an hour ahead: by its clock the token expired long ago.
+      const baseDir = makeBaseDir();
+      const token = jwt(Math.floor(Date.now() / 1_000) - 3_600);
+      await writeAccountCredentials(baseDir, credentials({ accessToken: token }));
+      const refreshAccessToken = renewal();
+      const client = makeClient({ refreshAccessToken });
+      for (let call = 0; call < 3; call++)
+        await withFreshAccessToken({ baseDir, client }, async (accessToken) => {
+          expect(accessToken).toBe(token);
+        });
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+    });
+
+    it("renews once, before sending, after holding the token for its whole lifetime", async () => {
+      vi.useFakeTimers({ toFake: ["performance"] });
+      const baseDir = makeBaseDir();
+      const token = jwt(Math.floor(Date.now() / 1_000));
+      await writeAccountCredentials(baseDir, credentials({ accessToken: token }));
+      const refreshAccessToken = renewal();
+      const client = makeClient({ refreshAccessToken });
+      const sent: string[] = [];
+      const send = () =>
+        withFreshAccessToken({ baseDir, client }, async (accessToken) => {
+          sent.push(accessToken === token ? "first" : accessToken);
+        });
+      await send();
+      vi.advanceTimersByTime(lifetimeSeconds * 1_000 - 1);
+      await send();
+      vi.advanceTimersByTime(1);
+      await send();
+      await send();
+      expect(sent).toEqual(["first", "first", "access-2", "access-2"]);
+      expect(refreshAccessToken).toHaveBeenCalledOnce();
+    });
   });
 
   it("retries only once, surfacing a second rejection to the caller", async () => {

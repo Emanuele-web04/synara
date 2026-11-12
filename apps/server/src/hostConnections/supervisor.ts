@@ -1,6 +1,20 @@
+import { isAccountRefusal } from "../accountRefusal";
+import { exponentialBackoffMs, jitterMs } from "../backoff";
 import { classifyConnectionFailure } from "./failure";
 import type { HostConnectionsPort } from "./port";
 import type { HostConnectionRegistry } from "./registry";
+
+/** Background retries keep today's 30 s cap through this many failures in a row. */
+const FAST_RETRY_FAILURES = 10;
+/** A host down for minutes, or one the account refuses, is retried no less often than this. */
+const SLOW_RETRY_MAX_MS = 5 * 60_000;
+
+/** Delay before the next background dial; explicit connects never wait on it. */
+export function backgroundRetryDelayMs(failures: number, error: unknown): number {
+  if (isAccountRefusal(error)) return exponentialBackoffMs(failures, 60_000, SLOW_RETRY_MAX_MS);
+  if (failures <= FAST_RETRY_FAILURES) return exponentialBackoffMs(failures + 1, 1_000, 30_000);
+  return exponentialBackoffMs(failures - FAST_RETRY_FAILURES + 1, 30_000, SLOW_RETRY_MAX_MS);
+}
 
 /** Restores persisted intent and retries transient failures without a renderer.
  * Idle verified relationships need no open RPC stream. At most two background
@@ -53,7 +67,7 @@ export function superviseHostConnections(
                 count,
                 retryAt:
                   classifyConnectionFailure(error) === "reconnecting"
-                    ? Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(count, 5))
+                    ? Date.now() + jitterMs(backgroundRetryDelayMs(count, error))
                     : Infinity,
               });
             },

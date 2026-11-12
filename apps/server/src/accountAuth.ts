@@ -43,6 +43,7 @@ import {
   mintHostProof,
   readHostIdentity,
 } from "./hostIdentity";
+import { decodeJwtClaims } from "./jwtClaims";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { resolveTailscaleEndpoint } from "./tailscaleEndpoint";
 import serverPackageJson from "../package.json" with { type: "json" };
@@ -729,8 +730,9 @@ async function renewSession(
 
 /**
  * Runs `fn` with the stored access token, renewing it once if the account
- * rejects it. WorkOS access tokens live about five minutes, so any CLI command
- * run more than a few minutes after `synara auth` needs this.
+ * rejects it, or before sending it once this process has seen it outlive its
+ * own lifetime. WorkOS access tokens live about five minutes, so any CLI
+ * command run more than a few minutes after `synara auth` needs this.
  *
  * Credentials are re-read per call rather than captured by the caller: a
  * rotation performed for one call must be visible to the next one, and the
@@ -739,9 +741,11 @@ async function renewSession(
  * {@link renewSession} — so concurrent expired-token operations cannot
  * double-spend the single-use refresh token or clobber each other's writes.
  *
- * Renewal is driven purely by a rejected call, not by reading `exp` off the
- * JWT first. The deliberate trade is one wasted round trip per expiry against
- * having to parse and trust token internals here.
+ * The early renewal trusts no wall clock: it compares the token's own lifetime
+ * (`exp - iat`) with how long this process has held it on its monotonic clock.
+ * A token first seen after a restart, a token without those claims, or a clock
+ * that runs ahead therefore falls back to the rejected-call path, so it never
+ * renews more often than a 401 would have.
  */
 export async function withFreshAccessToken<A>(
   options: WithFreshAccessTokenOptions,
@@ -762,33 +766,59 @@ export async function withFreshAccessToken<A>(
       throw new WorkspaceAccessChangedError();
   };
   assertIdentity(credentials);
-  try {
-    return await fn(credentials.accessToken);
-  } catch (error) {
-    // The workspace, not the token, is what the account rejected. Renewing
-    // would mint another token for the same dead organization, so the retry
-    // is skipped and the session dropped in favour of a fresh sign-in.
-    if (error instanceof OrganizationRequiredError) {
-      await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
-      throw new WorkspaceAccessChangedError();
+  // A token held for its whole lifetime would only come back 401; renew before sending it.
+  if (!accessTokenOutlived(baseDir, credentials.accessToken)) {
+    try {
+      return await fn(credentials.accessToken);
+    } catch (error) {
+      // The workspace, not the token, is what the account rejected. Renewing
+      // would mint another token for the same dead organization, so the retry
+      // is skipped and the session dropped in favour of a fresh sign-in.
+      if (error instanceof OrganizationRequiredError) {
+        await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
+        throw new WorkspaceAccessChangedError();
+      }
+      if (!isUnauthorized(error)) throw error;
     }
-    if (!isUnauthorized(error)) throw error;
-
-    const renewal = await renewSession(baseDir, client, credentials);
-    if (renewal.kind === "expired") throw new SessionExpiredError();
-    const current = await readAccountCredentials(baseDir);
-    if (!current) throw new SessionExpiredError();
-    // Renewal's verified user includes the permitted legacy backfill. Host metadata
-    // may change independently; explicit background identity fences still apply below.
-    if (
-      current.accountUrl !== credentials.accountUrl ||
-      current.organizationId !== credentials.organizationId ||
-      current.userId !== renewal.userId
-    )
-      throw new WorkspaceAccessChangedError();
-    assertIdentity(current);
-    return await fn(renewal.accessToken);
   }
+
+  const renewal = await renewSession(baseDir, client, credentials);
+  if (renewal.kind === "expired") throw new SessionExpiredError();
+  const current = await readAccountCredentials(baseDir);
+  if (!current) throw new SessionExpiredError();
+  // Renewal's verified user includes the permitted legacy backfill. Host metadata
+  // may change independently; explicit background identity fences still apply below.
+  if (
+    current.accountUrl !== credentials.accountUrl ||
+    current.organizationId !== credentials.organizationId ||
+    current.userId !== renewal.userId
+  )
+    throw new WorkspaceAccessChangedError();
+  assertIdentity(current);
+  accessTokenOutlived(baseDir, renewal.accessToken);
+  return await fn(renewal.accessToken);
+}
+
+/** When this process first held each credential directory's current access token (monotonic). */
+const accessTokenFirstSeen = new Map<string, { readonly tokenHash: string; readonly at: number }>();
+
+/**
+ * Whether this process has held the token at least its own lifetime. First
+ * sight comes after issuance, so a true answer means the account API would
+ * already refuse it; the claims only avoid a doomed request, never authorize.
+ */
+function accessTokenOutlived(baseDir: string, accessToken: string): boolean {
+  const claims = decodeJwtClaims(accessToken);
+  const exp = claims?.exp;
+  const iat = claims?.iat;
+  if (typeof exp !== "number" || typeof iat !== "number" || !(exp > iat)) return false;
+  const tokenHash = createHash("sha256").update(accessToken).digest("hex");
+  const seen = accessTokenFirstSeen.get(baseDir);
+  if (seen?.tokenHash !== tokenHash) {
+    accessTokenFirstSeen.set(baseDir, { tokenHash, at: performance.now() });
+    return false;
+  }
+  return performance.now() - seen.at >= (exp - iat) * 1_000;
 }
 
 /**

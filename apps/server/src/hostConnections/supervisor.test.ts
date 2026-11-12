@@ -2,15 +2,21 @@ import { once } from "node:events";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, expect, it, vi } from "vitest";
 import { HostConnectionRegistry } from "./registry";
-import { superviseHostConnections } from "./supervisor";
+import { AccountApiError } from "@synara/shared/account";
+import { backgroundRetryDelayMs, superviseHostConnections } from "./supervisor";
 import { RemoteHostTrustError } from "./failure";
 import { controllerProtocol, HostDialError } from "./dialer";
 import type { HostConnectionsPort } from "./port";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 it("retries a desired host whose published route disappears during connector recovery", async () => {
   vi.useFakeTimers();
+  // Background retries are jittered; pin it to the nominal delay.
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   const registry = new HostConnectionRegistry();
   registry.setConnector("mini", "Mini", async () => {
     throw new HostDialError("That host has no published route", { stage: "no-route" });
@@ -143,4 +149,27 @@ it("waits for trust repair, then recovers from a transient failure even between 
     for (const socket of host.clients) socket.terminate();
     host.close();
   }
+});
+
+it("keeps short retries for a brief outage and spaces them out for a long or refused one", () => {
+  const offline = new HostDialError("That host has no published route", { stage: "no-route" });
+  const refused = new HostDialError(
+    "Could not obtain a connection grant",
+    { stage: "grant" },
+    {
+      cause: new AccountApiError({
+        status: 403,
+        code: "subscription_required",
+        message: "Remote access requires an active Synara Alto subscription",
+      }),
+    },
+  );
+  const seconds = (error: unknown, failures: number[]) =>
+    failures.map((count) => backgroundRetryDelayMs(count, error) / 1_000);
+  expect(seconds(offline, [1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 30])).toEqual([
+    2, 4, 8, 16, 30, 30, 60, 120, 240, 300, 300,
+  ]);
+  expect(seconds(new Error("wrapper", { cause: refused }), [1, 2, 3, 4, 9])).toEqual([
+    60, 120, 240, 300, 300,
+  ]);
 });
