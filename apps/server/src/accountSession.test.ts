@@ -88,6 +88,38 @@ describe("billing account scope", () => {
     expect((await readAccountFile(baseDir))?.userId).toBe("user_2");
   });
 
+  it("lifts a registration refusal when access becomes granted, not on every granted read", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const registerDevice = vi.fn(() =>
+      Promise.reject(
+        new AccountApiError({ code: "not_host_owner", status: 403, message: "Refused" }),
+      ),
+    );
+    const session = createAccountSession({
+      baseDir,
+      accountUrl: ACCOUNT_URL,
+      client: makeClient({
+        me: async () => meResponse(),
+        registerDevice,
+        startHostLink: accountServiceUnavailable,
+        billingStatus: async () => ({ ...billing, access: "granted" as const }),
+      }),
+    });
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledOnce();
+
+    await session.billingStatus();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+
+    // Still granted, still refused for another reason: the backoff holds.
+    await session.billingStatus();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["granted", 1],
     ["none", 0],
@@ -538,6 +570,45 @@ describe("status", () => {
     await session.status();
     await session.status();
     expect(registerDevice).toHaveBeenCalledTimes(2);
+  });
+
+  // The app reads the status every ten minutes; a transient failure must not wait for that.
+  it("retries a failed enrollment in the background, but not a refused one", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const enroll = async (registerDevice: () => Promise<never>) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const calls = vi.fn(registerDevice);
+      const session = createAccountSession({
+        baseDir,
+        accountUrl: ACCOUNT_URL,
+        client: makeClient({
+          me: async () => meResponse(),
+          registerDevice: calls,
+          startHostLink: () =>
+            Promise.reject(
+              new AccountApiError({ code: "not_host_owner", status: 403, message: "Refused" }),
+            ),
+        }),
+        enrollmentRetryBaseMs: 10,
+      });
+      await session.status();
+      expect(calls).toHaveBeenCalledOnce();
+      return { baseDir, calls };
+    };
+
+    const failed = await enroll(accountServiceUnavailable);
+    await vi.waitFor(() => expect(failed.calls.mock.calls.length).toBeGreaterThanOrEqual(2));
+    // Signing out ends the retries.
+    fs.rmSync(failed.baseDir, { recursive: true, force: true });
+
+    const refused = await enroll(() =>
+      Promise.reject(
+        new AccountApiError({ code: "subscription_required", status: 403, message: "Refused" }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(refused.calls).toHaveBeenCalledOnce();
   });
 
   // Renewal runs every few minutes; one that fails without a terminal refusal

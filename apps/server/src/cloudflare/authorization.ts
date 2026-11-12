@@ -46,8 +46,12 @@ export async function requestAuthorizationSnapshot<A>(
     try {
       return await attempt(AbortSignal.any([options.signal, timeout]));
     } catch (error) {
-      const unanswered =
-        timeout.aborted || (error instanceof TypeError && !findAccountApiError(error));
+      // The client reports an abort (its own or this attempt's) as a 408; any
+      // other typed error is an answer, even one that landed as the bound elapsed.
+      const answer = findAccountApiError(error);
+      const unanswered = answer
+        ? answer.status === 408 && timeout.aborted
+        : timeout.aborted || error instanceof TypeError;
       if (attempts >= 2 || options.signal.aborted || !unanswered) throw error;
     }
   }

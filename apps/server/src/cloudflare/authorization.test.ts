@@ -648,6 +648,24 @@ describe("authorization snapshot request", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it("passes on an answer that lands as the attempt bound elapses", async () => {
+    const attempt = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      throw new AccountApiError({
+        status: 403,
+        code: "subscription_required",
+        message: "Refused",
+      });
+    });
+    await expect(
+      requestAuthorizationSnapshot(attempt, {
+        signal: new AbortController().signal,
+        attemptTimeoutMs: 10,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "subscription_required" });
+    expect(attempt).toHaveBeenCalledOnce();
+  });
+
   it("does not retry once its owner has stopped", async () => {
     const { fetch, request } = clientAnswering(["stall", Response.json(snapshot)]);
     const stop = new AbortController();

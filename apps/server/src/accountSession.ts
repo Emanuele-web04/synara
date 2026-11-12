@@ -142,14 +142,24 @@ const MAX_TRACKED_SSO_ATTEMPTS = 4;
 const SSO_CALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * How long a sign-in waits for device registration and host linking before
- * answering; they finish in the background after that. Enrollment is two or
- * three account requests (`POST /devices`, host link start and complete),
- * measured at 100-250 ms each and under 900 ms at p95, so it normally ends
- * well inside this and the sign-in answers exactly as before. A stalled
- * request (15 s client timeout each) no longer holds the sign-in past this.
+ * How long a sign-in or a status read waits for device registration and host
+ * linking before answering; they finish in the background after that.
+ * Enrollment is two or three account requests (`POST /devices`, host link
+ * start and complete), measured at 100-250 ms each and under 900 ms at p95, so
+ * it normally ends well inside this and the answer is exactly as before. A
+ * stalled request (15 s client timeout each) no longer holds the answer past
+ * this.
  */
-const SIGN_IN_ENROLLMENT_WAIT_MS = 5_000;
+const ENROLLMENT_WAIT_MS = 5_000;
+
+/**
+ * A registration or host link that failed without a refusal is retried here,
+ * not only on the next status read: the app reads the status every ten
+ * minutes when nothing else prompts it. The first retry waits 30 s, each
+ * further failure doubles that, up to those same ten minutes.
+ */
+const ENROLLMENT_RETRY_BASE_MS = 30_000;
+const ENROLLMENT_RETRY_MAX_MS = 10 * 60_000;
 
 /**
  * How long after a sign-in answers the usage reporter is nudged. Its first
@@ -208,8 +218,10 @@ export interface AccountSessionOptions {
   readonly hostname?: string;
   readonly appVersion?: string;
   readonly devUrl?: URL;
-  /** Overrides {@link SIGN_IN_ENROLLMENT_WAIT_MS}; tests only. */
+  /** Overrides {@link ENROLLMENT_WAIT_MS}; tests only. */
   readonly signInEnrollmentWaitMs?: number;
+  /** Overrides {@link ENROLLMENT_RETRY_BASE_MS}; tests only. */
+  readonly enrollmentRetryBaseMs?: number;
 }
 
 export interface AccountSession {
@@ -359,14 +371,23 @@ export function createAccountSession(
   let hostSecretsCoordinator:
     | { readonly sessionKey: string; readonly value: HostSecretsCoordinator }
     | undefined;
-  /** The enrollment running now, joined by status reads for the same user. */
-  let enrollmentInFlight: { readonly userId: string; readonly promise: Promise<void> } | undefined;
   /**
-   * The enrollment a sign-in started, until it finishes. A sign-in may answer
-   * before it does, so host, device and enrollment reads wait for it and never
-   * report the pre-enrollment state the app could otherwise cache.
+   * The enrollment running now, joined by status reads for the same user. A
+   * sign-in or status read may answer before it finishes, so host, device and
+   * enrollment reads wait for it and never report the pre-enrollment state the
+   * app could otherwise cache.
    */
-  let signInEnrollment: Promise<void> | undefined;
+  let enrollmentInFlight: { readonly userId: string; readonly promise: Promise<void> } | undefined;
+  /** The pending retry of an enrollment that failed without a refusal. */
+  let enrollmentRetry:
+    | {
+        readonly userId: string;
+        readonly failures: number;
+        readonly timer: ReturnType<typeof setTimeout>;
+      }
+    | undefined;
+  /** Whether the last billing read reported access; a refusal is lifted only when that changes. */
+  let billingAccessGranted: boolean | undefined;
   /** The last refused device registration, for the status-read backoff. */
   let registrationRefusal:
     | { readonly identity: string; readonly refusals: number; readonly retryAt: number }
@@ -641,15 +662,44 @@ export function createAccountSession(
   function ensureDesktopEnrollment(knownUserId: string, timing?: SignInTiming): Promise<void> {
     const running = enrollmentInFlight;
     if (running && running.userId === knownUserId && !timing) return running.promise;
-    const promise = (running?.promise ?? Promise.resolve()).then(() =>
-      enrollDesktop(knownUserId, timing),
-    );
+    const promise = (running?.promise ?? Promise.resolve())
+      .then(() => enrollDesktop(knownUserId, timing))
+      .then((retry) => scheduleEnrollmentRetry(knownUserId, retry));
     const entry = { userId: knownUserId, promise };
     enrollmentInFlight = entry;
     void promise.finally(() => {
       if (enrollmentInFlight === entry) enrollmentInFlight = undefined;
     });
     return promise;
+  }
+
+  /** Arms, re-arms or clears the background retry after an enrollment attempt. */
+  function scheduleEnrollmentRetry(userId: string, retry: boolean): void {
+    const previous = enrollmentRetry;
+    if (previous) clearTimeout(previous.timer);
+    enrollmentRetry = undefined;
+    if (!retry) return;
+    const failures = (previous?.userId === userId ? previous.failures : 0) + 1;
+    const timer = setTimeout(
+      () => {
+        void readAccountCredentials(credentialDir)
+          .catch(() => undefined)
+          .then((stored) => {
+            // Signed out, or another account since: its own sign-in enrolls it.
+            if (stored?.userId === userId) return ensureDesktopEnrollment(userId);
+            if (enrollmentRetry?.timer === timer) enrollmentRetry = undefined;
+          });
+      },
+      jitterMs(
+        exponentialBackoffMs(
+          failures,
+          options.enrollmentRetryBaseMs ?? ENROLLMENT_RETRY_BASE_MS,
+          ENROLLMENT_RETRY_MAX_MS,
+        ),
+      ),
+    );
+    timer.unref?.();
+    enrollmentRetry = { userId, failures, timer };
   }
 
   /**
@@ -694,20 +744,25 @@ export function createAccountSession(
     }
   }
 
-  /** Never rejects: both halves retry on a later status read. */
-  async function enrollDesktop(knownUserId: string, timing?: SignInTiming): Promise<void> {
-    if (remoteConnectionsUnavailableReason()) return;
+  /**
+   * Never rejects: both halves retry on a later status read. Resolves true
+   * when a half failed without a refusal, which the background retry picks up.
+   */
+  async function enrollDesktop(knownUserId: string, timing?: SignInTiming): Promise<boolean> {
+    if (remoteConnectionsUnavailableReason()) return false;
     const measure: SignInTiming["measure"] = timing
       ? (step, run) => timing.measure(step, run)
       : (_step, run) => run();
+    let retry = false;
     try {
       await measure("device_registration", () => registerShellDeviceUnlessRefused(knownUserId));
-    } catch {
+    } catch (error) {
       // A later status read retries; the durable user session remains valid.
+      retry = !isAccountRefusal(error);
     }
     try {
       const stored = await readAccountCredentials(credentialDir);
-      if (!stored) return;
+      if (!stored) return false;
       await measure("host_link", () =>
         ensureLocalAccountHostLinked({
           accountUrl: stored.accountUrl,
@@ -719,9 +774,11 @@ export function createAccountSession(
           ...(options.appVersion ? { appVersion: options.appVersion } : {}),
         }),
       );
-    } catch {
+    } catch (error) {
       // Host linking has the same retry-on-status semantics as registration.
+      retry ||= !isAccountRefusal(error);
     }
+    return retry;
   }
 
   async function signedInStatus(me: AccountMe): Promise<AccountStatus> {
@@ -816,6 +873,7 @@ export function createAccountSession(
     context.onPersisted?.();
     // A new sign-in retries a refused registration at once.
     registrationRefusal = undefined;
+    billingAccessGranted = undefined;
 
     // Enrollment and the final `/me` are independent once the pair is on
     // disk, so they run together. Enrollment gets a bounded wait and then
@@ -823,15 +881,6 @@ export function createAccountSession(
     // retried on the next status read.
     const enrollment = ensureDesktopEnrollment(scoped.userId, timing);
     timing.waitFor(enrollment);
-    const tracked: Promise<void> = enrollment.then(
-      () => {
-        if (signInEnrollment === tracked) signInEnrollment = undefined;
-      },
-      () => {
-        if (signInEnrollment === tracked) signInEnrollment = undefined;
-      },
-    );
-    signInEnrollment = tracked;
 
     try {
       // Not redundant on the common path: scoping's probe `/me` ran against the
@@ -840,7 +889,7 @@ export function createAccountSession(
       // pre-scoped self-hoster path pays a second call.
       const [me] = await Promise.all([
         timing.measure("final_me", () => withSession((accessToken, c) => c.me(accessToken))),
-        settleWithin(enrollment, options.signInEnrollmentWaitMs ?? SIGN_IN_ENROLLMENT_WAIT_MS),
+        settleWithin(enrollment, options.signInEnrollmentWaitMs ?? ENROLLMENT_WAIT_MS),
       ]);
       return await signedInStatus(me);
     } finally {
@@ -851,9 +900,9 @@ export function createAccountSession(
     }
   }
 
-  /** Waits for a sign-in's background enrollment, if one is still running. */
-  async function afterSignInEnrollment(): Promise<void> {
-    await signInEnrollment;
+  /** Waits for an enrollment still running in the background, if there is one. */
+  async function afterEnrollment(): Promise<void> {
+    await enrollmentInFlight?.promise;
   }
 
   /** The `status()` body, callable from inside the session's own methods. */
@@ -892,7 +941,11 @@ export function createAccountSession(
         });
         return verified;
       });
-      await ensureDesktopEnrollment(me.id);
+      // Bounded like a sign-in: a stalled enrollment finishes in the background.
+      await settleWithin(
+        ensureDesktopEnrollment(me.id),
+        options.signInEnrollmentWaitMs ?? ENROLLMENT_WAIT_MS,
+      );
       return await signedInStatus(me);
     } catch (error) {
       if (isSignedOut(error)) return SIGNED_OUT;
@@ -1160,10 +1213,14 @@ export function createAccountSession(
     async billingStatus() {
       const status = await withBillingSession((token, client) => client.billingStatus(token));
       // A host refused for lack of access may retry its own authorization now.
-      if (status.access === "granted") {
-        registrationRefusal = undefined;
+      const granted = status.access === "granted";
+      if (granted) {
+        // Access that was just granted lifts a refusal; an unchanged grant
+        // must not reset the backoff on every billing read.
+        if (billingAccessGranted !== true) registrationRefusal = undefined;
         noteRemoteAccessGranted();
       }
+      billingAccessGranted = granted;
       return status;
     },
     billingCheckout(input) {
@@ -1174,7 +1231,7 @@ export function createAccountSession(
     },
 
     async listHosts() {
-      await afterSignInEnrollment();
+      await afterEnrollment();
       return withSession((token, client) => client.listHosts(token));
     },
 
@@ -1205,7 +1262,7 @@ export function createAccountSession(
     },
 
     async listDevices() {
-      await afterSignInEnrollment();
+      await afterEnrollment();
       return withSession((token, client) => client.listDevices(token));
     },
 
@@ -1241,7 +1298,7 @@ export function createAccountSession(
     },
 
     async enrollment() {
-      await afterSignInEnrollment();
+      await afterEnrollment();
       const stored = await readAccountFile(credentialDir);
       const { hosts, organizationMemberCount } = await withSession(async (token, client) => {
         const [listed, memberCount] = await Promise.all([
