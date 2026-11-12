@@ -1306,6 +1306,27 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       ThreadId.makeUnsafe("thread-4"),
     ]);
   });
+
+  it("keeps the open child and its creators visible past the limit", () => {
+    const entries = [
+      { rowId: "first", depth: 0 },
+      { rowId: "creator", depth: 0 },
+      { rowId: "parent", depth: 1 },
+      { rowId: "sibling", depth: 2 },
+      { rowId: "open-child", depth: 2 },
+    ];
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: "open-child",
+      previewLimit: 1,
+    });
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      "first",
+      "creator",
+      "parent",
+      "open-child",
+    ]);
+  });
 });
 
 describe("getNextVisibleSidebarThreadId", () => {
@@ -2603,11 +2624,11 @@ describe("sortProjectsForSidebar", () => {
 describe("nestAgentCreatedThreadEntries", () => {
   const tid = (id: string) => ThreadId.makeUnsafe(id);
   const mk = (id: string, sourceId?: string) =>
-    ({
+    makeSidebarThreadSummary({
       id: tid(id),
       creationSource: sourceId ? "synara_mcp" : null,
       sourceThreadId: sourceId ? tid(sourceId) : null,
-    }) as unknown as SidebarThreadSummary;
+    });
   const ids = (entries: { rowId: string }[]) => entries.map((entry) => entry.rowId);
 
   it("nests children under their creator, multi-level, in DFS order", () => {
@@ -2632,6 +2653,18 @@ describe("nestAgentCreatedThreadEntries", () => {
   it("keeps a thread top-level when its creator is absent", () => {
     const entries = nestAgentCreatedThreadEntries([mk("c", "gone")], new Set());
     expect(entries.map((entry) => entry.depth)).toEqual([0]);
+  });
+
+  it("keeps a child in its own project when its creator is pinned", () => {
+    const parent = makeSidebarThreadSummary({ id: tid("p"), isPinned: true });
+    const child = makeSidebarThreadSummary({
+      id: tid("c"),
+      projectId: ProjectId.makeUnsafe("other-project"),
+      creationSource: "synara_mcp",
+      sourceThreadId: parent.id,
+    });
+    const entries = nestAgentCreatedThreadEntries([parent, child], new Set(), new Set([parent.id]));
+    expect(groupSidebarThreadFamilies(entries).map(ids)).toEqual([["p"], ["c"]]);
   });
 
   it("hides every child of a collapsed parent", () => {

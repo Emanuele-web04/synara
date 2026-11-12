@@ -377,6 +377,24 @@ describe("SidebarActivityView", () => {
     await expect.element(page.getByText("1 needs you")).toBeVisible();
   });
 
+  it("reveals an open child when its creator is in the closed Done section", async () => {
+    const parent = makeThread(1);
+    const child = makeThread(2, { creationSource: "synara_mcp", sourceThreadId: parent.id });
+    const mounted = await render(
+      <SidebarProvider>
+        {renderActivity({
+          threads: [parent, child],
+          activeThreadId: child.id,
+          settledOverrideByThreadId: new Map([[parent.id, true]]),
+          nestChildThreads: true,
+        })}
+      </SidebarProvider>,
+    );
+    await expect
+      .element(mounted.getByTestId(`activity-child-thread-${child.id}`), { timeout: 3000 })
+      .toBeVisible();
+  });
+
   it("keeps remote pinned rows in the feed without sending them to local actions", async () => {
     const local = makeThread(70, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const remote = makeThread(71, {

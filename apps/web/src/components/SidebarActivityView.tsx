@@ -934,18 +934,17 @@ export function SidebarActivityView({
     const eligible = threads.filter((thread) =>
       isActivityThread(thread, preparingThreadIdSet.has(thread.id)),
     );
-    const projectIdByThreadId = new Map(eligible.map((thread) => [thread.id, thread.projectId]));
-    const detachedIds = new Set(pinnedThreadIdSet);
-    for (const thread of eligible) {
-      const creatorProjectId = thread.sourceThreadId
-        ? projectIdByThreadId.get(thread.sourceThreadId)
-        : undefined;
-      if (creatorProjectId !== undefined && creatorProjectId !== thread.projectId) {
-        detachedIds.add(thread.id);
+    return groupActivityChildFamilies(eligible, pinnedThreadIdSet);
+  }, [childThreadNesting, pinnedThreadIdSet, preparingThreadIdSet, threads]);
+  // Section previews contain roots, so reveal the creator when the open chat is nested.
+  const activeSectionThreadId = useMemo(() => {
+    if (visualActiveThreadId !== null) {
+      for (const [rootId, children] of childFamilies?.childrenByRootId ?? []) {
+        if (children.some((child) => child.id === visualActiveThreadId)) return rootId;
       }
     }
-    return groupActivityChildFamilies(eligible, detachedIds);
-  }, [childThreadNesting, pinnedThreadIdSet, preparingThreadIdSet, threads]);
+    return visualActiveThreadId;
+  }, [childFamilies, visualActiveThreadId]);
   const childTierByRootId = useMemo(() => {
     const tiers = new Map<ThreadId, ActivityPriorityTier | null>();
     for (const [rootId, children] of childFamilies?.childrenByRootId ?? []) {
@@ -1095,7 +1094,7 @@ export function SidebarActivityView({
       threads: resolveActivitySectionRows(group.threads, {
         open: true,
         previewLimit: paging.previewLimit,
-        activeThreadId: visualActiveThreadId,
+        activeThreadId: activeSectionThreadId,
       }).visible,
     };
   });
@@ -1104,27 +1103,27 @@ export function SidebarActivityView({
       resolveActivitySectionRows(scopedPinnedThreads, {
         open: pinnedOpen,
         previewLimit: scopedPinnedThreads.length,
-        activeThreadId: visualActiveThreadId,
+        activeThreadId: activeSectionThreadId,
       }),
-    [visualActiveThreadId, pinnedOpen, scopedPinnedThreads],
+    [activeSectionThreadId, pinnedOpen, scopedPinnedThreads],
   );
   const earlierRows = useMemo(
     () =>
       resolveActivitySectionRows(dateBuckets.earlier, {
         open: earlierOpen,
         previewLimit: earlierPaging.previewLimit,
-        activeThreadId: visualActiveThreadId,
+        activeThreadId: activeSectionThreadId,
       }),
-    [visualActiveThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
+    [activeSectionThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
   );
   const settledRows = useMemo(
     () =>
       resolveActivitySectionRows(model.settled, {
         open: settledOpen,
         previewLimit: settledPaging.previewLimit,
-        activeThreadId: visualActiveThreadId,
+        activeThreadId: activeSectionThreadId,
       }),
-    [visualActiveThreadId, model.settled, settledOpen, settledPaging.previewLimit],
+    [activeSectionThreadId, model.settled, settledOpen, settledPaging.previewLimit],
   );
   // The open thread stays on screen even when its section is collapsed.
   const revealedThreads = useMemo(

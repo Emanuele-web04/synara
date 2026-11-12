@@ -1209,6 +1209,17 @@ describe("agent-created child families", () => {
     expect(families.childrenByRootId.size).toBe(0);
   });
 
+  it("keeps snoozed chats out of active families", () => {
+    const snoozedUntil = "2026-08-02T09:00:00.000Z";
+    const snoozedChild = { ...child("snoozed-child", "p"), snoozedUntil };
+    const activeGrandchild = child("active-grandchild", "snoozed-child");
+    const families = groupActivityChildFamilies([parent, snoozedChild, activeGrandchild]);
+    const model = buildActivityViewModel({ threads: families.roots, pinnedThreadIdSet: new Set() });
+    expect(ids(model.snoozed)).toEqual([snoozedChild.id]);
+    expect(ids(model.active)).toEqual(expect.arrayContaining([parent.id, activeGrandchild.id]));
+    expect(families.childrenByRootId.size).toBe(0);
+  });
+
   it("ranks tiers waiting, then unread, then working", () => {
     expect(mostUrgentActivityPriorityTier(null, "working")).toBe("working");
     expect(mostUrgentActivityPriorityTier("working", "unread")).toBe("unread");

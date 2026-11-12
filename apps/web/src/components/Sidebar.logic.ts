@@ -427,15 +427,15 @@ export function collectAgentCreatedDescendants(
 
 /**
  * Reorders threads depth-first so agent-created threads (synara_mcp) sit under the thread that
- * created them. A thread whose creator is not in `threads`, or that is in `detachedIds` (pinned
- * threads live in their own section), stays top-level and takes its children with it.
+ * created them in the same project. A thread whose creator is absent or in another project,
+ * or that is in `detachedIds` (such as a pinned thread), stays top-level with its children.
  */
 export function nestAgentCreatedThreadEntries(
   threads: readonly SidebarThreadSummary[],
   collapsedParentIds: ReadonlySet<ThreadId>,
   detachedIds: ReadonlySet<ThreadId> = new Set(),
 ): SidebarProjectEntry[] {
-  const ids = new Set(threads.map((thread) => thread.id));
+  const projectByThreadId = new Map(threads.map((thread) => [thread.id, thread.projectId]));
   const childrenByParent = new Map<ThreadId, SidebarThreadSummary[]>();
   const roots: SidebarThreadSummary[] = [];
   for (const thread of threads) {
@@ -443,7 +443,7 @@ export function nestAgentCreatedThreadEntries(
     if (
       isAgentCreatedChild(thread) &&
       parentId &&
-      ids.has(parentId) &&
+      projectByThreadId.get(parentId) === thread.projectId &&
       !detachedIds.has(thread.id)
     ) {
       const siblings = childrenByParent.get(parentId);
@@ -1120,6 +1120,7 @@ export function resolveSidebarThreadListPaging(input: {
 export function getVisibleSidebarEntriesForPreview<
   T extends {
     rowId: string;
+    depth?: number;
   },
 >(input: {
   entries: readonly T[];
@@ -1149,15 +1150,25 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  if (!entries.some((entry) => entry.rowId === activeEntryId)) {
+  const activeIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+  if (activeIndex < 0) {
     return {
       hasHiddenEntries: true,
       visibleEntries: previewEntries,
     };
   }
 
-  // Keep the open thread's row visible even when it sorts past the preview cap.
+  // Keep the open row and its creator chain visible past the preview cap.
   visibleEntryIds.add(activeEntryId);
+  let depth = entries[activeIndex]?.depth ?? 0;
+  for (let index = activeIndex - 1; index >= previewLimit && depth > 0; index -= 1) {
+    const entry = entries[index]!;
+    const candidateDepth = entry.depth ?? 0;
+    if (candidateDepth < depth) {
+      visibleEntryIds.add(entry.rowId);
+      depth = candidateDepth;
+    }
+  }
 
   return {
     hasHiddenEntries: true,

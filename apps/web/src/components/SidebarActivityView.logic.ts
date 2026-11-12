@@ -449,8 +449,18 @@ export function groupActivityChildFamilies(
   threads: readonly SidebarThreadSummary[],
   detachedIds: ReadonlySet<ThreadId> = NO_THREAD_IDS,
 ): ActivityChildFamilies {
+  // Snooze belongs to one chat. Keep it in Snoozed and let its active children remain visible.
+  const snoozedIds = new Set(
+    threads.filter((thread) => thread.snoozedUntil != null).map((thread) => thread.id),
+  );
+  const familyDetachedIds = new Set([...detachedIds, ...snoozedIds]);
+  for (const thread of threads) {
+    if (thread.sourceThreadId && snoozedIds.has(thread.sourceThreadId)) {
+      familyDetachedIds.add(thread.id);
+    }
+  }
   const families = groupSidebarThreadFamilies(
-    nestAgentCreatedThreadEntries(threads, NO_THREAD_IDS, detachedIds),
+    nestAgentCreatedThreadEntries(threads, NO_THREAD_IDS, familyDetachedIds),
   );
   const roots: SidebarThreadSummary[] = [];
   const childrenByRootId = new Map<ThreadId, readonly SidebarThreadSummary[]>();
