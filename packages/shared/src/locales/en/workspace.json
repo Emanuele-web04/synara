@@ -1034,7 +1034,9 @@
   "openFileOptions": "Open {{file}} options",
   "activeSpaceLabel": "{{name}} · Active",
   "unknownSpace": "Unknown space",
-  "childThreadCount_one": "{{count}} child",
-  "childThreadCount_other": "{{count}} children",
+  "childThreadCount_one": "{{count}} child thread",
+  "childThreadCount_other": "{{count}} child threads",
+  "childThreadClusterCount_one": "{{count}} thread",
+  "childThreadClusterCount_other": "{{count}} threads",
   "toggleChildThreads": "Toggle child threads"
 }

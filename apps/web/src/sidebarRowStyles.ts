@@ -81,6 +81,26 @@ export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
 ].join(" ");
 
+/** Left padding of a thread row (`pl-8` above), where its provider glyph starts. */
+export const SIDEBAR_THREAD_ROW_PADDING_PX = 32;
+
+/**
+ * A thread row with a second line (a folded parent's child-count badge). Top padding puts the
+ * 20px title line exactly where a single-line row centres it, so the title never moves.
+ */
+export const SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME =
+  "h-auto flex-wrap items-start gap-y-1 pt-[calc((var(--app-density-row-height,1.75rem)-1.25rem)/2)] pb-1.5";
+
+/** Centres an absolutely placed control on a thread row's first line, at any row height. */
+export const SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME =
+  "top-[calc(var(--app-density-row-height,1.75rem)/2)]";
+
+/** Indent per level for agent-created child threads, under the parent's title. */
+export const SIDEBAR_CHILD_INDENT_PX = 24;
+
+/** Centre of a thread row's leading glyph from the row's content edge; stems hang from here. */
+export const SIDEBAR_THREAD_GLYPH_CENTER_PX = 6;
+
 /** Spacing between a header row and its nested thread list, and between thread rows. */
 export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 

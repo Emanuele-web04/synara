@@ -100,9 +100,7 @@ import {
   type ComponentType,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type CSSProperties,
   type ReactNode,
-  Fragment,
 } from "react";
 import {
   DndContext,
@@ -390,6 +388,7 @@ import { Button } from "./ui/button";
 import { Popover, PopoverPopup } from "./ui/popover";
 import { StatusDot } from "./ui/status-chip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { ProviderIcon } from "./ProviderIcon";
 import { Input } from "./ui/input";
 import {
   Dialog,
@@ -468,6 +467,11 @@ import {
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
   type SidebarDerivedProjectData,
+  type SidebarProjectEntry,
+  agentCreatedAncestorIds,
+  groupAgentCreatedChildren,
+  groupSidebarThreadFamilies,
+  nestAgentCreatedThreadEntries,
   type SidebarActionBadge,
   type SidebarView,
   shouldShowDebugFeatureFlagsMenu,
@@ -499,8 +503,13 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
+  SIDEBAR_CHILD_INDENT_PX,
   SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
   SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
+  SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME,
+  SIDEBAR_THREAD_GLYPH_CENTER_PX,
+  SIDEBAR_THREAD_ROW_PADDING_PX,
+  SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
@@ -1363,6 +1372,11 @@ export function SidebarSurfacePicker({
   );
 }
 
+/** Pinned rows sit flush (`px-2`), with no gutter before the glyph. */
+const PINNED_ROW_PADDING_PX = 8;
+/** A parent's stem: one hairline hung from the glyph centre, never covering row content. */
+const SIDEBAR_CHILD_STEM_CLASS_NAME = "pointer-events-none absolute z-10 border-foreground/14";
+
 export default function Sidebar() {
   const { t, formatLocale } = useTranslation();
 
@@ -1837,10 +1851,7 @@ export default function Sidebar() {
   const toggleChildParentCollapsed = useCallback((threadId: ThreadId) => {
     setCollapsedChildParentIds((previous) => {
       const next = new Set(previous);
-      const wasExpanded = next.delete(threadId);
-      if (!wasExpanded) {
-        next.add(threadId);
-      }
+      if (!next.delete(threadId)) next.add(threadId);
       return next;
     });
   }, []);
@@ -1863,6 +1874,25 @@ export default function Sidebar() {
     visibleNonGroupThreads: visibleNonGroupSidebarThreads,
     activityNonGroupThreads: activityNonGroupSidebarThreads,
   } = useActivityThreads({ hideAutomationRunThreads });
+  const agentChildrenByThreadId = useMemo(
+    () => (nestChildThreads ? groupAgentCreatedChildren(sidebarThreads) : null),
+    [nestChildThreads, sidebarThreads],
+  );
+  // Opening a child unfolds its creators once, so it shows among its siblings; folding again
+  // afterwards sticks until another thread is opened.
+  const unfoldedForThreadIdRef = useRef<ThreadId | null>(null);
+  useEffect(() => {
+    const activeId = routeActiveSidebarThreadId;
+    if (!nestChildThreads || !activeId || unfoldedForThreadIdRef.current === activeId) return;
+    if (!sidebarThreads.some((thread) => thread.id === activeId)) return;
+    unfoldedForThreadIdRef.current = activeId;
+    const ancestors = new Set(agentCreatedAncestorIds(activeId, sidebarThreads));
+    setCollapsedChildParentIds((previous) =>
+      [...ancestors].some((id) => previous.has(id))
+        ? new Set([...previous].filter((id) => !ancestors.has(id)))
+        : previous,
+    );
+  }, [nestChildThreads, routeActiveSidebarThreadId, sidebarThreads]);
   const displaySidebarTreeThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
     [coordinatorThreadIds, sidebarTreeThreads],
@@ -2248,6 +2278,32 @@ export default function Sidebar() {
       ),
     [activeSpaceNonGroupSidebarTreeThreads, isOnGroups, pinnedThreadIds, groupSidebarTreeThreads],
   );
+  // A pinned parent brings its agent-created children into the Pinned section.
+  const pinnedFamilyByRootId = useMemo(() => {
+    if (!nestChildThreads || pinnedThreads.length === 0) return null;
+    const pinned = new Set(pinnedThreadIds);
+    const families = groupSidebarThreadFamilies(
+      nestAgentCreatedThreadEntries(
+        isOnGroups ? groupSidebarTreeThreads : activeSpaceNonGroupSidebarTreeThreads,
+        collapsedChildParentIds,
+        pinned,
+      ),
+    );
+    const byRootId = new Map<ThreadId, SidebarProjectEntry[]>();
+    for (const family of families) {
+      const root = family[0];
+      if (root && pinned.has(root.rowId)) byRootId.set(root.rowId, family);
+    }
+    return byRootId;
+  }, [
+    activeSpaceNonGroupSidebarTreeThreads,
+    collapsedChildParentIds,
+    groupSidebarTreeThreads,
+    isOnGroups,
+    nestChildThreads,
+    pinnedThreadIds,
+    pinnedThreads.length,
+  ]);
   const openPrLink = useCallback(
     (event: MouseEvent<HTMLElement>, prUrl: string) => {
       event.preventDefault();
@@ -5908,7 +5964,12 @@ export default function Sidebar() {
           <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{t("common:app_pinned")}</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+          {pinnedThreads.flatMap((thread) => {
+            const family = pinnedFamilyByRootId?.get(thread.id);
+            return family
+              ? family.map((entry) => renderPinnedThreadRow(entry.thread, entry))
+              : [renderPinnedThreadRow(thread)];
+          })}
           {remotePinnedThreads.map((entry) => (
             <WorkspaceThreadRow
               key={entry.key}
@@ -6023,6 +6084,7 @@ export default function Sidebar() {
           })}
           status={hoverStatus}
           hostName={remote?.hostName ?? null}
+          childThreadCount={agentChildrenByThreadId?.get(thread.id)?.length ?? 0}
         />
       </TooltipPopup>
     );
@@ -6055,7 +6117,16 @@ export default function Sidebar() {
     );
   }
 
-  function renderPinnedThreadRow(thread: SidebarThreadSummary) {
+  function renderPinnedThreadRow(
+    thread: SidebarThreadSummary,
+    nesting?: Pick<
+      SidebarProjectEntry,
+      "depth" | "childCount" | "childrenCollapsed" | "isLastChild" | "guideContinues"
+    >,
+  ) {
+    const nestDepth = nesting?.depth ?? 0;
+    const childCount = nesting?.childCount ?? 0;
+    const childrenCollapsed = nesting?.childrenCollapsed === true;
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
     const terminalStatus = terminalStatusFromThreadState({
@@ -6093,6 +6164,15 @@ export default function Sidebar() {
             />
           }
         >
+          {renderChildThreadStems(nesting, PINNED_ROW_PADDING_PX)}
+          {childCount > 0
+            ? renderChildThreadsDisclosure({
+                threadId: thread.id,
+                collapsed: childrenCollapsed,
+                left: PINNED_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX,
+                overlaysGlyph: true,
+              })
+            : null}
           <div
             role="button"
             tabIndex={0}
@@ -6110,7 +6190,13 @@ export default function Sidebar() {
                     SIDEBAR_ROW_HOVER_CLASS_NAME,
                     threadStatus?.label === "Reminder" && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
                   ),
+              childrenCollapsed && SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
             )}
+            style={
+              nestDepth > 0
+                ? { paddingLeft: PINNED_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX }
+                : undefined
+            }
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={(event) => activateThreadRow(thread.id, event.currentTarget)}
             onDoubleClick={(event) => {
@@ -6140,6 +6226,9 @@ export default function Sidebar() {
               terminalCount={terminalCount}
               isActive={isActive}
               variant="pinned"
+              glyphSlotClassName={
+                childCount === 0 ? undefined : sidebarHoverRevealHideClassName("thread-row")
+              }
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -6157,7 +6246,7 @@ export default function Sidebar() {
                 ) : null
               }
             />
-            <div className="flex min-w-0 items-center">
+            <div className={cn("flex min-w-0 items-center", childrenCollapsed && "h-5")}>
               {renderThreadRowTrailingCluster({
                 threadJumpLabel,
                 rightMetaChips,
@@ -6171,10 +6260,135 @@ export default function Sidebar() {
                 }),
               })}
             </div>
+            {childrenCollapsed ? renderChildThreadsCluster(thread.id, childCount) : null}
           </div>
         </TooltipTrigger>
         {renderThreadHoverCardPopup(thread, hoverAnchorId, activeSidebarThreadId === thread.id)}
       </Tooltip>
+    );
+  }
+
+  // Folded parent: its children's agents as overlapping avatars plus a count, on a second
+  // line that starts under the row's glyph.
+  function renderChildThreadsCluster(threadId: ThreadId, count: number) {
+    const children = agentChildrenByThreadId?.get(threadId) ?? [];
+    return (
+      <div className="flex basis-full items-center gap-1.5 text-ui-xs text-muted-foreground">
+        <span className="flex items-center" aria-hidden="true">
+          {children.slice(0, 3).map((child) => (
+            <span
+              key={child.id}
+              className="-ml-1.5 grid size-4 place-items-center rounded-full bg-secondary ring-[1.5px] ring-[var(--sidebar)] first:ml-0"
+            >
+              <ProviderIcon
+                provider={child.session?.provider ?? child.modelSelection.provider}
+                className="size-2.5"
+              />
+            </span>
+          ))}
+        </span>
+        {t("workspace:childThreadClusterCount", { count })}
+      </div>
+    );
+  }
+
+  // One parent's stem, drawn in pieces on the rows it passes: it starts under the parent's
+  // glyph, runs past every descendant, and hooks into the last child's glyph. Ancestors'
+  // stems continue past this row while their path still has later siblings.
+  function renderChildThreadStems(
+    nesting:
+      | Pick<
+          SidebarProjectEntry,
+          "depth" | "childCount" | "childrenCollapsed" | "isLastChild" | "guideContinues"
+        >
+      | undefined,
+    rowPaddingPx: number,
+  ) {
+    const depth = nesting?.depth ?? 0;
+    const stemX = (level: number) =>
+      rowPaddingPx + level * SIDEBAR_CHILD_INDENT_PX + SIDEBAR_THREAD_GLYPH_CENTER_PX;
+    const stems: ReactNode[] = [];
+    for (let level = 0; level < depth - 1; level += 1) {
+      if (nesting?.guideContinues?.[level] !== true) continue;
+      stems.push(
+        <span
+          key={level}
+          aria-hidden="true"
+          className={cn(SIDEBAR_CHILD_STEM_CLASS_NAME, "-inset-y-px border-l")}
+          style={{ left: stemX(level) }}
+        />,
+      );
+    }
+    if (depth > 0) {
+      const parentX = stemX(depth - 1);
+      const isLast = nesting?.isLastChild === true;
+      stems.push(
+        <span
+          key="parent"
+          aria-hidden="true"
+          className={cn(
+            SIDEBAR_CHILD_STEM_CLASS_NAME,
+            isLast
+              ? "-top-px h-[calc(var(--app-density-row-height,1.75rem)/2+1px)] rounded-bl-md border-b border-l"
+              : "-inset-y-px border-l",
+          )}
+          // The hook stops 4px short of this row's glyph.
+          style={{
+            left: parentX,
+            ...(isLast
+              ? { width: stemX(depth) - SIDEBAR_THREAD_GLYPH_CENTER_PX - 4 - parentX }
+              : {}),
+          }}
+        />,
+      );
+    }
+    if ((nesting?.childCount ?? 0) > 0 && !nesting?.childrenCollapsed) {
+      stems.push(
+        <span
+          key="own"
+          aria-hidden="true"
+          className={cn(
+            SIDEBAR_CHILD_STEM_CLASS_NAME,
+            "top-[calc(var(--app-density-row-height,1.75rem)/2+9px)] -bottom-px border-l",
+          )}
+          style={{ left: stemX(depth) }}
+        />,
+      );
+    }
+    return stems;
+  }
+
+  // Fold/unfold chevron for a parent's agent-created children. Project rows keep it in the
+  // gutter; pinned rows have no gutter, so it takes over the glyph slot on hover instead.
+  function renderChildThreadsDisclosure(input: {
+    threadId: ThreadId;
+    collapsed: boolean;
+    left: number;
+    overlaysGlyph: boolean;
+  }) {
+    return (
+      <button
+        type="button"
+        aria-expanded={!input.collapsed}
+        aria-label={t("workspace:toggleChildThreads")}
+        title={t("workspace:toggleChildThreads")}
+        className={cn(
+          SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
+          SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME,
+          "text-muted-foreground/70",
+          input.collapsed && !input.overlaysGlyph
+            ? "opacity-100"
+            : "pointer-events-none opacity-0 md:group-hover/thread-row:pointer-events-auto md:group-hover/thread-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+        )}
+        style={{ left: input.left }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleChildParentCollapsed(input.threadId);
+        }}
+      >
+        <DisclosureChevron open={!input.collapsed} className="size-3.5" />
+      </button>
     );
   }
 
@@ -6189,7 +6403,10 @@ export default function Sidebar() {
     // same small-label treatment as pinned rows' project name.
     projectContextLabel?: string,
     // Agent-created child nesting (project tree only).
-    nesting?: { depth?: number; childCount?: number; childrenCollapsed?: boolean },
+    nesting?: Pick<
+      SidebarProjectEntry,
+      "depth" | "childCount" | "childrenCollapsed" | "isLastChild" | "guideContinues"
+    >,
   ) {
     const nestDepth = nesting?.depth ?? 0;
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
@@ -6228,26 +6445,24 @@ export default function Sidebar() {
     });
 
     const childCount = nesting?.childCount ?? 0;
-    const isNested = nestDepth > 0;
-    // Each nesting level indents 12px; the guide line sits 6px left of the row's own indent.
-    const nestedRowStyle: CSSProperties | undefined = isNested
-      ? ({
-          paddingLeft: `${nestDepth * 12}px`,
-          "--child-guide-left": `${nestDepth * 12 - 6}px`,
-        } as CSSProperties)
-      : undefined;
-    const row = (
+    const childrenCollapsed = nesting?.childrenCollapsed === true;
+    return (
       <SidebarMenuSubItem
         key={thread.id}
         data-thread-hover-anchor={hoverAnchorId}
-        className={cn(
-          "group/thread-row w-full",
-          isNested &&
-            "relative before:pointer-events-none before:absolute before:inset-y-0 before:left-[var(--child-guide-left)] before:w-px before:bg-border/60",
-        )}
-        style={nestedRowStyle}
+        className="group/thread-row w-full"
         data-thread-item
       >
+        {renderChildThreadStems(nesting, SIDEBAR_THREAD_ROW_PADDING_PX)}
+        {childCount > 0
+          ? renderChildThreadsDisclosure({
+              threadId: thread.id,
+              collapsed: childrenCollapsed,
+              // Sits in the gutter right against the glyph, clear of ancestor stems.
+              left: SIDEBAR_THREAD_ROW_PADDING_PX - 16 + nestDepth * SIDEBAR_CHILD_INDENT_PX,
+              overlaysGlyph: false,
+            })
+          : null}
         <Tooltip>
           <TooltipTrigger
             {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
@@ -6267,7 +6482,18 @@ export default function Sidebar() {
                   }),
                   topLevel ? "pl-2" : null,
                   "pr-2",
+                  // A folded parent grows downward to fit its child-count badge; the title
+                  // keeps the first-line position of a normal row so folding never shifts it.
+                  childrenCollapsed && SIDEBAR_THREAD_ROW_WITH_BADGE_CLASS_NAME,
                 )}
+                style={
+                  nestDepth > 0
+                    ? {
+                        paddingLeft:
+                          SIDEBAR_THREAD_ROW_PADDING_PX + nestDepth * SIDEBAR_CHILD_INDENT_PX,
+                      }
+                    : undefined
+                }
                 draggable
                 onDragStart={(event) => beginThreadDrag(event, thread.id)}
                 onDragEnd={endThreadDrag}
@@ -6318,6 +6544,7 @@ export default function Sidebar() {
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
+              glyphSlotClassName={childCount > 0 ? "" : undefined}
               suffix={
                 isTemporaryThread ? (
                   <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
@@ -6339,7 +6566,7 @@ export default function Sidebar() {
                 ) : undefined
               }
             />
-            <div className="flex min-w-0 items-center">
+            <div className={cn("flex min-w-0 items-center", childrenCollapsed && "h-5")}>
               {renderThreadRowTrailingCluster({
                 threadJumpLabel,
                 rightMetaChips,
@@ -6353,35 +6580,11 @@ export default function Sidebar() {
                 }),
               })}
             </div>
+            {childrenCollapsed ? renderChildThreadsCluster(thread.id, childCount) : null}
           </TooltipTrigger>
           {renderThreadHoverCardPopup(thread, hoverAnchorId, activeSidebarThreadId === thread.id)}
         </Tooltip>
       </SidebarMenuSubItem>
-    );
-    if (childCount === 0) {
-      return row;
-    }
-    const collapsed = nesting?.childrenCollapsed === true;
-    return (
-      <Fragment key={thread.id}>
-        {row}
-        <SidebarMenuSubItem className="w-full" style={nestedRowStyle}>
-          <SidebarMenuSubButton
-            render={<button type="button" />}
-            size="sm"
-            aria-expanded={!collapsed}
-            aria-label={t("workspace:toggleChildThreads")}
-            className="text-ui-xs text-muted-foreground/70"
-            onClick={() => toggleChildParentCollapsed(thread.id)}
-          >
-            <GitBranchIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className="truncate">
-              {t("workspace:childThreadCount", { count: childCount })}
-            </span>
-            <DisclosureChevron open={!collapsed} className="ml-auto size-3" />
-          </SidebarMenuSubButton>
-        </SidebarMenuSubItem>
-      </Fragment>
     );
   }
 
@@ -6461,11 +6664,7 @@ export default function Sidebar() {
     return (
       <>
         {visibleEntries.map((entry) =>
-          renderThreadRow(entry.thread, orderedProjectThreadIds, false, undefined, {
-            depth: entry.depth ?? 0,
-            childCount: entry.childCount ?? 0,
-            childrenCollapsed: entry.childrenCollapsed ?? false,
-          }),
+          renderThreadRow(entry.thread, orderedProjectThreadIds, false, undefined, entry),
         )}
 
         {(canShowMoreThreads || canShowLessThreads) && (
