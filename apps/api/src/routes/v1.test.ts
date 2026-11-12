@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_MAX_BODY_BYTES } from "../app";
 import { createAccountDeletionService, type AccountDeletionService } from "../accountDeletion";
@@ -2388,6 +2389,71 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .where(eq(usageSkillStats.userId, userId));
       expect(skillRows).toHaveLength(1);
       expect(skillRows[0]).toMatchObject({ name: "code-review", kind: "skill", runs: 3 });
+    });
+
+    it("writes each table's buckets with one INSERT, atomically", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const count = 150;
+      // One clock read, so no two generated buckets can share a minute.
+      const base = Math.floor(Date.now() / 60_000) * 60_000;
+      const minuteAt = (offset: number) => new Date(base - offset * 60_000).toISOString();
+      const insertQuery = vi.spyOn(pg.Client.prototype, "query");
+      const inserts = () =>
+        insertQuery.mock.calls
+          .map(([first]) => (typeof first === "string" ? first : (first as { text?: string }).text))
+          .filter((text) => /^insert into "usage_(model|skill)_stats"/i.test(text ?? ""));
+      try {
+        const res = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, {
+            models: Array.from({ length: count }, (_, index) =>
+              modelBucket({ minute: minuteAt(index) }),
+            ),
+            skills: Array.from({ length: count }, (_, index) => ({
+              minute: minuteAt(0),
+              name: `skill-${index}`,
+              kind: "skill",
+              runs: 1,
+            })),
+          }),
+          "203.0.116.40",
+        );
+        expect(res.status).toBe(202);
+        expect(await res.json()).toEqual({ written: count * 2 });
+        expect(inserts()).toHaveLength(2);
+        expect(
+          await db.select().from(usageModelStats).where(eq(usageModelStats.userId, userId)),
+        ).toHaveLength(count);
+        expect(
+          await db.select().from(usageSkillStats).where(eq(usageSkillStats.userId, userId)),
+        ).toHaveLength(count);
+
+        // A payload repeating one bucket key still fails as a whole and
+        // leaves the earlier minutes untouched.
+        const duplicated = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, {
+            models: [
+              modelBucket({ minute: minuteAt(0), tokens: 1 }),
+              modelBucket({ minute: minuteAt(0), tokens: 2 }),
+            ],
+          }),
+          "203.0.116.40",
+        );
+        expect(duplicated.status).toBe(500);
+        const rows = await db
+          .select()
+          .from(usageModelStats)
+          .where(eq(usageModelStats.userId, userId));
+        expect(rows).toHaveLength(count);
+        expect(rows.every((row) => row.tokens === 1000)).toBe(true);
+      } finally {
+        insertQuery.mockRestore();
+      }
     });
 
     // Buckets carry ABSOLUTE values: re-pushing the same key with grown

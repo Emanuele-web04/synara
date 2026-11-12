@@ -2862,22 +2862,27 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.models) {
-        await tx.insert(usageModelStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          provider: bucket.provider,
-          model: bucket.model,
-          // '' is the stored spelling of "no reasoning setting": NULL would
-          // be distinct-per-row under the unique index and duplicate the
-          // bucket on every push.
-          reasoning: bucket.reasoning ?? "",
-          tokens: bucket.tokens,
-          turns: bucket.turns,
-          prompts: bucket.prompts,
-        });
+      // One multi-row INSERT per table (at most USAGE_PUSH_MAX_BUCKETS rows,
+      // well under PostgreSQL's bind-parameter limit). A duplicate key in
+      // the payload still fails the whole push, as the per-row inserts did.
+      if (parsed.models.length > 0) {
+        await tx.insert(usageModelStats).values(
+          parsed.models.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            provider: bucket.provider,
+            model: bucket.model,
+            // '' is the stored spelling of "no reasoning setting": NULL would
+            // be distinct-per-row under the unique index and duplicate the
+            // bucket on every push.
+            reasoning: bucket.reasoning ?? "",
+            tokens: bucket.tokens,
+            turns: bucket.turns,
+            prompts: bucket.prompts,
+          })),
+        );
       }
       if (skillMinutes.length > 0) {
         await tx
@@ -2890,16 +2895,18 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.skills) {
-        await tx.insert(usageSkillStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          name: bucket.name,
-          kind: bucket.kind,
-          runs: bucket.runs,
-        });
+      if (parsed.skills.length > 0) {
+        await tx.insert(usageSkillStats).values(
+          parsed.skills.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            name: bucket.name,
+            kind: bucket.kind,
+            runs: bucket.runs,
+          })),
+        );
       }
     });
 
