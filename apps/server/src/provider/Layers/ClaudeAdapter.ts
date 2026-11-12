@@ -1396,7 +1396,11 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
   ) {
     return "plan";
   }
-  if (normalized.includes("agent")) {
+  // Subagent launches are Claude's own tools. An MCP tool whose server or name
+  // merely mentions "agent" never carries subagent routing data, so it would
+  // render as an unrouted agent task instead of a plain tool call.
+  const isMcpTool = mcpSeparator > "mcp__".length;
+  if (!isMcpTool && normalized.includes("agent")) {
     return "collab_agent_tool_call";
   }
   if (
@@ -1496,6 +1500,36 @@ function summarizeToolRequest(
 // "ToolName: {json}" row alongside the real interaction surface.
 function isClientSurfacedClaudeTool(toolName: string): boolean {
   return toolName === "AskUserQuestion" || toolName === "ExitPlanMode";
+}
+
+// SDK system subtypes that are Claude's own bookkeeping, footer toasts or
+// housekeeping. Claude Code keeps them out of the transcript (toasts, debug-only
+// lines), so they never become transcript rows here either. Includes subtypes
+// newer CLIs emit that the SDK types do not list yet.
+const QUIET_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
+  "notification",
+  "memory_recall",
+  "memory_saved",
+  "session_state_changed",
+  "worker_shutting_down",
+  "elicitation_complete",
+  "control_request_progress",
+  "plugin_install",
+  "turn_duration",
+  "agents_killed",
+  "permission_retry",
+]);
+
+// SDK events about missing context or session data need a visible warning.
+const CLAUDE_DATA_WARNINGS: ReadonlyMap<string, string> = new Map([
+  ["mirror_error", "Claude could not sync part of this session's transcript."],
+  ["instruction_size_warning", "Some Claude instructions exceeded the size limit."],
+  ["session_writes_lost", "Claude reported that some session data could not be saved."],
+  ["file_attachments_missing", "Claude reported that some file attachments are missing."],
+]);
+
+export function isQuietClaudeSystemSubtype(subtype: string): boolean {
+  return QUIET_CLAUDE_SYSTEM_SUBTYPES.has(subtype) || subtype.startsWith("ui_");
 }
 
 // Stable per-call identity stamped on every tool lifecycle event's data so the client
@@ -3165,11 +3199,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        context.emittedContextUsageWarnings.add(warnings.first.key);
-        yield* emitRuntimeWarning(context, warnings.first.message);
-        if (warnings.second) {
-          context.emittedContextUsageWarnings.add(warnings.second.key);
-          yield* emitRuntimeWarning(context, warnings.second.message);
+        for (const warning of [warnings.first, warnings.second]) {
+          if (!warning) continue;
+          context.emittedContextUsageWarnings.add(warning.key);
+          // How much input missed the cache is a diagnostic, not something to act on.
+          if (warning.key === "uncached-ingestion") {
+            yield* Effect.logInfo("claude.context.uncached_ingestion", {
+              message: warning.message,
+            });
+            continue;
+          }
+          yield* emitRuntimeWarning(context, warning.message);
         }
       });
 
@@ -3219,22 +3259,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
-    // Surfaces each distinct unrecognized SDK message kind at most once per session.
-    // Without this, high-frequency telemetry the adapter doesn't model (notably the
-    // `thinking_tokens` system subtype streamed on every reasoning tick) turns into a
-    // "Runtime warning" timeline entry per message and floods the conversation.
+    // Logs each distinct unrecognized SDK message kind at most once per session.
+    // Kinds the adapter does not model are Claude's own bookkeeping or features
+    // newer than this adapter: Claude Code does not show them either, so they go
+    // to the server log instead of the transcript (where they also split the
+    // streamed reply into segments).
     const warnUnhandledSdkKind = (
       context: ClaudeSessionContext,
       kind: string,
       message: string,
-      detail: unknown,
+      _detail: unknown,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (context.warnedUnhandledSdkKinds.has(kind)) {
           return;
         }
         context.warnedUnhandledSdkKinds.add(kind);
-        yield* emitRuntimeWarning(context, message, detail);
+        yield* Effect.logWarning("claude.sdk.unhandled_kind", { kind, message });
       });
 
     const emitProposedPlanCompleted = (
@@ -5506,6 +5547,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (message.subtype === "thinking_tokens") {
           return;
         }
+        if (isQuietClaudeSystemSubtype(message.subtype)) {
+          return;
+        }
+        const dataWarning = CLAUDE_DATA_WARNINGS.get(message.subtype);
+        if (dataWarning) {
+          yield* emitRuntimeWarning(context, dataWarning);
+          return;
+        }
         if (
           (message.subtype === "task_progress" || message.subtype === "task_notification") &&
           message.tool_use_id
@@ -5725,14 +5774,42 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             return;
           case "api_retry": {
-            const delaySeconds = Math.ceil(message.retry_delay_ms / 1000);
+            // Claude Code shows retries as a passing status line and names the
+            // error only from the third attempt. The first ones usually recover
+            // unnoticed; rate limits are worth knowing about right away.
+            if (
+              message.attempt < Math.min(3, message.max_retries) &&
+              message.error !== "rate_limit"
+            ) {
+              return;
+            }
             const reason =
-              message.error_status === null ? "connection error" : `HTTP ${message.error_status}`;
-            yield* emitRuntimeWarning(
-              context,
-              `Request retry ${message.attempt}/${message.max_retries} in ${delaySeconds}s (${reason}).`,
-              message,
-            );
+              message.error === "rate_limit"
+                ? "rate limited"
+                : message.error_status === null
+                  ? "connection error"
+                  : `HTTP ${message.error_status}`;
+            // One stable line per cause, so repeated attempts collapse into one row.
+            yield* emitRuntimeWarning(context, `Claude API error (${reason}), retrying.`, {
+              ...message,
+              willRetry: true,
+            });
+            return;
+          }
+          case "informational": {
+            // Claude Code shows `info` lines only in its verbose transcript view, and
+            // a Stop hook's "Stop says:" feedback only when it blocked the turn.
+            const content = message.content.trim();
+            if (message.level === "info" || content.length === 0) return;
+            if (/^stop says:/i.test(content) && message.prevent_continuation !== true) return;
+            yield* emitRuntimeWarning(context, content, message);
+            return;
+          }
+          case "model_refusal_no_fallback": {
+            // Nothing was retried: the reply ends here and the user has to rephrase
+            // or pick another model, so say why.
+            const content = message.content.trim();
+            if (content.length > 0) yield* emitRuntimeWarning(context, content, message);
             return;
           }
           case "permission_denied": {
@@ -6175,7 +6252,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               context.knownBackgroundTaskIds.add(task.task_id);
               context.foregroundTasks.delete(task.task_id);
             }
-            if (added.length === 0) {
+            // Ambient tasks are Claude's own housekeeping, which Claude Code keeps
+            // out of the transcript. They stay tracked above (turn-end settling
+            // reads the known set) but are never announced or listed.
+            const announced = added.filter((task) => task.ambient !== true);
+            if (announced.length === 0) {
               return;
             }
             // Each notice lands on the thread that owns the work: a subagent's
@@ -6183,10 +6264,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const ownerByTaskId = new Map(
               tasks.map((task) => [task.task_id, resolveBackgroundTaskOwner(context, task)]),
             );
-            const owners = new Set(added.map((task) => ownerByTaskId.get(task.task_id)!));
+            const owners = new Set(announced.map((task) => ownerByTaskId.get(task.task_id)!));
             for (const owner of owners) {
-              const ownedAdded = added.filter((task) => ownerByTaskId.get(task.task_id) === owner);
-              const ownedTasks = tasks.filter((task) => ownerByTaskId.get(task.task_id) === owner);
+              const ownedAdded = announced.filter(
+                (task) => ownerByTaskId.get(task.task_id) === owner,
+              );
+              const ownedTasks = tasks.filter(
+                (task) => ownerByTaskId.get(task.task_id) === owner && task.ambient !== true,
+              );
               const labels = ownedAdded.map((task) =>
                 task.description.trim().length > 0 ? task.description.trim() : task.task_type,
               );

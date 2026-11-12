@@ -2345,6 +2345,7 @@ describe("ClaudeAdapterLive", () => {
         ["image_edit", "image_generation"],
         ["mcp__visuals__generate_image", "image_generation"],
         ["mcp__agent_image__image_edit", "image_generation"],
+        ["mcp__agentmail__send_message", "mcp_tool_call"],
         ["mcp__image_gen__view_image", "mcp_tool_call"],
         ["mcp__visuals__render__generate_image", "mcp_tool_call"],
         ["view_image", "image_view"],
@@ -3769,16 +3770,31 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg",
         uuid: "bg-change-1",
       } as unknown as SDKMessage);
-      // Same task again plus one addition: only the addition is announced.
+      // Same task again plus additions: only the non-ambient addition is
+      // announced, and the ambient task is left out of the notice's task list.
       harness.query.emit({
         type: "system",
         subtype: "background_tasks_changed",
         tasks: [
           { task_id: "bg-1", task_type: "local_bash", description: "sleep 120" },
           { task_id: "bg-2", task_type: "subagent", description: "beta" },
+          { task_id: "bg-amb", task_type: "monitor", description: "watch logs", ambient: true },
         ],
         session_id: "sdk-session-bg",
         uuid: "bg-change-2",
+      } as unknown as SDKMessage);
+      // An ambient-only addition announces nothing.
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          { task_id: "bg-1", task_type: "local_bash", description: "sleep 120" },
+          { task_id: "bg-2", task_type: "subagent", description: "beta" },
+          { task_id: "bg-amb", task_type: "monitor", description: "watch logs", ambient: true },
+          { task_id: "bg-amb-2", task_type: "local_bash", description: "index", ambient: true },
+        ],
+        session_id: "sdk-session-bg",
+        uuid: "bg-change-ambient",
       } as unknown as SDKMessage);
       // Removal-only change announces nothing.
       harness.query.emit({
@@ -3792,7 +3808,9 @@ describe("ClaudeAdapterLive", () => {
       // arriving third proves the removal produced no notice.
       harness.query.emit({
         type: "system",
-        subtype: "totally_unknown_subtype",
+        subtype: "permission_denied",
+        tool_name: "Sentinel",
+        decision_reason: "end of stream",
         session_id: "sdk-session-bg",
         uuid: "bg-sentinel",
       } as unknown as SDKMessage);
@@ -3800,7 +3818,7 @@ describe("ClaudeAdapterLive", () => {
       const warnings = Array.from(yield* Fiber.join(warningsFiber));
       assert.deepEqual(
         warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
-        ["sleep 120", "beta", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+        ["sleep 120", "beta", "Sentinel was denied: end of stream"],
       );
       const firstNotice = warnings[0];
       assert.equal(firstNotice?.type, "runtime.warning");
@@ -3809,6 +3827,14 @@ describe("ClaudeAdapterLive", () => {
         // notices apart from plain runtime warnings.
         const detail = firstNotice.payload.detail as Record<string, unknown>;
         assert.equal(detail.subtype, "background_tasks_changed");
+      }
+      const secondNotice = warnings[1];
+      if (secondNotice?.type === "runtime.warning") {
+        const detail = secondNotice.payload.detail as { tasks?: Array<{ task_id: string }> };
+        assert.deepEqual(
+          detail.tasks?.map((task) => task.task_id),
+          ["bg-1", "bg-2"],
+        );
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3868,7 +3894,9 @@ describe("ClaudeAdapterLive", () => {
         // publication URLs and branches never become trusted metadata either.
         harness.query.emit({
           type: "system",
-          subtype: "totally_unknown_subtype",
+          subtype: "permission_denied",
+          tool_name: "Sentinel",
+          decision_reason: "end of stream",
           session_id: "sdk-session-vcs",
           uuid: "vcs-sentinel",
         } as unknown as SDKMessage);
@@ -3881,10 +3909,7 @@ describe("ClaudeAdapterLive", () => {
         }
         assert.equal(events[1]?.type, "runtime.warning");
         if (events[1]?.type === "runtime.warning") {
-          assert.equal(
-            events[1].payload.message,
-            "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
-          );
+          assert.equal(events[1].payload.message, "Sentinel was denied: end of stream");
         }
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3931,7 +3956,9 @@ describe("ClaudeAdapterLive", () => {
       // arrive before it.
       harness.query.emit({
         type: "system",
-        subtype: "totally_unknown_subtype",
+        subtype: "permission_denied",
+        tool_name: "Sentinel",
+        decision_reason: "end of stream",
         session_id: "sdk-session-bg-race",
         uuid: "bg-race-sentinel",
       } as unknown as SDKMessage);
@@ -3939,7 +3966,7 @@ describe("ClaudeAdapterLive", () => {
       const warnings = Array.from(yield* Fiber.join(warningsFiber));
       assert.deepEqual(
         warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
-        ["sleep 5", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+        ["sleep 5", "Sentinel was denied: end of stream"],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3992,7 +4019,9 @@ describe("ClaudeAdapterLive", () => {
       backgroundSnapshot("bg-returning-change-2", "second background run");
       harness.query.emit({
         type: "system",
-        subtype: "totally_unknown_subtype",
+        subtype: "permission_denied",
+        tool_name: "Sentinel",
+        decision_reason: "end of stream",
         session_id: "sdk-session-bg-returning",
         uuid: "bg-returning-sentinel",
       } as unknown as SDKMessage);
@@ -4000,11 +4029,7 @@ describe("ClaudeAdapterLive", () => {
       const warnings = Array.from(yield* Fiber.join(warningsFiber));
       assert.deepEqual(
         warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
-        [
-          "first background run",
-          "second background run",
-          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
-        ],
+        ["first background run", "second background run", "Sentinel was denied: end of stream"],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -7188,7 +7213,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   });
 
   it.effect(
-    "suppresses thinking_tokens/task_updated telemetry and de-dupes each unknown Claude subtype once",
+    "keeps Claude bookkeeping, early retries and unknown subtypes out of the transcript",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -7237,7 +7262,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
-        for (const attempt of [1, 2]) {
+        // Early retries pass unseen, like Claude Code's transient retry line; from
+        // the third attempt (or on a rate limit) one stable line names the cause.
+        for (const attempt of [1, 2, 3]) {
           harness.query.emit({
             type: "system",
             subtype: "api_retry",
@@ -7250,9 +7277,79 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             uuid: `retry-${attempt}`,
           } as SDKMessage);
         }
+        harness.query.emit({
+          type: "system",
+          subtype: "api_retry",
+          attempt: 1,
+          max_retries: 10,
+          retry_delay_ms: 1500,
+          error_status: 429,
+          error: "rate_limit",
+          session_id: "sdk-session-retry",
+          uuid: "retry-rate-limit",
+        } as unknown as SDKMessage);
 
-        // Two distinct unknown subtypes, each emitted twice — each must surface
-        // exactly one warning (per-kind de-dup), so two warnings in total.
+        // Loop status lines: `info` and an unblocking Stop hook's feedback stay
+        // out; a warning-level line and a Stop hook that blocked the turn show.
+        for (const [index, line] of [
+          { level: "info", content: "Checking hooks" },
+          { level: "notice", content: "Stop says: all good" },
+          { level: "warning", content: "PostToolUse hook flagged lint errors" },
+          { level: "notice", content: "Stop says: tests still fail", prevent_continuation: true },
+        ].entries()) {
+          harness.query.emit({
+            type: "system",
+            subtype: "informational",
+            ...line,
+            session_id: "sdk-session-informational",
+            uuid: `informational-${index}`,
+          } as unknown as SDKMessage);
+        }
+
+        // Footer toasts, memory and UI bookkeeping never reach the transcript.
+        for (const subtype of ["notification", "memory_recall", "ui_state", "turn_duration"]) {
+          harness.query.emit({
+            type: "system",
+            subtype,
+            text: "toast",
+            session_id: `sdk-session-${subtype}`,
+            uuid: `${subtype}-quiet`,
+          } as unknown as SDKMessage);
+        }
+
+        harness.query.emit({
+          type: "system",
+          subtype: "mirror_error",
+          error: "SessionStore append failed",
+          key: { projectKey: "test", sessionId: "sdk-session-mirror" },
+          session_id: "sdk-session-mirror",
+          uuid: "00000000-0000-4000-8000-000000000002",
+        } satisfies SDKMessage);
+        for (const subtype of [
+          "instruction_size_warning",
+          "session_writes_lost",
+          "file_attachments_missing",
+        ]) {
+          harness.query.emit({
+            type: "system",
+            subtype,
+            session_id: "sdk-session-mirror",
+            uuid: `${subtype}-warning`,
+          } as unknown as SDKMessage);
+        }
+
+        // A refusal nothing retried ends the reply, so it says why.
+        harness.query.emit({
+          type: "system",
+          subtype: "model_refusal_no_fallback",
+          original_model: "claude-fable-5-2",
+          request_id: null,
+          content: "The model declined this request.",
+          session_id: "sdk-session-refusal",
+          uuid: "refusal-no-fallback",
+        } as unknown as SDKMessage);
+
+        // Unknown subtypes go to the server log, not the transcript.
         for (const subtype of ["future_unknown_subtype", "another_unknown_subtype"]) {
           for (let i = 0; i < 2; i += 1) {
             harness.query.emit({
@@ -7280,31 +7377,17 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           event.type === "runtime.warning" ? [event.payload.message] : [],
         );
 
-        assert.equal(warningMessages.length, 4);
-        assert.deepEqual(
-          warningMessages.filter((message) => message.includes("Request retry")),
-          ["Request retry 1/3 in 2s (HTTP 503).", "Request retry 2/3 in 2s (HTTP 503)."],
-        );
-        assert.equal(
-          warningMessages.some((message) => message.includes("thinking_tokens")),
-          false,
-        );
-        assert.equal(
-          warningMessages.some((message) => message.includes("task_updated")),
-          false,
-        );
-        assert.equal(
-          warningMessages.some((message) => message.includes("commands_changed")),
-          false,
-        );
-        assert.equal(
-          warningMessages.some((message) => message.includes("future_unknown_subtype")),
-          true,
-        );
-        assert.equal(
-          warningMessages.some((message) => message.includes("another_unknown_subtype")),
-          true,
-        );
+        assert.deepEqual(warningMessages, [
+          "Claude API error (HTTP 503), retrying.",
+          "Claude API error (rate limited), retrying.",
+          "PostToolUse hook flagged lint errors",
+          "Stop says: tests still fail",
+          "Claude could not sync part of this session's transcript.",
+          "Some Claude instructions exceeded the size limit.",
+          "Claude reported that some session data could not be saved.",
+          "Claude reported that some file attachments are missing.",
+          "The model declined this request.",
+        ]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
         Effect.provide(harness.layer),

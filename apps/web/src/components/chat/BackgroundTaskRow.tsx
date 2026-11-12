@@ -15,7 +15,6 @@ import type { WorkLogBackgroundTask } from "../../workLog";
 import { deriveLiteralCommand } from "../../lib/toolCallLabel";
 import { Button } from "../ui/button";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
-import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 import { LiveElapsedTimer } from "./LiveElapsedTimer";
 import { useTranslation } from "~/i18n";
 
@@ -52,12 +51,8 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         {/* The ticking clock and Stop carry liveness; the glyph stays put. */}
         <BackgroundTrayIcon className="size-3.5" />
       </span>
-      <span className="min-w-0 truncate leading-5">
-        {command ? (
-          <code className={INLINE_COMMAND_CHIP_CLASS_NAME}>{subject}</code>
-        ) : (
-          <span className={MUTED_LABEL_TEXT_CLASS_NAME}>{subject}</span>
-        )}
+      <span className={cn("min-w-0 truncate leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}>
+        {subject}
       </span>
       <span
         className={cn(

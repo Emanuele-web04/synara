@@ -959,6 +959,8 @@
   "backgroundTasksFailed_other": "{{count}} failed",
   "backgroundTasksStopped_one": "{{count}} stopped",
   "backgroundTasksStopped_other": "{{count}} stopped",
+  "subagentsCreated_one": "Created subagent",
+  "subagentsCreated_other": "Created {{count}} subagents",
   "subagentsSpawning_one": "Spawning {{count}} agent",
   "subagentsSpawning_other": "Spawning {{count}} agents",
   "subagentsWaiting_one": "Waiting on {{count}} agent",

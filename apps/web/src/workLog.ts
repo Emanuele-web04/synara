@@ -582,6 +582,7 @@ export function deriveWorkLogEntries(
       const message = asTrimmedString(payload?.message);
       return !message || classifyCodexStderr(message)?.kind === "notice";
     })
+    .filter((activity) => !isLogOnlyClaudeWarning(activity))
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
@@ -935,6 +936,28 @@ function subagentOutcomeFromStatus(
     default:
       return undefined;
   }
+}
+
+// Claude warnings older hosts stored that the adapter now only logs: unmodelled
+// SDK kinds, the cache-ingestion diagnostic, and the first API retries, which
+// Claude Code also lets pass unseen. History follows the live policy.
+function isLogOnlyClaudeWarning(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.warning" || activity.tone === "error") return false;
+  const payload = asRecord(activity.payload);
+  const message = asTrimmedString(payload?.message) ?? "";
+  if (message.startsWith("Unhandled Claude ")) {
+    return !/^Unhandled Claude system message subtype '(mirror_error|instruction_size_warning|session_writes_lost|file_attachments_missing)'\.$/.test(
+      message,
+    );
+  }
+  if (message.startsWith("Claude reported ") && message.includes("outside cache in one request")) {
+    return true;
+  }
+  const detail = asRecord(payload?.data) ?? asRecord(payload?.detail);
+  if (detail?.subtype !== "api_retry" || detail.type !== "system") return false;
+  const attempt = typeof detail.attempt === "number" ? detail.attempt : 0;
+  const maxRetries = typeof detail.max_retries === "number" ? detail.max_retries : 0;
+  return detail.error !== "rate_limit" && attempt < Math.min(3, maxRetries);
 }
 
 export interface SubagentTaskEnd {
