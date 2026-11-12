@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { AccountApiError } from "@synara/shared/account";
 import type { HostAuthorizationSnapshot } from "@synara/contracts";
 
-import { isRemoteAccessRefusal } from "../accountRefusal";
+import { findAccountApiError, isRemoteAccessRefusal } from "../accountRefusal";
 import { exponentialBackoffMs, jitterMs } from "../backoff";
 
 export const REMOTE_AUTHORIZATION_LEASE_MS = 60_000;
@@ -20,6 +20,38 @@ export const REMOTE_PERMANENT_DENIAL_MS = 5 * 60_000;
  * Ownership denials keep the normal cadence that their confirmation window counts.
  */
 export const REMOTE_REFUSED_POLL_MAX_MS = 60_000;
+
+/**
+ * How long one snapshot request on the poll and admission paths may take. The
+ * account client's general 15 s bound let one stalled request spend a quarter
+ * of the lease, or hold a phone's connect for 15 s; a healthy request answers
+ * in well under a second (p95 under 700 ms measured at the account API).
+ */
+export const REMOTE_AUTHORIZATION_ATTEMPT_TIMEOUT_MS = 5_000;
+
+/**
+ * Runs one snapshot request with {@link REMOTE_AUTHORIZATION_ATTEMPT_TIMEOUT_MS}
+ * per attempt, retrying once at once when the attempt timed out or failed in
+ * transport (a dropped or reset connection). Every answer the account service
+ * gave, refusals, denials and 5xx included, is returned unretried, so the lease,
+ * denial confirmation and backoff rules see exactly the answers they did before.
+ */
+export async function requestAuthorizationSnapshot<A>(
+  attempt: (signal: AbortSignal) => Promise<A>,
+  options: { readonly signal: AbortSignal; readonly attemptTimeoutMs?: number },
+): Promise<A> {
+  const timeoutMs = options.attemptTimeoutMs ?? REMOTE_AUTHORIZATION_ATTEMPT_TIMEOUT_MS;
+  for (let attempts = 1; ; attempts++) {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    try {
+      return await attempt(AbortSignal.any([options.signal, timeout]));
+    } catch (error) {
+      const unanswered =
+        timeout.aborted || (error instanceof TypeError && !findAccountApiError(error));
+      if (attempts >= 2 || options.signal.aborted || !unanswered) throw error;
+    }
+  }
+}
 
 /** Answers that mean the host no longer belongs to its owner: unlinked, deleted or handed over. */
 const OWNERSHIP_DENIAL_CODES: ReadonlySet<string> = new Set([
