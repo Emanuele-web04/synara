@@ -461,10 +461,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
     const selection = traitSelectionFor(row.provider, model);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
-    // footer slider can set its effort. Presets already carry their effort, and picking
-    // the current model again is the "done" gesture, so both close.
-    const keepOpen =
-      usesEffortSlider && row.preset === null && !row.selected && selection.effortLevels.length > 0;
+    // footer slider can adjust its effort, including after a preset is applied.
+    // Picking the current selection again is the "done" gesture.
+    const keepOpen = usesEffortSlider && !row.selected && selection.effortLevels.length > 0;
     commitRow(
       row,
       model,
