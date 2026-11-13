@@ -1,6 +1,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import { resolveComputerControlDefault } from "~/computerControlMode";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
 import {
   prepareComputerPermissionGuide,
@@ -409,7 +410,7 @@ export function useChatTurnSubmission({
         // command already froze its mode and generation and must not be inferred again.
         const mode = resolveComputerInvocationMode({
           messageText: promptForSend,
-          enableComputerControl: settings.computerControlEnabled,
+          enableComputerControl: resolveComputerControlDefault(settings.computerControlEnabled),
         });
         dispatchSettings = {
           ...dispatchSettings,

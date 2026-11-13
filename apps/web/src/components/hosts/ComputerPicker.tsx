@@ -1,3 +1,4 @@
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import { addWsTransportStateListener, type WsTransportState } from "../../wsTransportEvents";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { appHistory } from "../../appNavigation";
@@ -8,7 +9,12 @@ import {
   readWorkspaceSessions,
   subscribeWorkspaceSessions,
 } from "../../lib/hosts/workspaceSessions";
+import { reconnectWorkspaceComputer } from "../../lib/hosts/workspaceReconnect";
 import { CheckIcon } from "../../lib/icons";
+import { cn } from "../../lib/utils";
+import { hoverRevealHideClassName } from "../../rowHoverReveal";
+import { RowHoverActions } from "../RowHoverActions";
+import { buttonVariants } from "../ui/button";
 import { isHostSettingsSection, type SettingsSectionId } from "../../settingsNavigation";
 import { PickerTriggerButton } from "../chat/PickerTriggerButton";
 import { ComposerPickerMenuPopup } from "../chat/ComposerPickerMenuPopup";
@@ -20,6 +26,8 @@ export interface ComputerChoice {
   readonly label: string;
   readonly detail: string;
   readonly available: boolean;
+  /** An unavailable connected computer that the controller can redial on request. */
+  readonly reconnectable?: boolean;
 }
 
 /** Frames read the controller's directory, while commands retain their owning runtime. */
@@ -35,17 +43,24 @@ export function useWorkspaceComputers() {
   const localId = local?.environmentId ?? "local";
   const computers: ComputerChoice[] = [
     { id: localId, label: "This computer", detail: local?.label ?? "Local", available: true },
-    ...sessions.map((session) => ({
-      id: session.host.executionScope.environmentId,
-      label: session.host.hostName,
-      detail: session.error
-        ? "Unavailable"
-        : session.summary?.state === "open"
-          ? "Connected"
-          : "Reconnecting…",
-      available: !session.error && Boolean(session.navigation) && session.summary?.state === "open",
-    })),
+    ...sessions.map((session) => {
+      const available =
+        !session.error && Boolean(session.navigation) && session.summary?.state === "open";
+      return {
+        id: session.host.executionScope.environmentId,
+        label: session.host.hostName,
+        detail: session.error
+          ? "Unavailable"
+          : session.summary?.state === "open"
+            ? "Connected"
+            : "Reconnecting…",
+        available,
+        reconnectable: !available,
+      };
+    }),
   ];
+  // A frame cannot reach the controller's sessions directly, so it asks through its bridge.
+  const reconnect = frame ? frame.controller.reconnect : reconnectWorkspaceComputer;
   const navigate = (path: string) => {
     if (frame) frame.controller.navigate(path);
     else appHistory.push(path);
@@ -56,7 +71,89 @@ export function useWorkspaceComputers() {
     localId,
     currentId: context?.execution.environmentId ?? localId,
     navigate,
+    reconnect,
   };
+}
+
+function ComputerChoiceText({
+  computer,
+  detail = computer.detail,
+  reserveHoverActions = false,
+}: {
+  computer: ComputerChoice;
+  detail?: string;
+  reserveHoverActions?: boolean;
+}) {
+  // While the row shows its action, the text yields that width and fades under it,
+  // like a sidebar chat title behind its pin and archive actions.
+  const lineClassName = reserveHoverActions ? "block min-w-0 truncate-fade" : "block truncate";
+  return (
+    <span
+      className={cn(
+        "min-w-0 flex-1",
+        reserveHoverActions && "group-data-highlighted/picker-row:pr-[6em]",
+      )}
+    >
+      <span className={lineClassName}>{computer.label}</span>
+      <span className={cn(lineClassName, "text-ui-xs text-muted-foreground")}>{detail}</span>
+    </span>
+  );
+}
+
+/** Picker rows for unavailable computers redial on click and reveal the action on hover. */
+function ReconnectComputerMenuItem({
+  computer,
+  selected,
+  onReconnect,
+}: {
+  computer: ComputerChoice;
+  selected: boolean;
+  onReconnect: (environmentId: string) => Promise<void>;
+}) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const reconnect = async () => {
+    if (reconnecting) return;
+    setReconnecting(true);
+    try {
+      await onReconnect(computer.id);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: `Could not reconnect ${computer.label}`,
+        // A frame's bridge rejects with the controller realm's Error, so read it structurally.
+        description: describeErrorMessage(
+          error,
+          "Check that the computer is online and try again.",
+        ),
+      });
+    } finally {
+      setReconnecting(false);
+    }
+  };
+  return (
+    <MenuItem
+      className="group/picker-row relative"
+      closeOnClick={false}
+      disabled={reconnecting}
+      onClick={() => void reconnect()}
+    >
+      <ComputerChoiceText
+        computer={computer}
+        detail={reconnecting ? "Reconnecting…" : computer.detail}
+        reserveHoverActions
+      />
+      {selected ? (
+        <CheckIcon className={cn("size-3.5 shrink-0", hoverRevealHideClassName("picker-row"))} />
+      ) : null}
+      <RowHoverActions group="picker-row" className="right-2">
+        <span
+          className={buttonVariants({ size: "xs", shape: "capsule", variant: "secondary-outline" })}
+        >
+          Reconnect
+        </span>
+      </RowHoverActions>
+    </MenuItem>
+  );
 }
 
 export function ComputerPicker({
@@ -65,6 +162,7 @@ export function ComputerPicker({
   disabled,
   onChange,
   onManage,
+  onReconnect,
   purpose = "Computer",
 }: {
   computers: readonly ComputerChoice[];
@@ -72,6 +170,7 @@ export function ComputerPicker({
   disabled?: boolean;
   onChange: (id: string) => void;
   onManage?: (() => void) | undefined;
+  onReconnect?: ((environmentId: string) => Promise<void>) | undefined;
   purpose?: string;
 }) {
   const selected = computers.find((computer) => computer.id === value);
@@ -93,21 +192,25 @@ export function ComputerPicker({
       />
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72">
         <p className="px-2 py-1.5 text-ui-xs text-muted-foreground">{purpose}</p>
-        {computers.map((computer) => (
-          <MenuItem
-            key={computer.id}
-            disabled={!computer.available}
-            onClick={() => onChange(computer.id)}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block truncate">{computer.label}</span>
-              <span className="block truncate text-ui-xs text-muted-foreground">
-                {computer.detail}
-              </span>
-            </span>
-            {computer.id === value ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-          </MenuItem>
-        ))}
+        {computers.map((computer) =>
+          !computer.available && computer.reconnectable && onReconnect ? (
+            <ReconnectComputerMenuItem
+              key={computer.id}
+              computer={computer}
+              selected={computer.id === value}
+              onReconnect={onReconnect}
+            />
+          ) : (
+            <MenuItem
+              key={computer.id}
+              disabled={!computer.available}
+              onClick={() => onChange(computer.id)}
+            >
+              <ComputerChoiceText computer={computer} />
+              {computer.id === value ? <CheckIcon className="size-3.5 shrink-0" /> : null}
+            </MenuItem>
+          ),
+        )}
         {onManage ? (
           <>
             <MenuSeparator />
@@ -125,7 +228,7 @@ export function WorkspaceSurfaceComputerPicker({
 }: {
   path: "/tasks" | "/kanban" | "/inbox" | "/pull-requests";
 }) {
-  const { computers, localId, currentId, navigate } = useWorkspaceComputers();
+  const { computers, localId, currentId, navigate, reconnect } = useWorkspaceComputers();
   const frame = readWorkspaceFrame();
   if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
   const select = (environmentId: string) => {
@@ -154,6 +257,7 @@ export function WorkspaceSurfaceComputerPicker({
         value={currentId}
         onChange={select}
         onManage={() => navigate("/settings?section=connections")}
+        onReconnect={reconnect}
       />
     </div>
   );
@@ -161,7 +265,7 @@ export function WorkspaceSurfaceComputerPicker({
 
 /** The main window's Settings route resolves `computer` and opens host-owned sections on it. */
 export function SettingsComputerPicker({ section }: { section: SettingsSectionId }) {
-  const { computers, sessions, localId, currentId, navigate } = useWorkspaceComputers();
+  const { computers, sessions, localId, currentId, navigate, reconnect } = useWorkspaceComputers();
   const frame = readWorkspaceFrame();
   if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
   if (!isHostSettingsSection(section)) {
@@ -210,6 +314,7 @@ export function SettingsComputerPicker({ section }: { section: SettingsSectionId
         purpose="Settings for"
         onChange={select}
         onManage={() => navigate("/settings?section=connections")}
+        onReconnect={reconnect}
       />
     </div>
   );
@@ -217,7 +322,7 @@ export function SettingsComputerPicker({ section }: { section: SettingsSectionId
 
 /** Selecting another computer opens its own draft; it never migrates the current one. */
 export function NewChatComputerPicker() {
-  const { computers, sessions, localId, currentId, navigate } = useWorkspaceComputers();
+  const { computers, sessions, localId, currentId, navigate, reconnect } = useWorkspaceComputers();
   const { handleNewChat } = useHandleNewChat();
   const [busy, setBusy] = useState(false);
   const frame = readWorkspaceFrame();
@@ -263,6 +368,7 @@ export function NewChatComputerPicker() {
       purpose="Run on"
       onChange={(id) => void select(id)}
       onManage={() => navigate("/settings?section=connections")}
+      onReconnect={reconnect}
     />
   );
 }

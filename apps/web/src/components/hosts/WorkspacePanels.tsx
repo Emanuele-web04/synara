@@ -83,6 +83,7 @@ import {
   type WorkspaceSession,
 } from "../../lib/hosts/workspaceSessions";
 import { recoverBeforeLocalEscape } from "../../lib/hosts/executionSwitch";
+import { reconnectWorkspaceComputer } from "../../lib/hosts/workspaceReconnect";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
 import { isGroupContainerProject } from "../../lib/groupProjects";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
@@ -222,6 +223,7 @@ function WorkspacePanel({
           sessions: readWorkspaceSessions,
           subscribe: subscribeWorkspaceSessions,
           newChat: newLocalChat,
+          reconnect: reconnectWorkspaceComputer,
           createProject: () => window.dispatchEvent(new Event(OPEN_CREATE_PROJECT_EVENT)),
           prepareAutomation: prepareWorkspaceAutomation,
           navigate: (path) => {
@@ -388,7 +390,11 @@ export function WorkspacePanels() {
     const environmentId = session.host.executionScope.environmentId;
     return (
       <WorkspacePanel
-        key={JSON.stringify([session.host.hostId, session.host.executionScope])}
+        key={JSON.stringify([
+          session.host.hostId,
+          session.host.executionScope,
+          session.frameGeneration ?? 0,
+        ])}
         session={session}
         newLocalChat={newLocalChat}
         active={selected?.environmentId === environmentId}
