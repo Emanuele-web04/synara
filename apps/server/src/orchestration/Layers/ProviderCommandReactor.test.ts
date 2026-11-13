@@ -14260,6 +14260,103 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  describe("typed skills", () => {
+    // The harness session runs in /tmp/provider-project, whose project skill folders
+    // the shared catalog scans. Unique names keep real user skills out of the way.
+    const projectRoot = "/tmp/provider-project";
+    const suffix = Math.random().toString(36).slice(2, 10);
+    const claudeSkillName = `synara-test-claude-${suffix}`;
+    const codexSkillName = `synara-test-codex-${suffix}`;
+    const createdSkillDirs: string[] = [];
+
+    function writeProjectSkill(root: ".claude" | ".codex", name: string, body: string): string {
+      const dir = path.join(projectRoot, root, "skills", name);
+      fs.mkdirSync(dir, { recursive: true });
+      createdSkillDirs.push(dir);
+      const skillPath = path.join(dir, "SKILL.md");
+      fs.writeFileSync(skillPath, `---\nname: ${name}\ndescription: test skill\n---\n${body}\n`);
+      return skillPath;
+    }
+
+    function writeSkills() {
+      return {
+        claudePath: writeProjectSkill(".claude", claudeSkillName, "CLAUDE SKILL BODY"),
+        codexPath: writeProjectSkill(".codex", codexSkillName, "CODEX SKILL BODY"),
+      };
+    }
+
+    afterEach(() => {
+      for (const dir of createdSkillDirs.splice(0))
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    async function sendTyped(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      text: string,
+      dispatchOrigin?: "user" | "agent",
+    ) {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `typed-skill-${Math.random().toString(36).slice(2)}`,
+        text,
+        createdAt: new Date().toISOString(),
+        ...(dispatchOrigin ? { dispatchOrigin } : {}),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      return harness.sendTurn.mock.calls[0]![0];
+    }
+
+    const claudeHarness = () =>
+      createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      });
+
+    it("gives Claude the instructions of a skill typed mid-sentence", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`<skill name="${claudeSkillName}"`);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
+    it("lets Claude Code load a .claude skill that starts the message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`/${claudeSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).not.toContain("<skill name=");
+    });
+
+    it("hands Claude a leading skill shared from Codex as a mention with its instructions", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${codexSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`$${codexSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CODEX SKILL BODY");
+    });
+
+    it("sends typed skills to Codex as $mentions with skill references", async () => {
+      const { claudePath, codexPath } = writeSkills();
+      const turn = await sendTyped(
+        await createHarness(),
+        `Use /${codexSkillName} and /${claudeSkillName} now`,
+      );
+      expect(turn.input).toContain(`Use $${codexSkillName} and $${claudeSkillName} now`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: codexPath },
+        { name: claudeSkillName, path: claudePath },
+      ]);
+      // Codex loads its own folder natively; the shared Claude skill travels inline.
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.input).not.toContain("CODEX SKILL BODY");
+    });
+
+    it("ignores skill tokens in another agent's message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please /${claudeSkillName}`, "agent");
+      expect(turn.skills).toBeUndefined();
+      expect(turn.input).not.toContain("<skill name=");
+    });
+  });
+
   it("stops an active provider runtime and immediately resends an edited latest message", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
