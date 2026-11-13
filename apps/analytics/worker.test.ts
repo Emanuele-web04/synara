@@ -228,6 +228,39 @@ describe("normalizeProductEvent", () => {
     expect(normalizeProductEvent(raw, Date.parse(productEvent.ts))).toBeNull();
   });
 
+  it("accepts a fixed failure category and HTTP status only on turns that ended badly", () => {
+    const turn = { ...productEvent, event: "turn.completed", feature: undefined };
+    const now = Date.parse(productEvent.ts);
+    expect(
+      normalizeProductEvent(
+        { ...turn, outcome: "failed", failure: "edge_blocked", httpStatus: 403 },
+        now,
+      ),
+    ).toMatchObject({ failure: "edge_blocked", httpStatus: 403 });
+    expect(
+      normalizeProductEvent({ ...turn, outcome: "cancelled", failure: "network" }, now),
+    ).toMatchObject({ failure: "network", httpStatus: null });
+    expect(normalizeProductEvent({ ...turn, outcome: "failed" }, now)).toMatchObject({
+      failure: null,
+      httpStatus: null,
+    });
+    for (const patch of [
+      { outcome: "failed", failure: "free text from the provider" },
+      { outcome: "succeeded", failure: "auth" },
+      { outcome: "failed", httpStatus: 403 },
+      { outcome: "failed", failure: "auth", httpStatus: 99 },
+      { outcome: "failed", failure: "auth", httpStatus: 403.5 },
+    ]) {
+      expect(normalizeProductEvent({ ...turn, ...patch }, now)).toBeNull();
+    }
+    expect(
+      normalizeProductEvent(
+        { ...productEvent, event: "chat.request", outcome: "failed", failure: "auth" },
+        now,
+      ),
+    ).toBeNull();
+  });
+
   it("rejects timestamps outside the 7-day and 5-minute ingest window", () => {
     const now = Date.parse(productEvent.ts);
     expect(

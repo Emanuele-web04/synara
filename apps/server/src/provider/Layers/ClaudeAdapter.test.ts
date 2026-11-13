@@ -442,6 +442,7 @@ function makeHarness(config?: {
   readonly cwd?: string;
   readonly baseDir?: string;
   readonly workflowRuntimePollIntervalMs?: number;
+  readonly edgeBlockRetryDelaysMs?: ReadonlyArray<number>;
   readonly onCreate?: (options: ClaudeQueryOptions) => void;
 }) {
   const query = new FakeClaudeQuery();
@@ -472,6 +473,9 @@ function makeHarness(config?: {
       ? {
           workflowRuntimePollIntervalMs: config.workflowRuntimePollIntervalMs,
         }
+      : {}),
+    ...(config?.edgeBlockRetryDelaysMs !== undefined
+      ? { edgeBlockRetryDelaysMs: config.edgeBlockRetryDelaysMs }
       : {}),
   };
 
@@ -622,6 +626,38 @@ function emitSuccessResult(
     errors: [],
     session_id: sessionId,
     uuid,
+    usage,
+  } as unknown as SDKMessage);
+}
+
+function emitCloudflareBlockedLeg(
+  query: FakeClaudeQuery,
+  leg: number,
+  usage: Record<string, number> = {},
+): void {
+  query.emit({
+    type: "assistant",
+    error: "authentication_failed",
+    session_id: "sdk-edge-block",
+    uuid: `assistant-edge-block-${leg}`,
+    parent_tool_use_id: null,
+    message: {
+      id: `message-edge-block-${leg}`,
+      content: [
+        {
+          type: "text",
+          text: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+        },
+      ],
+    },
+  } as unknown as SDKMessage);
+  query.emit({
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    errors: [],
+    session_id: "sdk-edge-block",
+    uuid: `result-edge-block-${leg}`,
     usage,
   } as unknown as SDKMessage);
 }
@@ -6091,6 +6127,193 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
     });
   }
+
+  // streamEvents is one queue: a single consumer records every event and lets
+  // the test wait for the next event of a type.
+  const observeRuntimeEvents = (adapter: ClaudeAdapterShape) =>
+    Effect.gen(function* () {
+      const events: Array<ProviderRuntimeEvent> = [];
+      const arrivals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => events.push(event)).pipe(Effect.andThen(Queue.offer(arrivals, event))),
+        ),
+        Effect.forkChild,
+      );
+      const next = (type: ProviderRuntimeEvent["type"]) =>
+        Effect.gen(function* () {
+          while (true) {
+            const event = yield* Queue.take(arrivals);
+            if (event.type === type) return event;
+          }
+        });
+      return { events, next };
+    });
+
+  const startEdgeBlockTurn = (harness: ReturnType<typeof makeHarness>) =>
+    Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const observed = yield* observeRuntimeEvents(adapter);
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+      const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
+      yield* Effect.promise(() => prompts.next());
+      const nextPrompt = Effect.promise(() => prompts.next()).pipe(
+        Effect.map((result) => (result.done ? undefined : result.value)),
+      );
+      return { adapter, observed, turn, nextPrompt };
+    });
+
+  const promptText = (message: SDKUserMessage | undefined) => {
+    const block = message?.message.content[0];
+    return typeof block === "object" && block.type === "text" ? block.text : undefined;
+  };
+
+  it.effect("retries a Cloudflare-blocked turn in place and completes it", () => {
+    const harness = makeHarness({ edgeBlockRetryDelaysMs: [5, 5, 5] });
+    return Effect.gen(function* () {
+      const { adapter, observed, turn, nextPrompt } = yield* startEdgeBlockTurn(harness);
+
+      emitAssistantUsage(
+        harness.query,
+        "sdk-edge-block",
+        "work-block",
+        "working",
+        { input_tokens: 100 },
+        "work-call",
+      );
+      emitCloudflareBlockedLeg(harness.query, 1, { input_tokens: 100 });
+      const warning = yield* observed.next("runtime.warning");
+      assert.equal(
+        warning.type === "runtime.warning" ? warning.payload.message : undefined,
+        "Request retry 1/3 in 1s (HTTP 403 Cloudflare block).",
+      );
+
+      const resumed = yield* nextPrompt;
+      assert.equal(resumed?.isSynthetic, true);
+      assert.match(promptText(resumed) ?? "", /Continue the task from where you left off/);
+
+      emitAssistantUsage(
+        harness.query,
+        "sdk-edge-block",
+        "resume-block",
+        "done",
+        { input_tokens: 30 },
+        "resume-call",
+      );
+      emitSuccessResult(harness.query, "sdk-edge-block", "result-resumed", { input_tokens: 30 });
+      const completed = yield* observed.next("turn.completed");
+
+      assert.equal(completed.type, "turn.completed");
+      if (completed.type === "turn.completed") {
+        assert.equal(String(completed.turnId), String(turn.turnId));
+        assert.equal(completed.payload.state, "completed");
+        // The blocked leg's work still belongs to this turn.
+        assert.equal(completed.payload.mainLoopTokens, 130);
+      }
+      const events = observed.events;
+      assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      assert.isFalse(events.some((event) => event.type === "runtime.error"));
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && /Failed to authenticate/.test(event.payload.delta),
+        ),
+      );
+      assert.equal(harness.query.closeCalls, 0);
+      assert.isTrue(yield* adapter.hasSession(THREAD_ID));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "reports a temporary block, not a login problem, once Cloudflare retries run out",
+    () => {
+      const harness = makeHarness({ edgeBlockRetryDelaysMs: [5, 5, 5] });
+      return Effect.gen(function* () {
+        const { adapter, observed, turn, nextPrompt } = yield* startEdgeBlockTurn(harness);
+
+        for (const leg of [1, 2, 3]) {
+          emitCloudflareBlockedLeg(harness.query, leg);
+          yield* observed.next("runtime.warning");
+          assert.equal((yield* nextPrompt)?.isSynthetic, true);
+        }
+        emitCloudflareBlockedLeg(harness.query, 4);
+        const completed = yield* observed.next("turn.completed");
+
+        const events = observed.events;
+        assert.deepEqual(
+          events.flatMap((event) =>
+            event.type === "runtime.warning" ? [event.payload.message] : [],
+          ),
+          [
+            "Request retry 1/3 in 1s (HTTP 403 Cloudflare block).",
+            "Request retry 2/3 in 1s (HTTP 403 Cloudflare block).",
+            "Request retry 3/3 in 1s (HTTP 403 Cloudflare block).",
+          ],
+        );
+        const runtimeError = events.find((event) => event.type === "runtime.error");
+        assert.equal(
+          runtimeError?.type === "runtime.error" ? runtimeError.payload.errorCode : undefined,
+          "edge_blocked",
+        );
+        assert.equal(completed.type, "turn.completed");
+        if (completed.type === "turn.completed") {
+          assert.equal(String(completed.turnId), String(turn.turnId));
+          assert.equal(completed.payload.state, "failed");
+          assert.equal(completed.payload.errorCode, "edge_blocked");
+          assert.equal(completed.payload.httpStatus, 403);
+          assert.match(
+            completed.payload.errorMessage ?? "",
+            /temporarily blocked the request \(HTTP 403\), still blocked after 3 automatic retries/,
+          );
+          assert.notMatch(completed.payload.errorMessage ?? "", /auth login/);
+        }
+        // The login is fine, so the session stays up for the next message.
+        assert.isFalse(events.some((event) => event.type === "session.exited"));
+        assert.equal(harness.query.closeCalls, 0);
+        assert.isTrue(yield* adapter.hasSession(THREAD_ID));
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("settles a Cloudflare-blocked turn stopped while its retry waits", () => {
+    const harness = makeHarness({ edgeBlockRetryDelaysMs: [1_000] });
+    return Effect.gen(function* () {
+      const { adapter, observed, turn, nextPrompt } = yield* startEdgeBlockTurn(harness);
+
+      emitCloudflareBlockedLeg(harness.query, 1);
+      yield* observed.next("runtime.warning");
+      yield* adapter.interruptTurn(THREAD_ID, turn.turnId);
+      const completed = yield* observed.next("turn.completed");
+      assert.equal(completed.type, "turn.completed");
+      if (completed.type === "turn.completed") {
+        assert.equal(String(completed.turnId), String(turn.turnId));
+        assert.equal(completed.payload.state, "interrupted");
+      }
+
+      // The cancelled retry never re-prompts; the next prompt is the user's.
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1_500)));
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "next", attachments: [] });
+      assert.equal(promptText(yield* nextPrompt), "next");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("suppresses Claude ede_diagnostic text emitted during a user interrupt", () => {
     const harness = makeHarness();

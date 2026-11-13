@@ -86,12 +86,14 @@ import { resolveCodexServiceTier } from "../../codexServiceTier.ts";
 import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import {
   codexErrorCode,
+  codexErrorHttpStatus,
   codexUsageLimitWindows,
   isCodexUsageLimitError,
   usageLimitResetAt,
   type UsageLimitWindows,
 } from "../usageLimit.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
+import { isProviderEdgeBlockedText, PROVIDER_EDGE_BLOCKED_ERROR_CODE } from "../edgeBlock.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
@@ -182,6 +184,14 @@ export interface CodexAdapterLiveOptions {
   readonly makeManager?: (services?: ServiceMap.ServiceMap<never>) => CodexAppServerManager;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+}
+
+// Codex reports a Cloudflare 403 page as a generic HTTP failure; name it as an
+// edge block so it is never read as a login problem.
+function codexTurnErrorCode(error: unknown, message: string | undefined): string | undefined {
+  return message !== undefined && isProviderEdgeBlockedText(message)
+    ? PROVIDER_EDGE_BLOCKED_ERROR_CODE
+    : codexErrorCode(error);
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -1205,7 +1215,12 @@ function mapUnmappedCodexEvent(
 interface CodexUsageLimitContext {
   activeTurnId?: string;
   windows?: UsageLimitWindows;
-  terminalError?: { readonly turnId: string; readonly code: string; readonly usageLimit: boolean };
+  terminalError?: {
+    readonly turnId: string;
+    readonly code: string;
+    readonly usageLimit: boolean;
+    readonly httpStatus?: number;
+  };
 }
 
 function mapToRuntimeEvents(
@@ -1492,7 +1507,8 @@ function mapToRuntimeEvents(
     const currentTurn =
       event.turnId !== undefined && usageLimitContext?.activeTurnId === event.turnId;
     const priorError = currentTurn ? usageLimitContext?.terminalError : undefined;
-    const errorCode = codexErrorCode(turn?.error) ?? priorError?.code;
+    const errorCode = codexTurnErrorCode(turn?.error, errorMessage) ?? priorError?.code;
+    const httpStatus = codexErrorHttpStatus(turn?.error) ?? priorError?.httpStatus;
     const isUsageLimit =
       codexErrorCode(turn?.error) !== undefined
         ? isCodexUsageLimitError(errorCode, turn?.error)
@@ -1525,6 +1541,7 @@ function mapToRuntimeEvents(
             : {}),
           ...(errorMessage ? { errorMessage } : {}),
           ...(errorCode ? { errorCode } : {}),
+          ...(httpStatus !== undefined ? { httpStatus } : {}),
           ...(usageLimit ? { usageLimit } : {}),
         },
       },
@@ -2025,7 +2042,8 @@ function mapToRuntimeEvents(
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
-    const errorCode = codexErrorCode(payload?.error);
+    const errorCode = codexTurnErrorCode(payload?.error, message);
+    const httpStatus = codexErrorHttpStatus(payload?.error);
     const nonFatal = isNonFatalCodexErrorMessage(message);
     const quotaFailure = isCodexUsageLimitError(errorCode, payload?.error);
     // Only the terminal command settles quota failure and recovery together.
@@ -2044,6 +2062,7 @@ function mapToRuntimeEvents(
         turnId: event.turnId,
         code: errorCode,
         usageLimit: quotaFailure,
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
       };
     }
     return [

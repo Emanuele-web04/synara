@@ -1413,6 +1413,9 @@ export function projectProviderRuntimeActivities(
               ? { errorMessage: sanitizeUserFacingErrorMessage(errorMessage, "Turn failed") }
               : {}),
             ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
+            ...(event.payload.httpStatus !== undefined
+              ? { httpStatus: event.payload.httpStatus }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

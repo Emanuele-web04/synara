@@ -272,6 +272,16 @@ export interface ProductData {
     events: number;
     installations: number;
   }[];
+  turnFailures?: {
+    provider: string | null;
+    failure: string;
+    httpStatus: number | null;
+    outcome: string;
+    channel: string;
+    turns: number;
+    installations: number;
+    lastSeen: string;
+  }[];
   daily: { day: string; events: number; installations: number; turns: number }[];
   features: { feature: string; events: number; installations: number }[];
   outcomes: { event: string; outcome: string; events: number }[];

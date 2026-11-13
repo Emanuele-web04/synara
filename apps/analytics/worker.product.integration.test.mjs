@@ -781,6 +781,13 @@ describe("analytics ingest and D1 storage", () => {
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
       );
+      // The current receiver also writes the turn-failure columns (0014 deploys first).
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
+      );
       const at = new Date(now).toISOString();
       const installId = "00000000-0000-4000-8000-0000000000f1";
       const eventId = Number(
@@ -973,6 +980,13 @@ describe("analytics ingest and D1 storage", () => {
       // The cohort receiver requires its additive columns; account removal is independent.
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
+      // The current receiver also writes the turn-failure columns (0014 deploys first).
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
       );
       const send = () =>
         worker.fetch(
@@ -1227,6 +1241,111 @@ describe("analytics ingest and D1 storage", () => {
         },
       ]),
     );
+  });
+
+  it("adds turn failure columns to a populated product table without changing its rows", () => {
+    const deployed = new SQLiteD1();
+    try {
+      applyMigrations(deployed.database, "0013");
+      const columns = () =>
+        deployed.database
+          .prepare("PRAGMA table_info(product_events)")
+          .all()
+          .map((column) => column.name);
+      expect(columns()).not.toContain("failure");
+      deployed.database
+        .prepare(
+          `INSERT INTO product_events (event_id, ts, received_at, install_id, channel, surface,
+             platform, app_version, event, outcome, provider)
+           VALUES (?, ?, ?, ?, 'stable', 'desktop', 'darwin', '1.0.0', 'turn.completed', 'failed', 'claude')`,
+        )
+        .run(
+          crypto.randomUUID(),
+          new Date(now).toISOString(),
+          new Date(now).toISOString(),
+          "00000000-0000-4000-8000-0000000000c1",
+        );
+      const before = deployed.database.prepare("SELECT * FROM product_events").get();
+      deployed.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(columns()).toEqual(expect.arrayContaining(["failure", "http_status"]));
+      expect(deployed.database.prepare("SELECT * FROM product_events").get()).toEqual({
+        ...before,
+        failure: null,
+        http_status: null,
+      });
+    } finally {
+      deployed.close();
+    }
+  });
+
+  it("stores turn failure categories and serves them grouped behind dashboard auth", async () => {
+    const turn = (patch) =>
+      envelope({
+        id: crypto.randomUUID(),
+        event: "turn.completed",
+        feature: undefined,
+        durationMs: undefined,
+        ...patch,
+      });
+    const mac = "00000000-0000-4000-8000-0000000000b1";
+    const linux = "00000000-0000-4000-8000-0000000000b2";
+    const response = await postEvents([
+      turn({
+        installId: mac,
+        outcome: "failed",
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+      }),
+      turn({
+        installId: linux,
+        platform: "linux",
+        outcome: "failed",
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+      }),
+      turn({ installId: mac, outcome: "cancelled", provider: "codex", failure: "network" }),
+      turn({ installId: mac, outcome: "succeeded", provider: "claude" }),
+      // Free text, a category on a success, or a status without a category is dropped.
+      turn({ installId: mac, outcome: "failed", provider: "claude", failure: "API Error: 403" }),
+      turn({ installId: mac, outcome: "succeeded", provider: "claude", failure: "auth" }),
+      turn({ installId: mac, outcome: "failed", provider: "claude", httpStatus: 401 }),
+    ]);
+    expect(await response.json()).toEqual({ accepted: 4, received: 7 });
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const dashboard = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    const body = await dashboard.json();
+    expect(body.turnFailures).toEqual([
+      expect.objectContaining({
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+        outcome: "failed",
+        turns: 2,
+        installations: 2,
+      }),
+      expect.objectContaining({
+        provider: "codex",
+        failure: "network",
+        httpStatus: null,
+        outcome: "cancelled",
+        turns: 1,
+        installations: 1,
+      }),
+    ]);
+    expect(body.turnFailures[0].lastSeen).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("discards valid and malformed legacy account identifiers without linking installations", async () => {
