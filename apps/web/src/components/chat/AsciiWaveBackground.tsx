@@ -16,6 +16,9 @@ const MAX_BACKING_PIXELS = 4_000_000;
 // The idle field drifts slowly, so it redraws rarely on a plain timer; only click ripples,
 // which need smooth motion, use animation frames.
 const IDLE_FRAME_INTERVAL_MS = 1000 / 15;
+// Redrawing forever keeps the renderer and GPU busy on an untouched window, so the
+// field holds still after this long without pointer or keyboard input.
+const INPUT_IDLE_PAUSE_MS = 5000;
 const RIPPLE_FRAME_INTERVAL_MS = 1000 / 40;
 // Share of cells that swap glyphs each frame; cells inside a ripple swap far more often.
 const IDLE_SCRAMBLE_RATE = 0.025;
@@ -266,6 +269,10 @@ export function AsciiWaveBackground() {
     let field: Field | null = null;
     let frameId = 0;
     let lastFrameMs = 0;
+    let lastInputMs = performance.now();
+    // Time spent paused is taken out of the field clock, so it resumes where it stopped.
+    let pausedAtMs: number | null = null;
+    let pausedTotalMs = 0;
     const startMs = performance.now();
     let revealStartMs: number | null = null;
     const seed = Math.random() * 1000;
@@ -370,7 +377,7 @@ export function AsciiWaveBackground() {
       const inkBytes = field.inkMask.image.data;
       const accentBytes = field.accentMask.image.data;
       // The seed shifts time so each mount starts somewhere new in the noise.
-      const fieldMs = reduceMotion ? startMs : nowMs;
+      const fieldMs = reduceMotion ? startMs : nowMs - pausedTotalMs;
       const t = fieldMs / 1000 + seed;
       const elapsed = fieldMs - startMs;
       const cycle = Math.floor(elapsed / PATTERN_DURATION_MS);
@@ -527,6 +534,17 @@ export function AsciiWaveBackground() {
       // Reduced motion keeps a still field and only animates while a ripple is alive
       // (or while the glyph layer is still filling in).
       const filling = field.filled < field.glyphs.length;
+      const revealing = revealStartMs === null || nowMs - revealStartMs < REVEAL_MS;
+      if (
+        !reduceMotion &&
+        !filling &&
+        !revealing &&
+        ripplesRef.current.length === 0 &&
+        nowMs - lastInputMs >= INPUT_IDLE_PAUSE_MS
+      ) {
+        pausedAtMs = nowMs;
+        return;
+      }
       if (!reduceMotion || filling || ripplesRef.current.length > 0) {
         scheduleNext(Math.max(0, lastFrameMs + IDLE_FRAME_INTERVAL_MS - nowMs));
       }
@@ -534,6 +552,10 @@ export function AsciiWaveBackground() {
 
     // Draw soon. A pending idle timer is kept unless a new ripple needs frame-rate updates.
     const wake = () => {
+      if (pausedAtMs !== null) {
+        pausedTotalMs += performance.now() - pausedAtMs;
+        pausedAtMs = null;
+      }
       if (frameId !== 0) return;
       if (timerId !== 0) {
         if (ripplesRef.current.length === 0) return;
@@ -575,6 +597,14 @@ export function AsciiWaveBackground() {
     };
     host.addEventListener("pointerdown", onPointerDown, { passive: true });
     host.addEventListener("pointerup", onPointerUp, { passive: true });
+    const onInput = () => {
+      lastInputMs = performance.now();
+      if (pausedAtMs !== null) wake();
+    };
+    const inputEvents = ["pointermove", "pointerdown", "keydown", "wheel"] as const;
+    for (const type of inputEvents) {
+      window.addEventListener(type, onInput, { passive: true, capture: true });
+    }
 
     // Setup (canvas allocation, glyph layer) only ever runs in an idle slot, never in the
     // mount or resize path, so opening or creating a thread is not delayed by it.
@@ -602,6 +632,9 @@ export function AsciiWaveBackground() {
     return () => {
       host.removeEventListener("pointerdown", onPointerDown);
       host.removeEventListener("pointerup", onPointerUp);
+      for (const type of inputEvents) {
+        window.removeEventListener(type, onInput, { capture: true });
+      }
       clearTimeout(startTimer);
       cancelIdle?.();
       resizeObserver.disconnect();
