@@ -314,6 +314,8 @@ interface ClaudeTurnState {
     readonly attempts: number;
     readonly processedTokens: number;
     readonly cacheReadTokens: number;
+    // The latest blocked result; a Stop during the wait settles cost and model usage with it.
+    readonly lastResult: SDKResultMessage;
   };
   nextSyntheticAssistantBlockIndex: number;
   // Offset into assistantTextBlockOrder where the current assistant API
@@ -3671,7 +3673,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         } = claudeResultLegUsage(context, result);
         // Legs retried after an edge block left their results unsettled.
         const retriedLegs = context.turnState?.edgeBlockRetry;
-        if (resultProcessedTokens !== undefined) {
+        // Settling the retained blocked result: the carry already holds its tokens.
+        const resultCarried = result !== undefined && result === retriedLegs?.lastResult;
+        if (resultProcessedTokens !== undefined && !resultCarried) {
           const reconciledTotal =
             context.processedTokenResultBaseline +
             (retriedLegs?.processedTokens ?? 0) +
@@ -5341,6 +5345,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             attempts: attempt,
             processedTokens: context.processedTokenTotal - context.processedTokenResultBaseline,
             cacheReadTokens: (retried?.cacheReadTokens ?? 0) + (leg.cacheReadTokens ?? 0),
+            lastResult: result,
           },
         };
         const pending: NonNullable<ClaudeSessionContext["pendingEdgeBlockRetry"]> = {
@@ -8756,7 +8761,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // Between edge-block retries the CLI is idle and emits no result for
         // this Stop, so the adapter settles the turn itself.
         if (cancelledEdgeBlockRetry && context.turnState?.turnId === activeTurnId) {
-          yield* completeTurn(context, "interrupted");
+          yield* completeTurn(
+            context,
+            "interrupted",
+            undefined,
+            context.turnState.edgeBlockRetry?.lastResult,
+          );
         }
         if (Option.isNone(acknowledged)) {
           return yield* new ProviderAdapterRequestError({

@@ -634,6 +634,7 @@ function emitCloudflareBlockedLeg(
   query: FakeClaudeQuery,
   leg: number,
   usage: Record<string, number> = {},
+  resultFields: Record<string, unknown> = {},
 ): void {
   query.emit({
     type: "assistant",
@@ -659,6 +660,7 @@ function emitCloudflareBlockedLeg(
     session_id: "sdk-edge-block",
     uuid: `result-edge-block-${leg}`,
     usage,
+    ...resultFields,
   } as unknown as SDKMessage);
 }
 
@@ -6295,7 +6297,21 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const { adapter, observed, turn, nextPrompt } = yield* startEdgeBlockTurn(harness);
 
-      emitCloudflareBlockedLeg(harness.query, 1);
+      // Process-cumulative cost and model usage, as Claude reports them on results.
+      const cumulative = (cost: number) => ({
+        total_cost_usd: cost,
+        modelUsage: {
+          "claude-fable-5-2": {
+            inputTokens: cost * 100,
+            outputTokens: cost * 10,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: cost,
+            webSearchRequests: 0,
+          },
+        },
+      });
+      emitCloudflareBlockedLeg(harness.query, 1, {}, cumulative(2));
       yield* observed.next("runtime.warning");
       yield* adapter.interruptTurn(THREAD_ID, turn.turnId);
       const completed = yield* observed.next("turn.completed");
@@ -6303,12 +6319,28 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (completed.type === "turn.completed") {
         assert.equal(String(completed.turnId), String(turn.turnId));
         assert.equal(completed.payload.state, "interrupted");
+        // The stop settles the blocked result, so its cost stays with this turn.
+        assert.equal(completed.payload.claudeResultObserved, true);
+        assert.equal(completed.payload.totalCostUsd, 2);
       }
 
       // The cancelled retry never re-prompts; the next prompt is the user's.
       yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1_500)));
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "next", attachments: [] });
       assert.equal(promptText(yield* nextPrompt), "next");
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-edge-block",
+        uuid: "result-after-stop",
+        usage: {},
+        ...cumulative(3),
+      } as unknown as SDKMessage);
+      const next = yield* observed.next("turn.completed");
+      // The next turn pays only for itself.
+      assert.equal(next.type === "turn.completed" ? next.payload.totalCostUsd : undefined, 1);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
