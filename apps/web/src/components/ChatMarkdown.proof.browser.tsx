@@ -58,3 +58,58 @@ it("renders completion proof inline with expand and download controls", async ()
     queryClient.clear();
   }
 });
+
+it("lays out captioned screenshots in a column and adjacent images side by side", async () => {
+  await page.viewport(1000, 800);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const mounted = await render(
+    <QueryClientProvider client={queryClient}>
+      <div style={{ width: 760 }} data-testid="image-rows">
+        <ChatMarkdown
+          cwd="/workspace"
+          text={
+            "Retry running:\n![First](/private/generated_images/a.png)\n\n" +
+            "Both states:\n![Before](/private/generated_images/b.png)\n![After](/private/generated_images/c.png)\nDone."
+          }
+          onImageExpand={vi.fn()}
+        />
+      </div>
+    </QueryClientProvider>,
+  );
+  try {
+    await vi.waitFor(() => {
+      const frames = document.querySelectorAll('.chat-generated-image[data-status="ready"]');
+      expect(frames).toHaveLength(3);
+    });
+    const rect = (name: string) =>
+      mounted.getByRole("img", { name }).element().getBoundingClientRect();
+    const textRect = (text: string) => {
+      const root = mounted.getByTestId("image-rows").element();
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const start = node.textContent?.indexOf(text) ?? -1;
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + text.length);
+        return range.getBoundingClientRect();
+      }
+      throw new Error(`Missing text: ${text}`);
+    };
+    const caption = textRect("Retry running:");
+    const pairCaption = textRect("Both states:");
+    const trailing = textRect("Done.");
+
+    expect(rect("First").top).toBeGreaterThanOrEqual(caption.bottom);
+    expect(rect("First").left).toBeLessThanOrEqual(caption.left + 1);
+    expect(rect("Before").top).toBeGreaterThanOrEqual(pairCaption.bottom);
+    expect(rect("After").top).toBe(rect("Before").top);
+    expect(rect("After").left).toBeGreaterThan(rect("Before").right);
+    expect(trailing.top).toBeGreaterThanOrEqual(rect("Before").bottom);
+    await page.getByTestId("image-rows").screenshot({ path: "image-rows-proof.png" });
+  } finally {
+    await mounted.unmount();
+    queryClient.clear();
+  }
+});
