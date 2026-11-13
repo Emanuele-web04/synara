@@ -561,6 +561,105 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }),
   );
 
+  for (const scenario of [
+    {
+      name: "empty journal",
+      project: false,
+      liveThread: false,
+      threadHistory: false,
+      missingProject: false,
+      expected: true,
+    },
+    {
+      name: "chat project with lagging cursors",
+      project: true,
+      liveThread: false,
+      threadHistory: false,
+      missingProject: false,
+      expected: true,
+    },
+    {
+      name: "unprojected thread history",
+      project: true,
+      liveThread: false,
+      threadHistory: true,
+      missingProject: false,
+      expected: false,
+    },
+    {
+      name: "live projection without thread history",
+      project: true,
+      liveThread: true,
+      threadHistory: false,
+      missingProject: false,
+      expected: false,
+    },
+    {
+      name: "missing durable project",
+      project: false,
+      liveThread: false,
+      threadHistory: false,
+      missingProject: true,
+      expected: false,
+    },
+  ]) {
+    it.effect(`verifies empty thread shells conservatively: ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_state`;
+        yield* sql`DELETE FROM orchestration_events`;
+        const now = "2026-10-13T10:00:00.000Z";
+        if (scenario.project) {
+          yield* sql`INSERT INTO projection_projects
+            (project_id, title, workspace_root, kind, scripts_json, created_at, updated_at)
+            VALUES ('empty-proof-project', 'Home', '/tmp/empty-proof', 'chat', '[]', ${now}, ${now})`;
+        }
+        if (scenario.project || scenario.missingProject) {
+          yield* sql`INSERT INTO orchestration_events
+            (event_id, aggregate_kind, stream_id, stream_version, event_type,
+             occurred_at, command_id, actor_kind, payload_json, metadata_json)
+            VALUES ('proof-project-created', 'project', 'empty-proof-project', 0,
+              'project.created', ${now}, 'proof-project-command', 'user', '{}', '{}')`;
+        }
+        if (scenario.liveThread) {
+          yield* sql`INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+            VALUES ('empty-proof-thread', 'empty-proof-project', 'Thread',
+              '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+        }
+        if (scenario.threadHistory) {
+          yield* sql`INSERT INTO orchestration_events
+            (event_id, aggregate_kind, stream_id, stream_version, event_type,
+             occurred_at, command_id, actor_kind, payload_json, metadata_json)
+            VALUES ('proof-thread-created', 'thread', 'empty-proof-thread', 0,
+              'thread.created', ${now}, 'proof-thread-command', 'user', '{}', '{}')`;
+        }
+        const snapshot = yield* query.getShellSnapshot({ verifyEmptyThreads: true });
+        assert.propertyVal(snapshot, "emptyThreadShellVerified", scenario.expected);
+        const streamSnapshot = yield* query.getShellSnapshot();
+        assert.notProperty(streamSnapshot, "emptyThreadShellVerified");
+        if (scenario.threadHistory) {
+          yield* sql`INSERT INTO orchestration_events
+            (event_id, aggregate_kind, stream_id, stream_version, event_type,
+             occurred_at, command_id, actor_kind, payload_json, metadata_json)
+            VALUES ('proof-thread-deleted', 'thread', 'empty-proof-thread', 1,
+              'thread.deleted', ${now}, 'proof-delete-command', 'user', '{}', '{}')`;
+          assert.propertyVal(
+            yield* query.getShellSnapshot({ verifyEmptyThreads: true }),
+            "emptyThreadShellVerified",
+            false,
+          );
+        }
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM orchestration_events`;
+      }),
+    );
+  }
+
   it.effect("marks only an empty shell with an active durable project for repair", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
