@@ -4106,8 +4106,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ),
           sql<{ historyRevisionSequence: number }>`
             SELECT COALESCE(MAX(sequence), 0) AS "historyRevisionSequence"
-            FROM orchestration_events INDEXED BY idx_orchestration_events_profile_turn_events
-            WHERE aggregate_kind = 'thread' AND stream_id = ${threadId}
+            FROM orchestration_events
+            -- The unary plus keeps SQLite off the per-stream index, which would walk every
+            -- event of the thread. It then seeks the (event_type, stream_id) index instead.
+            WHERE +aggregate_kind = 'thread' AND stream_id = ${threadId}
               AND event_type IN ('thread.reverted', 'thread.conversation-rolled-back')
               AND sequence <= COALESCE((
                 SELECT MIN(last_applied_sequence) FROM projection_state
