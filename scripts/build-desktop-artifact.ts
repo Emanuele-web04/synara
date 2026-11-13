@@ -47,6 +47,7 @@ import {
   RELEASE_WORKSPACE_MANIFEST_PATHS,
 } from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { settleConcurrently } from "./lib/settle-concurrently.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1457,32 +1458,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
-    yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
-    const finalizedDmg = yield* Effect.tryPromise({
-      try: () =>
-        finalizeSignedMacDmg({
-          stageDistDir,
-          appleApiKey: buildEnv.APPLE_API_KEY,
-          appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
-          appleApiIssuer: buildEnv.APPLE_API_ISSUER,
-          verbose: options.verbose,
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS DMG signing/notarization finalization failed.",
-          cause,
-        }),
-    });
-    yield* Effect.log(
-      `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
-    );
-  }
-
   if (options.platform === "mac") {
-    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* timedBuildStage(
+    const updateZip = timedBuildStage(
       "update-zip",
+      // Wait for archive subprocesses and extraction cleanup before the
+      // enclosing build scope removes the staging directory on interruption.
       Effect.tryPromise({
         try: () =>
           finalizeMacUpdateZip({
@@ -1499,8 +1479,44 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             message: "macOS update zip finalization failed.",
             cause,
           }),
-      }),
+      }).pipe(Effect.uninterruptible),
     );
+    let finalizedZip: Effect.Success<typeof updateZip>;
+    if (options.target === "dmg" && options.signed) {
+      // The app was notarized and stapled during packaging. DMG finalization
+      // verifies, notarizes and staples only the disk image; the update ZIP only
+      // reads that app and writes its own ZIP and feed. While Apple processes the
+      // DMG, the ZIP is packed from the same final app it always used.
+      yield* Effect.log(
+        "[desktop-artifact] Notarizing the signed macOS DMG while repacking the update zip...",
+      );
+      const finalizeDmg = Effect.tryPromise({
+        try: () =>
+          finalizeSignedMacDmg({
+            stageDistDir,
+            appleApiKey: buildEnv.APPLE_API_KEY,
+            appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
+            appleApiIssuer: buildEnv.APPLE_API_ISSUER,
+            verbose: options.verbose,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS DMG signing/notarization finalization failed.",
+            cause,
+          }),
+      });
+      const [finalizedDmg, zip] = yield* timedBuildStage(
+        "dmg-notarization-and-update-zip",
+        settleConcurrently(finalizeDmg, updateZip),
+      );
+      finalizedZip = zip;
+      yield* Effect.log(
+        `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
+      );
+    } else {
+      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+      finalizedZip = yield* updateZip;
+    }
     if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,

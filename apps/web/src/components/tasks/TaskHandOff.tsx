@@ -19,6 +19,7 @@ import {
   ScratchRuntimeControls,
 } from "~/components/chat/ScratchAgentControls";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useScratchComposerDraft } from "~/hooks/useScratchComposerDraft";
 import { useScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { LoaderCircleIcon } from "~/lib/icons";
@@ -54,8 +55,9 @@ export function TaskHandOff({
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const newChatDefault = useNewChatDefault(settings);
   const draft = useScratchComposerDraft({
-    defaultProvider: settings.defaultProvider,
+    newChatDefault,
     settings,
     initialPrompt: buildDelegationPrompt(todo),
   });

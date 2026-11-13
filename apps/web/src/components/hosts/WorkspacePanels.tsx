@@ -39,7 +39,7 @@ import {
 } from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
-import { useAppSettings } from "../../appSettings";
+import { resolveNewChatDefault, useAppSettings } from "../../appSettings";
 import { ensureNativeApi } from "../../nativeApi";
 import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
@@ -622,7 +622,7 @@ export function WorkspaceFrameNavigation() {
             api,
             ...input,
             spaceId: null,
-            defaultProvider: settingsRef.current.defaultProvider,
+            newChatDefault: resolveNewChatDefault(settingsRef.current),
             loadSnapshot: () => api.orchestration.getShellSnapshot(),
           });
           if (result.snapshot) useStore.getState().syncServerShellSnapshot(result.snapshot);
@@ -635,7 +635,7 @@ export function WorkspaceFrameNavigation() {
             throw new Error(
               "The project was added, but its chat could not be opened. Reopen it from the sidebar.",
             );
-          return `/${id}`;
+          return { projectId: result.projectId, path: `/${id}` };
         }),
       newChat: async (projectId) => {
         if (!projectId) {

@@ -13,6 +13,7 @@ import { BackgroundTrayIcon } from "~/lib/icons";
 import type { WorkLogEntry } from "../../session-logic";
 import { summarizeBackgroundTaskGroup } from "./backgroundTaskRow.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
+import { WORK_ROW_DISCLOSED_CLASS_NAME } from "./chatTypography";
 
 export function BackgroundTaskGroupRow(props: {
   entries: ReadonlyArray<WorkLogEntry>;
@@ -32,7 +33,9 @@ export function BackgroundTaskGroupRow(props: {
         open={open}
         onToggle={onToggle}
         fontSizePx={fontSizePx}
-        renderChildren={() => <div className="space-y-0.5 pt-0.5">{entries.map(renderEntry)}</div>}
+        renderChildren={() => (
+          <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>{entries.map(renderEntry)}</div>
+        )}
       />
     </div>
   );

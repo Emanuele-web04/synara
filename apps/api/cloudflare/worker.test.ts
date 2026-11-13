@@ -9,10 +9,13 @@ vi.mock("@cloudflare/containers", () => ({
       public env: unknown,
     ) {}
     envVars: Record<string, string> = {};
-    startAndWaitForPorts() {
-      return (this.ctx as { start: (env: Record<string, string>) => Promise<void> }).start(
+    onStart() {}
+    renewActivityTimeout() {}
+    async startAndWaitForPorts() {
+      await (this.ctx as { start: (env: Record<string, string>) => Promise<void> }).start(
         this.envVars,
       );
+      this.onStart();
     }
     stop(signal: string) {
       return (this.ctx as { stop: (signal: string) => Promise<void> }).stop(signal);
@@ -175,6 +178,21 @@ function billingBindings(environment: "sandbox" | "production") {
     POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "7999",
     POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
   };
+}
+
+function refresh(
+  method = "POST",
+  path = "/api/v1/auth/refresh",
+): Request<unknown, IncomingRequestCfProperties> {
+  return new Request(`https://api.example${path}`, {
+    method,
+    ...(method === "POST" ? { body: '{"refreshToken":"synthetic-refresh-token"}' } : {}),
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function instance(method = "GET") {
+  return new Request("https://api.example/api/v1/instance", { method });
 }
 
 function runtime(running = false) {
@@ -401,6 +419,188 @@ describe("Cloudflare account API container configuration", () => {
       expect(state.values.size).toBe(0);
     },
   );
+
+  describe("a refresh that never reached the API process", () => {
+    async function expectNotAttempted(response: Response) {
+      expect(response.status).toBe(429);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("retry-after")).toBe("5");
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ error: "refresh_not_attempted" });
+      expect(body).not.toContain("synthetic-private");
+      expect(body).not.toContain("synthetic-refresh-token");
+    }
+
+    it.each([false, true])(
+      "is answered as not attempted when the restart fails, keeping the cleanup (new object: %s)",
+      async (newObject) => {
+        const { env, fetch } = setup();
+        const state = runtime();
+        const first = new AccountApi(state.context, env);
+        await first.fetch(new Request("https://api.example/"));
+        state.process.running = false;
+        state.start.mockRejectedValue(new Error("synthetic-private-startup-detail"));
+        const container = newObject ? new AccountApi(state.context, env) : first;
+        fetch.mockImplementation((request) => container.fetch(request));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        await expectNotAttempted(await worker.fetch(refresh(), env));
+        expect(state.forward).toHaveBeenCalledTimes(1);
+        expect(state.remove).toHaveBeenCalledTimes(1);
+        expect(state.values.size).toBe(0);
+      },
+    );
+
+    it("is answered as not attempted when the configuration handover stalls", async () => {
+      vi.useFakeTimers();
+      const { env, fetch } = setup();
+      const state = runtime(true);
+      state.stop.mockImplementation(async () => {});
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const pending = worker.fetch(refresh(), env);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expectNotAttempted(await pending);
+      expect(state.forward).not.toHaveBeenCalled();
+      expect(state.put).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["GET", "/api/v1/auth/refresh"],
+      ["POST", "/api/v1/auth/refresh/"],
+      ["POST", "/api/v1/auth/authorize/token"],
+    ])("leaves %s %s on the generic retryable 503", async (method, path) => {
+      const { env, fetch } = setup();
+      const state = runtime();
+      state.start.mockRejectedValue(new Error("synthetic-private-startup-detail"));
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await worker.fetch(refresh(method, path), env);
+      expect(response.status).toBe(503);
+      expect(state.forward).not.toHaveBeenCalled();
+    });
+
+    // Once forwarded, the API may have spent the token: that outcome is unknown.
+    it.each([
+      ["throws", () => Promise.reject(new Error("synthetic-private-transport-detail"))],
+      [
+        "returns a raw transport error",
+        async () => new Response("synthetic-private-transport-detail", { status: 500 }),
+      ],
+    ] as const)("stays a retryable 503 when forwarding %s", async (_name, forward) => {
+      const { env, fetch } = setup();
+      const state = runtime();
+      state.forward.mockImplementation(forward);
+      const container = new AccountApi(state.context, env);
+      fetch.mockImplementation((request) => container.fetch(request));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await worker.fetch(refresh(), env);
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain("synthetic-private");
+      expect(state.forward).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("GET /api/v1/instance", () => {
+    const instanceBody = '{"version":"1","authMode":"workos","remoteBillingEnforced":false}';
+    function instanceRuntime() {
+      vi.spyOn(console, "info").mockImplementation(() => {});
+      const state = runtime();
+      state.forward.mockImplementation(async () =>
+        Response.json(JSON.parse(instanceBody), {
+          headers: { "Cache-Control": "no-store", "Server-Timing": "app;dur=1" },
+        }),
+      );
+      return state;
+    }
+    async function expectInstance(response: Response) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.text()).toBe(instanceBody);
+    }
+
+    it("is answered from the Durable Object after the first read", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      const renew = vi.spyOn(container, "renewActivityTimeout");
+      for (let read = 0; read < 3; read += 1)
+        await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(1);
+      expect(state.start).toHaveBeenCalledTimes(1);
+      expect(renew).toHaveBeenCalledTimes(2);
+      // Other routes and methods still reach the API process.
+      await container.fetch(instance("HEAD"));
+      await container.fetch(new Request("https://api.example/api/v1/instance/"));
+      await container.fetch(new Request("https://api.example/api/v1/me"));
+      expect(state.forward).toHaveBeenCalledTimes(4);
+    });
+
+    it("is fetched again after the configuration fingerprint changes", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      await expectInstance(await new AccountApi(state.context, env).fetch(instance()));
+      const next = new AccountApi(state.context, { ...env, ...billingBindings("sandbox") });
+      await expectInstance(await next.fetch(instance()));
+      await expectInstance(await next.fetch(instance()));
+      expect(state.stop).toHaveBeenCalledTimes(1);
+      expect(state.forward).toHaveBeenCalledTimes(2);
+    });
+
+    it("is fetched again after the container restarts", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      await expectInstance(await container.fetch(instance()));
+      state.process.running = false;
+      await expectInstance(await container.fetch(instance()));
+      expect(state.start).toHaveBeenCalledTimes(2);
+      expect(state.forward).toHaveBeenCalledTimes(2);
+      // An SDK-driven restart also drops the cached answer.
+      container.onStart();
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not keep an answer from a process that restarted while it was in flight", async () => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      const container = new AccountApi(state.context, env);
+      const forward = state.forward.getMockImplementation()!;
+      state.forward.mockImplementationOnce(async (request) => {
+        container.onStart();
+        return forward(request);
+      });
+      await expectInstance(await container.fetch(instance()));
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a 503", () => Response.json({ error: "internal_error" }, { status: 503 })],
+      ["a 429", () => Response.json({ error: "rate_limited" }, { status: 429 })],
+      ["a raw transport error", () => new Response("Failed to start container", { status: 500 })],
+      ["a non-JSON 200", () => new Response("Synara account API", { status: 200 })],
+    ])("never caches %s", async (_name, answer) => {
+      const { env } = setup();
+      const state = instanceRuntime();
+      state.forward.mockImplementationOnce(async () => answer());
+      const container = new AccountApi(state.context, env);
+      const first = await container.fetch(instance());
+      expect(first.status).toBe(answer().status);
+      expect(await first.text()).toBe(await answer().text());
+      await expectInstance(await container.fetch(instance()));
+      await expectInstance(await container.fetch(instance()));
+      expect(state.forward).toHaveBeenCalledTimes(2);
+    });
+  });
 
   it("does not persist or forward a configuration whose API process cannot become ready", async () => {
     const { env } = setup();

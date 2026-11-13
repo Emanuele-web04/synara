@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import { AppSettingsSchema } from "~/appSettings";
 
 import {
+  createProviderCliFieldsResetPatch,
   createProviderInstallResetPatch,
+  isProviderCliFieldsDirty,
   isProviderInstallSettingsDirty,
   providerInstanceLaunchConfigFor,
-} from "./ProvidersSettingsPanel";
+} from "./providerInstallSettings";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
 
@@ -84,5 +86,43 @@ describe("providerInstanceLaunchConfigFor", () => {
         claudeEnableArtifacts: true,
       }),
     ).toEqual({ binaryPath: "/opt/homebrew/bin/claude" });
+  });
+});
+
+describe("provider CLI fields (the Agents list reset)", () => {
+  it("restores only provider-wide CLI options, never accounts or sign-in folders", () => {
+    const patch = createProviderCliFieldsResetPatch(defaults);
+    expect(patch).toHaveProperty("codexBinaryPath");
+    expect(patch).toHaveProperty("openCodeServerPassword");
+    for (const key of [
+      "providerInstances",
+      "codexAccounts",
+      "selectedCodexAccountId",
+      "codexHomePath",
+      "claudeHomePath",
+      "piAgentDir",
+      "ompAgentDir",
+    ]) {
+      expect(patch).not.toHaveProperty(key);
+    }
+  });
+
+  it("ignores account changes when deciding whether there is anything to reset", () => {
+    expect(
+      isProviderCliFieldsDirty(
+        {
+          ...defaults,
+          codexHomePath: "~/.codex-personal",
+          providerInstances: { codex_team: { driver: "codex", displayName: "Team" } },
+        },
+        defaults,
+      ),
+    ).toBe(false);
+    expect(isProviderCliFieldsDirty({ ...defaults, codexBinaryPath: "/bin/codex" }, defaults)).toBe(
+      true,
+    );
+    expect(
+      isProviderCliFieldsDirty({ ...defaults, openCodeServerPasswordConfigured: true }, defaults),
+    ).toBe(true);
   });
 });

@@ -20,7 +20,6 @@ import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
-import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
 import {
   type AccountUsageView,
   localDayKey,
@@ -56,9 +55,11 @@ import {
   toDisplayName,
 } from "../profile/profileFormatting";
 import { SettingsSegmentedControl } from "./SettingControls";
+import { useSynaraPlan } from "./BillingSettingsPanel";
+import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
 import { profileShareUrl } from "~/lib/accountLogic";
-import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
-import { SynaraPlanLink } from "./BillingSettingsPanel";
+import { signOutWithToast } from "../account/signOutWithToast";
 import { openExternalLink } from "~/lib/linkChips";
 import { ExternalLinkIcon } from "~/lib/icons";
 import { getFormatLocale, t, useTranslation } from "~/i18n";
@@ -188,7 +189,6 @@ function ProfileContent({
           />
         ) : null}
         <div className="flex items-center gap-2">
-          {ACCOUNT_BILLING_ENABLED ? <SynaraPlanLink /> : null}
           {publicUrl ? (
             <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
               <ExternalLinkIcon />
@@ -259,7 +259,7 @@ function ProfileContent({
         />
       )}
 
-      <DeleteAccountControl />
+      {userId ? <SynaraAccountSection /> : null}
       <EditProfileDialog
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -726,4 +726,43 @@ function ProfileSkeleton() {
 
 function capitalize(value: string): string {
   return value.length > 0 ? value[0]!.toUpperCase() + value.slice(1) : value;
+}
+
+// Signed-in account actions grouped in one card: identity + sign out, plan, delete.
+function SynaraAccountSection() {
+  const { t } = useTranslation();
+  const account = useAccount();
+  const plan = useSynaraPlan();
+  return (
+    <SettingsSection title="settings:profile_synaraAccount">
+      <SettingsRow
+        title={t("settings:profile_signedIn")}
+        description={account.me?.email ?? ""}
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={account.signOut.isPending}
+            onClick={() => void signOutWithToast(account)}
+          >
+            {t("settings:signOut")}
+          </Button>
+        }
+      />
+      {plan ? (
+        <SettingsRow
+          title={t("settings:profile_plan")}
+          description={
+            plan.granted ? t("settings:altoProPlan") : t("settings:profile_planDescriptionFree")
+          }
+          control={
+            <Button variant="outline" size="sm" onClick={plan.open}>
+              {t("settings:profile_seePlans")}
+            </Button>
+          }
+        />
+      ) : null}
+      <DeleteAccountControl />
+    </SettingsSection>
+  );
 }

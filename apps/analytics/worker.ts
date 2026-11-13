@@ -19,6 +19,7 @@ import {
   decodeAnonymousProductRecord,
   isProductAnalyticsCommand,
   PRODUCT_COHORT_WINDOWS,
+  PRODUCT_TURN_FAILURES,
   ANONYMOUS_PRODUCT_RETRY_DAYS,
   type ProductAnalyticsCohortStage,
   type AnonymousProductRecord,
@@ -127,6 +128,7 @@ const PRODUCT_REASONS = new Set([
   "rejected",
   "other",
 ]);
+const PRODUCT_TURN_FAILURE_SET = new Set<string>(PRODUCT_TURN_FAILURES);
 const PRODUCT_SURFACES = new Set(["desktop", "ios", "ipados"]);
 const PRODUCT_PLATFORMS = new Set(["darwin", "win32", "linux", "ios", "ipados", "other"]);
 const PRODUCT_MAX_EVENTS_PER_POST = 50;
@@ -159,6 +161,8 @@ interface NormalizedProductEvent {
   mode: string | null;
   provider: string | null;
   reason: string | null;
+  failure: string | null;
+  httpStatus: number | null;
   command: string | null;
   durationMs: number | null;
   inputTokens: number | null;
@@ -169,8 +173,8 @@ interface NormalizedProductEvent {
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
   event_id, ts, received_at, install_id, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, command, duration_ms,
-  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage, failure, http_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(event_id) DO UPDATE SET cohort_day = excluded.cohort_day, cohort_stage = excluded.cohort_stage
 WHERE product_events.cohort_stage IS NULL AND excluded.cohort_stage IS NOT NULL
   AND product_events.install_id = excluded.install_id AND julianday(product_events.ts) = julianday(excluded.ts)
@@ -204,6 +208,8 @@ function productEventStatement(
     event.cachedInputTokens,
     event.cohortDay,
     event.cohortStage,
+    event.failure,
+    event.httpStatus,
   );
 }
 
@@ -324,6 +330,27 @@ export function normalizeProductEvent(
   ) {
     return null;
   }
+  // A turn that ended badly may name a fixed failure category; its status needs one.
+  const failure =
+    raw.failure === undefined
+      ? null
+      : typeof raw.failure === "string" &&
+          PRODUCT_TURN_FAILURE_SET.has(raw.failure) &&
+          raw.event === "turn.completed" &&
+          (raw.outcome === "failed" || raw.outcome === "cancelled")
+        ? raw.failure
+        : undefined;
+  const httpStatus =
+    raw.httpStatus === undefined
+      ? null
+      : typeof raw.httpStatus === "number" &&
+          Number.isInteger(raw.httpStatus) &&
+          raw.httpStatus >= 100 &&
+          raw.httpStatus <= 599 &&
+          typeof failure === "string"
+        ? raw.httpStatus
+        : undefined;
+  if (failure === undefined || httpStatus === undefined) return null;
   const command =
     raw.command === undefined
       ? null
@@ -391,6 +418,8 @@ export function normalizeProductEvent(
     mode,
     provider,
     reason,
+    failure,
+    httpStatus,
     command,
     durationMs,
     inputTokens,
@@ -2092,6 +2121,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       commandRows,
       platformRows,
       reasonRows,
+      turnFailureRows,
       hostExecutions,
       installerDownloads,
       anonymousEvents,
@@ -2266,6 +2296,26 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           events: number;
           installations: number;
         }>(),
+      env.DB.prepare(
+        `SELECT provider, failure, http_status AS httpStatus, outcome, channel,
+                  COUNT(*) AS turns, COUNT(DISTINCT install_id) AS installations,
+                  MAX(ts) AS lastSeen
+           FROM product_events
+           WHERE ${where} AND event = 'turn.completed' AND failure IS NOT NULL
+           GROUP BY provider, failure, http_status, outcome, channel
+           ORDER BY turns DESC, provider, failure LIMIT 200`,
+      )
+        .bind(...binds)
+        .all<{
+          provider: string | null;
+          failure: string;
+          httpStatus: number | null;
+          outcome: string;
+          channel: string;
+          turns: number;
+          installations: number;
+          lastSeen: string;
+        }>(),
       readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
       loadInstallerDownloads(env.DB, productFilters),
       productFilters.surface && productFilters.surface !== "desktop"
@@ -2329,6 +2379,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       },
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
+      turnFailures: turnFailureRows.results,
       commands: commandRows.results,
       daily,
       features: featureRows.results,

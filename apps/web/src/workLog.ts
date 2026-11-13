@@ -1,5 +1,6 @@
 import {
   classifyCodexStderr,
+  CODEX_STDERR_NATIVE_EVENT_TYPE,
   normalizeCodexUserVisibleErrorMessage,
 } from "@synara/shared/codexStderr";
 import {
@@ -537,6 +538,14 @@ export function isMissingCheckpointBaselineActivity(
   return checkpoint !== "captured" && checkpoint !== "not-applicable";
 }
 
+// Pi unsupported-UI notices are log-only now; hide the rows old hosts stored.
+// Extension notifications themselves (mode changes, saved settings) stay visible.
+const PI_UNSUPPORTED_UI_WARNING = /^Pi extension UI API '[^']+' is not supported in Synara yet\.$/;
+function isLogOnlyPiWarning(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.warning") return false;
+  return PI_UNSUPPORTED_UI_WARNING.test(asTrimmedString(asRecord(activity.payload)?.message) ?? "");
+}
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -554,6 +563,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => !isLogOnlyPiWarning(activity))
     // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
     .filter((activity) => {
       if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
@@ -565,9 +575,14 @@ export function deriveWorkLogEntries(
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
+      // Ingestion already judged the Codex stderr rows it marks, and stored their
+      // text normalized: judging that text again could hide a structured ERROR
+      // whose level the normalization removed.
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
       const message = asTrimmedString(payload?.message);
       return !message || classifyCodexStderr(message)?.kind === "notice";
     })
+    .filter((activity) => !isLogOnlyClaudeWarning(activity))
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
@@ -921,6 +936,28 @@ function subagentOutcomeFromStatus(
     default:
       return undefined;
   }
+}
+
+// Claude warnings older hosts stored that the adapter now only logs: unmodelled
+// SDK kinds, the cache-ingestion diagnostic, and the first API retries, which
+// Claude Code also lets pass unseen. History follows the live policy.
+function isLogOnlyClaudeWarning(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "runtime.warning" || activity.tone === "error") return false;
+  const payload = asRecord(activity.payload);
+  const message = asTrimmedString(payload?.message) ?? "";
+  if (message.startsWith("Unhandled Claude ")) {
+    return !/^Unhandled Claude system message subtype '(mirror_error|instruction_size_warning|session_writes_lost|file_attachments_missing)'\.$/.test(
+      message,
+    );
+  }
+  if (message.startsWith("Claude reported ") && message.includes("outside cache in one request")) {
+    return true;
+  }
+  const detail = asRecord(payload?.data) ?? asRecord(payload?.detail);
+  if (detail?.subtype !== "api_retry" || detail.type !== "system") return false;
+  const attempt = typeof detail.attempt === "number" ? detail.attempt : 0;
+  const maxRetries = typeof detail.max_retries === "number" ? detail.max_retries : 0;
+  return detail.error !== "rate_limit" && attempt < Math.min(3, maxRetries);
 }
 
 export interface SubagentTaskEnd {

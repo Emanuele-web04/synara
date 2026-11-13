@@ -50,7 +50,7 @@ function expiredCleanupCutoff(): Date {
 }
 
 /** The one row→HostRecord projection, shared with the route layer. */
-export function hostRecordFromRow(row: typeof hosts.$inferSelect): HostRecord {
+export function hostRecordFromRow(row: HostRecord): HostRecord {
   return {
     id: row.id,
     ownerUserId: row.ownerUserId,
@@ -140,11 +140,20 @@ export function createHostKeyRegistry(
 
   type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-  async function withAuthenticatedHost<T>(
-    authorization: string | undefined | null,
-    expectedHostId: string,
-    action: (tx: Transaction, row: typeof hosts.$inferSelect, host: HostRecord) => Promise<T>,
-  ): Promise<T> {
+  const hostProofColumns = {
+    id: hosts.id,
+    ownerUserId: hosts.ownerUserId,
+    ownerOrgId: hosts.ownerOrgId,
+    environmentId: hosts.environmentId,
+    publicKeyJwk: hosts.publicKeyJwk,
+    keyGeneration: hosts.keyGeneration,
+    discoverable: hosts.discoverable,
+    lastSeenAt: hosts.lastSeenAt,
+  };
+  type HostProofRow = HostRecord & { lastSeenAt: Date };
+
+  /** The proof's claims, checked against the route before any database work. */
+  function parseHostProof(authorization: string | undefined | null, expectedHostId: string) {
     const match = authorization ? /^HostProof\s+(.+)$/i.exec(authorization) : null;
     const proof = match?.[1];
     if (!proof) throw new HostAuthDomainError(401, "unauthorized", "Host proof required");
@@ -157,43 +166,104 @@ export function createHostKeyRegistry(
     if (claims.sub !== expectedHostId) {
       throw new HostAuthDomainError(401, "unauthorized", "Host proof does not match this host");
     }
+    return { proof, claims };
+  }
+
+  /** Signature, issuer, audience, age and key generation against the stored row. */
+  async function verifyHostProof(
+    proof: string,
+    claims: typeof HostProofClaims.Type,
+    row: HostProofRow | undefined,
+  ): Promise<HostProofRow> {
+    if (!row?.publicKeyJwk) {
+      throw new HostAuthDomainError(401, "host_not_linked", "Host is not linked");
+    }
+    try {
+      await verifyJwtWithEmbeddedJwk(proof, {
+        typ: HOST_PROOF_JWT_TYP,
+        audience: apiIssuer,
+        issuer: `synara-host:${row.environmentId}`,
+        algorithms: ["EdDSA"],
+        maxAgeSeconds: HOST_PROOF_MAX_AGE_SECONDS,
+        publicKeyJwk: row.publicKeyJwk,
+      });
+    } catch {
+      throw new HostAuthDomainError(401, "bad_proof", "Host proof is invalid");
+    }
+    if (claims.keyGeneration !== row.keyGeneration) {
+      throw new HostAuthDomainError(401, "bad_proof", "Host proof key generation is stale");
+    }
+    return row;
+  }
+
+  // Fleet hosts poll proof-authed routes constantly; rewriting the row each
+  // time is pure MVCC churn. One-minute granularity is plenty for a
+  // historical-metadata column, and actions that update the row anyway
+  // (replaceEndpoints) carry their own fresh lastSeenAt.
+  const LAST_SEEN_GRANULARITY_MS = 60_000;
+
+  async function withAuthenticatedHost<T>(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+    action: (tx: Transaction, host: HostRecord) => Promise<T>,
+  ): Promise<T> {
+    const { proof, claims } = parseHostProof(authorization, expectedHostId);
     return db.transaction(async (tx) => {
       // The lock is held through the protected action. A relink/unlink cannot
       // land after proof verification but before the effect or signed ticket.
-      const [row] = await tx
-        .select()
+      const [selected] = await tx
+        .select(hostProofColumns)
         .from(hosts)
         .where(eq(hosts.id, claims.sub))
         .limit(1)
         .for("update");
-      if (!row?.publicKeyJwk) {
-        throw new HostAuthDomainError(401, "host_not_linked", "Host is not linked");
+      const row = await verifyHostProof(proof, claims, selected);
+      const now = new Date();
+      // The row is still locked, so this decision cannot race another heartbeat.
+      // Avoid a database round trip even when the conditional UPDATE would do nothing.
+      if (row.lastSeenAt.getTime() < now.getTime() - LAST_SEEN_GRANULARITY_MS) {
+        await tx.update(hosts).set({ lastSeenAt: now }).where(eq(hosts.id, row.id));
       }
-      try {
-        await verifyJwtWithEmbeddedJwk(proof, {
-          typ: HOST_PROOF_JWT_TYP,
-          audience: apiIssuer,
-          issuer: `synara-host:${row.environmentId}`,
-          algorithms: ["EdDSA"],
-          maxAgeSeconds: HOST_PROOF_MAX_AGE_SECONDS,
-          publicKeyJwk: row.publicKeyJwk,
-        });
-      } catch {
-        throw new HostAuthDomainError(401, "bad_proof", "Host proof is invalid");
-      }
-      if (claims.keyGeneration !== row.keyGeneration) {
-        throw new HostAuthDomainError(401, "bad_proof", "Host proof key generation is stale");
-      }
-      // Fleet hosts poll proof-authed routes constantly; rewriting the row
-      // each time is pure MVCC churn. One-minute granularity is plenty for a
-      // historical-metadata column, and actions that update the row anyway
-      // (replaceEndpoints) carry their own fresh lastSeenAt.
-      await tx
-        .update(hosts)
-        .set({ lastSeenAt: new Date() })
-        .where(and(eq(hosts.id, row.id), lt(hosts.lastSeenAt, new Date(Date.now() - 60_000))));
-      return action(tx, row, hostRecordFromRow(row));
+      return action(tx, hostRecordFromRow(row));
     });
+  }
+
+  /**
+   * The same verification without a transaction or row lock, for the
+   * read-only polls. It reads the last committed row, so a concurrent unlink
+   * or relink is ordered entirely before or after this read: the proof is
+   * checked against one consistent key and generation, never a mix.
+   */
+  async function readAuthenticatedHost(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+  ): Promise<HostRecord> {
+    const { proof, claims } = parseHostProof(authorization, expectedHostId);
+    const [selected] = await db
+      .select(hostProofColumns)
+      .from(hosts)
+      .where(eq(hosts.id, claims.sub))
+      .limit(1);
+    const row = await verifyHostProof(proof, claims, selected);
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - LAST_SEEN_GRANULARITY_MS);
+    if (row.lastSeenAt.getTime() < staleBefore.getTime()) {
+      // Without the row lock, the condition is what keeps this to one write a
+      // minute under concurrent polls, and off a row unlinked or relinked
+      // since it was read.
+      await db
+        .update(hosts)
+        .set({ lastSeenAt: now })
+        .where(
+          and(
+            eq(hosts.id, row.id),
+            lt(hosts.lastSeenAt, staleBefore),
+            eq(hosts.keyGeneration, row.keyGeneration),
+            isNotNull(hosts.publicKeyJwk),
+          ),
+        );
+    }
+    return hostRecordFromRow(row);
   }
 
   return {
@@ -524,8 +594,9 @@ export function createHostKeyRegistry(
       );
     },
 
+    readAuthenticatedHost,
     withAuthenticatedHost(authorization, expectedHostId, action) {
-      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, _row, host) =>
+      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, host) =>
         action(host),
       );
     },

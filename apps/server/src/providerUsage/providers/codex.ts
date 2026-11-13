@@ -27,7 +27,7 @@ import {
   writeJsonFileAtomic,
   type OAuthRefreshResult,
 } from "../credentials";
-import { fetchJson, isAuthFailureStatus } from "../http";
+import { fetchJson, isAuthFailureStatus, isEdgeBlockedResponse } from "../http";
 import {
   asFiniteNumber,
   asRecord,
@@ -467,7 +467,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
 
     try {
       let result = await fetchCodexUsage(state);
-      if (isAuthFailureStatus(result.status)) {
+      if (!isEdgeBlockedResponse(result) && isAuthFailureStatus(result.status)) {
         // The stored expiry can lag reality (revocation, clock skew): refresh/re-read and retry
         // once with a genuinely different token.
         const outcome = await refreshCodexAuth(ctx, state, { allowRedeem });
@@ -475,6 +475,17 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           state = outcome.state;
           result = await fetchCodexUsage(state);
         }
+      }
+      if (isEdgeBlockedResponse(result)) {
+        // Not a token problem: refreshing would only rotate the refresh token for nothing. An error
+        // snapshot lets the usage cache keep the last healthy values and retry on the short TTL.
+        log.warn("codex usage request blocked by Cloudflare edge", { status: result.status });
+        return errorSnapshot(
+          "codex",
+          ctx.nowMs,
+          SOURCE,
+          "OpenAI's network edge temporarily blocked the usage check (HTTP 403). Your Codex login is fine; retrying shortly.",
+        );
       }
       if (isAuthFailureStatus(result.status)) {
         log.warn("codex usage request unauthorized after refresh", { status: result.status });

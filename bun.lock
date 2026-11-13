@@ -64,7 +64,7 @@
     },
     "apps/desktop": {
       "name": "@synara/desktop",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "dependencies": {
         "betterwright": "2.7.3",
         "effect": "catalog:",
@@ -171,7 +171,7 @@
     },
     "apps/server": {
       "name": "@synara/cli",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "bin": {
         "synara": "dist/index.mjs",
         "synara-compact-database": "dist/compactDatabase.mjs",
@@ -200,6 +200,7 @@
         "reflect-metadata": "0.2.2",
         "smol-toml": "^1.7.0",
         "typescript": "catalog:",
+        "undici": "8.10.2",
         "ws": "^8.21.0",
         "yaml": "^2.8.3",
         "zod": "4.3.6",
@@ -219,7 +220,7 @@
     },
     "apps/web": {
       "name": "@synara/web",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "dependencies": {
         "@base-ui/react": "^1.5.0",
         "@dnd-kit/core": "^6.3.1",
@@ -297,7 +298,7 @@
     },
     "packages/contracts": {
       "name": "@synara/contracts",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "dependencies": {
         "effect": "catalog:",
       },

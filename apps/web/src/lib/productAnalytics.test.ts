@@ -3,6 +3,7 @@ import { ORCHESTRATION_WS_METHODS, WS_METHODS, type OrchestrationEvent } from "@
 import {
   ProductTurnObserver,
   productRpcActivity,
+  productTurnFailure,
   trackProductNavigation,
   trackShortcutCommand,
   trackSlashCommand,
@@ -79,6 +80,50 @@ it("reports cancellation and leaves missing token usage unknown instead of zero"
     mode: "local",
     provider: "other",
   });
+});
+
+it("reports a failed turn's fixed category and HTTP status, never its error text", async () => {
+  const observer = new ProductTurnObserver();
+  observer.observe(
+    completed({
+      payload: {
+        state: "failed",
+        provider: "claudeAgent",
+        errorCode: "edge_blocked",
+        httpStatus: 403,
+        errorMessage: "secret path /Users/private/project",
+      },
+    }),
+    "local",
+  );
+  await vi.waitFor(() => expect(track).toHaveBeenCalledTimes(1));
+  expect(track.mock.calls[0]![0]).toEqual({
+    event: "turn.completed",
+    outcome: "failed",
+    mode: "local",
+    provider: "claude",
+    failure: "edge_blocked",
+    httpStatus: 403,
+  });
+});
+
+it("maps provider error codes to fixed turn failure categories", () => {
+  const failure = (errorCode: unknown, httpStatus?: number, outcome = "failed" as const) =>
+    productTurnFailure({ outcome, errorCode, httpStatus });
+  expect(failure("edge_blocked", 403)).toBe("edge_blocked");
+  expect(failure("authentication_failed", 401)).toBe("auth");
+  expect(failure("unauthorized")).toBe("auth");
+  expect(failure("usageLimitExceeded")).toBe("usage_limit");
+  expect(failure("responseStreamDisconnected")).toBe("network");
+  expect(failure("custom-provider-code", 503)).toBe("server_error");
+  expect(failure(undefined)).toBe("other");
+  // A cancelled turn without an error is a user stop, not a failure.
+  expect(
+    productTurnFailure({ outcome: "cancelled", errorCode: undefined, httpStatus: undefined }),
+  ).toBeUndefined();
+  expect(
+    productTurnFailure({ outcome: "cancelled", errorCode: "edge_blocked", httpStatus: 403 }),
+  ).toBe("edge_blocked");
 });
 
 it("classifies only explicit actions and fixed navigation categories", () => {

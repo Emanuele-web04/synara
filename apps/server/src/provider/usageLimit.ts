@@ -58,6 +58,18 @@ export function codexErrorCode(value: unknown): string | undefined {
   return code === "serverOverloaded" ? "server_overloaded" : code || undefined;
 }
 
+// Codex data variants carry the failed request's status: { httpConnectionFailed: { httpStatusCode } }.
+export function codexErrorHttpStatus(value: unknown): number | undefined {
+  const error = record(value);
+  const info = record(error?.codexErrorInfo ?? error?.codex_error_info);
+  const variant =
+    info && Object.keys(info).length === 1 ? record(Object.values(info)[0]) : undefined;
+  const status = variant?.httpStatusCode;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
+
 export function isCodexUsageLimitError(code: string | undefined, value?: unknown): boolean {
   if (code === "usageLimitExceeded" || code === "rateLimitExceeded") return true;
   const error = record(value);

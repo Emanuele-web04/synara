@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useAccount } from "~/hooks/useAccount";
 import { Button } from "~/components/ui/button";
+import { SettingsRow } from "~/components/settings/SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 import { Input } from "~/components/ui/input";
 import {
   AlertDialog,
@@ -14,7 +16,9 @@ import {
   AlertDialogTitle,
 } from "~/components/ui/alert-dialog";
 
+/** The Delete account row of Settings › Profile › Synara account, with its confirmation. */
 export function DeleteAccountControl() {
+  const { t } = useTranslation();
   const account = useAccount();
   const [open, setOpen] = useState(false);
   const [confirmation, setConfirmation] = useState("");
@@ -29,21 +33,26 @@ export function DeleteAccountControl() {
     account.status?.state === "signed-in" ? account.status.accountAuthority : undefined;
   if (!me) return null;
   return (
-    <section className="flex flex-col items-start gap-2 border-t pt-4">
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={!accountAuthority}
-        onClick={() => {
-          if (!accountAuthority) return;
-          setConfirmation("");
-          setError(false);
-          setTarget({ id: me.id, email: me.email, accountAuthority });
-          setOpen(true);
-        }}
-      >
-        Delete account…
-      </Button>
+    <SettingsRow
+      title={t("settings:profile_deleteAccount")}
+      description={t("settings:profile_deleteAccountDescription")}
+      control={
+        <Button
+          variant="destructive-outline"
+          size="sm"
+          disabled={!accountAuthority}
+          onClick={() => {
+            if (!accountAuthority) return;
+            setConfirmation("");
+            setError(false);
+            setTarget({ id: me.id, email: me.email, accountAuthority });
+            setOpen(true);
+          }}
+        >
+          {t("settings:profile_deleteAccountButton")}
+        </Button>
+      }
+    >
       <AlertDialog
         open={
           open &&
@@ -109,6 +118,6 @@ export function DeleteAccountControl() {
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
-    </section>
+    </SettingsRow>
   );
 }

@@ -3,8 +3,9 @@ import { isAbsolute, join } from "node:path";
 import { installCloudflared, CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
 import { startCloudflareIngress } from "./cloudflare/ingress";
 import { startCloudflareConnector } from "./cloudflare/connector";
-import { startRemoteAuthorization } from "./cloudflare/authorization";
+import { requestAuthorizationSnapshot, startRemoteAuthorization } from "./cloudflare/authorization";
 import { recordRemoteBillingPolicyHint } from "./remoteBillingPolicy";
+import { registerHostAuthorizationNudge } from "./hostConnectivitySignals";
 import { accountStateDirectory } from "./accountAuth";
 import { createRemoteResourceGateway } from "./remoteTransport/resourceGateway";
 import { requireRemoteConnections } from "./remoteFeaturePolicy";
@@ -14,7 +15,8 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
 import { acceptRemotePairing } from "./remotePairing/gateway";
 
-import { AccountApiError, createAccountClient } from "@synara/shared/account";
+import { AccountApiError } from "@synara/shared/account";
+import { createServerAccountClient } from "./accountHttp";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   loadRemoteTlsIdentity,
@@ -83,7 +85,7 @@ export async function startHostConnectivity(
   const identity = await readHostIdentity(options.config.hostIdentityPath);
   if (!identity) return async () => {};
   const environmentId = await resolveEnvironmentId(options.config.baseDir, options.config.devUrl);
-  const client = createAccountClient({ baseUrl: credentials.accountUrl });
+  const client = createServerAccountClient(credentials.accountUrl);
   const hostProof = () =>
     mintHostProof({
       identity,
@@ -92,7 +94,8 @@ export async function startHostConnectivity(
       hostId: credentials.hostId!,
       keyGeneration: credentials.hostKeyGeneration!,
     });
-  const rememberBillingPolicy = async (enforced: boolean) => {
+  // `requestedAt` is the monotonic start of the snapshot request that carried the policy.
+  const rememberBillingPolicy = async (enforced: boolean, requestedAt: number) => {
     const saved = await recordRemoteBillingPolicy(
       accountStateDirectory(options.config.baseDir, options.config.devUrl),
       {
@@ -109,24 +112,42 @@ export async function startHostConnectivity(
       if (!options.remoteSessions.canAdmitRemoteSession())
         options.remoteSessions.closeAll("Remote billing policy requires authorization");
     }
+    // The snapshot carries the deployment flag the public policy reads, so the
+    // running policy adopts it instead of asking for it again.
     await recordRemoteBillingPolicyHint(
       accountStateDirectory(options.config.baseDir, options.config.devUrl),
       credentials.accountUrl,
       enforced,
+      undefined,
+      requestedAt,
     );
     if (!enforced) options.remoteSessions.setRemoteBillingEnforced(false);
   };
+  /**
+   * The poll and admission paths bound each request and retry a stalled one
+   * once (`requestAuthorizationSnapshot`); the startup read keeps the client's
+   * general bound. Every attempt mints its own proof.
+   */
   const readAuthorization = async (signal?: AbortSignal) => {
-    try {
-      const authorization = await client.getHostAuthorization(
-        await hostProof(),
-        credentials.hostId!,
-        signal,
+    let requestedAt = performance.now();
+    const request = (attemptSignal?: AbortSignal) => {
+      requestedAt = performance.now();
+      return hostProof().then((proof) =>
+        client.getHostAuthorization(proof, credentials.hostId!, attemptSignal),
       );
+    };
+    try {
+      const authorization = await (signal
+        ? requestAuthorizationSnapshot(request, { signal })
+        : request());
       if (typeof authorization.remoteBillingEnforced === "boolean")
-        await rememberBillingPolicy(authorization.remoteBillingEnforced);
-      else if (options.remoteSessions.remoteBillingEnforced)
-        throw new Error("The account service did not confirm the commercial policy");
+        await rememberBillingPolicy(authorization.remoteBillingEnforced, requestedAt);
+      else {
+        // Never the admission gate here: this runs inside the authorization check it waits on.
+        await options.remoteSessions.prepareBillingPolicy();
+        if (options.remoteSessions.remoteBillingEnforced)
+          throw new Error("The account service did not confirm the commercial policy");
+      }
       return authorization;
     } catch (error) {
       if (
@@ -134,7 +155,7 @@ export async function startHostConnectivity(
         ((error.status === 403 && error.code === "subscription_required") ||
           (error.status === 503 && error.code === "billing_unavailable"))
       )
-        await rememberBillingPolicy(true);
+        await rememberBillingPolicy(true, requestedAt);
       throw error;
     }
   };
@@ -159,8 +180,14 @@ export async function startHostConnectivity(
     organizationId: credentials.organizationId,
   };
   let admissionAvailable = () => false;
+  // Every admission first waits for a snapshot as fresh as the revocation poll.
+  let ensureAdmission: () => Promise<void> = async () => {};
+  const admitNow = async () => {
+    await ensureAdmission();
+    return admissionAvailable();
+  };
   const authorizeDevice = async (userId: string, deviceJkt: string, generation?: number) => {
-    if (!admissionAvailable()) throw new HostAuthorizationUnavailableError();
+    if (!(await admitNow())) throw new HostAuthorizationUnavailableError();
     if (userId !== trustScope.userId)
       throw new Error("Only the locally linked owner is authorized");
     const trusted = await Effect.runPromise(
@@ -245,6 +272,7 @@ export async function startHostConnectivity(
     remoteSessions.registerAdmissionGuard({
       authority: accountApiIssuer(credentials.accountUrl),
       available: () => paidAdmissionAvailable(),
+      prepare: () => ensureAdmission(),
     }),
   );
   let finishSetup!: () => void;
@@ -270,6 +298,8 @@ export async function startHostConnectivity(
   try {
     const tunnel = new RemoteTlsServer({
       identity: tlsIdentity,
+      // Direct, SSH-forwarded and Cloudflare streams all pass here before any inner route.
+      admit: () => admitNow(),
       request: createRemoteResourceGateway({
         identity,
         environmentId,
@@ -374,9 +404,15 @@ export async function startHostConnectivity(
             options.remoteTrust.disable(trustScope, new Date().toISOString()),
           );
       },
+      // Revocations must reach open connections on the poll cadence; without any,
+      // admission asks for a fresh snapshot and a slow poll keeps tombstones current.
+      active: () => remoteSessions.remoteConnectionsOpen,
       log: (message) => console.warn(`[synara] ${message}`),
     });
     paidAdmissionAvailable = authorizationPoll.paidAvailable;
+    ensureAdmission = authorizationPoll.ensureFresh;
+    stops.push(remoteSessions.onRemoteConnectionOpened(authorizationPoll.wake));
+    stops.push(registerHostAuthorizationNudge(authorizationPoll.checkSoon));
     admissionAvailable = () =>
       authorizationPoll.available() &&
       (!remoteSessions.remoteBillingEnforced || remoteSessions.canAdmitRemoteSession());
@@ -385,6 +421,7 @@ export async function startHostConnectivity(
     const ingress = await startCloudflareIngress(
       tunnel,
       () => admissionAvailable() && connectorReady,
+      () => ensureAdmission(),
     );
     stops.push(ingress.close);
     const connectorHome = join(options.config.baseDir, "tools", "cloudflared", "home");
@@ -413,7 +450,7 @@ export async function startHostConnectivity(
                 throw error;
               }))),
       token: async (signal) => {
-        if (!admissionAvailable()) throw new Error("Remote authorization unavailable");
+        if (!(await admitNow())) throw new Error("Remote authorization unavailable");
         const config = await client.provisionRemoteTunnel(
           await hostProof(),
           credentials.hostId!,

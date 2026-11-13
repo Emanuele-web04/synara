@@ -17,6 +17,7 @@ import {
   EmptyLine,
   ErrorState,
   Loading,
+  RelTime,
   Stat,
   TableWrap,
   useApiData,
@@ -67,6 +68,22 @@ const reasonLabels: Record<string, string> = {
   timeout: "Timed out",
   invalid_code: "Invalid pairing code",
   rejected: "Rejected",
+  other: "Other",
+};
+const turnFailureLabels: Record<string, string> = {
+  edge_blocked: "Network edge blocked (Cloudflare)",
+  auth: "Not signed in",
+  account: "Account issue",
+  billing: "Billing",
+  rate_limit: "Rate limited",
+  usage_limit: "Usage limit",
+  overloaded: "Provider overloaded",
+  server_error: "Provider server error",
+  network: "Connection lost",
+  invalid_request: "Request rejected",
+  model_unavailable: "Model unavailable",
+  context_limit: "Context full",
+  output_limit: "Output limit",
   other: "Other",
 };
 const eventLabels: Record<string, string> = {
@@ -946,6 +963,59 @@ export function Product({
                               <td>{surfaceLabel(row.surface)}</td>
                               <td className="num">{row.events.toLocaleString()}</td>
                               <td className="num">{row.installations.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
+              {data.turnFailures && (
+                <section className="section" aria-labelledby="product-turn-failures">
+                  <h2 id="product-turn-failures" className="heading-20 section-head">
+                    Why turns failed
+                  </h2>
+                  {data.turnFailures.length === 0 ? (
+                    <EmptyLine text="No failed or error-interrupted turns in this range." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Provider</th>
+                            <th scope="col">Cause</th>
+                            <th scope="col" className="num">
+                              HTTP
+                            </th>
+                            <th scope="col">Ended as</th>
+                            <th scope="col">Channel</th>
+                            <th scope="col" className="num">
+                              Turns
+                            </th>
+                            <th scope="col" className="num">
+                              Installations
+                            </th>
+                            <th scope="col">Last seen</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.turnFailures.map((row) => (
+                            <tr
+                              key={`${row.provider}:${row.failure}:${row.httpStatus}:${row.outcome}:${row.channel}`}
+                            >
+                              <td>
+                                <ProviderLabel provider={row.provider ?? "unknown"} />
+                              </td>
+                              <td>{turnFailureLabels[row.failure] ?? row.failure}</td>
+                              <td className="num">{row.httpStatus ?? "—"}</td>
+                              <td>{row.outcome === "cancelled" ? "Interrupted" : "Failed"}</td>
+                              <td>{row.channel}</td>
+                              <td className="num">{row.turns.toLocaleString()}</td>
+                              <td className="num">{row.installations.toLocaleString()}</td>
+                              <td>
+                                <RelTime ts={row.lastSeen} />
+                              </td>
                             </tr>
                           ))}
                         </tbody>

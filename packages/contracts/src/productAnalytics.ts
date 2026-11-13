@@ -70,6 +70,29 @@ export const ProductAnalyticsReason = Schema.Literals([
   "other",
 ]);
 export type ProductAnalyticsReason = typeof ProductAnalyticsReason.Type;
+/**
+ * Why a turn failed or was interrupted by an error. A fixed category derived from the
+ * provider's error code, never error text. `edge_blocked` is the provider's network edge
+ * (e.g. Cloudflare) refusing a request, distinct from a real `auth` failure.
+ */
+export const PRODUCT_TURN_FAILURES = [
+  "edge_blocked",
+  "auth",
+  "account",
+  "billing",
+  "rate_limit",
+  "usage_limit",
+  "overloaded",
+  "server_error",
+  "network",
+  "invalid_request",
+  "model_unavailable",
+  "context_limit",
+  "output_limit",
+  "other",
+] as const;
+export const ProductAnalyticsTurnFailure = Schema.Literals(PRODUCT_TURN_FAILURES);
+export type ProductAnalyticsTurnFailure = typeof ProductAnalyticsTurnFailure.Type;
 import { BUILT_IN_COMPOSER_SLASH_COMMANDS } from "./composerSlashCommands";
 
 export const PRODUCT_ANALYTICS_COMMANDS = [
@@ -87,6 +110,7 @@ export function isProductAnalyticsCommand(value: unknown): value is string {
 const ProductAnalyticsCommand = Schema.Literals(PRODUCT_ANALYTICS_COMMANDS);
 
 const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_400_000 }));
+const HttpStatus = Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }));
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
 export const ProductAnalyticsChannel = Schema.Literals(["stable", "beta", "remote"]);
 export type ProductAnalyticsChannel = typeof ProductAnalyticsChannel.Type;
@@ -128,6 +152,8 @@ export const ProductAnalyticsInput = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  failure: Schema.optional(ProductAnalyticsTurnFailure),
+  httpStatus: Schema.optional(HttpStatus),
   command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
@@ -158,6 +184,8 @@ export const ProductAnalyticsEnvelope = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  failure: Schema.optional(ProductAnalyticsTurnFailure),
+  httpStatus: Schema.optional(HttpStatus),
   command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),

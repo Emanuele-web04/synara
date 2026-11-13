@@ -55,6 +55,77 @@ type Row = {
   deleted_at: Date | null;
 };
 
+/**
+ * How long a reconciled authorization is reused without asking the provider.
+ * Deliberately below REMOTE_BILLING_MAX_STATUS_AGE_MS in accessPolicy.ts,
+ * which refuses older statuses outright: a longer reuse here would turn into
+ * `billing_unavailable` there, not into fewer provider calls.
+ */
+const ACCESS_REUSE_MS = 30_000;
+
+type AccessRow = Pick<Row, "access_granted" | "checked_at" | "valid_until">;
+type BillingAccess = Pick<
+  AccountBillingStatus,
+  "available" | "access" | "checkedAt" | "validUntil"
+>;
+
+/**
+ * Whether a stored authorization may be served without reconciling: checked
+ * within the reuse window by the API clock (a future timestamp is not
+ * trusted), and its lease not yet over. Pending webhooks and the erasure
+ * fence are checked separately by each caller.
+ */
+function isAccessReusable(row: AccessRow, now: number): boolean {
+  const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
+  return (
+    age >= 0 && age <= ACCESS_REUSE_MS && (!row.valid_until || row.valid_until.getTime() > now)
+  );
+}
+
+/** Ledger columns are null when `present` is false: the row does not exist yet. */
+type Probe = AccessRow &
+  Pick<Row, "deleted_at"> & {
+    present: boolean;
+    pending_webhook: boolean;
+    deleting: boolean;
+  };
+/** A probe plus the product and checkout scope a provider snapshot is requested for. */
+type LedgerProbe = Probe & Pick<Row, "product_ids" | "checkout_attempt_id" | "checkout_product_id">;
+
+/** The single-statement answer: reusable, no pending webhook, no erasure. */
+function isProbeReusable(probe: Probe, now: number): boolean {
+  return (
+    probe.present &&
+    !probe.deleted_at &&
+    !probe.deleting &&
+    !probe.pending_webhook &&
+    isAccessReusable(probe, now)
+  );
+}
+
+/**
+ * Whether the locked row still holds what a provider snapshot was requested
+ * for: the same last check, product scope and open checkout attempt. A row
+ * missing at probe time must still hold the defaults its upsert created.
+ */
+function isUnchangedSince(row: Row, before: LedgerProbe): boolean {
+  return (
+    (row.checked_at?.getTime() ?? null) === (before.checked_at?.getTime() ?? null) &&
+    JSON.stringify(row.product_ids) === JSON.stringify(before.product_ids ?? []) &&
+    row.checkout_attempt_id === before.checkout_attempt_id &&
+    row.checkout_product_id === before.checkout_product_id
+  );
+}
+
+function serializeAccess(row: AccessRow): BillingAccess {
+  return {
+    available: true,
+    access: row.access_granted ? "granted" : "none",
+    checkedAt: row.checked_at?.toISOString() ?? null,
+    validUntil: row.valid_until?.toISOString() ?? null,
+  };
+}
+
 function serialize(
   row: Row,
   plans: AccountBillingStatus["plans"],
@@ -102,9 +173,10 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     }
     return initialization;
   }
-  async function withAccount<T>(
+  async function withAccount<T, K extends keyof Row = keyof Row>(
     userId: string,
-    action: (client: pg.PoolClient, row: Row) => Promise<T>,
+    action: (client: pg.PoolClient, row: Pick<Row, K>) => Promise<T>,
+    columns?: readonly K[],
   ) {
     await initialize();
     const client = await pool.connect();
@@ -119,8 +191,8 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         ON CONFLICT(user_id) DO UPDATE SET deleted_at=coalesce(billing_accounts.deleted_at,excluded.deleted_at)`,
         [userId],
       );
-      const { rows } = await client.query<Row>(
-        "SELECT * FROM billing_accounts WHERE user_id=$1 FOR UPDATE",
+      const { rows } = await client.query<Pick<Row, K>>(
+        `SELECT ${columns?.join(",") ?? "*"} FROM billing_accounts WHERE user_id=$1 FOR UPDATE`,
         [userId],
       );
       const result = await action(client, rows[0]!);
@@ -142,7 +214,15 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       existing.rows[0]!.product_ids,
     );
     // The lease evaluator and its successful check use the same API clock.
-    const checkedAt = new Date();
+    return applySnapshot(client, userId, existing.rows[0]!, state, new Date());
+  }
+  async function applySnapshot(
+    client: pg.PoolClient,
+    userId: string,
+    existing: Pick<Row, "product_ids" | "checkout_attempt_id" | "checkout_product_id">,
+    state: BillingSnapshot | null,
+    checkedAt: Date,
+  ): Promise<Row> {
     const { rows } = await client.query<Row>(
       `UPDATE billing_accounts SET customer_id=$2,
       access_granted=$3, subscription_status=$4, valid_until=$5, cancel_at_period_end=$6,
@@ -162,13 +242,11 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         state?.validUntil ?? null,
         state?.cancelAtPeriodEnd ?? false,
         state?.hasSubscription ?? false,
-        JSON.stringify([
-          ...new Set([...existing.rows[0]!.product_ids, ...(state?.productIds ?? [])]),
-        ]),
+        JSON.stringify([...new Set([...existing.product_ids, ...(state?.productIds ?? [])])]),
         state?.settledCheckoutAttempts.some(
           (attempt) =>
-            attempt.attemptId === existing.rows[0]!.checkout_attempt_id &&
-            attempt.productId === existing.rows[0]!.checkout_product_id,
+            attempt.attemptId === existing.checkout_attempt_id &&
+            attempt.productId === existing.checkout_product_id,
         ) ?? false,
         checkedAt,
       ],
@@ -176,7 +254,96 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     if (!rows[0]) throw new BillingError(409, "This account is being deleted");
     return rows[0];
   }
-  function assertAvailable(row: Row) {
+  /**
+   * The stored authorization, read without a transaction or lock. Always one
+   * row, so the erasure fence is seen before the ledger row exists. This is
+   * the statement every authorization poll runs, so it returns only what the
+   * reuse decision needs; `detail` adds the scope a refresh is requested for.
+   */
+  async function readProbe<T extends Probe>(userId: string, detail: string): Promise<T> {
+    const { rows } = await pool.query<T>(
+      `SELECT b.user_id IS NOT NULL AS present,
+        b.access_granted, b.checked_at, b.valid_until, b.deleted_at,${detail}
+        EXISTS(SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL) AS pending_webhook,
+        EXISTS(SELECT 1 FROM account_deletions WHERE user_id=$1) AS deleting
+      FROM (SELECT $1::text AS user_id) AS u LEFT JOIN billing_accounts AS b ON b.user_id=u.user_id`,
+      [userId],
+    );
+    return rows[0]!;
+  }
+  const probe = (userId: string) => readProbe<Probe>(userId, "");
+  const probeLedger = (userId: string) =>
+    readProbe<LedgerProbe>(userId, " b.product_ids, b.checkout_attempt_id, b.checkout_product_id,");
+  /**
+   * Reconciles without holding a pooled connection, transaction or lock while
+   * the provider answers: read the ledger, ask the provider, then lock and
+   * write only if nothing the snapshot depends on changed meanwhile. A ledger
+   * that did change (a concurrent checkout, webhook flush or erasure) is
+   * re-decided under the lock exactly as before, provider call included.
+   * `allowReuse` is the authorization path's 30 s reuse; the full status
+   * read always reconciles.
+   */
+  async function refresh(userId: string, before: LedgerProbe, allowReuse: boolean): Promise<Row> {
+    const decideLocked = async (client: pg.PoolClient, row: Row) => {
+      assertAvailable(row);
+      if (allowReuse && isAccessReusable(row, Date.now())) {
+        const pending = await client.query(
+          "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
+          [userId],
+        );
+        if (pending.rows.length === 0) return row;
+      }
+      // A failed refresh cannot extend an old authorization lease.
+      return reconcile(client, userId);
+    };
+    // Erasure answers from the lock without asking the provider, as before.
+    if (before.deleted_at || before.deleting) return withAccount(userId, decideLocked);
+    const state = await provider.state(userId, before.product_ids ?? []);
+    // The lease evaluator and its successful check use the same API clock.
+    const checkedAt = new Date();
+    return withAccount(userId, async (client, row) => {
+      assertAvailable(row);
+      return isUnchangedSince(row, before)
+        ? applySnapshot(client, userId, row, state, checkedAt)
+        : decideLocked(client, row);
+    });
+  }
+  /**
+   * Per-user, in-process queue for refreshes. Concurrent requests for one
+   * user used to queue on the advisory lock while each held a pooled
+   * connection; they now queue here and take a connection only for their own
+   * statements. The advisory lock still orders writers across processes.
+   */
+  const refreshQueue = new Map<string, Promise<void>>();
+  async function oneAtATime<T>(userId: string, run: () => Promise<T>): Promise<T> {
+    const previous = refreshQueue.get(userId);
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    refreshQueue.set(userId, turn);
+    try {
+      if (previous) await previous;
+      return await run();
+    } finally {
+      release();
+      if (refreshQueue.get(userId) === turn) refreshQueue.delete(userId);
+    }
+  }
+  /**
+   * The locked ledger action for callers other than `refresh` (webhook flush,
+   * checkout, portal, erasure cleanup), queued in process like a refresh.
+   * They still call the provider under the lock, so a concurrent authorization
+   * check for the same user waits here instead of holding a pooled connection
+   * on the advisory lock.
+   */
+  function queuedAccount<T>(
+    userId: string,
+    action: (client: pg.PoolClient, row: Row) => Promise<T>,
+  ): Promise<T> {
+    return oneAtATime(userId, () => withAccount(userId, action));
+  }
+  function assertAvailable(row: Pick<Row, "deleted_at">) {
     if (row.deleted_at) throw new BillingError(409, "This account is being deleted");
   }
   return {
@@ -187,36 +354,32 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         if (error instanceof BillingCatalogUnavailableError) return [];
         throw error;
       });
-      return withAccount(userId, async (client, row) => {
-        assertAvailable(row);
-        return serialize(await reconcile(client, userId), plans, provider.environment);
-      });
+      return oneAtATime(userId, async () =>
+        serialize(
+          await refresh(userId, await probeLedger(userId), false),
+          plans,
+          provider.environment,
+        ),
+      );
     },
-    async access(
-      userId: string,
-    ): Promise<Pick<AccountBillingStatus, "available" | "access" | "checkedAt" | "validUntil">> {
-      return withAccount(userId, async (client, row) => {
-        assertAvailable(row);
-        const now = Date.now();
-        const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
-        let current = row;
-        let reusable =
-          age >= 0 && age <= 30_000 && (!row.valid_until || row.valid_until.getTime() > now);
-        if (reusable) {
-          const pending = await client.query(
-            "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
-            [userId],
-          );
-          reusable = pending.rows.length === 0;
-        }
-        // A failed refresh cannot extend an old authorization lease.
-        if (!reusable) current = await reconcile(client, userId);
-        return {
-          available: true,
-          access: current.access_granted ? "granted" : "none",
-          checkedAt: current.checked_at?.toISOString() ?? null,
-          validUntil: current.valid_until?.toISOString() ?? null,
-        };
+    async access(userId: string): Promise<BillingAccess> {
+      // Authorization needs no customer, product or checkout payload. The
+      // common case — a recent, unexpired grant with no pending webhook on a
+      // live account — is answered by one read-only statement: no transaction,
+      // lock or write. The erasure fence is read from account_deletions too,
+      // because the locked path's upsert is what copies it into deleted_at.
+      await initialize();
+      const stored = await probe(userId);
+      if (isProbeReusable(stored, Date.now())) return serializeAccess(stored);
+      // Anything else re-decides under the same locks, tombstone check and
+      // webhook freshness as the full ledger read.
+      return oneAtATime(userId, async () => {
+        // Read again with the refresh's scope. A caller that queued behind
+        // another refresh sees its result here, as it did when it waited on
+        // the row lock.
+        const current = await probeLedger(userId);
+        if (isProbeReusable(current, Date.now())) return serializeAccess(current);
+        return serializeAccess(await refresh(userId, current, true));
       });
     },
     /**
@@ -245,7 +408,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     ): Promise<AccountBillingRedirect> {
       await initialize();
       await provider.plans();
-      const prepared = await withAccount(userId, async (client, row) => {
+      const prepared = await queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (current.has_subscription || current.access_granted)
@@ -316,7 +479,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         if (!(error instanceof BillingCheckoutNotCreatedError)) throw error;
         // A definitive schema refusal cannot have created a session. Clear only
         // this request's intent; a concurrently recovered/newer one remains fenced.
-        await withAccount(userId, async (client) => {
+        await queuedAccount(userId, async (client) => {
           await client.query(
             "UPDATE billing_accounts SET checkout_id=NULL,checkout_attempt_id=NULL,checkout_product_id=NULL,checkout_interval=NULL,checkout_url=NULL,checkout_expires_at=NULL WHERE user_id=$1 AND checkout_attempt_id=$2",
             [userId, prepared.attemptId],
@@ -327,7 +490,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           "The checkout could not validate your account details. Check your account information before trying again",
         );
       }
-      return withAccount(userId, async (client, row) => {
+      return queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         if (row.checkout_attempt_id !== prepared.attemptId)
           throw new BillingError(409, "Billing changed. Refresh the subscription status");
@@ -339,7 +502,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       });
     },
     async portal(userId: string): Promise<AccountBillingRedirect> {
-      return withAccount(userId, async (client, row) => {
+      return queuedAccount(userId, async (client, row) => {
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (!current.customer_id)
@@ -378,7 +541,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       );
       for (const { user_id: userId } of rows) {
         try {
-          await withAccount(userId, async (client, row) => {
+          await queuedAccount(userId, async (client, row) => {
             const pending = await client.query<{ event_id: string }>(
               "SELECT event_id FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL AND next_attempt_at <= now() LIMIT 100 FOR UPDATE",
               [userId],
@@ -404,7 +567,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       );
     },
     async cleanupDeletedAccount(userId: string) {
-      await withAccount(userId, async (client, row) => {
+      await queuedAccount(userId, async (client, row) => {
         if (!row.deleted_at) throw new BillingError(409, "Account erasure was not requested");
         if (row.checkout_attempt_id) {
           if (!row.checkout_product_id)

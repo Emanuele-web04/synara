@@ -4,6 +4,7 @@ import { ComputerPicker, useWorkspaceComputers } from "./hosts/ComputerPicker";
 import { showExecutionFolderPicker } from "../lib/hosts/ExecutionFolderPicker";
 import { readWorkspaceSessions } from "../lib/hosts/workspaceSessions";
 import { workspaceRoute } from "../lib/hosts/workspaceFrame";
+import { useRemoteProjectSpacesStore } from "../remoteProjectSpacesStore";
 // FILE: CreateProjectDialog.tsx
 // Purpose: Single entry point for adding a project — typed path, source folders
 //          (drag/drop or native browse; extra folders make a multi-folder project),
@@ -390,7 +391,7 @@ export function CreateProjectDialog(props: {
       } else if (remote) {
         const navigation = remoteSession?.navigation;
         if (!navigation) throw new Error("This computer is no longer connected.");
-        const route = await navigation.createProject({
+        const { projectId, path } = await navigation.createProject({
           name: name.trim(),
           workspaceRoot: trimmedPath,
           additionalFolders,
@@ -402,7 +403,13 @@ export function CreateProjectDialog(props: {
           )
         )
           throw new Error("The connection changed. Reconnect to view the project.");
-        navigate(workspaceRoute(computerId, route));
+        if (spaceId !== null) {
+          // Spaces belong to the controlling computer, even when the project lives elsewhere.
+          useRemoteProjectSpacesStore
+            .getState()
+            .assignSpace({ environmentId: computerId, projectId }, spaceId);
+        }
+        navigate(workspaceRoute(computerId, path));
       } else {
         await props.onSubmit(
           {

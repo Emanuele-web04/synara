@@ -309,6 +309,52 @@ it("rejects invalid enums and out-of-range counters before they enter the queue"
   analytics.dispose();
 });
 
+it("sends a turn failure category and HTTP status only for turns that ended badly", async () => {
+  const homeDir = makeRoot();
+  const fetcher = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
+  );
+  const analytics = createPrimaryAnalytics({
+    homeDir,
+    channel: "stable",
+    appVersion: "1.0.0",
+    platform: "darwin",
+    fetcher,
+  });
+  analytics.setEnabled(true);
+  // Unknown categories, out-of-range statuses, a status without a category, and a
+  // category on a successful turn never enter the queue.
+  analytics.track({ event: "turn.completed", outcome: "failed", failure: "invented" } as never);
+  analytics.track({
+    event: "turn.completed",
+    outcome: "failed",
+    failure: "edge_blocked",
+    httpStatus: 700,
+  });
+  analytics.track({ event: "turn.completed", outcome: "failed", httpStatus: 403 });
+  analytics.track({ event: "turn.completed", outcome: "succeeded", failure: "auth" });
+  analytics.track({ event: "chat.request", outcome: "failed", failure: "auth" });
+  await analytics.flush();
+  expect(fetcher).not.toHaveBeenCalled();
+  analytics.track({
+    event: "turn.completed",
+    outcome: "failed",
+    provider: "claude",
+    failure: "edge_blocked",
+    httpStatus: 403,
+  });
+  analytics.track({ event: "turn.completed", outcome: "cancelled", failure: "network" });
+  await analytics.flush();
+  const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as {
+    events: Array<Record<string, unknown>>;
+  };
+  expect(body.events).toHaveLength(2);
+  expect(body.events[0]).toMatchObject({ failure: "edge_blocked", httpStatus: 403 });
+  expect(body.events[1]).toMatchObject({ outcome: "cancelled", failure: "network" });
+  expect(body.events[1]).not.toHaveProperty("httpStatus");
+  analytics.dispose();
+});
+
 it("aborts an in-flight send immediately when consent is withdrawn", async () => {
   const homeDir = makeRoot();
   const request = { signal: null as AbortSignal | null };

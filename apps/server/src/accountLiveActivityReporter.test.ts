@@ -10,6 +10,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { writeAccountCredentials } from "./accountAuth";
 import { generateAndPersistHostIdentity } from "./hostIdentity";
 import { createAccountLiveActivityReporter } from "./accountLiveActivityReporter";
+import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
 
 vi.mock("./remoteFeaturePolicy", () => ({ accountLiveActivityEnabled: () => true }));
 
@@ -295,3 +296,249 @@ it.each(recoveryCases)(
     }
   },
 );
+
+/** Real time for file I/O while the reporter's own timers stay fake. */
+async function waitForIo(ms = 50) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function cadenceFixture() {
+  const home = await mkdtemp(join(tmpdir(), "synara-activity-cadence-"));
+  const identityPath = join(home, "host-identity.json");
+  await generateAndPersistHostIdentity(identityPath);
+  await writeAccountCredentials(home, {
+    accountUrl: "https://account.example.test",
+    workosClientId: "test",
+    workosApiUrl: "https://identity.example.test",
+    userId: "user",
+    organizationId: "org",
+    hostId: "00000000-0000-4000-8000-000000000001",
+    hostOwnerUserId: "user",
+    hostKeyGeneration: 1,
+    accessToken: "test-access",
+    refreshToken: "test-refresh",
+  });
+  return { home, identityPath };
+}
+
+it("asks for watches only once remote access was ever set up on this host", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () => Response.json({ turns: [] }));
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  let setUp = false;
+  const hasIdentity = vi.fn(() => Effect.succeed(setUp));
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    completionPreviewTrust: {
+      remoteTrust: { hasIdentity } as unknown as RemoteDeviceTrustRepositoryShape,
+      tlsIdentityPath: join(home, "missing-root.json"),
+    },
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waitForIo();
+    expect(hasIdentity).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+    // The first approval is noticed on the next 15 s cycle, as an empty watch list is today.
+    setUp = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await waitForIo();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+/** A stand-in for the session registry: `connect` opens a device session. */
+function remoteSessionsFixture() {
+  const listeners = new Set<() => void>();
+  let open = 0;
+  return {
+    remoteSessions: {
+      open: () => open > 0,
+      onOpened: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    connect: () => {
+      open++;
+      for (const listener of listeners) listener();
+    },
+    disconnect: () => {
+      open--;
+    },
+  };
+}
+
+it("backs off refused reads and reads again whenever a device connects", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () =>
+    Response.json({ error: "not_host_owner", message: "Refused" }, { status: 403 }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const devices = remoteSessionsFixture();
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    remoteSessions: devices.remoteSessions,
+  });
+  const advance = async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    await waitForIo();
+  };
+  try {
+    await advance(1_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // One minute after the first refusal, as before; then two.
+    await advance(59_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await advance(1_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advance(119_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advance(1_000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    // A device connecting means access may be back: read within the watched
+    // cadence of the last read, not in four minutes.
+    devices.connect();
+    await advance(5_000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    // Still refused: the backoff continues while that device stays connected...
+    await advance(60_000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    // ...and a second device connecting wakes it again.
+    devices.connect();
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(5);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("reads the watch list while devices connect and, after a grace window, once a minute", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () => Response.json({ turns: [] }));
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const devices = remoteSessionsFixture();
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    remoteSessions: devices.remoteSessions,
+  });
+  // Small steps: each read finishes real file I/O before it schedules the next.
+  const advance = async (ms: number) => {
+    for (let left = ms; left >= 0; left -= 5_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(left, 5_000));
+      await waitForIo();
+      if (left <= 5_000) break;
+    }
+  };
+  try {
+    await advance(1_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // No device has connected: the next read is a minute away, still inside
+    // the account's 90 s first-report window for a watch registered meanwhile.
+    await advance(30_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    devices.connect();
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advance(15_000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    devices.disconnect();
+    // Within the grace window the 15 s cadence continues.
+    await advance(9 * 60_000);
+    const atGraceEnd = fetch.mock.calls.length;
+    expect(atGraceEnd).toBeGreaterThanOrEqual(3 + 36);
+    await advance(2 * 60_000);
+    const settled = fetch.mock.calls.length;
+    await advance(3 * 60_000);
+    expect(fetch.mock.calls.length - settled).toBe(3);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("reports a watched turn when it changes and otherwise as a heartbeat inside the API window", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const puts: unknown[] = [];
+  const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      puts.push(JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    }
+    return Response.json({ turns: [{ threadId: "watched", turnId: "turn-1" }] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+            VALUES ('watched','turn-1','running','2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]')`;
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+          vi.spyOn(Math, "random").mockReturnValue(0.5);
+          const reporter = createAccountLiveActivityReporter({
+            baseDir: home,
+            hostIdentityPath: identityPath,
+            sql,
+          });
+          const advance = (ms: number) =>
+            Effect.promise(async () => {
+              for (let left = ms; left > 0; left -= 5_000) {
+                await vi.advanceTimersByTimeAsync(Math.min(left, 5_000));
+                await waitForIo(100);
+              }
+            });
+          try {
+            yield* advance(1_000);
+            expect(puts).toHaveLength(1);
+            // Unchanged for 25 s: read every 5 s, nothing sent.
+            yield* advance(25_000);
+            expect(puts).toHaveLength(1);
+            // The heartbeat keeps the host fresh well inside the 90 s staleness window.
+            yield* advance(5_000);
+            expect(puts).toHaveLength(2);
+            // A change is sent on the next read.
+            yield* sql`UPDATE projection_turns SET state='completed' WHERE turn_id='turn-1'`;
+            yield* advance(5_000);
+            expect(puts).toHaveLength(3);
+            expect(puts[2]).toMatchObject({ turns: [{ turnId: "turn-1", state: "ready" }] });
+          } finally {
+            reporter.stop();
+            vi.restoreAllMocks();
+            vi.useRealTimers();
+          }
+        }).pipe(Effect.provide(SqlitePersistenceMemory.pipe(Layer.provide(NodeServices.layer)))),
+      ),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});

@@ -144,6 +144,13 @@ When enabled, fixed events record app readiness, selected feature opens, pairing
 connection/reconnection outcomes, chat request acknowledgements and startup
 duration. The desktop also observes live terminal turn activities; available
 usage counters are included without model names. Missing counters stay unknown.
+A turn that failed, or was interrupted by a provider error, also carries one fixed
+`failure` category derived from the provider's error code (for example
+`edge_blocked` for a Cloudflare 403 page, `auth`, `rate_limit`, `usage_limit`,
+`overloaded`, `server_error`, `network`) and, when the provider reports it, the
+numeric HTTP status. A cancelled turn without a provider error is a user stop and
+has no category. Error messages never leave the app; the receiver rejects any
+category outside the fixed list and a status without a category.
 These observations are not complete host execution totals: closed clients,
 history and native completion events are not included. They are not billing data.
 
@@ -174,7 +181,11 @@ discards its unsent telemetry before replay. Consent and local workspace history
 are preserved.
 
 Release dependency: deploy additive migration `0010_product_host_usage.sql` and
-the receiving Worker before shipping the host-usage client. `/v1/crash` remains
+the receiving Worker before shipping the host-usage client. Apply additive migration
+`0014_product_turn_failures.sql` before deploying the Worker that writes turn
+failure categories, applying only that file as described in
+[the analytics README](../apps/analytics/README.md#deployment); clients may ship first
+because older Workers drop the unknown fields. `/v1/crash` remains
 retired with HTTP 410 in every flavor. `/v1/events` accepts Beta and
 Remote diagnostics; Remote events follow the sharing switch.
 

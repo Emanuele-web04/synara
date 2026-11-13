@@ -7,6 +7,7 @@ import type { AvatarStorage } from "./avatarStorage";
 import * as schema from "./db/schema";
 import type { AccountIdentityVerifier } from "./identity/interfaces";
 import { writeRevocationEvents } from "./identity/revocationLog";
+import { invalidateUserCache } from "./identity/userCache";
 
 export function createAccountDeletionService(options: {
   db: NodePgDatabase<typeof schema>;
@@ -23,6 +24,29 @@ export function createAccountDeletionService(options: {
       .where(eq(schema.accountDeletions.userId, userId))
       .limit(1);
     return row !== undefined;
+  }
+
+  /**
+   * The access fence every authenticated request passes: true when this
+   * account session was revoked (the device registry's tombstone) or the
+   * account is being erased (this service's). One statement, so the check
+   * costs one database round trip; a database error propagates and fails the
+   * request closed as a server fault, never as a discarded session.
+   */
+  async function isSessionFenced(userId: string, sessionId: string): Promise<boolean> {
+    const sessions = schema.deviceAccountSessions;
+    const { rows } = await db.execute<{ fenced: boolean }>(
+      sql`SELECT EXISTS (
+          SELECT 1 FROM ${sessions}
+          WHERE ${sessions.userId} = ${userId}
+            AND ${sessions.sessionId} = ${sessionId}
+            AND ${sessions.revokedAt} IS NOT NULL
+        ) OR EXISTS (
+          SELECT 1 FROM ${schema.accountDeletions}
+          WHERE ${schema.accountDeletions.userId} = ${userId}
+        ) AS fenced`,
+    );
+    return rows[0]!.fenced;
   }
 
   // Persist the intent before acknowledging it. Public profiles and new API
@@ -116,6 +140,7 @@ export function createAccountDeletionService(options: {
       .where(eq(schema.accountDeletions.userId, userId));
     if (!intent?.identityDeletedAt) {
       await options.verifier.deleteUser!(userId);
+      invalidateUserCache(userId);
       await db
         .update(schema.accountDeletions)
         .set({ identityDeletedAt: new Date() })
@@ -229,6 +254,12 @@ export function createAccountDeletionService(options: {
       );
   }
 
-  return { isDeleting, request, flush, supported: options.verifier.deleteUser !== undefined };
+  return {
+    isDeleting,
+    isSessionFenced,
+    request,
+    flush,
+    supported: options.verifier.deleteUser !== undefined,
+  };
 }
 export type AccountDeletionService = ReturnType<typeof createAccountDeletionService>;

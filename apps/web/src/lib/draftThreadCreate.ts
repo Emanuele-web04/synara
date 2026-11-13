@@ -10,12 +10,12 @@ import type {
   ModelSelection,
   ProjectId,
   ProviderInteractionMode,
-  ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 
+import type { NewChatDefault } from "../appSettings";
 import { composerDraftsMatchForCleanup } from "../composerDraftDomain";
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
 import {
@@ -74,7 +74,7 @@ export function createDraftThread(input: DraftThreadInput): ThreadId {
  */
 export async function createAndDispatchDraftThread(
   input: DraftThreadInput & {
-    defaultProvider: ProviderKind;
+    newChatDefault: NewChatDefault;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
     providerInstances?: ReadonlyArray<DraftDispatchProviderInstance>;
@@ -103,7 +103,7 @@ export async function createAndDispatchDraftThread(
     threadId,
     projectId: input.projectId,
     thread: null,
-    defaultProvider: input.defaultProvider,
+    newChatDefault: input.newChatDefault,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
     providerInstances: input.providerInstances,

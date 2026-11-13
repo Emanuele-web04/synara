@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   claudeUsageLimitWindows,
   codexErrorCode,
+  codexErrorHttpStatus,
   codexUsageLimitWindows,
   isCodexUsageLimitError,
   usageLimitResetAt,
@@ -281,5 +282,15 @@ describe("provider quota evidence", () => {
     expect(codexErrorCode({ codex_error_info: { serverOverloaded: {} } })).toBe(
       "server_overloaded",
     );
+  });
+
+  it("reads the HTTP status only from a Codex data variant", () => {
+    expect(
+      codexErrorHttpStatus({ codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } } }),
+    ).toBe(403);
+    expect(codexErrorHttpStatus({ codexErrorInfo: "serverOverloaded" })).toBeUndefined();
+    expect(
+      codexErrorHttpStatus({ codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 42 } } }),
+    ).toBeUndefined();
   });
 });

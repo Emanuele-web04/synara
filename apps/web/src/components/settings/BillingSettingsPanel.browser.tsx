@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { BillingSettingsPanel, SynaraPlanLink } from "./BillingSettingsPanel";
+import { BillingSettingsPanel } from "./BillingSettingsPanel";
 import { UsageSettingsPanel } from "./UsageSettingsPanel";
 
 const fixture = vi.hoisted(() => ({
@@ -277,33 +277,6 @@ describe("Synara Alto settings", () => {
     fixture.billing.mockResolvedValue({ ...disabled, environment: "production", available: true });
     await render(panel(new QueryClient()));
     await expect.element(page.getByText("Free", { exact: true })).toBeVisible();
-  });
-});
-
-describe("SynaraPlanLink", () => {
-  function link(client: QueryClient) {
-    return (
-      <QueryClientProvider client={client}>
-        <SynaraPlanLink />
-      </QueryClientProvider>
-    );
-  }
-
-  it("names the plan and opens it in Usage & limits", async () => {
-    fixture.billing.mockResolvedValue({ ...disabled, environment: "production", available: true });
-    await render(link(new QueryClient()));
-    await page.getByRole("button", { name: "Free plan", exact: true }).click();
-    expect(fixture.navigate).toHaveBeenCalledWith({
-      to: "/settings",
-      search: { section: "usage", target: "settings-synara-plan" },
-    });
-  });
-
-  it("stays hidden while signed out", async () => {
-    fixture.status = { state: "signed-out" };
-    const screen = await render(link(new QueryClient()));
-    expect(screen.container.textContent).toBe("");
-    expect(fixture.billing).not.toHaveBeenCalled();
   });
 });
 

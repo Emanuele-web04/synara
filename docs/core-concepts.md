@@ -289,6 +289,9 @@ Thread runtime errors appear above the transcript. Use **Show details** to read 
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
+A Stop that was still being delivered when the server exited does not block the thread: the
+provider session it was sent to belonged to that server process, so the next start settles the
+Stop without resending it and clears a block an earlier version left for that reason.
 
 Messages queued above the composer while a turn runs are sent one by one after it completes.
 If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it

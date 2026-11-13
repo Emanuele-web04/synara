@@ -97,7 +97,20 @@ with `no-store`, independently of login. Its persistent hint is scoped to that
 exact account authority and survives logout and host unlink. A policy for a
 different authority cannot clear a known paid policy. Policy discovery never
 proves that the current user has paid; a fresh authenticated authorization lease
-must establish that separately.
+must establish that separately. Every authenticated host authorization snapshot
+carries the same `remoteBillingEnforced` flag; the host adopts it as a policy read
+(a `false` requested before a newer `true` is discarded), so a linked host with
+snapshots flowing makes no `/instance` reads. Otherwise the host reads it every
+fifteen seconds (jittered shorter) while a remote session or legacy remote socket
+is open, once at startup, and before any decision the policy can change whenever
+the last read is older than fifteen seconds. A loopback server without an auth
+token keeps the fifteen-second cadence, because the policy decides each of its
+unauthenticated local requests.
+
+On Cloudflare the `/instance` body is answered by the Durable Object from the
+last `200` the running API process returned, without a request to the container.
+It is kept per runtime-configuration fingerprint and dropped whenever the
+container starts, so it is exactly as fresh as the process it describes.
 
 | Setting                                 | Runs on               | Default and rollout use                                                                                                                                                                            |
 | --------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -245,6 +258,12 @@ seconds; explicit status reads reconcile immediately. Provider outages leave
 events retryable without holding up normal host/tunnel housekeeping. Remote
 access checks use a bounded 30-second cache, bypass pending webhook work and
 expired access leases, and do not convert provider failures into stale grants.
+A grant checked within those 30 seconds, with an unexpired lease, no pending
+webhook and no erasure request, is answered by one read-only statement; anything
+else takes the locked path, which re-checks under the lock and reconciles with
+Polar when the grant is not reusable. The window stays at 30 seconds because
+the access policy refuses statuses older than 60 seconds, so a longer reuse
+would answer `billing_unavailable` rather than save a Polar call.
 
 Checkout creation commits a durable attempt ID and chosen product before sending
 Polar a POST. A timeout is **uncertain**, not proof that no checkout was created.
@@ -413,16 +432,24 @@ backs both:
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
 
-Refresh admission failures use `429 refresh_not_attempted` only when this API
-rejects the request before sending the refresh token to the identity provider.
-That response includes `Retry-After: 60`; desktop keeps the token available for
-the next request. Upstream `429 rate_limited`, unknown outcomes and lost API
-responses remain distinct: they do not prove that a token was unused.
-Only `401 unauthorized` from the refresh endpoint proves a terminal refusal;
-an unrecognized response preserves the credential and its uncertain-operation
-marker. Identity metadata or verification-key outages surface as server failures,
-so they do not tell desktop clients to renew a valid session. Invalid or expired
-access tokens still receive `401 unauthorized`.
+Refresh follows WorkOS's
+[session-resilience contract](https://workos.com/docs/authkit/session-resilience):
+refresh tokens rotate, a replay of the just-used token within 30 seconds returns
+the same rotated pair, and a token whose exchange never reached WorkOS is still
+valid. Presenting the same token again is therefore always the recovery, and
+only a terminal refusal ends a session.
+
+Refresh admission failures use `429 refresh_not_attempted` only when the refresh
+token provably never reached the identity provider: this API's own per-IP limiter
+(`Retry-After: 60`), or the Cloudflare Worker when the API process could not be
+configured or started before the request was forwarded (`Retry-After: 5`). A
+failure after forwarding stays the generic `503`, since its outcome is unknown.
+Upstream `429 rate_limited`, timeouts, other unknown outcomes and lost API
+responses remain distinct: they do not prove that a token was unused. Only
+`401 unauthorized` from the refresh endpoint proves a terminal refusal. Identity
+metadata or verification-key outages surface as server failures, so they do not
+tell desktop clients to renew a valid session. Invalid or expired access tokens
+still receive `401 unauthorized`.
 
 The desktop renews access tokens for session failures. Authenticated permission
 denials and device-proof failures pass through without rotating the session.
@@ -430,14 +457,35 @@ Billing stays bound to the captured account and workspace. Remote grants and
 Host Secrets operations also verify the registered device identity before using
 credentials or applying a result.
 
-The WorkOS adapter retries a transient refresh failure once, with backoff and
-a total deadline of at most 25 seconds from the first attempt. The configured
-grant timeout can shorten that deadline. This uses WorkOS's documented
-[30-second replay grace period](https://workos.com/docs/authkit/session-resilience)
-for the exact same refresh request; revoked or expired grants are not retried.
-OTP and PKCE grants retain their existing behavior. Account-status failures are
-request-scoped RPC errors, so a temporary renewal fault does not fail unrelated
-requests on the connection.
+When a renewal fails without a terminal refusal, the desktop keeps its token pair
+and retries the same refresh token under the credential-file lock. Each request
+has a 26-second deadline. Up to three replays can start within 28 seconds of the
+first request, with jittered backoff of 1s, 2s and 4s. This leaves time to replay
+when the first response stalls after WorkOS rotates the token.
+Transport errors, timeouts, `429` and `5xx` are retried that way; `refresh_not_attempted`
+and other refusals are not. After a failed series, later renewals of that token
+wait out a cooldown that starts at 5 seconds and doubles to a one-minute cap, so
+background requests fail fast instead of each retrying. If that series failed
+because the account service was unreachable, a rejection received during that
+cooldown can trigger one early renewal. The failure reaches the
+caller as itself, so account status reports an error rather than signing out.
+Files written by older versions may carry a `refreshPendingTokenHash` marker;
+it is ignored and dropped with the next rotation. Every way the desktop server
+drops, distrusts or fails to renew a session writes one `[account] session <reason>`
+log line (`refresh_rejected`, `workspace_refused`, `identity_fence`,
+`status_unauthorized`, `refresh_failed`) with non-secret context only — HTTP
+status, account error code, fence and field names, counts — and repeats of the
+same line are suppressed for ten minutes.
+
+The WorkOS adapter retries a transient refresh failure (`408`, `429`, `5xx`,
+including its own timeouts and interrupted responses) with the exact same request,
+backing off from 250ms and doubling to a 4-second cap with jitter. Every attempt
+stays within a 25-second budget from the first, inside WorkOS's 30-second replay
+grace; the configured grant timeout can shorten that budget, and the adapter
+stops once the budget cannot fit another attempt. Revoked or expired grants
+(`invalid_grant`) are not retried. OTP and PKCE grants retain their existing
+behavior. Account-status failures are request-scoped RPC errors, so a temporary
+renewal fault does not fail unrelated requests on the connection.
 
 ## Hosts are account entities shared through organizations
 
@@ -495,7 +543,22 @@ makes a revoked membership take effect without anything being purged.
 
 Membership lists are cached per process for 60 seconds, so a burst of requests
 costs one round trip while an added or removed member still takes effect on its
-own.
+own. The WorkOS user behind a session is cached the same way, and read once per
+request. Routine requests (`/me`, host listing, usage push and summary, member count)
+accept both caches, and the read-only watch poll (`GET /hosts/:id/live-activities`)
+accepts the membership cache. When WorkOS is healthy, membership or user
+changes reach these routes within 60 seconds. `GET /hosts/:id/authorization`
+reads membership live on every poll, because the host pauses itself on its
+`ownerInOrg` answer. When a WorkOS user lookup fails with anything but a 404, a
+routine request can reuse the last known user for up to 10 minutes while the
+membership check still passes. A 404 during a cache lookup invalidates the user
+and any pending shared lookup. Concurrent cold lookups for one user share one
+call, and entries past that window are pruned. Creating a personal workspace
+requires a live user lookup. Routes that require fresh organization authorization
+(including profile and workspace writes, host linking and grants, pairing,
+tunnels, and host publication) resolve membership live and fetch the user live
+for bearer sessions. Every signed-in request checks the durable account deletion
+fence first.
 
 ## What WorkOS owning identity means in practice
 
@@ -771,6 +834,23 @@ Provider references: [connections](https://supabase.com/docs/guides/database/con
 [Data API settings](https://supabase.com/docs/guides/api/securing-your-api),
 [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
+Host polling keeps its authorization and notification cadence. To limit database
+egress, proof verification projects only identity and heartbeat fields under the
+existing row lock, and skips the heartbeat UPDATE while that locked timestamp is
+less than a minute old. Authorization reads all three bounded revocation sources
+in one statement, retaining pending-delivery precedence on equal timestamps and
+requiring acknowledgements even beyond ordinary event retention. The
+authorization snapshot reads the owner's membership live; the watch poll takes
+it from the 60-second cache described above. Billing access projects only entitlement fields: a grant
+reconciled within 30 seconds, with no pending webhook or erasure request, is
+read in one statement with no transaction or write, and everything else keeps
+the locked path with its deletion check, pending-webhook check and provider
+freshness limit. Every signed-in (bearer-token) request checks the
+revoked-session and erasure tombstones in one statement.
+Measure PostgreSQL response bytes separately from the provider's billed egress:
+local warm-connection measurements exclude connection setup, TLS/TCP overhead,
+other routes and the production traffic mix.
+
 ## Deploying to Cloudflare
 
 Synara's selected API host is Cloudflare Containers. The public profiles run in
@@ -802,6 +882,51 @@ release step.
 Other platforms work the same way: any host that can run `bun run start` with a
 Postgres URL and a persistent public origin is enough. There is no filesystem
 state — everything lives in Postgres.
+
+## Request cost and measurement
+
+Released desktops poll this API continuously, and the database plan bills by
+egress, so the hot paths are built to make few round trips and to hold no
+connection while a provider answers:
+
+- **Read-only host polls** (`GET /hosts/:id/authorization`,
+  `GET /hosts/:id/live-activities`) verify the host proof with one plain
+  `SELECT`; `last_seen_at` is written at most once a minute. Every route that
+  changes state, signs or issues something keeps the transaction and
+  `FOR UPDATE` on the host row.
+- **Authorization snapshot**: the live membership read and the revocation query
+  run together. Billing is checked after ownership, so a host whose owner left
+  never causes a provider call.
+- **Billing reconcile**: the stored authorization is one read-only statement
+  for 30 seconds. After that the provider is asked first, outside any
+  transaction; the ledger row is then locked and the snapshot written only if
+  the row is unchanged, otherwise it is re-decided under the lock. Concurrent
+  checks for one user queue in the process and share the result. Webhook
+  flush, checkout, portal and erasure cleanup take the same queue; they still
+  call the provider under the lock.
+- **Push delivery** reads membership and billing before the row transaction.
+  Each read is used only within two seconds of its own answer; an older one
+  (a slow sibling read, a wait for a connection) is made again inside the
+  transaction. The send and its bookkeeping stay in the row-locked
+  transaction.
+- **Sweeps**: the five-second push sweep only looks for due deliveries;
+  retention of expired activities runs with the 30-second maintenance sweep.
+- **Pool**: a request waits at most 5 seconds for a connection and then fails
+  as a retryable `500`; idle connections are kept 60 seconds with TCP
+  keep-alive. No statement timeout is set.
+
+`SYNARA_API_PERF=1` turns on request timing (off by default; on Cloudflare,
+set it as a Worker variable, which restarts the container). Each response
+then carries a `Server-Timing` header and the process logs one `[api-perf]`
+JSON line a minute with, per route pattern and status class: count, latency
+p50/p95/max, database round trips and time, pool wait, outbound calls by
+provider, and bytes. Only route patterns, provider labels and numbers are
+recorded.
+
+`bun run scripts/measure-perf.ts public` times unauthenticated endpoints from
+the caller's machine; `bun run scripts/measure-perf.ts tail` aggregates live
+requests per route from `wrangler tail` (needs `wrangler login`). Both are
+read-only.
 
 ## Build and run
 

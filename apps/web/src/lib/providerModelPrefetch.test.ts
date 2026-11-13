@@ -24,6 +24,7 @@ import {
 } from "./providerModelPrefetch";
 import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
+import { newChatDefaultForProvider } from "../appSettings";
 
 const providerDiscoveryQueryKeys = {
   ...rawProviderDiscoveryQueryKeys,
@@ -59,7 +60,6 @@ function makeSettings(
   overrides: Partial<ProviderModelPrefetchSettings> = {},
 ): ProviderModelPrefetchSettings {
   return {
-    defaultProvider: "codex",
     claudeBinaryPath: "",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
@@ -285,6 +285,7 @@ describe("prefetchModelsForNewThread", () => {
 
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       projectCwd: "/tmp/project",
       projectDefaultProvider: "opencode",
     });
@@ -344,6 +345,7 @@ describe("prefetchModelsForNewThread", () => {
 
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       serverSettings: {
         ...DEFAULT_SERVER_SETTINGS,
         providers: {
@@ -373,6 +375,7 @@ describe("prefetchModelsForNewThread", () => {
 
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerOverride: "droid",
       projectCwd: "/tmp/project",
     });
@@ -387,6 +390,7 @@ describe("prefetchModelsForNewThread", () => {
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerOverride: "droid",
       projectCwd: "/tmp/project",
       includeDroid: true,
@@ -413,6 +417,7 @@ describe("prefetchModelsForNewThread — new-thread options key parity", () => {
 
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings({ openCodeBinaryPath: "/bin/opencode" }),
+      newChatDefault: newChatDefaultForProvider("codex"),
       projectCwd: "/project",
       draftWorktreePath: "/old-draft-wt",
       worktreePath: "/prepared-wt",
@@ -437,13 +442,13 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings({
-        defaultProvider: "claudeAgent",
         providerInstances: {
           claudeAgent: { driver: "claudeAgent", enabled: false },
           first_claude: { driver: "claudeAgent", displayName: "A", enabled: true },
           work_claude: { driver: "claudeAgent", displayName: "B", enabled: true },
         },
       }),
+      newChatDefault: newChatDefaultForProvider("claudeAgent"),
       providerStatuses: [
         makeStatus("codex", true),
         { ...makeStatus("claudeAgent", false), enabled: false },
@@ -459,6 +464,38 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     ]);
   });
 
+  it("warms the new-chat default account when nothing else picks the provider", () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+    const settings = makeSettings({
+      providerInstances: {
+        first_claude: { driver: "claudeAgent", displayName: "A", enabled: true },
+        work_claude: { driver: "claudeAgent", displayName: "B", enabled: true },
+      },
+    });
+    const newChatDefault = {
+      defaultProvider: "claudeAgent" as const,
+      defaultProviderInstanceId: "work_claude" as ProviderInstanceId,
+    };
+    prefetchModelsForNewThread(queryClient, { settings, newChatDefault });
+    expect(modelKeysFromCalls(prefetchQuery)[0]?.slice(2, 4)).toEqual([
+      "claudeAgent",
+      "work_claude",
+    ]);
+
+    // A project default decides the provider, so its own account wins.
+    prefetchQuery.mockClear();
+    prefetchModelsForNewThread(queryClient, {
+      settings,
+      newChatDefault,
+      projectDefaultProvider: "claudeAgent",
+    });
+    expect(modelKeysFromCalls(prefetchQuery)[0]?.slice(2, 4)).toEqual([
+      "claudeAgent",
+      "claudeAgent",
+    ]);
+  });
+
   it("skips confirmed-unavailable providers only when reconciled, and mirrors ChatView's preference", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
@@ -466,6 +503,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     // Reconciled + confirmed-unavailable cursor → skipped (9 - 1 = 8).
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerStatuses: availableStatuses(["cursor"]),
       statusesReconciled: true,
       projectCwd: "/tmp/project",
@@ -480,6 +518,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerStatuses: availableStatuses(["cursor"]),
       statusesReconciled: false,
       projectCwd: "/tmp/project",
@@ -490,7 +529,8 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     // Preferred provider unavailable → warm leads with ChatView's swap target (codex).
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
-      settings: makeSettings({ defaultProvider: "cursor" }),
+      settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("cursor"),
       providerStatuses: availableStatuses(["cursor"]),
       statusesReconciled: true,
       projectCwd: "/tmp/project",
@@ -504,6 +544,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       serverSettings: {
         ...DEFAULT_SERVER_SETTINGS,
         providers: {
@@ -525,6 +566,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerOverride: "cursor",
       providerStatuses: availableStatuses(NEW_THREAD_MODEL_PREFETCH_PROVIDERS),
       statusesReconciled: true,
@@ -551,7 +593,11 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       },
     } as unknown as NativeApi);
     const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
-    prefetchModelsForNewThread(client, { settings: makeSettings(), projectCwd: "/tmp/project" });
+    prefetchModelsForNewThread(client, {
+      settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
+      projectCwd: "/tmp/project",
+    });
     await vi.waitFor(() => expect(client.isFetching()).toBe(0));
     expect(listModels).toHaveBeenCalledTimes(9);
     expect(new Set(listModels.mock.calls.map(([input]) => input.provider)).size).toBe(9);
@@ -564,6 +610,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
 
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
       projectCwd: "/tmp/project",
     });
 
@@ -606,6 +653,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings({ droidBinaryPath: "/bin/droid" }),
+      newChatDefault: newChatDefaultForProvider("codex"),
       providerOverride: "droid",
       projectCwd: "/tmp/project",
       includeDroid: true,

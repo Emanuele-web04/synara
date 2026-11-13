@@ -738,19 +738,11 @@ describe("Connections settings", () => {
     expect(CREATE_CALLS()).toHaveLength(2);
   });
 
-  it("persists keep awake through the desktop bridge", async () => {
-    await renderPanel();
-    const toggle = page.getByRole("switch", { name: /Keep this (Mac|computer) awake/ });
-    await expect.element(toggle).not.toBeChecked();
-    await toggle.click();
-    await vi.waitFor(() => expect(keepAwake.setEnabled).toHaveBeenCalledWith(true));
-    await expect.element(toggle).toBeChecked();
-  });
-
-  it("hides keep awake without a desktop bridge", async () => {
-    delete (window as { desktopBridge?: unknown }).desktopBridge;
+  // Keep awake moved to General › Power (KeepAwakeControls.browser.tsx covers it).
+  it("leaves keep awake to General", async () => {
     await renderPanel();
     await expect.element(page.getByText("iOS 27.0.1 iPhone")).toBeVisible();
     await expect.element(page.getByText("Other settings")).not.toBeInTheDocument();
+    expect(page.getByRole("switch", { name: /awake/i }).elements()).toHaveLength(0);
   });
 });

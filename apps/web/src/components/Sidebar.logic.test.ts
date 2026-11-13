@@ -4,6 +4,11 @@ import {
   derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
+  nestAgentCreatedThreadEntries,
+  collectAgentCreatedDescendants,
+  groupAgentCreatedChildren,
+  groupSidebarThreadFamilies,
+  agentCreatedAncestorIds,
   describeAddProjectError,
   excludeHiddenProjectAgentCoordinatorThreads,
   filterSidebarThreadsBySpace,
@@ -1301,6 +1306,27 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       ThreadId.makeUnsafe("thread-4"),
     ]);
   });
+
+  it("keeps the open child and its creators visible past the limit", () => {
+    const entries = [
+      { rowId: "first", depth: 0 },
+      { rowId: "creator", depth: 0 },
+      { rowId: "parent", depth: 1 },
+      { rowId: "sibling", depth: 2 },
+      { rowId: "open-child", depth: 2 },
+    ];
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: "open-child",
+      previewLimit: 1,
+    });
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      "first",
+      "creator",
+      "parent",
+      "open-child",
+    ]);
+  });
 });
 
 describe("getNextVisibleSidebarThreadId", () => {
@@ -2592,5 +2618,144 @@ describe("sortProjectsForSidebar", () => {
       ProjectId.makeUnsafe("project-2"),
       ProjectId.makeUnsafe("project-1"),
     ]);
+  });
+});
+
+describe("nestAgentCreatedThreadEntries", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const mk = (id: string, sourceId?: string) =>
+    makeSidebarThreadSummary({
+      id: tid(id),
+      creationSource: sourceId ? "synara_mcp" : null,
+      sourceThreadId: sourceId ? tid(sourceId) : null,
+    });
+  const ids = (entries: { rowId: string }[]) => entries.map((entry) => entry.rowId);
+
+  it("nests children under their creator, multi-level, in DFS order", () => {
+    const entries = nestAgentCreatedThreadEntries(
+      [mk("c1", "p"), mk("p"), mk("g", "c1"), mk("c2", "p"), mk("other")],
+      new Set(),
+    );
+    expect(ids(entries)).toEqual(["p", "c1", "g", "c2", "other"]);
+    expect(entries.map((entry) => entry.depth)).toEqual([0, 1, 2, 1, 0]);
+    expect(entries[0]?.childCount).toBe(2);
+    expect(entries.map((entry) => entry.isLastChild)).toEqual([
+      undefined,
+      false,
+      true,
+      true,
+      undefined,
+    ]);
+    // g sits under c1, which has a later sibling (c2), so p's stem runs past g.
+    expect(entries[2]?.guideContinues).toEqual([true]);
+  });
+
+  it("keeps a thread top-level when its creator is absent", () => {
+    const entries = nestAgentCreatedThreadEntries([mk("c", "gone")], new Set());
+    expect(entries.map((entry) => entry.depth)).toEqual([0]);
+  });
+
+  it("keeps a child in its own project when its creator is pinned", () => {
+    const parent = makeSidebarThreadSummary({ id: tid("p"), isPinned: true });
+    const child = makeSidebarThreadSummary({
+      id: tid("c"),
+      projectId: ProjectId.makeUnsafe("other-project"),
+      creationSource: "synara_mcp",
+      sourceThreadId: parent.id,
+    });
+    const entries = nestAgentCreatedThreadEntries([parent, child], new Set(), new Set([parent.id]));
+    expect(groupSidebarThreadFamilies(entries).map(ids)).toEqual([["p"], ["c"]]);
+  });
+
+  it("hides every child of a collapsed parent", () => {
+    const hidden = nestAgentCreatedThreadEntries(
+      [mk("p"), mk("c1", "p"), mk("c2", "p")],
+      new Set([tid("p")]),
+    );
+    expect(ids(hidden)).toEqual(["p"]);
+    expect(hidden[0]?.childrenCollapsed).toBe(true);
+  });
+
+  it("detaches a thread from its creator while keeping its own children", () => {
+    const entries = nestAgentCreatedThreadEntries(
+      [mk("p"), mk("c", "p"), mk("g", "c")],
+      new Set(),
+      new Set([tid("c")]),
+    );
+    expect(groupSidebarThreadFamilies(entries).map(ids)).toEqual([["p"], ["c", "g"]]);
+  });
+
+  it("survives cycles", () => {
+    const entries = nestAgentCreatedThreadEntries([mk("a", "b"), mk("b", "a")], new Set());
+    expect(ids(entries).toSorted()).toEqual(["a", "b"]);
+  });
+
+  it("groups each top-level row with its visible descendants", () => {
+    const entries = nestAgentCreatedThreadEntries(
+      [mk("p"), mk("c1", "p"), mk("g", "c1"), mk("solo")],
+      new Set(),
+    );
+    expect(groupSidebarThreadFamilies(entries).map(ids)).toEqual([["p", "c1", "g"], ["solo"]]);
+  });
+
+  it("counts direct agent-created children per creator", () => {
+    const counts = groupAgentCreatedChildren([
+      mk("p"),
+      mk("c1", "p"),
+      mk("c2", "p"),
+      mk("g", "c1"),
+    ]);
+    expect(counts.get(tid("p"))?.map((thread) => thread.id)).toEqual([tid("c1"), tid("c2")]);
+    expect(counts.get(tid("c1"))).toHaveLength(1);
+  });
+
+  it("lists creator ancestors nearest first and stops at cycles", () => {
+    const threads = [mk("p"), mk("c", "p"), mk("g", "c"), mk("x", "y"), mk("y", "x")];
+    expect(agentCreatedAncestorIds(tid("g"), threads)).toEqual([tid("c"), tid("p")]);
+    expect(agentCreatedAncestorIds(tid("x"), threads)).toEqual([tid("y")]);
+  });
+
+  const deriveFor = (
+    threads: SidebarThreadSummary[],
+    extra: { pinned?: string[]; nest?: boolean },
+  ) =>
+    deriveSidebarProjectData({
+      projects: [{ id: ProjectId.makeUnsafe("proj"), cwd: "/x", expanded: true }],
+      sortedSidebarThreadsByProjectId: new Map([[ProjectId.makeUnsafe("proj"), threads]]),
+      pinnedThreadIds: (extra.pinned ?? []).map(tid),
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 10,
+      previewPageSize: 10,
+      nestChildThreads: extra.nest ?? false,
+    }).get(ProjectId.makeUnsafe("proj"));
+
+  it("moves a pinned parent's children out of the project list", () => {
+    const data = deriveFor([mk("p"), mk("c", "p"), mk("other")], { pinned: ["p"], nest: true });
+    expect(ids(data?.visibleEntries ?? [])).toEqual(["other"]);
+  });
+
+  it("leaves project data unchanged when the flag is off", () => {
+    const data = deriveFor([mk("c", "p"), mk("p")], {});
+    expect(data?.orderedProjectThreadIds).toEqual([tid("c"), tid("p")]);
+    expect(data?.visibleEntries.every((entry) => entry.depth === undefined)).toBe(true);
+  });
+});
+
+describe("collectAgentCreatedDescendants", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const mk = (id: string) => ({ id: tid(id) }) as unknown as SidebarThreadSummary;
+
+  it("collects every level, nearest first, and stops at cycles", () => {
+    const childrenByParent = new Map([
+      [tid("p"), [mk("c1"), mk("c2")]],
+      [tid("c1"), [mk("g")]],
+      [tid("g"), [mk("p")]],
+    ]);
+    expect(
+      collectAgentCreatedDescendants(tid("p"), childrenByParent).map((thread) => thread.id),
+    ).toEqual([tid("c1"), tid("c2"), tid("g")]);
+    expect(collectAgentCreatedDescendants(tid("p"), null)).toEqual([]);
   });
 });
