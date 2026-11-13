@@ -5275,6 +5275,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
+    const getSessionAdditionalDirectories: NonNullable<
+      ProviderServiceShape["getSessionAdditionalDirectories"]
+    > = (threadId) =>
+      directory.getBinding(threadId).pipe(
+        Effect.map((bindingOption) => {
+          const binding = Option.getOrUndefined(bindingOption);
+          return binding ? readPersistedAdditionalDirectories(binding.runtimePayload) : undefined;
+        }),
+      );
+
     stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
         if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
@@ -5869,6 +5879,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       getRuntimeSessionStopTarget,
       withRuntimeSessionStopTarget,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       clearSessionResumeCursor,
       listSessions,
       listRetainedSessions,

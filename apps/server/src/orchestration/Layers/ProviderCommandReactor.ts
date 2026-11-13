@@ -2806,8 +2806,24 @@ const make = Effect.gen(function* () {
     const workspaceChanged =
       activeSessionBeforeEnsure !== undefined &&
       providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
-    // An unknown previous set (a session this process did not start) is not proof of an edit.
-    const previousAdditionalDirectories = threadSessionAdditionalDirectories.get(threadId);
+    // A runtime this process recovered or prewarmed is not in the cache, so read the grants
+    // it was launched with from its persisted binding before deciding it can be reused.
+    const previousAdditionalDirectories =
+      threadSessionAdditionalDirectories.get(threadId) ??
+      (activeSessionBeforeEnsure !== undefined && providerService.getSessionAdditionalDirectories
+        ? yield* providerService.getSessionAdditionalDirectories(threadId).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("provider command reactor could not read session folder grants", {
+                threadId,
+                cause,
+              }),
+            ),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined);
+    if (previousAdditionalDirectories !== undefined) {
+      threadSessionAdditionalDirectories.set(threadId, previousAdditionalDirectories);
+    }
     const additionalDirectoriesChanged =
       activeSessionBeforeEnsure !== undefined &&
       previousAdditionalDirectories !== undefined &&
