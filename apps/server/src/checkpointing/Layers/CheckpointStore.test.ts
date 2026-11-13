@@ -39,6 +39,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   throw new Error("Timed out waiting for condition");
 }
 
+// Mocked repositories have no HEAD to record and checkpoints without a recorded
+// HEAD, so captures and diffs keep their pre-trailer command sequence.
+function legacyCheckpointLookup(args: string) {
+  return args === "rev-parse --verify --quiet HEAD^{commit}" || args.startsWith("cat-file commit ")
+    ? Effect.succeed({ code: 1, stdout: "", stderr: "" })
+    : undefined;
+}
+
 describe("CheckpointStoreLive", () => {
   let runtime: ManagedRuntime.ManagedRuntime<CheckpointStore, unknown> | null = null;
 
@@ -74,6 +82,8 @@ describe("CheckpointStoreLive", () => {
       if (args.startsWith("update-ref ")) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -143,6 +153,8 @@ describe("CheckpointStoreLive", () => {
       if (args.startsWith("update-ref ")) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -203,6 +215,8 @@ describe("CheckpointStoreLive", () => {
       if (args.startsWith("update-ref ")) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -272,6 +286,8 @@ describe("CheckpointStoreLive", () => {
       if (args.startsWith("update-ref ")) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -385,6 +401,8 @@ describe("CheckpointStoreLive", () => {
       if (input.args[0] === "apply" && input.args[1] === "--whitespace=nowarn") {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -592,6 +610,8 @@ describe("CheckpointStoreLive", () => {
       if (args === `update-ref -d ${deletableRef}`) {
         return Effect.succeed({ code: 0, stdout: "", stderr: "" });
       }
+      const legacy = legacyCheckpointLookup(args);
+      if (legacy) return legacy;
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
@@ -646,5 +666,206 @@ describe("CheckpointStoreLive", () => {
     );
 
     expect(result).toBe("success");
+  });
+});
+
+const diffedPaths = (diff: string) =>
+  [...diff.matchAll(/^diff --git a\/(.+) b\//gm)].map((match) => match[1]);
+
+describe("CheckpointStoreLive history integration", () => {
+  // Commits dated before the starting checkpoint model history that already
+  // existed (another branch, a remote); undated commits are made during the turn.
+  const existingHistoryDate = "2020-01-01T00:00:00Z";
+  const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
+  const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
+  let cwd = "";
+  let runtime: ManagedRuntime.ManagedRuntime<CheckpointStore, unknown> | null = null;
+
+  const git = (args: string[], options: { readonly existing?: boolean } = {}) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: options.existing
+        ? {
+            ...process.env,
+            GIT_AUTHOR_DATE: existingHistoryDate,
+            GIT_COMMITTER_DATE: existingHistoryDate,
+          }
+        : process.env,
+    });
+  const write = (relativePath: string, contents: string) => {
+    mkdirSync(join(cwd, relativePath, ".."), { recursive: true });
+    writeFileSync(join(cwd, relativePath), contents);
+  };
+  const commitExisting = (message: string) => {
+    git(["add", "-A"]);
+    git(["commit", "-m", message], { existing: true });
+  };
+  const run = <A>(effect: Effect.Effect<A, unknown, CheckpointStore>) => {
+    runtime ??= ManagedRuntime.make(
+      CheckpointStoreLive.pipe(
+        Layer.provide(
+          GitCoreLive.pipe(
+            Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-history-store-" })),
+          ),
+        ),
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    return runtime.runPromise(effect);
+  };
+  const capture = (checkpointRef: CheckpointRef) =>
+    run(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        yield* store.captureCheckpoint({ cwd, checkpointRef });
+      }),
+    );
+  const turnDiff = () =>
+    run(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store.diffCheckpoints({
+          cwd,
+          fromCheckpointRef: fromRef,
+          toCheckpointRef: toRef,
+          ignoreWhitespace: false,
+        });
+      }),
+    );
+
+  // main gains CI files and a shared change; feature diverges from it.
+  const prepareDivergedBranches = () => {
+    cwd = mkdtempSync(join(tmpdir(), "synara-history-integration-"));
+    git(["init", "--initial-branch=main"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "Test User"]);
+    git(["config", "core.autocrlf", "false"]);
+    write("src/app.ts", "app v1\n");
+    write("README.md", "readme v1\n");
+    write("conflict-theirs.txt", "base\n");
+    write("conflict-resolved.txt", "base\n");
+    commitExisting("Initial");
+    git(["switch", "-c", "feature"]);
+    write("src/feature.ts", "feature v1\n");
+    write("conflict-theirs.txt", "feature side\n");
+    write("conflict-resolved.txt", "feature side\n");
+    commitExisting("Feature work");
+    git(["switch", "main"]);
+    write(".github/CI.md", "ci\n");
+    write("README.md", "readme v2\n");
+    write("conflict-theirs.txt", "main side\n");
+    write("conflict-resolved.txt", "main side\n");
+    commitExisting("Main work");
+    git(["switch", "feature"]);
+  };
+
+  afterEach(async () => {
+    await runtime?.dispose();
+    runtime = null;
+    if (cwd) rmSync(cwd, { recursive: true, force: true });
+    cwd = "";
+  });
+
+  it("leaves a merged branch out of the turn diff and undo but keeps the turn's own edits", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    try {
+      git(["merge", "main", "--no-edit"]);
+    } catch {
+      // Expected: both conflicted files need a resolution.
+    }
+    write("conflict-theirs.txt", "main side\n");
+    write("conflict-resolved.txt", "feature side\nmain side\n");
+    git(["add", "-A"]);
+    git(["commit", "--no-edit"]);
+    write("src/app.ts", "app v2\n");
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["conflict-resolved.txt", "src/app.ts"]);
+
+    const mergeCommit = git(["rev-parse", "HEAD"]).trim();
+    await run(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        expect(
+          yield* store.reverseCheckpointDiff({
+            cwd,
+            fromCheckpointRef: fromRef,
+            toCheckpointRef: toRef,
+          }),
+        ).toBe(true);
+      }),
+    );
+    expect(readFileSync(join(cwd, "src", "app.ts"), "utf8")).toBe("app v1\n");
+    expect(readFileSync(join(cwd, "conflict-resolved.txt"), "utf8")).toBe("feature side\n");
+    expect(readFileSync(join(cwd, ".github", "CI.md"), "utf8")).toBe("ci\n");
+    expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("readme v2\n");
+    expect(git(["rev-parse", "HEAD"]).trim()).toBe(mergeCommit);
+  });
+
+  it("leaves out a checked-out branch but keeps uncommitted work it discarded", async () => {
+    prepareDivergedBranches();
+    write("src/feature.ts", "uncommitted\n");
+    await capture(fromRef);
+
+    git(["reset", "--hard", "main"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+  });
+
+  it("filters merged history for a project in a repository subdirectory", async () => {
+    prepareDivergedBranches();
+    const repositoryRoot = cwd;
+    write("packages/web/index.ts", "web v1\n");
+    commitExisting("Add web package");
+    cwd = join(repositoryRoot, "packages", "web");
+    await capture(fromRef);
+
+    cwd = repositoryRoot;
+    try {
+      git(["merge", "main", "--no-edit"]);
+    } catch {
+      // Expected: resolve both conflicts to main's side.
+    }
+    git(["checkout", "--theirs", "--", "conflict-theirs.txt", "conflict-resolved.txt"]);
+    git(["add", "-A"]);
+    git(["commit", "--no-edit"]);
+    write("packages/web/index.ts", "web v2\n");
+    cwd = join(repositoryRoot, "packages", "web");
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["packages/web/index.ts"]);
+    cwd = repositoryRoot;
+  });
+
+  it("keeps commits made during the turn in the turn diff", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    write("src/feature.ts", "feature v2\n");
+    git(["commit", "-am", "Turn work"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+  });
+
+  it("keeps the full diff for checkpoints captured before HEAD was recorded", async () => {
+    prepareDivergedBranches();
+    const legacyCommit = git([
+      "commit-tree",
+      git(["rev-parse", "HEAD^{tree}"]).trim(),
+      "-m",
+      `Synara checkpoint ref=${fromRef}`,
+    ]).trim();
+    git(["update-ref", fromRef, legacyCommit]);
+
+    git(["reset", "--hard", "main"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toContain(".github/CI.md");
   });
 });

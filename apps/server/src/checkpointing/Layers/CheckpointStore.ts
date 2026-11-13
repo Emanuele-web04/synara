@@ -30,8 +30,21 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointRef } from "@synara/contracts";
 import { CHECKPOINT_REFS_PREFIX } from "../Utils.ts";
+import {
+  type CheckpointCommitMetadata,
+  chunkArgumentGroups,
+  formatCheckpointHeadTrailer,
+  parseCheckpointCommit,
+  parseNameOnlyPaths,
+  parseRawDiff,
+} from "../historyIntegration.ts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+// Bounds the walk over commits created during a diffed range and the history
+// tips checked against it; anything beyond stays visible as an edit.
+const HISTORY_INTEGRATION_MAX_COMMITS = 1_000;
+const HISTORY_INTEGRATION_MAX_TIPS = 8;
+const CHECKPOINT_METADATA_CACHE_MAX_ENTRIES = 512;
 
 // Individual git commands are already bounded by GitCore's default timeout;
 // this aggregate cap exists to unstick the shared in-flight capture slot if a
@@ -233,10 +246,18 @@ const makeCheckpointStore = Effect.gen(function* () {
             }
 
             const message = `Synara checkpoint ref=${input.checkpointRef}`;
+            // Recorded so diffs can leave out history this turn only checked out.
+            const headCommit = yield* resolveHeadCommit(input.cwd);
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,
-              args: ["commit-tree", treeOid, "-m", message],
+              args: [
+                "commit-tree",
+                treeOid,
+                "-m",
+                message,
+                ...(headCommit ? ["-m", formatCheckpointHeadTrailer(headCommit)] : []),
+              ],
               env: commitEnv,
             });
             const commitOid = commitTreeResult.stdout.trim();
@@ -389,6 +410,238 @@ const makeCheckpointStore = Effect.gen(function* () {
       return true;
     });
 
+  // Commit objects are immutable, so metadata is cached by object id.
+  const checkpointMetadataCache = new Map<string, CheckpointCommitMetadata>();
+  const readCheckpointMetadata = (
+    cwd: string,
+    commitOid: string,
+  ): Effect.Effect<CheckpointCommitMetadata, GitCommandError> => {
+    const cached = checkpointMetadataCache.get(commitOid);
+    if (cached) return Effect.succeed(cached);
+    return git
+      .execute({
+        operation: "CheckpointStore.readCheckpointMetadata",
+        cwd,
+        args: ["cat-file", "commit", commitOid],
+        allowNonZeroExit: true,
+      })
+      .pipe(
+        Effect.map((result) => {
+          if (result.code !== 0) return { capturedAtSeconds: null, head: null };
+          const metadata = parseCheckpointCommit(result.stdout);
+          checkpointMetadataCache.set(commitOid, metadata);
+          if (checkpointMetadataCache.size > CHECKPOINT_METADATA_CACHE_MAX_ENTRIES) {
+            const oldest = checkpointMetadataCache.keys().next().value;
+            if (oldest !== undefined) checkpointMetadataCache.delete(oldest);
+          }
+          return metadata;
+        }),
+      );
+  };
+
+  const listChangedPaths = (cwd: string, from: string, to: string) =>
+    git
+      .execute({
+        operation: "CheckpointStore.changedPaths",
+        cwd,
+        args: ["diff", "--name-only", "-z", "--no-renames", from, to],
+        maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      })
+      .pipe(Effect.map((result) => parseNameOnlyPaths(result.stdout)));
+
+  /**
+   * Commits that entered HEAD between two checkpoints without being created
+   * after the first one: the incoming side of a merge or rebase, or the target
+   * of a pull, checkout or reset.
+   */
+  const resolveIntegratedHistoryTips = (input: {
+    readonly cwd: string;
+    readonly fromHead: string;
+    readonly toHead: string;
+    readonly fromCapturedAtSeconds: number;
+  }) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.resolveIntegratedHistoryTips";
+      const created = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: [
+          "rev-list",
+          "--parents",
+          `--max-age=${input.fromCapturedAtSeconds}`,
+          `--max-count=${HISTORY_INTEGRATION_MAX_COMMITS}`,
+          input.toHead,
+          `^${input.fromHead}`,
+        ],
+      });
+      const createdCommits = new Map<string, string[]>();
+      for (const line of created.stdout.split("\n")) {
+        const [commit, ...parents] = line.trim().split(/\s+/);
+        if (commit) createdCommits.set(commit, parents);
+      }
+      // Nothing was committed in range, so the new HEAD is existing history.
+      if (createdCommits.size === 0) return [input.toHead];
+
+      const candidates = new Set<string>();
+      for (const parents of createdCommits.values()) {
+        for (const parent of parents) {
+          if (parent !== input.fromHead && !createdCommits.has(parent)) candidates.add(parent);
+        }
+      }
+      const tips: string[] = [];
+      for (const candidate of candidates) {
+        if (tips.length >= HISTORY_INTEGRATION_MAX_TIPS) break;
+        // A parent already behind the starting HEAD (amend, reset then commit)
+        // is not incoming history; its differences stay visible as edits.
+        const ancestor = yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["merge-base", "--is-ancestor", candidate, input.fromHead],
+          allowNonZeroExit: true,
+        });
+        if (ancestor.code === 1) tips.push(candidate);
+      }
+      return tips;
+    });
+
+  /**
+   * The diff target that shows only what changed on top of history moves.
+   *
+   * A path is left out only when it was clean against HEAD at both checkpoints
+   * and its final content equals an integrated history tip, so local edits,
+   * conflict resolutions and discarded uncommitted work stay visible. Legacy
+   * checkpoints without a recorded HEAD, or any lookup failure, keep the full
+   * diff.
+   */
+  const resolveAuthoredDiffTarget = (input: {
+    readonly cwd: string;
+    readonly fromCommitOid: string;
+    readonly toCommitOid: string;
+  }): Effect.Effect<string> =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.resolveAuthoredDiffTarget";
+      const [from, to] = yield* Effect.all(
+        [
+          readCheckpointMetadata(input.cwd, input.fromCommitOid),
+          readCheckpointMetadata(input.cwd, input.toCommitOid),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const fromHead = from.head;
+      const toHead = to.head;
+      if (!fromHead || !toHead || fromHead === toHead || from.capturedAtSeconds === null) {
+        return input.toCommitOid;
+      }
+
+      const tips = yield* resolveIntegratedHistoryTips({
+        cwd: input.cwd,
+        fromHead,
+        toHead,
+        fromCapturedAtSeconds: from.capturedAtSeconds,
+      });
+      if (tips.length === 0) return input.toCommitOid;
+
+      const changes = parseRawDiff(
+        (yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: [
+            "diff",
+            "--raw",
+            "-z",
+            "--no-renames",
+            "--no-abbrev",
+            input.fromCommitOid,
+            input.toCommitOid,
+          ],
+          maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        })).stdout,
+      );
+      if (changes.length === 0) return input.toCommitOid;
+
+      const [dirtyAtStart, dirtyAtEnd, ...tipDifferences] = yield* Effect.all(
+        [
+          listChangedPaths(input.cwd, fromHead, input.fromCommitOid),
+          listChangedPaths(input.cwd, toHead, input.toCommitOid),
+          ...tips.map((tip) =>
+            tip === toHead
+              ? Effect.succeed(new Set<string>())
+              : listChangedPaths(input.cwd, tip, toHead),
+          ),
+        ],
+        { concurrency: 4 },
+      );
+      const integrated = changes.filter(
+        (change) =>
+          !dirtyAtStart!.has(change.path) &&
+          !dirtyAtEnd!.has(change.path) &&
+          tipDifferences.some((differences) => !differences.has(change.path)),
+      );
+      if (integrated.length === 0) return input.toCommitOid;
+      if (integrated.length === changes.length) return input.fromCommitOid;
+
+      const topLevel = (yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["rev-parse", "--show-toplevel"],
+      })).stdout.trim();
+      return yield* Effect.acquireUseRelease(
+        fs.makeTempDirectory({ prefix: "synara-checkpoint-authored-" }),
+        (tempDir) =>
+          Effect.gen(function* () {
+            const env = { ...process.env, GIT_INDEX_FILE: path.join(tempDir, "index") };
+            yield* git.execute({
+              operation,
+              cwd: topLevel,
+              args: ["read-tree", input.toCommitOid],
+              env,
+            });
+            // Put integrated paths back to their starting entries; raw diff
+            // paths are repository-relative, so update from the top level.
+            const restored = integrated.filter((change) => change.status !== "A");
+            const removed = integrated.filter((change) => change.status === "A");
+            for (const chunk of chunkArgumentGroups(
+              restored.map((change) => [
+                "--cacheinfo",
+                change.sourceMode,
+                change.sourceObject,
+                change.path,
+              ]),
+            )) {
+              yield* git.execute({
+                operation,
+                cwd: topLevel,
+                args: ["update-index", "--add", ...chunk],
+                env,
+              });
+            }
+            for (const chunk of chunkArgumentGroups(removed.map((change) => [change.path]))) {
+              yield* git.execute({
+                operation,
+                cwd: topLevel,
+                args: ["update-index", "--force-remove", "--", ...chunk],
+                env,
+              });
+            }
+            const tree = (yield* git.execute({
+              operation,
+              cwd: topLevel,
+              args: ["write-tree"],
+              env,
+            })).stdout.trim();
+            return tree.length > 0 ? tree : input.toCommitOid;
+          }),
+        (tempDir) => fs.remove(tempDir, { recursive: true }).pipe(Effect.ignore),
+      );
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logDebug("checkpoint diff keeps integrated history", {
+          cwd: input.cwd,
+          detail: error.message,
+        }).pipe(Effect.as(input.toCommitOid)),
+      ),
+    );
+
   const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.diffCheckpoints";
@@ -494,7 +747,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "--dst-prefix=b/",
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           fromCommitOid,
-          toCommitOid,
+          yield* resolveAuthoredDiffTarget({ cwd: input.cwd, fromCommitOid, toCommitOid }),
         ],
         maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       });
@@ -640,6 +893,12 @@ const makeCheckpointStore = Effect.gen(function* () {
       if (!fromCommitOid || !toCommitOid) {
         return false;
       }
+      // Undo reverses the same changes the turn diff shows, never checked-out history.
+      const targetOid = yield* resolveAuthoredDiffTarget({
+        cwd: input.cwd,
+        fromCommitOid,
+        toCommitOid,
+      });
 
       const diff = yield* git.execute({
         operation,
@@ -655,7 +914,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "--src-prefix=a/",
           "--dst-prefix=b/",
           fromCommitOid,
-          toCommitOid,
+          targetOid,
         ],
         maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       });
@@ -666,7 +925,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       const changedPaths = yield* git.execute({
         operation,
         cwd: input.cwd,
-        args: ["diff", "--name-only", "--no-renames", "-z", fromCommitOid, toCommitOid],
+        args: ["diff", "--name-only", "--no-renames", "-z", fromCommitOid, targetOid],
         maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       });
       const affectedPaths = changedPaths.stdout.split("\0").filter((entry) => entry.length > 0);
