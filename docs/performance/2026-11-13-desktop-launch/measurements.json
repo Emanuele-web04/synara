@@ -1,0 +1,294 @@
+{
+  "machine": {
+    "os": "Linux 7.2.15 (Omarchy), Wayland/Hyprland",
+    "cpuThreads": 16,
+    "ramGb": 22,
+    "note": "shared desktop in normal use during all runs"
+  },
+  "build": {
+    "baseline": "fa05901d (Synara 1.5.3 Stable)",
+    "toolchain": "bun 1.4.4, node 24.13.1, Electron 43.8.7 (Node 24.22.1)",
+    "kind": "source desktop build (bun run build:desktop), SYNARA_DESKTOP_FLAVOR=dev, isolated data home and Electron profile"
+  },
+  "metric": "milliseconds from process spawn until two typed probe characters are in the composer (DOM), window focus emulated through the DevTools protocol",
+  "homes": {
+    "empty": "onboarding done, hidden Home chat project, 0 threads, last route is an unsent draft",
+    "seeded": "12 projects, 301 threads, 14,000 messages, 13,875 tool rows, 82,193 events, 177 MB state.sqlite; last route is a 40-message thread"
+  },
+  "comparisons": [
+    {
+      "id": "final-s0",
+      "home": "empty",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [8464, 8320, 8599, 8252, 8258, 8448, 8294, 8531, 8393, 8290],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 8356,
+          "minMs": 8252,
+          "maxMs": 8599
+        },
+        "B": {
+          "label": "combined branch",
+          "commit": "dd10bf48",
+          "samplesMs": [2406, 2292, 2890, 2087, 2350, 2392, 2621, 2437, 1992, 2012],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 2371,
+          "minMs": 1992,
+          "maxMs": 2890
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "final-s1",
+      "home": "seeded",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [3174, 3199, 3424, 3254, 3385, 3309, 3246, 3273, 3326, 3200],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 3264,
+          "minMs": 3174,
+          "maxMs": 3424
+        },
+        "B": {
+          "label": "combined branch",
+          "commit": "dd10bf48",
+          "samplesMs": [2635, 2598, 2639, 2815, 2775, 2818, 3563, 2791, 2738, 2633],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 2756,
+          "minMs": 2598,
+          "maxMs": 3563
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "final-s1-cold",
+      "home": "seeded",
+      "mode": "file-cache-advised launch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [3390, 3314, 3348, 3274, 3288],
+          "n": 5,
+          "errors": 0,
+          "medianMs": 3314,
+          "minMs": 3274,
+          "maxMs": 3390
+        },
+        "B": {
+          "label": "combined branch",
+          "commit": "dd10bf48",
+          "samplesMs": [3024, 3005, 3002, 3058, 2699],
+          "n": 5,
+          "errors": 0,
+          "medianMs": 3005,
+          "minMs": 2699,
+          "maxMs": 3058
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "final-s0-cold",
+      "home": "empty",
+      "mode": "file-cache-advised launch (stopped after 3 pairs)",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [8316, 8357, 8310],
+          "n": 3,
+          "errors": 0,
+          "medianMs": 8316,
+          "minMs": 8310,
+          "maxMs": 8357
+        },
+        "B": {
+          "label": "combined branch",
+          "commit": "dd10bf48",
+          "samplesMs": [2115, 2021, 2397],
+          "n": 3,
+          "errors": 0,
+          "medianMs": 2115,
+          "minMs": 2021,
+          "maxMs": 2397
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "f1-s0",
+      "home": "empty",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [8324, 8373, 8549, 8360, 8415, 8471, 8235],
+          "n": 7,
+          "errors": 0,
+          "medianMs": 8373,
+          "minMs": 8235,
+          "maxMs": 8549
+        },
+        "B": {
+          "label": "empty-thread proof only",
+          "commit": "daaf1a2c",
+          "samplesMs": [3043, 2815, 2914, 2884, 2766, 2796, 2743],
+          "n": 7,
+          "errors": 0,
+          "medianMs": 2815,
+          "minMs": 2743,
+          "maxMs": 3043
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "w1-s1",
+      "home": "seeded",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [3360, 3215, 3265, 3206, 3314, 3302, 3845],
+          "n": 7,
+          "errors": 0,
+          "medianMs": 3302,
+          "minMs": 3206,
+          "maxMs": 3845
+        },
+        "B": {
+          "label": "startup reconnect only (final form)",
+          "commit": "fa05901d+uncommitted",
+          "samplesMs": [2841, 2733, 2605, 2742, 3264, 4032, 3112],
+          "n": 7,
+          "errors": 0,
+          "medianMs": 2841,
+          "minMs": 2605,
+          "maxMs": 4032
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "e3b-s1",
+      "home": "seeded",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "1.5.3",
+          "commit": "fa05901d",
+          "samplesMs": [3087, 3146, 3102, 3123, 3388, 3290, 3554, 3202, 3100, 3397],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 3174,
+          "minMs": 3087,
+          "maxMs": 3554
+        },
+        "B": {
+          "label": "startup reconnect only (experiment form)",
+          "commit": "fa05901d+uncommitted",
+          "samplesMs": [2639, 2920, 2401, 2831, 2603, 2582, 2837, 2533, 2934, 2695],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 2667,
+          "minMs": 2401,
+          "maxMs": 2934
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    },
+    {
+      "id": "e4-s1",
+      "home": "seeded",
+      "mode": "relaunch",
+      "sides": {
+        "A": {
+          "label": "startup reconnect (experiment form)",
+          "commit": "fa05901d+uncommitted",
+          "samplesMs": [2929, 2828, 2762, 2886, 2812, 3015, 2650, 2844, 2743, 3063],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 2836,
+          "minMs": 2650,
+          "maxMs": 3063
+        },
+        "B": {
+          "label": "same plus backend compile cache env probe",
+          "commit": "fa05901d+uncommitted",
+          "samplesMs": [2639, 3170, 2538, 2641, 2587, 2641, 2528, 2856, 2703, 2518],
+          "n": 10,
+          "errors": 0,
+          "medianMs": 2640,
+          "minMs": 2518,
+          "maxMs": 3170
+        }
+      },
+      "order": "alternating A, B, A, B; one launch per sample; each side on its own prepared copy of the same home"
+    }
+  ],
+  "baselineRuns": [
+    {
+      "id": "base-s0-warm",
+      "label": "empty relaunch",
+      "commit": "fa05901d",
+      "samplesMs": [8529, 8359, 8511, 8396, 8503, 8484, 8577],
+      "n": 7,
+      "errors": 0,
+      "medianMs": 8503,
+      "minMs": 8359,
+      "maxMs": 8577,
+      "note": "sequential runs with an earlier harness revision (timer started a few ms earlier)"
+    },
+    {
+      "id": "base-s0-cold",
+      "label": "empty file-cache-advised",
+      "commit": "fa05901d",
+      "samplesMs": [8692, 8646, 8631, 8551, 8567],
+      "n": 5,
+      "errors": 0,
+      "medianMs": 8631,
+      "minMs": 8551,
+      "maxMs": 8692,
+      "note": "sequential runs with an earlier harness revision (timer started a few ms earlier)"
+    },
+    {
+      "id": "base-s1-warm",
+      "label": "seeded relaunch",
+      "commit": "fa05901d",
+      "samplesMs": [3603, 3597, 3420, 3503, 3894, 3453, 3514],
+      "n": 7,
+      "errors": 0,
+      "medianMs": 3514,
+      "minMs": 3420,
+      "maxMs": 3894,
+      "note": "sequential runs with an earlier harness revision (timer started a few ms earlier)"
+    },
+    {
+      "id": "base-s1-cold",
+      "label": "seeded file-cache-advised",
+      "commit": "fa05901d",
+      "samplesMs": [3633, 3637, 3686, 3648, 3748],
+      "n": 5,
+      "errors": 0,
+      "medianMs": 3648,
+      "minMs": 3633,
+      "maxMs": 3748,
+      "note": "sequential runs with an earlier harness revision (timer started a few ms earlier)"
+    }
+  ]
+}
