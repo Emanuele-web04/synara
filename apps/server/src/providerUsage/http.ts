@@ -67,9 +67,33 @@ export async function fetchJson(input: {
   };
 }
 
-/** Provider backends reject the access token once it is stale; treat that as "needs re-auth". */
+/**
+ * Provider backends reject the access token once it is stale; treat that as "needs re-auth".
+ * Check `isEdgeBlockedResponse` first: a CDN 403 is not a token rejection.
+ */
 export function isAuthFailureStatus(status: number): boolean {
   return status === 401 || status === 403;
+}
+
+/**
+ * Cloudflare (in front of api.anthropic.com and chatgpt.com) sometimes answers a healthy,
+ * authenticated request with an HTML 403 block/challenge page. That is transient and unrelated to
+ * the token, so it must not trigger refresh, re-auth, or credential fallthrough. A JSON 403 from
+ * the provider itself is still an auth failure.
+ */
+export function isEdgeBlockedResponse(
+  result: Pick<FetchJsonResult, "status" | "json" | "headers">,
+): boolean {
+  if (result.status !== 403) {
+    return false;
+  }
+  if (result.headers.has("cf-mitigated")) {
+    return true;
+  }
+  if (/\btext\/html\b/iu.test(result.headers.get("content-type") ?? "")) {
+    return true;
+  }
+  return result.json === null && /cloudflare/iu.test(result.headers.get("server") ?? "");
 }
 
 /** The backend is throttling requests; callers should back off rather than blank the usage panel. */

@@ -25,6 +25,8 @@ const MAX_TRACKED_KEYS = 32;
 interface ResilienceEntry {
   lastGoodSnapshot: ServerProviderUsageSnapshot | null;
   cooldownUntilMs: number;
+  /** Note for a cooldown that is not a rate limit (e.g. a CDN block), so it isn't mislabeled. */
+  detailOverride: ((retryMins: number) => string) | null;
 }
 
 export interface RateLimitResilience {
@@ -32,11 +34,15 @@ export interface RateLimitResilience {
   serveDuringCooldown(key: string, nowMs: number): ServerProviderUsageSnapshot | null;
   /** Record a clean fetch and clear any cooldown for `key`. */
   rememberLastGood(key: string, snapshot: ServerProviderUsageSnapshot, nowMs: number): void;
-  /** Begin a cooldown for `key` honoring Retry-After (clamped), then return the snapshot to serve. */
+  /**
+   * Begin a cooldown for `key` honoring Retry-After (clamped), then return the snapshot to serve.
+   * `detail` replaces the instance's throttle note for this cooldown only.
+   */
   enterCooldown(
     key: string,
     nowMs: number,
     retryAfterMs: number | undefined,
+    detail?: (retryMins: number) => string,
   ): ServerProviderUsageSnapshot;
   /** Test-only: drop all remembered state. */
   reset(): void;
@@ -74,13 +80,19 @@ export function createRateLimitResilience(options: {
         }
       }
     }
-    const entry: ResilienceEntry = { lastGoodSnapshot: null, cooldownUntilMs: 0 };
+    const entry: ResilienceEntry = {
+      lastGoodSnapshot: null,
+      cooldownUntilMs: 0,
+      detailOverride: null,
+    };
     store.set(key, entry);
     return entry;
   };
 
   const detailFor = (entry: ResilienceEntry, nowMs: number): string =>
-    options.detail(Math.max(1, Math.ceil((entry.cooldownUntilMs - nowMs) / 60_000)));
+    (entry.detailOverride ?? options.detail)(
+      Math.max(1, Math.ceil((entry.cooldownUntilMs - nowMs) / 60_000)),
+    );
 
   // The last clean fetch with a staleness note when we have it, otherwise an error snapshot that at
   // least explains the throttle. The last-good note rides on `status: "ok"` so the UI keeps rendering
@@ -108,14 +120,16 @@ export function createRateLimitResilience(options: {
       const entry = entryFor(key, nowMs);
       entry.lastGoodSnapshot = snapshot;
       entry.cooldownUntilMs = 0;
+      entry.detailOverride = null;
     },
-    enterCooldown(key, nowMs, retryAfterMs) {
+    enterCooldown(key, nowMs, retryAfterMs, detail) {
       const entry = entryFor(key, nowMs);
       const backoffMs = Math.min(
         Math.max(retryAfterMs ?? defaultCooldownMs, 0) || defaultCooldownMs,
         maxCooldownMs,
       );
       entry.cooldownUntilMs = nowMs + backoffMs;
+      entry.detailOverride = detail ?? null;
       return snapshotForCooldown(entry, nowMs);
     },
     reset() {
