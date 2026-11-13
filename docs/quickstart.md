@@ -63,6 +63,10 @@ Useful controls:
 - Send a follow-up when the agent needs a correction or additional constraint.
 - Interrupt the turn when it is clearly heading in the wrong direction.
 
+In the desktop app, choose **View → Always on Top** to keep Synara above other windows
+while working in another app. Choose it again to return to normal window behavior. This
+option starts off whenever you open a new Synara window and is not saved between launches.
+
 Do not wait passively for a final message if the intermediate work is already incorrect.
 
 ## 6. Verify the result yourself
