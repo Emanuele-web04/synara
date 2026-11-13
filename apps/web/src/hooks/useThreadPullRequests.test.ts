@@ -36,6 +36,40 @@ describe("resolveThreadPullRequestFallback", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps an explicitly linked PR when the worktree is on another branch", () => {
+    expect(
+      resolveThreadPullRequestFallback({
+        branch: "feat/current-branch",
+        hasDedicatedWorktree: true,
+        lastKnownPr: staleOpenPullRequest,
+        pullRequests: [
+          {
+            pullRequest: staleOpenPullRequest,
+            source: "agent",
+            linkedAt: "2026-11-13T10:00:00.000Z",
+          },
+        ],
+      }),
+    ).toMatchObject({ number: 841, state: "open" });
+  });
+
+  it("still validates a branch-discovered PR against the branch", () => {
+    expect(
+      resolveThreadPullRequestFallback({
+        branch: "feat/current-branch",
+        hasDedicatedWorktree: true,
+        lastKnownPr: staleOpenPullRequest,
+        pullRequests: [
+          {
+            pullRequest: staleOpenPullRequest,
+            source: "discovered",
+            linkedAt: "2026-11-13T10:00:00.000Z",
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("useThreadPullRequests requireLiveStatus", () => {

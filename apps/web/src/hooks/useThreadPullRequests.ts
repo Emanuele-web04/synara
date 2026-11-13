@@ -8,10 +8,15 @@
 import type {
   GitStatusResult,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
+import {
+  isExplicitPullRequestLinkSource,
+  resolveCurrentPullRequestLink,
+} from "@synara/shared/threadPullRequestLinks";
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
 
@@ -23,8 +28,20 @@ export type ThreadPullRequest = GitStatusResult["pr"];
 
 export type ThreadPullRequestSource = Pick<
   SidebarThreadSummary,
-  "id" | "projectId" | "branch" | "envMode" | "worktreePath" | "lastKnownPr"
+  "id" | "projectId" | "branch" | "envMode" | "worktreePath" | "lastKnownPr" | "pullRequests"
 >;
+
+/**
+ * A PR the user, the agent, or the app's create/checkout flows linked to the thread is the
+ * thread's PR regardless of which branch the checkout is on, so branch validation (which
+ * guards branch-discovered PRs against a moved checkout) must not hide it.
+ */
+function hasExplicitCurrentPullRequest(
+  links: ReadonlyArray<OrchestrationThreadPullRequestLink> | null | undefined,
+): boolean {
+  const current = resolveCurrentPullRequestLink(links);
+  return current !== null && isExplicitPullRequestLinkSource(current.source);
+}
 
 const THREAD_PR_STALE_TIME_MS = 30_000;
 // Every visible row costs one GitHub API call per tick, so badges poll at the relaxed git-status
@@ -75,7 +92,11 @@ export function resolveThreadPullRequestFallback(input: {
   readonly branch: string | null;
   readonly hasDedicatedWorktree: boolean;
   readonly lastKnownPr: OrchestrationThreadPullRequest | null | undefined;
+  readonly pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink> | null | undefined;
 }): ThreadPullRequest {
+  if (input.lastKnownPr && hasExplicitCurrentPullRequest(input.pullRequests)) {
+    return toThreadPullRequest(input.lastKnownPr);
+  }
   return resolveSidebarThreadPullRequest({
     threadBranch: input.branch,
     liveBranch: null,
@@ -110,6 +131,7 @@ export function useThreadPullRequests(input: {
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
+        hasExplicitPullRequest: hasExplicitCurrentPullRequest(thread.pullRequests),
         hasDedicatedWorktree: thread.worktreePath !== null,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
@@ -200,6 +222,10 @@ export function useThreadPullRequests(input: {
         ? (liveResolvedStoredPrByThreadId.get(target.threadId) ?? null)
         : (storedPrByThreadId.get(target.threadId) ??
           (target.lastKnownPr ? toThreadPullRequest(target.lastKnownPr) : null));
+      if (target.hasExplicitPullRequest) {
+        if (persistedPr) map.set(target.threadId, persistedPr);
+        continue;
+      }
       map.set(
         target.threadId,
         resolveSidebarThreadPullRequest({

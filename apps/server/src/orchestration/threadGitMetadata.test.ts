@@ -40,7 +40,7 @@ describe("deriveThreadGitMetadataPatch", () => {
         pullRequestLookup: { status: "resolved", pullRequest: null },
         dedicatedWorktree,
       }),
-    ).toEqual({ lastKnownPr: null });
+    ).toEqual({ discoveredPullRequest: null });
   });
 
   it("clears a stale PR when the branch changes while GitHub is unavailable", () => {
@@ -54,7 +54,7 @@ describe("deriveThreadGitMetadataPatch", () => {
       }),
     ).toEqual({
       branch: "feat/next-change",
-      lastKnownPr: null,
+      discoveredPullRequest: null,
       associatedWorktreeBranch: "feat/next-change",
       associatedWorktreeRef: "feat/next-change",
     });
@@ -69,7 +69,7 @@ describe("deriveThreadGitMetadataPatch", () => {
         pullRequestLookup: { status: "resolved", pullRequest: null },
         dedicatedWorktree,
       }),
-    ).toEqual({ branch: null, lastKnownPr: null });
+    ).toEqual({ branch: null, discoveredPullRequest: null });
   });
 
   it.each([
@@ -110,7 +110,7 @@ describe("deriveThreadGitMetadataPatch", () => {
         observedBranch: otherPullRequest.headBranch,
         pullRequestLookup: { status: "resolved", pullRequest: otherPullRequest },
       }),
-    ).toEqual({ branch: otherPullRequest.headBranch, lastKnownPr: otherPullRequest });
+    ).toEqual({ branch: otherPullRequest.headBranch, discoveredPullRequest: otherPullRequest });
   });
 
   it("does not regress a semantic branch to a temporary worktree branch", () => {

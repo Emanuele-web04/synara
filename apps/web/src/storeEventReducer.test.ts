@@ -1384,6 +1384,47 @@ describe("store event reducer", () => {
     });
   });
 
+  it("applies PR link lists and maps pre-link lastKnownPr events to one legacy link", () => {
+    const pullRequest = {
+      number: 12,
+      title: "Link PRs",
+      url: "https://github.com/acme/app/pull/12",
+      baseBranch: "main",
+      headBranch: "feat/links",
+      state: "open" as const,
+    };
+    const legacy = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        lastKnownPr: pullRequest,
+        updatedAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+    expect(threadsOf(legacy)[0]).toMatchObject({
+      lastKnownPr: pullRequest,
+      pullRequests: [{ pullRequest, source: "legacy", linkedAt: "2026-02-27T00:01:00.000Z" }],
+    });
+
+    const links = [
+      { pullRequest, source: "agent" as const, linkedAt: "2026-02-27T00:02:00.000Z" },
+      {
+        pullRequest: { ...pullRequest, number: 13, url: "https://github.com/acme/app/pull/13" },
+        source: "created" as const,
+        linkedAt: "2026-02-27T00:03:00.000Z",
+      },
+    ];
+    const linked = applyOrchestrationEvents(legacy, [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pullRequests: links,
+        lastKnownPr: links[1]!.pullRequest,
+        updatedAt: "2026-02-27T00:03:00.000Z",
+      }),
+    ]);
+    expect(threadsOf(linked)[0]?.pullRequests).toEqual(links);
+    expect(threadsOf(linked)[0]?.lastKnownPr?.number).toBe(13);
+  });
+
   it("keeps createBranchFlowCompleted sticky for stale thread.meta-updated payloads", () => {
     const initialState = makeState(
       makeThread({

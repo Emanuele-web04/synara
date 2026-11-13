@@ -545,6 +545,31 @@ also refuses an earlier turn when a later managed checkpoint has no initial base
 files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
 activity keys remain unchanged for client and persisted-history compatibility.
 
+### Linked pull requests
+
+A chat keeps a list of the pull requests linked to it, each with where the link came from:
+
+- **Created**: the Create PR action (linked by the server, so a closed window cannot drop it), or
+  an agent's `gh pr create` that Synara recognized in the command output.
+- **Agent**: the agent called `synara_set_thread_pull_request` for a PR it created, took over, or
+  pushed to. Agents link every PR of a stack and do not link PRs they only read or review.
+- **User**: you linked it from the Environment panel, or pushed to its branch with a git action.
+- **Checkout**: the chat was started from a checked-out PR, or from another chat's workspace
+  together with that chat's current PR.
+- **Branch**: Synara found a PR on the chat's branch at the end of a turn.
+
+Linking adds to the list; it never replaces another PR. Branch discovery only manages its own
+links, so a PR linked any other way stays with the chat after the branch changes, and the
+sidebar badge keeps showing it. The current PR is the open one (the most recently linked open
+PR for a stack), otherwise the most recently linked one. The server refreshes the state of open
+linked PRs (every few minutes, faster for active chats) and stops once a PR is merged or closed;
+a failed refresh keeps the last known state.
+
+The Environment panel's pull request section shows the current PR and lists the other linked
+PRs. **Link pull request…** links a PR by URL or number, and **Unlink from this chat** removes a
+link without closing or changing the PR on GitHub. An unlinked PR is not re-added automatically
+by branch discovery or command recognition.
+
 ## Hubs
 
 A hub is a coordinated home for related work. You talk to one coordinator conversation, and it

@@ -203,6 +203,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_interrupt_thread",
   "synara_set_thread_title",
   "synara_set_thread_pull_request",
+  "synara_unlink_thread_pull_request",
   "synara_set_thread_archived",
   "synara_set_thread_goal",
   // Thread diagnostics (threadDiagnosticTools.ts)

@@ -11,6 +11,7 @@ import {
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { pullRequestLinksFromEventPayload } from "@synara/shared/threadPullRequestLinks";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -395,6 +396,16 @@ function deriveNextMessageTextSegments(
   return undefined;
 }
 
+/** PR links written by a `thread.meta-updated` payload; legacy payloads carry only `lastKnownPr`. */
+function pullRequestLinksPatch(payload: {
+  readonly pullRequests?: Parameters<typeof pullRequestLinksFromEventPayload>[0]["pullRequests"];
+  readonly lastKnownPr?: Parameters<typeof pullRequestLinksFromEventPayload>[0]["lastKnownPr"];
+  readonly updatedAt: string;
+}) {
+  const pullRequests = pullRequestLinksFromEventPayload(payload, payload.updatedAt);
+  return pullRequests === undefined ? {} : { pullRequests };
+}
+
 export function projectEvent(
   model: OrchestrationReadModel,
   event: OrchestrationEvent,
@@ -610,6 +621,7 @@ export function projectEvent(
             sidechatLastActivityAt: payload.sidechatLastActivityAt,
             sidechatExpiredAt: payload.sidechatExpiredAt,
             lastKnownPr: payload.lastKnownPr ?? null,
+            pullRequests: pullRequestLinksFromEventPayload(payload, payload.createdAt) ?? [],
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -814,6 +826,7 @@ export function projectEvent(
                 : {}),
               ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
               ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
+              ...pullRequestLinksPatch(payload),
               ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }

@@ -38,6 +38,7 @@ import {
   type ComputerSetupRequiredPayload,
   type ModelSelection,
   type OrchestrationCommand,
+  type OrchestrationThreadShell,
   type ProviderApprovalDecision,
   type ProviderKind,
   type RuntimeMode,
@@ -46,6 +47,7 @@ import {
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import { pullRequestLinkKey, visiblePullRequestLinks } from "@synara/shared/threadPullRequestLinks";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
@@ -930,13 +932,35 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const resolveThreadGitWorkspace = (target: OrchestrationThreadShell) =>
+    Effect.gen(function* () {
+      const threadId = target.id;
+      const project = Option.getOrUndefined(
+        yield* snapshotQuery
+          .getProjectShellById(target.projectId)
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
+      );
+      if (!project) {
+        return yield* Effect.fail(
+          new ToolInputError(`Project for thread "${threadId}" was not found.`),
+        );
+      }
+      const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
+      if (!cwd) {
+        return yield* Effect.fail(
+          new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
+        );
+      }
+      return cwd;
+    });
+
   const setThreadPullRequest: ToolEntry = {
     requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_pull_request",
       description:
-        "Associate a pull request with a Synara thread. Use this after successfully creating the pull request that represents that thread's own deliverable. Do not associate pull requests that the thread only reviews, references, or discusses. Defaults to your own thread when threadId is omitted.",
+        "Link a pull request to a Synara thread. A thread can have several; linking adds to the list and never replaces other links, and linking an already-linked PR only refreshes it. Link each PR you create, take over, or push to for the thread's work, including every PR of a stack. Do not link PRs you only read, review, or mention. Defaults to your own thread when threadId is omitted.",
       inputSchema: {
         type: "object",
         properties: {
@@ -952,7 +976,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["reference"],
         additionalProperties: false,
       },
-      annotations: { title: "Associate a pull request", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Link a pull request", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -961,23 +985,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
-
-        const project = Option.getOrUndefined(
-          yield* snapshotQuery
-            .getProjectShellById(target.projectId)
-            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
-        );
-        if (!project) {
-          return yield* Effect.fail(
-            new ToolInputError(`Project for thread "${threadId}" was not found.`),
-          );
-        }
-        const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
-        if (!cwd) {
-          return yield* Effect.fail(
-            new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
-          );
-        }
+        const cwd = yield* resolveThreadGitWorkspace(target);
 
         const { pullRequest } = yield* gitManager
           .resolvePullRequest({ cwd, reference })
@@ -985,13 +993,63 @@ export const makeAgentGateway = Effect.gen(function* () {
         yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
-            type: "thread.meta.update",
+            type: "thread.pull-request.link",
             commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request`),
             threadId: target.id,
-            lastKnownPr: pullRequest,
+            pullRequest,
+            source: "agent",
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson({ threadId: target.id, pullRequest });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const unlinkThreadPullRequest: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_unlink_thread_pull_request",
+      description:
+        "Remove a pull request link from a Synara thread, for example one linked by mistake. This only removes the association: it does not close, merge, or change the pull request on GitHub. Succeeds with wasLinked=false when the PR was not linked. Defaults to your own thread when threadId is omitted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Thread to unlink from. Defaults to your own thread.",
+          },
+          url: {
+            type: "string",
+            description: "Full GitHub pull request URL, as listed in the thread's pullRequests.",
+          },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Unlink a pull request", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
+        const url = readStringArg(args, "url", { required: true })!;
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
+        const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
+        const wasLinked = visiblePullRequestLinks(target.pullRequests).some(
+          (link) => pullRequestLinkKey(link.pullRequest.url) === pullRequestLinkKey(url),
+        );
+        yield* context.assertCallerTurnActive();
+        if (wasLinked) {
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.pull-request.unlink",
+              commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request-unlink`),
+              threadId: target.id,
+              url,
+            })
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        }
+        return mcpToolResultJson({ threadId: target.id, url, wasLinked });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
@@ -1699,6 +1757,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     interruptThread,
     setThreadTitle,
     setThreadPullRequest,
+    unlinkThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
     ...automationTools,

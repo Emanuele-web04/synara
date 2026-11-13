@@ -1,6 +1,18 @@
-import { CommandId, type ProviderRuntimeEvent, type ThreadId } from "@synara/contracts";
+import {
+  CommandId,
+  type OrchestrationThreadPullRequest,
+  type ProviderRuntimeEvent,
+  type ThreadId,
+} from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import {
+  findPullRequestLink,
+  pullRequestLinkKey,
+  resolveBranchManagedPullRequest,
+  threadPullRequestsEqual,
+  visiblePullRequestLinks,
+} from "@synara/shared/threadPullRequestLinks";
+import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -17,8 +29,19 @@ import {
   deriveThreadGitMetadataPatch,
   type ThreadPullRequestLookup,
 } from "../threadGitMetadata.ts";
+import { detectCreatedPullRequestUrls } from "../pullRequestCommandDetection.ts";
 
 const THREAD_GIT_METADATA_REACTOR_CAPACITY = 128;
+const PULL_REQUEST_LINK_WORKER_CAPACITY = 64;
+// Linked open PRs are re-read on the server so every surface (sidebar, kanban, agents) sees the
+// current state without a client polling it. Active threads refresh faster; merged/closed PRs
+// are final and never re-read. A failed read keeps the last known state.
+const PULL_REQUEST_REFRESH_INITIAL_DELAY = "45 seconds";
+const PULL_REQUEST_REFRESH_TICK = "1 minute";
+const ACTIVE_PULL_REQUEST_REFRESH_INTERVAL_MS = 2 * 60_000;
+const QUIET_PULL_REQUEST_REFRESH_INTERVAL_MS = 10 * 60_000;
+const ACTIVE_THREAD_WINDOW_MS = 30 * 60_000;
+const PULL_REQUEST_REFRESH_CONCURRENCY = 2;
 
 type StartedEvent = Extract<ProviderRuntimeEvent, { type: "turn.started" }>;
 type TerminalEvent = Extract<
@@ -26,6 +49,12 @@ type TerminalEvent = Extract<
   { type: "turn.completed" | "turn.aborted" | "session.exited" | "runtime.error" }
 >;
 type VcsStateChangedEvent = Extract<ProviderRuntimeEvent, { type: "vcs.state.changed" }>;
+type ItemCompletedEvent = Extract<ProviderRuntimeEvent, { type: "item.completed" }>;
+
+interface CommandCreatedPullRequests {
+  readonly threadId: ThreadId;
+  readonly urls: ReadonlyArray<string>;
+}
 
 interface ThreadWorkspaceContext {
   readonly threadId: ThreadId;
@@ -274,7 +303,7 @@ const make = Effect.gen(function* () {
 
     const patch = deriveThreadGitMetadataPatch({
       currentBranch: thread.branch,
-      currentPullRequest: thread.lastKnownPr ?? null,
+      currentPullRequest: resolveBranchManagedPullRequest(thread.pullRequests),
       observedBranch: captured.observedBranch,
       pullRequestLookup,
       ...(captured.hasDedicatedWorktree
@@ -289,12 +318,23 @@ const make = Effect.gen(function* () {
     });
     if (!patch) return;
 
-    yield* orchestrationEngine.dispatch({
-      type: "thread.meta.update",
-      commandId: serverCommandId(),
-      threadId: captured.threadId,
-      ...patch,
-    });
+    const { discoveredPullRequest, ...workspacePatch } = patch;
+    if (Object.keys(workspacePatch).length > 0) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId(),
+        threadId: captured.threadId,
+        ...workspacePatch,
+      });
+    }
+    if (discoveredPullRequest !== undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.pull-request.sync",
+        commandId: serverCommandId(),
+        threadId: captured.threadId,
+        discovered: discoveredPullRequest,
+      });
+    }
   });
 
   const processCapturedMetadataSafely = (captured: CapturedThreadGitMetadata) =>
@@ -319,7 +359,155 @@ const make = Effect.gen(function* () {
     capacity: THREAD_GIT_METADATA_REACTOR_CAPACITY,
   });
 
+  // Safety net for `gh pr create` run by an agent that never called the link tool. A PR that is
+  // already linked, or that the user unlinked (tombstone), is left alone.
+  const linkCommandCreatedPullRequests = Effect.fnUntraced(function* (
+    job: CommandCreatedPullRequests,
+  ) {
+    const threadOption = yield* projectionSnapshotQuery.getThreadShellById(job.threadId);
+    const thread = Option.getOrUndefined(threadOption);
+    if (!thread || thread.archivedAt != null) return;
+    const pending = job.urls.filter(
+      (url) => findPullRequestLink(thread.pullRequests, url) === null,
+    );
+    if (pending.length === 0) return;
+    const context = yield* resolveWorkspaceContext(job.threadId);
+    if (!context) return;
+    for (const url of pending) {
+      const resolved = yield* gitManager
+        .resolvePullRequest({ cwd: context.cwd, reference: url })
+        .pipe(
+          Effect.map((result) => result.pullRequest),
+          Effect.catch((error) =>
+            Effect.logDebug("command-created pull request could not be resolved", {
+              threadId: job.threadId,
+              url,
+              error: error.message,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+      if (!resolved) continue;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.makeUnsafe(`server:command-pr:${crypto.randomUUID()}`),
+        threadId: job.threadId,
+        pullRequest: resolved,
+        source: "created",
+      });
+    }
+  });
+
+  const linkCommandCreatedPullRequestsSafely = (job: CommandCreatedPullRequests) =>
+    linkCommandCreatedPullRequests(job).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        return Effect.logWarning("command-created pull request link failed", {
+          threadId: job.threadId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
+  const pullRequestLinkWorker = yield* makeDrainableWorker(linkCommandCreatedPullRequestsSafely, {
+    capacity: PULL_REQUEST_LINK_WORKER_CAPACITY,
+  });
+
+  const captureCommandCreatedPullRequests = (event: ItemCompletedEvent) => {
+    const urls = detectCreatedPullRequestUrls(event.payload);
+    if (urls.length === 0) return Effect.void;
+    return pullRequestLinkWorker.enqueue({ threadId: event.threadId, urls }).pipe(Effect.asVoid);
+  };
+
+  const lastRefreshAttemptByKey = new Map<string, number>();
+
+  const refreshLinkedPullRequests = Effect.gen(function* () {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const now = Date.now();
+    const projectsById = new Map(readModel.projects.map((project) => [project.id, project]));
+    const dueByKey = new Map<
+      string,
+      {
+        readonly url: string;
+        readonly cwd: string;
+        intervalMs: number;
+        readonly snapshotsByThread: Map<ThreadId, OrchestrationThreadPullRequest>;
+      }
+    >();
+    for (const thread of readModel.threads) {
+      if (thread.archivedAt != null || thread.deletedAt != null) continue;
+      const openLinks = visiblePullRequestLinks(thread.pullRequests).filter(
+        (link) => link.pullRequest.state === "open",
+      );
+      if (openLinks.length === 0) continue;
+      const project = projectsById.get(thread.projectId);
+      if (!project) continue;
+      const cwd = resolveThreadWorkspaceCwd({ thread, projects: [project] });
+      if (!cwd) continue;
+      const lastActivity = Date.parse(thread.latestUserMessageAt ?? thread.updatedAt);
+      const intervalMs =
+        Number.isFinite(lastActivity) && now - lastActivity < ACTIVE_THREAD_WINDOW_MS
+          ? ACTIVE_PULL_REQUEST_REFRESH_INTERVAL_MS
+          : QUIET_PULL_REQUEST_REFRESH_INTERVAL_MS;
+      for (const link of openLinks) {
+        const key = pullRequestLinkKey(link.pullRequest.url);
+        const entry = dueByKey.get(key) ?? {
+          url: link.pullRequest.url,
+          cwd,
+          intervalMs,
+          snapshotsByThread: new Map<ThreadId, OrchestrationThreadPullRequest>(),
+        };
+        entry.intervalMs = Math.min(entry.intervalMs, intervalMs);
+        entry.snapshotsByThread.set(thread.id, link.pullRequest);
+        dueByKey.set(key, entry);
+      }
+    }
+    for (const key of lastRefreshAttemptByKey.keys()) {
+      if (!dueByKey.has(key)) lastRefreshAttemptByKey.delete(key);
+    }
+    const due = [...dueByKey.entries()].filter(
+      ([key, entry]) => now - (lastRefreshAttemptByKey.get(key) ?? 0) >= entry.intervalMs,
+    );
+    yield* Effect.forEach(
+      due,
+      ([key, entry]) =>
+        Effect.gen(function* () {
+          lastRefreshAttemptByKey.set(key, Date.now());
+          const resolved = yield* gitManager
+            .resolvePullRequest({ cwd: entry.cwd, reference: entry.url }, { background: true })
+            .pipe(
+              Effect.map((result) => result.pullRequest),
+              Effect.catch(() => Effect.succeed(null)),
+            );
+          if (!resolved) return;
+          for (const [threadId, snapshot] of entry.snapshotsByThread) {
+            if (threadPullRequestsEqual(snapshot, resolved)) continue;
+            yield* orchestrationEngine
+              .dispatch({
+                type: "thread.pull-request.sync",
+                commandId: CommandId.makeUnsafe(`server:pr-refresh:${crypto.randomUUID()}`),
+                threadId,
+                snapshots: [resolved],
+              })
+              .pipe(Effect.catch(() => Effect.void));
+          }
+        }),
+      { concurrency: PULL_REQUEST_REFRESH_CONCURRENCY, discard: true },
+    );
+  });
+
+  const refreshLinkedPullRequestsSafely = refreshLinkedPullRequests.pipe(
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+      return Effect.logWarning("linked pull request refresh failed", {
+        cause: Cause.pretty(cause),
+      });
+    }),
+  );
+
   const processProviderEvent = (event: ProviderRuntimeEvent) => {
+    // A PR created inside a native subagent still belongs to the parent thread's work, so this
+    // runs before the subagent filter below.
+    if (event.type === "item.completed") return captureCommandCreatedPullRequests(event);
     // Native subagent lifecycle events carry the parent Synara thread id and the child identity
     // in providerRefs. Treating them as parent turns would make shared-root ownership ambiguous
     // and suppress reconciliation when the actual parent turn completes.
@@ -349,18 +537,31 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const start: ThreadGitMetadataReactorShape["start"] = startDrainableWorkerProducers(
-    worker,
-    Effect.gen(function* () {
-      yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, processProviderEventSafely),
-      );
-    }),
-  );
+  const start: ThreadGitMetadataReactorShape["start"] = Effect.gen(function* () {
+    // Registered first so it runs last: producers stop, then the metadata worker, then this one.
+    yield* Effect.addFinalizer(() => pullRequestLinkWorker.stop);
+    yield* startDrainableWorkerProducers(
+      worker,
+      Effect.gen(function* () {
+        yield* Effect.forkScoped(
+          Stream.runForEach(providerService.streamEvents, processProviderEventSafely),
+        );
+        yield* Effect.forkScoped(
+          Effect.sleep(PULL_REQUEST_REFRESH_INITIAL_DELAY).pipe(
+            Effect.andThen(
+              refreshLinkedPullRequestsSafely.pipe(
+                Effect.repeat(Schedule.spaced(PULL_REQUEST_REFRESH_TICK)),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  });
 
   return {
     start,
-    drain: worker.drain,
+    drain: Effect.andThen(worker.drain, pullRequestLinkWorker.drain),
   } satisfies ThreadGitMetadataReactorShape;
 });
 
