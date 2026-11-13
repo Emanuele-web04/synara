@@ -4106,7 +4106,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ),
           sql<{ historyRevisionSequence: number }>`
             SELECT COALESCE(MAX(sequence), 0) AS "historyRevisionSequence"
-            FROM orchestration_events
+            FROM orchestration_events INDEXED BY idx_orchestration_events_profile_turn_events
             WHERE aggregate_kind = 'thread' AND stream_id = ${threadId}
               AND event_type IN ('thread.reverted', 'thread.conversation-rolled-back')
               AND sequence <= COALESCE((
