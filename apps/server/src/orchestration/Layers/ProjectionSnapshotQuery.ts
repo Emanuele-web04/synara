@@ -1738,6 +1738,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const readThreadEventExists = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: Schema.Struct({ exists: Schema.Number }),
+    execute: () => sql`
+      SELECT EXISTS (
+        SELECT 1 FROM orchestration_events WHERE aggregate_kind = 'thread'
+      ) AS "exists"
+    `,
+  });
+
   // Cheap targeted reads avoid hydrating the full snapshot for startup and diff lookups.
   const readProjectionCounts = SqlSchema.findOne({
     Request: Schema.Void,
@@ -3142,7 +3152,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
-  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
+  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = (options) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
@@ -3217,9 +3227,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
 
+          const hasLiveThreads = threadRows.some((row) => row.deletedAt === null);
           const shellIsEmpty =
-            !projectRows.some((row) => row.deletedAt === null) &&
-            !threadRows.some((row) => row.deletedAt === null);
+            !projectRows.some((row) => row.deletedAt === null) && !hasLiveThreads;
           const requiresEmptyProjectShellRepair = shellIsEmpty
             ? yield* readEmptyProjectShellRepair(undefined).pipe(
                 Effect.mapError(
@@ -3232,9 +3242,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               )
             : false;
 
+          // No thread history means there is nothing for a thread projector to catch up on.
+          // Only queried snapshots request this proof; subscription snapshots omit it.
+          const emptyThreadShellVerified = options?.verifyEmptyThreads
+            ? !hasLiveThreads &&
+              !requiresEmptyProjectShellRepair &&
+              (yield* readThreadEventExists(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getShellSnapshot:threadEventExists:query",
+                    "ProjectionSnapshotQuery.getShellSnapshot:threadEventExists:decodeRow",
+                  ),
+                ),
+                Effect.map((row) => row.exists === 0),
+              ))
+            : undefined;
+
           const snapshot = {
             snapshotSequence: yield* computeSnapshotSequence(stateRows),
             requiresEmptyProjectShellRepair,
+            ...(emptyThreadShellVerified === undefined ? {} : { emptyThreadShellVerified }),
             spaces: spaceRows.filter((row) => row.deletedAt === null).map(toProjectedSpaceShell),
             projects: projectRows
               .filter((row) => row.deletedAt === null)

@@ -1649,7 +1649,7 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot(),
+            projectionReadModelQuery.getShellSnapshot({ verifyEmptyThreads: true }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
