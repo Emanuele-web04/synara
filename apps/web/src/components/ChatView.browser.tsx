@@ -6257,6 +6257,36 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("names the project ahead of the chat title when open-thread tabs are off", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showOpenThreadTabs: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-crumb-target" as MessageId,
+        targetText: "project crumb",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          const title = document.querySelector<HTMLElement>(`header h2[title='${THREAD_TITLE}']`);
+          expect(title, "Unable to find the chat header title.").toBeTruthy();
+          const projectCrumb = title!
+            .closest("header")!
+            .querySelector<HTMLElement>("[title='Project']");
+          expect(projectCrumb?.textContent).toBe("Project");
+          expect(
+            projectCrumb!.compareDocumentPosition(title!) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows transport recovery without auto-following a detached transcript", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
