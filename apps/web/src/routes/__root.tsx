@@ -1,6 +1,9 @@
 import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
 import { subscribeWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
-import { onControllerStateChange } from "../lib/hosts/connectionClients";
+import {
+  onControllerStateChange,
+  whenExecutionIdentityVerified,
+} from "../lib/hosts/connectionClients";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
@@ -1854,6 +1857,7 @@ function EventRouter() {
       ) {
         return;
       }
+      await whenExecutionIdentityVerified();
       const snapshot = await api.orchestration.getShellSnapshot();
       if (
         disposed ||
@@ -1928,6 +1932,8 @@ function EventRouter() {
       const refresh = (async () => {
         shellSnapshotSequence = -1;
         pendingShellEvents = [];
+        // Server data stays out of the window until its identity is confirmed.
+        await whenExecutionIdentityVerified();
         await api.orchestration
           .subscribeShell()
           .catch(() => loadBootstrapShellSnapshotIfMissing(generation));

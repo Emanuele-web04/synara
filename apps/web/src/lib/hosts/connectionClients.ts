@@ -1,4 +1,7 @@
-import { rememberVerifiedController } from "./controllerRecovery";
+import {
+  readVerifiedControllerForRecovery,
+  rememberVerifiedController,
+} from "./controllerRecovery";
 import {
   WS_METHODS,
   RemoteConnectionUnavailable,
@@ -9,7 +12,7 @@ import {
 } from "@synara/contracts";
 import { Schema } from "effect";
 import { WsTransport, rawSocketUrl } from "../../wsTransport";
-import { readActiveHost } from "./activeHost";
+import { readActiveHost, readLegacyActiveHost } from "./activeHost";
 import { readWorkspaceFrame } from "./workspaceFrame";
 import { initializeExecutionContext } from "./executionContext";
 
@@ -31,6 +34,86 @@ export function getConnectionClients(): { controller: WsTransport; execution: Ws
   }
   return clients;
 }
+const EARLY_START_UNVERIFIED_KEY = "synara:early-start-unverified:v1";
+
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).toSorted(([left], [right]) => left.localeCompare(right)),
+        )
+      : inner,
+  );
+}
+
+/**
+ * Starts the local execution context from the identity the backend verified on
+ * the previous launch, so the app can load while the backend starts. It needs
+ * the desktop to read the same environment id from the data home and an
+ * unchanged app version. A failed check or a different answer reloads into the
+ * verified start; the session marker makes that reload, and any window that
+ * cannot write it, take the verified start.
+ */
+export function bootstrapLocalExecutionEarly(input: { readonly appVersion: string }): boolean {
+  // The one-time legacy host migration rewrites the route from a verified capability.
+  if (readWorkspaceFrame() || readLegacyActiveHost()) return false;
+  const localEnvironmentId = window.desktopBridge?.getLocalEnvironmentId?.();
+  if (!localEnvironmentId) return false;
+  const remembered = readVerifiedControllerForRecovery();
+  if (
+    !remembered ||
+    remembered.environmentId !== localEnvironmentId ||
+    remembered.serverVersion !== input.appVersion
+  ) {
+    return false;
+  }
+  try {
+    if (window.sessionStorage.getItem(EARLY_START_UNVERIFIED_KEY) !== null) return false;
+    window.sessionStorage.setItem(EARLY_START_UNVERIFIED_KEY, "1");
+    if (window.sessionStorage.getItem(EARLY_START_UNVERIFIED_KEY) !== "1") return false;
+  } catch {
+    return false;
+  }
+
+  const current = getConnectionClients();
+  initializeExecutionContext({ controller: remembered, execution: remembered, remote: null });
+  executionIdentityVerified = new Promise<void>((resolve) => {
+    void current.controller
+      .request<ExecutionEnvironmentDescriptor>(WS_METHODS.serverGetEnvironment)
+      .then(
+        (verified) => {
+          rememberVerifiedController(verified);
+          if (sortedJson(verified) !== sortedJson(remembered)) {
+            window.location.reload();
+            return;
+          }
+          try {
+            window.sessionStorage.removeItem(EARLY_START_UNVERIFIED_KEY);
+          } catch {
+            // The marker only makes a later reload take the verified start.
+          }
+          resolve();
+        },
+        () => {
+          // The verified start owns the connection-unavailable screen and its retry.
+          window.location.reload();
+        },
+      );
+  });
+  return true;
+}
+
+let executionIdentityVerified: Promise<void> = Promise.resolve();
+
+/**
+ * Resolves once the backend has confirmed the identity this window started
+ * from. After an early start it stays pending until then, so server data and
+ * anything that depends on capabilities must wait for it.
+ */
+export function whenExecutionIdentityVerified(): Promise<void> {
+  return executionIdentityVerified;
+}
+
 export async function bootstrapExecutionContext(): Promise<void> {
   const current = getConnectionClients();
   const local = await current.controller.request<ExecutionEnvironmentDescriptor>(

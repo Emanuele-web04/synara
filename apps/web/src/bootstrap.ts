@@ -13,7 +13,12 @@ import { readVerifiedControllerForRecovery } from "./lib/hosts/controllerRecover
 import "./storageOriginMigration";
 
 import { migrateLocalComposerImageBlobs } from "./lib/composerImageBlobStore";
-import { bootstrapExecutionContext } from "./lib/hosts/connectionClients";
+import { APP_VERSION } from "./branding";
+import {
+  bootstrapExecutionContext,
+  bootstrapLocalExecutionEarly,
+  whenExecutionIdentityVerified,
+} from "./lib/hosts/connectionClients";
 import { deactivateHost } from "./lib/hosts/activeHost";
 import { bootstrapSignedOutScreen } from "./authSignedOut";
 import { bootstrapPairingSession } from "./pairingBootstrap";
@@ -21,9 +26,13 @@ import { bootstrapPairingSession } from "./pairingBootstrap";
 if (!bootstrapSignedOutScreen()) {
   void bootstrapPairingSession().then((result) => {
     if (result === "not-pairing") {
-      return bootstrapExecutionContext()
+      const startedEarly = bootstrapLocalExecutionEarly({ appVersion: APP_VERSION });
+      return (startedEarly ? Promise.resolve() : bootstrapExecutionContext())
         .then(() => {
-          if (!readWorkspaceFrame()) {
+          if (startedEarly) {
+            // Remote workspaces are restored from a verified capability only.
+            void whenExecutionIdentityVerified().then(restoreWorkspaceSessions);
+          } else if (!readWorkspaceFrame()) {
             restoreWorkspaceSessions();
             const legacy = readLegacyActiveHost();
             if (legacy) {
