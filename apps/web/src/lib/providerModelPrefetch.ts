@@ -443,6 +443,11 @@ export function prefetchModelsForNewThread(
     fresh?: boolean;
     envMode?: DraftThreadEnvMode | null;
     includeDroid?: boolean;
+    /**
+     * Warm only the provider the new thread would start with. Use it where the
+     * user has not asked for a new thread yet; the picker loads the others.
+     */
+    selectedProviderOnly?: boolean;
   },
 ): void {
   const instanceSettings = {
@@ -554,7 +559,11 @@ export function prefetchModelsForNewThread(
     }
     return true;
   };
-  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(isProviderWarmable);
+  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(
+    (provider) =>
+      isProviderWarmable(provider) &&
+      (input.selectedProviderOnly !== true || provider === selectedProvider),
+  );
   const orderedProviders =
     selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
       ? providers
