@@ -133,6 +133,7 @@ import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { makeAgentGatewayTodoTools } from "../todoTools.ts";
 import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
+import { makeAgentGatewayTurnPlanTools } from "../turnPlanTools.ts";
 import { TodoService } from "../../todo/Services/TodoService.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
@@ -1709,6 +1710,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...(isServerBetaFeatureEnabled("tasks") ? todoTools : []),
     // Shared policy enables inline visuals in both Stable and Beta.
     ...(isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE) ? inlineVisualTools : []),
+    // Advertised only to sessions holding `turn:plan` (Claude; see sessionLease.ts).
+    ...makeAgentGatewayTurnPlanTools(),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({
           manager: deviceService.manager,

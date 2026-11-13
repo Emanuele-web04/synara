@@ -294,6 +294,31 @@ describe("AgentGatewaySessionLease", () => {
     lease?.release();
   });
 
+  it("grants the turn plan only to Claude sessions, whose adapter shows it", () => {
+    const connectionForThread = vi.fn(() => ({
+      url: "http://127.0.0.1:48123/mcp",
+      bearerToken: "plan-token",
+    }));
+    const credentials = { connectionForThread, revokeSessionToken: vi.fn() };
+    acquireAgentGatewaySessionLease(
+      credentials,
+      ThreadId.makeUnsafe("thread-claude"),
+      "claudeAgent",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+    acquireAgentGatewaySessionLease(
+      credentials,
+      ThreadId.makeUnsafe("thread-codex"),
+      "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
+    );
+
+    expect(connectionForThread).toHaveBeenNthCalledWith(1, "thread-claude", "claudeAgent", {
+      additionalCapabilities: ["turn:plan"],
+    });
+    expect(connectionForThread).toHaveBeenNthCalledWith(2, "thread-codex", "codex");
+  });
+
   it.each([
     { name: "computer control off", input: { enableComputerControl: false } },
     { name: "no capabilities", input: AGENT_GATEWAY_NO_CAPABILITIES },

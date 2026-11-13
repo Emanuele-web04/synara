@@ -58,6 +58,7 @@ import {
   type ProviderUserInputAnswers,
   type RuntimeContentStreamKind,
   type RuntimeSessionState,
+  type RuntimeTaskListItem,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -121,7 +122,8 @@ import {
   Stream,
 } from "effect";
 
-import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
+import { buildClaudeMcpServers, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
+import { SYNARA_UPDATE_PLAN_TOOL_NAME } from "../../agentGateway/turnPlanTools.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
 import {
   isSynaraGatewayToolName,
@@ -161,6 +163,7 @@ import {
   hasOnlyCompletedClaudeTasks,
   hasUnfinishedClaudeTasks,
   normalizeClaudeTodoTasks,
+  normalizeSynaraPlanTasks,
   parseClaudeTrackedTasks,
   type ClaudeTrackedTask,
 } from "../claudeTaskTracker.ts";
@@ -292,6 +295,8 @@ interface ClaudeTurnState {
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
+  // The last plan the gateway accepted from synara_update_plan this turn.
+  synaraPlanTasks?: ReadonlyArray<RuntimeTaskListItem>;
   usageLimitWindows?: UsageLimitWindows;
   readonly assistantError?: {
     readonly code: SDKAssistantMessageError;
@@ -1376,7 +1381,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
   return hasActiveClaudeRuntimeWork(context) || hasUnfinishedClaudeTasks(context.trackedTasks);
 }
 
+// Claude Code stopped offering its own task-list tools to current models; the
+// turn plan now arrives through Synara's gateway tool under the SDK's MCP name.
+const CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME = `mcp__${SYNARA_MCP_SERVER_NAME}__${SYNARA_UPDATE_PLAN_TOOL_NAME}`;
+
 function classifyToolItemType(toolName: string): CanonicalItemType {
+  if (toolName === CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME) {
+    return "plan";
+  }
   const normalized = toolName.toLowerCase();
   // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
   // terminal tool name before server names and broad edit/image checks interfere.
@@ -3327,11 +3339,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
-    // Normalizes Claude TodoWrite tool calls into the shared runtime task-list event.
+    // Emits a whole-list plan (TodoWrite, synara_update_plan) as the shared runtime task-list event.
     const emitTodoTasksUpdated = (
       context: ClaudeSessionContext,
       input: {
-        readonly toolInput: Record<string, unknown>;
+        readonly tasksPayload: { readonly tasks: ReadonlyArray<RuntimeTaskListItem> } | null;
         readonly toolUseId?: string | undefined;
         readonly rawMethod: string;
         readonly rawPayload: unknown;
@@ -3343,7 +3355,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        const tasksPayload = normalizeClaudeTodoTasks(input.toolInput);
+        const tasksPayload = input.tasksPayload;
         if (!tasksPayload) {
           return;
         }
@@ -3898,6 +3910,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (settlesForegroundTasks) {
           yield* settleForegroundTasksAtTurnEnd(context, status);
         }
+        // synara_update_plan tells the model to leave its last step in_progress:
+        // a turn that ends normally checks the plan off, while an interrupted or
+        // failed one keeps the steps it never reached.
+        const synaraPlanTasks = turnState.synaraPlanTasks;
+        if (
+          status === "completed" &&
+          synaraPlanTasks?.some((task) => task.status !== "completed")
+        ) {
+          yield* emitTodoTasksUpdated(context, {
+            tasksPayload: {
+              tasks: synaraPlanTasks.map(({ task }) => ({ task, status: "completed" as const })),
+            },
+            rawMethod: "claude/result/synara-plan-finished",
+            rawPayload: result ?? { status },
+          });
+        }
 
         for (const block of turnState.assistantTextBlockOrder) {
           yield* completeAssistantTextBlock(context, block, {
@@ -4292,7 +4320,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
         if (tool.toolName === "TodoWrite") {
           yield* emitTodoTasksUpdated(context, {
-            toolInput: input.toolInput,
+            tasksPayload: normalizeClaudeTodoTasks(input.toolInput),
             toolUseId: tool.itemId,
             rawMethod: input.rawMethod,
             rawPayload: input.rawPayload,
@@ -4506,7 +4534,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             if (nextTool.toolName === "TodoWrite") {
               yield* emitTodoTasksUpdated(context, {
-                toolInput: nextTool.input,
+                tasksPayload: normalizeClaudeTodoTasks(nextTool.input),
                 toolUseId: nextTool.itemId,
                 rawMethod: "claude/stream_event/content_block_delta/input_json_delta",
                 rawPayload: message,
@@ -4673,6 +4701,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* updateResumeCursor(context);
             yield* emitTrackedTasksUpdated(context, {
               toolUseId: tool.itemId,
+              rawPayload: message,
+            });
+          }
+
+          // Shown only once the gateway accepted it, so a refused plan never
+          // reaches the user while the model is told to resend it.
+          if (tool.toolName === CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME && !toolResult.isError) {
+            const tasksPayload = normalizeSynaraPlanTasks(tool.input);
+            if (tasksPayload && context.turnState) {
+              context.turnState.synaraPlanTasks = tasksPayload.tasks;
+            }
+            yield* emitTodoTasksUpdated(context, {
+              tasksPayload,
+              toolUseId: tool.itemId,
+              rawMethod: "claude/user/synara-plan-result",
               rawPayload: message,
             });
           }

@@ -964,7 +964,7 @@ describe("ClaudeAdapterLive", () => {
         });
 
         assert.deepEqual(gateway.leasedCapabilities, [
-          enableComputerControl ? ["computer:control"] : [],
+          enableComputerControl ? ["computer:control", "turn:plan"] : ["turn:plan"],
         ]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -7658,6 +7658,127 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (taskCreateStarted?.type === "item.started") {
         assert.equal(taskCreateStarted.payload.itemType, "plan");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("shows accepted synara_update_plan calls as the shared turn plan", () => {
+    const harness = makeHarness();
+    const emitPlanCall = (
+      toolUseId: string,
+      index: number,
+      items: ReadonlyArray<{ content: string; status: string }>,
+      result: { isError: boolean },
+    ) => {
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-update-plan",
+        uuid: `stream-${toolUseId}`,
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index,
+          content_block: {
+            type: "tool_use",
+            id: toolUseId,
+            name: "mcp__synara__synara_update_plan",
+            input: { items },
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-update-plan",
+        uuid: `user-${toolUseId}`,
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUseId,
+              content: result.isError ? "Refused" : "Plan shown",
+              ...(result.isError ? { is_error: true } : {}),
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+    };
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.tasks.updated" ||
+            (event.type === "item.started" && event.itemId === "tool-plan-1"),
+        ),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "fix the bug",
+        attachments: [],
+      });
+
+      emitPlanCall(
+        "tool-plan-1",
+        0,
+        [
+          { content: "Find the cause", status: "in_progress" },
+          { content: "Fix it", status: "pending" },
+        ],
+        { isError: false },
+      );
+      // The gateway refused this one (say, a retired turn): nothing may show.
+      emitPlanCall("tool-plan-2", 1, [{ content: "Refused step", status: "pending" }], {
+        isError: true,
+      });
+      emitPlanCall(
+        "tool-plan-3",
+        2,
+        [
+          { content: "Find the cause", status: "completed" },
+          { content: "Fix it", status: "in_progress" },
+        ],
+        { isError: false },
+      );
+      // The model leaves its last step in_progress; a normal end checks it off.
+      emitSuccessResult(harness.query, "sdk-session-update-plan", "result-update-plan", {
+        input_tokens: 1,
+        output_tokens: 1,
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const started = events.find((event) => event.type === "item.started");
+      assert.equal(started?.type === "item.started" ? started.payload.itemType : undefined, "plan");
+      const taskEvents = events.filter((event) => event.type === "turn.tasks.updated");
+      assert.deepEqual(
+        taskEvents.map((event) => event.payload.tasks),
+        [
+          [
+            { task: "Find the cause", status: "inProgress" },
+            { task: "Fix it", status: "pending" },
+          ],
+          [
+            { task: "Find the cause", status: "completed" },
+            { task: "Fix it", status: "inProgress" },
+          ],
+          [
+            { task: "Find the cause", status: "completed" },
+            { task: "Fix it", status: "completed" },
+          ],
+        ],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
