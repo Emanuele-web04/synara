@@ -751,7 +751,7 @@
   "theFolderMovedOrIsMissingLinkItsNew": "The folder moved or is missing. Link its new location to continue these conversations, or import the history alone.",
   "projectsKeepTheirExistingFoldersAndConversationsAreCopied": "Projects keep their existing folders, and conversations are copied into Synara. Nothing in your current projects changes.",
   "threadsContextAndMemoryForTheHubLiveIn": "Threads, context, and memory for the hub live in this folder after you set up the coordinator. Setup does not launch a model.",
-  "chatsInAMultiFolderProjectRunInLocal": "Chats in a multi-folder project run in Local mode with Codex or Claude. Git actions and file undo cover only the primary folder.",
+  "multiFolderProjectHint": "Chats in a multi-folder project run with Codex or Claude. A worktree isolates only the primary folder; the other folders are edited directly. Git actions and file undo cover only the primary folder.",
   "enterTheRestoredFolderSPathOnTheSynara": "Enter the restored folder's path on the Synara server. Your existing project and conversations stay in place. This does not recover lost files or move/repair linked Git worktrees. Finish active turns first.",
   "deletesTheHubItsCoordinatorContextAndAutomationsThe": "Deletes the hub, its coordinator, context, and automations. The Library is moved to the trash when possible. The hub folder under ~/Documents/Synara/Groups is removed only when it holds nothing but Synara-generated files; if it has your files it is kept and you get its path. Linked repositories and their threads are untouched.",
   "pushed_command": "Pushed",

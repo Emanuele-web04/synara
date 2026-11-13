@@ -983,7 +983,7 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
-          additionalFolders: existingProject.additionalFolders,
+          additionalFolders: event.payload.additionalFolders ?? existingProject.additionalFolders,
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },

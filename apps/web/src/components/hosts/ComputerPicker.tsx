@@ -12,6 +12,7 @@ import { CheckIcon } from "../../lib/icons";
 import { isHostSettingsSection, type SettingsSectionId } from "../../settingsNavigation";
 import { PickerTriggerButton } from "../chat/PickerTriggerButton";
 import { ComposerPickerMenuPopup } from "../chat/ComposerPickerMenuPopup";
+import { COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME } from "../chat/composerPickerStyles";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 
@@ -66,6 +67,7 @@ export function ComputerPicker({
   onChange,
   onManage,
   purpose = "Computer",
+  triggerClassName,
 }: {
   computers: readonly ComputerChoice[];
   value: string;
@@ -73,6 +75,7 @@ export function ComputerPicker({
   onChange: (id: string) => void;
   onManage?: (() => void) | undefined;
   purpose?: string;
+  triggerClassName?: string;
 }) {
   const selected = computers.find((computer) => computer.id === value);
   if (!onManage && computers.length === 1)
@@ -88,6 +91,7 @@ export function ComputerPicker({
             title={selected?.detail}
             variant="ghost"
             disabled={disabled}
+            {...(triggerClassName ? { className: triggerClassName } : {})}
           />
         }
       />
@@ -263,6 +267,8 @@ export function NewChatComputerPicker() {
       purpose="Run on"
       onChange={(id) => void select(id)}
       onManage={() => navigate("/settings?section=connections")}
+      // Same primary text and capsule hover as the project chip beside it.
+      triggerClassName={COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME}
     />
   );
 }

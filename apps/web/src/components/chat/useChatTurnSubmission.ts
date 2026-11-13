@@ -680,10 +680,7 @@ export function useChatTurnSubmission({
       // creating a worktree the turn would never use.
       const projectFolderIssue =
         (activeProject.additionalFolders?.length ?? 0) > 0
-          ? projectFoldersSessionIssue({
-              provider: selectedModelSelectionForSend.provider,
-              worktree: envModeForSend === "worktree",
-            })
+          ? projectFoldersSessionIssue({ provider: selectedModelSelectionForSend.provider })
           : null;
       if (projectFolderIssue !== null) {
         toastManager.add({ type: "error", title: projectFolderIssue });

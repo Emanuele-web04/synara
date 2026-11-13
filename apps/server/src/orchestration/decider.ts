@@ -32,7 +32,6 @@ import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
-import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
@@ -72,6 +71,7 @@ import {
   requireApprovalNotResponded,
   requireProject,
   requireProjectAbsent,
+  requireValidProjectFolders,
   requireProjectHasNoThreads,
   requireProjectWorkspaceRootAvailable,
   requireSpace,
@@ -1082,24 +1082,12 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
       const additionalFolders = command.additionalFolders ?? [];
-      if (additionalFolders.length > 0) {
-        if (nextProjectKind !== "project") {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: "Only ordinary projects can have additional folders.",
-          });
-        }
-        const folderProblem = findProjectFolderProblem(
-          [command.workspaceRoot, ...additionalFolders],
-          { platform: process.platform },
-        );
-        if (folderProblem !== null) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: folderProblem,
-          });
-        }
-      }
+      yield* requireValidProjectFolders({
+        command,
+        kind: nextProjectKind,
+        workspaceRoot: command.workspaceRoot,
+        additionalFolders,
+      });
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -1241,7 +1229,8 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         command.workspaceRoot !== undefined ||
         command.defaultModelSelection !== undefined ||
         command.scripts !== undefined ||
-        command.isPinned !== undefined;
+        command.isPinned !== undefined ||
+        command.additionalFolders !== undefined;
       const isLegacyHomeChatContainer = isLegacyHomeChatContainerRow({
         projectTitle: existingProject.title,
         projectWorkspaceRoot: existingProject.workspaceRoot,
@@ -1269,21 +1258,19 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
       }
-      // Relocating the primary folder must keep the folder set distinct and un-nested.
+      // Relocating the primary folder, editing the extra ones, or changing the kind must
+      // leave a valid folder set.
       if (
-        command.workspaceRoot !== undefined &&
-        (existingProject.additionalFolders ?? []).length > 0
+        command.workspaceRoot !== undefined ||
+        command.additionalFolders !== undefined ||
+        command.kind !== undefined
       ) {
-        const folderProblem = findProjectFolderProblem(
-          [command.workspaceRoot, ...(existingProject.additionalFolders ?? [])],
-          { platform: process.platform },
-        );
-        if (folderProblem !== null) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: folderProblem,
-          });
-        }
+        yield* requireValidProjectFolders({
+          command,
+          kind: nextProjectKind,
+          workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
+          additionalFolders: command.additionalFolders ?? existingProject.additionalFolders ?? [],
+        });
       }
       if (effectiveSpaceId !== null) {
         // Assignability is an invariant of the resulting row, not only of commands that
@@ -1365,6 +1352,9 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
+          ...(command.additionalFolders !== undefined
+            ? { additionalFolders: command.additionalFolders }
+            : {}),
           updatedAt: occurredAt,
         },
       } satisfies Omit<Extract<OrchestrationEvent, { type: "project.meta-updated" }>, "sequence">;

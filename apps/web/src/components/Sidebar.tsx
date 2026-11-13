@@ -182,6 +182,7 @@ import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
+import { deepEqualJson } from "../storeNormalization";
 import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import { getThreadFromState } from "../threadDerivation";
 import {
@@ -4740,7 +4741,28 @@ export default function Sidebar() {
   }, []);
 
   const handleEditProjectSave = useCallback(
-    (projectId: ProjectId, next: EditProjectValue, previousLocalName: string | null) => {
+    async (
+      projectId: ProjectId,
+      next: EditProjectValue,
+      previous: {
+        readonly localName: string | null;
+        readonly additionalFolders: ReadonlyArray<string>;
+      },
+    ) => {
+      // Folders are server state: save them first so a refused edit keeps the dialog open
+      // with nothing applied.
+      const nextFolders = next.additionalFolders;
+      if (nextFolders !== undefined && !deepEqualJson(nextFolders, previous.additionalFolders)) {
+        const api = readNativeApi();
+        if (!api) throw new Error(t("workspace:theAppServerIsUnavailable"));
+        await api.orchestration.dispatchCommand({
+          type: "project.meta.update",
+          commandId: newCommandId(),
+          projectId,
+          additionalFolders: [...nextFolders],
+        });
+      }
+      const previousLocalName = previous.localName;
       setProjectAppearanceLocally(projectId, next.appearance);
       const trimmed = next.name.trim();
       const normalizedPrevious = previousLocalName?.trim() ?? "";
@@ -4749,7 +4771,7 @@ export default function Sidebar() {
       }
       renameProjectLocally(projectId, trimmed.length > 0 ? trimmed : null);
     },
-    [renameProjectLocally, setProjectAppearanceLocally],
+    [renameProjectLocally, setProjectAppearanceLocally, t],
   );
 
   const remotePinnedThreads = useMemo<WorkspaceThreadEntry[]>(() => {
@@ -8849,17 +8871,18 @@ export default function Sidebar() {
           initialValue={{
             name: editProjectDialogProject.localName ?? "",
             appearance: editProjectDialogProject.appearance ?? null,
+            additionalFolders: editProjectDialogProject.additionalFolders ?? [],
           }}
+          editFolders={editProjectDialogProject.kind === "project"}
           onOpenChange={(nextOpen) => {
             if (!nextOpen)
               setEditProjectDialog((current) => current && { ...current, open: false });
           }}
           onSave={(next) =>
-            handleEditProjectSave(
-              editProjectDialogProject.id,
-              next,
-              editProjectDialogProject.localName,
-            )
+            handleEditProjectSave(editProjectDialogProject.id, next, {
+              localName: editProjectDialogProject.localName,
+              additionalFolders: editProjectDialogProject.additionalFolders ?? [],
+            })
           }
         />
       ) : null}

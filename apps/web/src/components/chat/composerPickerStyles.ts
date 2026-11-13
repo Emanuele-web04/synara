@@ -37,6 +37,10 @@ export const COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME =
 
 export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 px-2 py-1 ${COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME}`;
 
+/** `PickerTriggerButton` override for the chips in the tray above an empty composer
+ *  (computer, project / folder): primary text and the same capsule hover. */
+export const COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME = `h-8 px-2 py-1 sm:h-7 sm:px-2.5 ${COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME} ${COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME}`;
+
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";

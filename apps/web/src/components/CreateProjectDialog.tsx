@@ -18,6 +18,7 @@ import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryNa
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { isElectron } from "../env";
+import { useAdditionalProjectFolders } from "../hooks/useAdditionalProjectFolders";
 import { useWindowFolderDrop } from "../hooks/useWindowFolderDrop";
 import { VOID_SPACE_KEY, spaceKey, toSpaceIconName } from "../lib/spaceGrouping";
 import { createSpace } from "../lib/spaces";
@@ -33,7 +34,7 @@ import {
   CreateGitHubProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
 } from "./CreateGitHubProjectFields";
-import { ProjectFolderList } from "./ProjectFolderList";
+import { ProjectFolderAddRow, ProjectFolderList } from "./ProjectFolderList";
 import { ProjectSourceSegmentedPicker } from "./ProjectSourceSegmentedPicker";
 import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
@@ -107,10 +108,6 @@ export function CreateProjectDialog(props: {
   const dialogGeneration = useRef(0);
   const [source, setSource] = useState<"local" | "github">("local");
   const [path, setPath] = useState("");
-  /** Extra folders after the primary `path`, in display order. */
-  const [additionalFolders, setAdditionalFolders] = useState<ReadonlyArray<string>>([]);
-  /** Browser builds have no native picker, so another folder is typed here. */
-  const [additionalFolderInput, setAdditionalFolderInput] = useState("");
   const [repositoryInput, setRepositoryInput] = useState("");
   const [destinationParent, setDestinationParent] = useState("");
   const [directoryName, setDirectoryName] = useState("");
@@ -133,6 +130,13 @@ export function CreateProjectDialog(props: {
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  /** Extra folders after the primary `path`, in display order. */
+  const {
+    additionalFolders,
+    setAdditionalFolders,
+    addFolder: addAdditionalFolder,
+    removeFolder: removeAdditionalFolder,
+  } = useAdditionalProjectFolders({ primary: path.trim(), onProblem: setFormError });
   const openedRef = useRef(false);
   const submitAbortRef = useRef<AbortController | null>(null);
   const activeOperationIdRef = useRef<string | null>(null);
@@ -164,7 +168,6 @@ export function CreateProjectDialog(props: {
     setSource("local");
     setPath("");
     setAdditionalFolders([]);
-    setAdditionalFolderInput("");
     setRepositoryInput("");
     setDestinationParent(props.defaultCloneParent);
     setDirectoryName("");
@@ -183,7 +186,14 @@ export function CreateProjectDialog(props: {
     // name field has to happen after that lands or it is immediately undone.
     const frame = requestAnimationFrame(() => document.getElementById(nameInputId)?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [localId, nameInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
+  }, [
+    localId,
+    nameInputId,
+    props.activeSpaceId,
+    props.defaultCloneParent,
+    props.open,
+    setAdditionalFolders,
+  ]);
 
   useEffect(() => {
     if (!githubAvailable && source === "github") {
@@ -238,20 +248,6 @@ export function CreateProjectDialog(props: {
     [directoryNameInputId],
   );
 
-  // Adds a folder after the primary one, refusing duplicates and nested folders up front.
-  const addAdditionalFolder = (folder: string): boolean => {
-    const candidate = folder.trim();
-    if (!candidate) return false;
-    const problem = findProjectFolderProblem([trimmedPath, ...additionalFolders, candidate]);
-    if (problem) {
-      setFormError(problem);
-      return false;
-    }
-    setAdditionalFolders((current) => [...current, candidate]);
-    setFormError(null);
-    return true;
-  };
-
   // Replaces the primary folder (`path`); the rest keep their order.
   const setFolders = (folders: ReadonlyArray<string>) => {
     const [primary = "", ...rest] = folders;
@@ -266,12 +262,8 @@ export function CreateProjectDialog(props: {
   const makeFolderPrimary = (index: number) =>
     setFolders([folders[index]!, ...folders.filter((_, candidate) => candidate !== index)]);
   const removeFolder = (index: number) => {
-    if (index === 0) {
-      setFolders(additionalFolders);
-      return;
-    }
-    setAdditionalFolders((current) => current.filter((_, candidate) => candidate !== index - 1));
-    setFormError(null);
+    if (index === 0) setFolders(additionalFolders);
+    else removeAdditionalFolder(index);
   };
 
   const handleBrowse = async (mode: "primary" | "additional" = "primary") => {
@@ -554,7 +546,6 @@ export function CreateProjectDialog(props: {
                     setComputerId(id);
                     setPath("");
                     setAdditionalFolders([]);
-                    setAdditionalFolderInput("");
                     setPickedPath(null);
                     setFormError(null);
                     if (!nameEdited) setName("");
@@ -591,82 +582,24 @@ export function CreateProjectDialog(props: {
                 />
               </InputGroup>
               {showFolderList ? (
-                <div className="space-y-2">
-                  <span
-                    id={sourceFolderLabelId}
-                    className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
-                  >
-                    {t("workspace:sourceFolders")}
-                  </span>
-                  <ProjectFolderList
-                    folders={folders}
-                    disabled={submitting || isPickingFolder}
-                    labelledBy={sourceFolderLabelId}
-                    onMakePrimary={makeFolderPrimary}
-                    onRemove={removeFolder}
-                    addRow={
-                      !remote && isElectron ? (
-                        <button
-                          type="button"
-                          disabled={isPickingFolder || submitting}
-                          className={cn(
-                            "flex min-h-12 w-full cursor-pointer items-center gap-2.5 px-3.5 text-start text-ui text-[var(--color-text-foreground)] transition-colors outline-none hover:bg-foreground/4 focus-visible:bg-foreground/6 disabled:opacity-50",
-                            isDropTarget && "bg-foreground/6",
-                          )}
-                          onClick={() => void handleBrowse("additional")}
-                        >
-                          <FolderAddIcon className="size-4.5" aria-hidden="true" />
-                          {isPickingFolder
-                            ? t("workspace:openingTheFolderPicker")
-                            : t("workspace:addFolder")}
-                        </button>
-                      ) : (
-                        <div className="flex min-h-12 items-center gap-2.5 px-3.5">
-                          <FolderAddIcon className="size-4.5 shrink-0" aria-hidden="true" />
-                          <input
-                            id={additionalFolderInputId}
-                            value={additionalFolderInput}
-                            aria-label={t("workspace:additionalFolderPath")}
-                            placeholder={t("workspace:pathToAnotherFolder")}
-                            spellCheck={false}
-                            autoCorrect="off"
-                            autoCapitalize="off"
-                            disabled={submitting}
-                            className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
-                            onChange={(event) => {
-                              setAdditionalFolderInput(event.target.value);
-                              setFormError(null);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key !== "Enter") return;
-                              event.preventDefault();
-                              if (addAdditionalFolder(additionalFolderInput)) {
-                                setAdditionalFolderInput("");
-                              }
-                            }}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="chip"
-                            disabled={submitting || additionalFolderInput.trim().length === 0}
-                            onClick={() => {
-                              if (addAdditionalFolder(additionalFolderInput)) {
-                                setAdditionalFolderInput("");
-                              }
-                            }}
-                          >
-                            {t("workspace:addFolder")}
-                          </Button>
-                        </div>
-                      )
-                    }
-                  />
-                  {additionalFolders.length > 0 ? (
-                    <p className="text-ui-xs text-muted-foreground/70">
-                      {t("workspace:chatsInAMultiFolderProjectRunInLocal")}
-                    </p>
-                  ) : null}
-                </div>
+                <ProjectFolderList
+                  folders={folders}
+                  disabled={submitting || isPickingFolder}
+                  onMakePrimary={makeFolderPrimary}
+                  onRemove={removeFolder}
+                  addRow={
+                    <ProjectFolderAddRow
+                      picker={!remote && isElectron}
+                      disabled={isPickingFolder || submitting}
+                      picking={isPickingFolder}
+                      highlighted={isDropTarget}
+                      inputId={additionalFolderInputId}
+                      onBrowse={() => void handleBrowse("additional")}
+                      onAdd={addAdditionalFolder}
+                      onInputChange={() => setFormError(null)}
+                    />
+                  }
+                />
               ) : (
                 <div className="space-y-2">
                   <span
