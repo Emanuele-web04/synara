@@ -444,7 +444,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       .execute({
         operation: "CheckpointStore.changedPaths",
         cwd,
-        args: ["diff", "--name-only", "-z", "--no-renames", from, to],
+        args: ["diff", "--name-only", "-z", "--no-renames", "--no-relative", from, to],
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       })
       .pipe(Effect.map((result) => parseNameOnlyPaths(result.stdout)));
@@ -506,20 +506,19 @@ const makeCheckpointStore = Effect.gen(function* () {
       return tips;
     });
 
-  // A merged branch must have changed a path itself before its contents
-  // can explain a change in the final tree. For a checkout, compare directly
-  // with the starting HEAD because the branch switch replaces that tree.
+  // Compare incoming paths against their common ancestor when the final HEAD
+  // contains new commits. An existing target reached directly replaces the
+  // starting tree, so compare it to the starting HEAD instead.
   const listIntegratedPaths = (input: {
     readonly cwd: string;
     readonly fromHead: string;
     readonly toHead: string;
     readonly tip: string;
-    readonly isDescendant: boolean;
   }) =>
     Effect.gen(function* () {
-      const { cwd, fromHead, toHead, tip, isDescendant } = input;
+      const { cwd, fromHead, toHead, tip } = input;
       let baseline = fromHead;
-      if (isDescendant && tip !== toHead) {
+      if (tip !== toHead) {
         const bases = (yield* git.execute({
           operation: "CheckpointStore.resolveIntegratedMergeBase",
           cwd,
@@ -583,6 +582,7 @@ const makeCheckpointStore = Effect.gen(function* () {
             "-z",
             "--no-renames",
             "--no-abbrev",
+            "--no-relative",
             input.fromCommitOid,
             input.toCommitOid,
           ],
@@ -590,16 +590,6 @@ const makeCheckpointStore = Effect.gen(function* () {
         })).stdout,
       );
       if (changes.length === 0) return input.toCommitOid;
-
-      const ancestry = tips.includes(toHead)
-        ? undefined
-        : yield* git.execute({
-            operation,
-            cwd: input.cwd,
-            args: ["merge-base", "--is-ancestor", fromHead, toHead],
-            allowNonZeroExit: true,
-          });
-      if (ancestry && ancestry.code !== 0 && ancestry.code !== 1) return input.toCommitOid;
 
       const [dirtyAtStart, dirtyAtEnd, ...integratedPaths] = yield* Effect.all(
         [
@@ -611,7 +601,6 @@ const makeCheckpointStore = Effect.gen(function* () {
               fromHead,
               toHead,
               tip,
-              isDescendant: ancestry?.code === 0,
             }),
           ),
         ],
@@ -791,6 +780,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "--no-textconv",
           "--src-prefix=a/",
           "--dst-prefix=b/",
+          "--no-relative",
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           fromCommitOid,
           yield* resolveAuthoredDiffTarget({ cwd: input.cwd, fromCommitOid, toCommitOid }),
@@ -959,6 +949,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "--no-textconv",
           "--src-prefix=a/",
           "--dst-prefix=b/",
+          "--no-relative",
           fromCommitOid,
           targetOid,
         ],
@@ -971,7 +962,9 @@ const makeCheckpointStore = Effect.gen(function* () {
       const changedPaths = yield* git.execute({
         operation,
         cwd: input.cwd,
-        args: ["diff", "--name-only", "--no-renames", "-z", fromCommitOid, targetOid],
+        // Git applies repo-relative patches within cwd; reset and rollback
+        // take project-relative pathspecs and must touch the same files.
+        args: ["diff", "--name-only", "--no-renames", "-z", "--relative", fromCommitOid, targetOid],
         maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       });
       const affectedPaths = changedPaths.stdout.split("\0").filter((entry) => entry.length > 0);

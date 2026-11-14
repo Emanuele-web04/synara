@@ -382,7 +382,7 @@ describe("CheckpointStoreLive", () => {
       if (args.startsWith("diff --patch --binary --full-index")) {
         return Effect.succeed({ code: 0, stdout: "turn patch", stderr: "" });
       }
-      if (args === "diff --name-only --no-renames -z from-oid to-oid") {
+      if (args === "diff --name-only --no-renames -z --relative from-oid to-oid") {
         return Effect.succeed({ code: 0, stdout: "src/file.ts\0", stderr: "" });
       }
       if (input.args[0] === "apply" && input.args[1] === "--reverse") {
@@ -846,6 +846,46 @@ describe("CheckpointStoreLive history integration", () => {
     cwd = repositoryRoot;
   });
 
+  it("filters incoming changes in a subdirectory with diff.relative enabled", async () => {
+    prepareDivergedBranches();
+    const repositoryRoot = cwd;
+    git(["config", "diff.relative", "true"]);
+    git(["switch", "-c", "incoming"]);
+    write("pkg/incoming", "initial\n");
+    write("pkg/own", "initial\n");
+    commitExisting("Add project");
+    git(["branch", "working"]);
+    write("pkg/incoming", "incoming change\n");
+    commitExisting("Update incoming file");
+    git(["switch", "working"]);
+    cwd = join(repositoryRoot, "pkg");
+
+    try {
+      await capture(fromRef);
+      git(["merge", "--ff-only", "incoming"]);
+      write("own", "authored change\n");
+      await capture(toRef);
+
+      expect(diffedPaths(await turnDiff())).toEqual(["pkg/own"]);
+      await run(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          expect(
+            yield* store.reverseCheckpointDiff({
+              cwd,
+              fromCheckpointRef: fromRef,
+              toCheckpointRef: toRef,
+            }),
+          ).toBe(true);
+        }),
+      );
+      expect(readFileSync(join(cwd, "incoming"), "utf8")).toBe("incoming change\n");
+      expect(readFileSync(join(cwd, "own"), "utf8")).toBe("initial\n");
+    } finally {
+      cwd = repositoryRoot;
+    }
+  });
+
   it("keeps commits made during the turn in the turn diff", async () => {
     prepareDivergedBranches();
     await capture(fromRef);
@@ -883,17 +923,23 @@ describe("CheckpointStoreLive history integration", () => {
     },
   );
 
-  it("keeps a feature-only deletion when the merged branch never changed that path", async () => {
-    prepareDivergedBranches();
-    await capture(fromRef);
+  it.each([
+    ["merge", ["merge", "--no-edit", "-Xtheirs", "main"]],
+    ["rebase", ["rebase", "-Xours", "main"]],
+  ] as const)(
+    "keeps a feature-only deletion when the branch used for %s never changed that path",
+    async (_, command) => {
+      prepareDivergedBranches();
+      await capture(fromRef);
 
-    git(["rm", "src/feature.ts"]);
-    git(["commit", "-m", "Delete feature-only file during the turn"]);
-    git(["merge", "--no-edit", "-Xtheirs", "main"]);
-    await capture(toRef);
+      git(["rm", "src/feature.ts"]);
+      git(["commit", "-m", "Delete feature-only file during the turn"]);
+      git([...command]);
+      await capture(toRef);
 
-    expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
-  });
+      expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+    },
+  );
 
   it("keeps authored changes when the history walk would omit the first new commit", async () => {
     prepareDivergedBranches();
