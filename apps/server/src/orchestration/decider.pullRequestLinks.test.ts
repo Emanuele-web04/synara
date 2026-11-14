@@ -233,6 +233,17 @@ describe("thread pull request links", () => {
     const thread = threadOf(readModel);
     expect(thread.lastKnownPr).toBeNull();
     expect(thread.pullRequests?.[0]?.dismissedAt).toEqual(expect.any(String));
+
+    // A command can finish resolving its PR after the user has unlinked it.
+    ({ readModel } = await dispatch(readModel, {
+      type: "thread.pull-request.link",
+      commandId: commandId(),
+      threadId: THREAD_ID,
+      pullRequest: pr(1),
+      source: "created",
+    }));
+    expect(threadOf(readModel).pullRequests).toEqual(thread.pullRequests);
+    expect(threadOf(readModel).lastKnownPr).toBeNull();
   });
 
   it("links a PR carried into a new thread as a checkout link", async () => {

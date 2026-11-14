@@ -506,6 +506,7 @@ describe("EnvironmentPullRequestSection thread links", () => {
       pullRequest: GitResolvedPullRequest;
       source: "agent" | "created" | "discovered";
       linkedAt: string;
+      dismissedAt?: string;
     }>,
   ) {
     useStore.setState((state) => ({
@@ -593,6 +594,60 @@ describe("EnvironmentPullRequestSection thread links", () => {
     await page.getByText("Unlink from this chat", { exact: true }).click();
     expect(dispatchCommand).toHaveBeenCalledWith(
       expect.objectContaining({ type: "thread.pull-request.unlink", url: pullRequest.url }),
+    );
+  });
+
+  it("keeps a dismissed PR hidden when the checked-out branch still reports it", async () => {
+    seedThreadLinks([
+      {
+        pullRequest,
+        source: "discovered",
+        linkedAt: "2026-11-13T09:00:00.000Z",
+        dismissedAt: "2026-11-13T10:00:00.000Z",
+      },
+    ]);
+    await renderSection(createQueryClient());
+
+    await expect.element(page.getByTestId("pr-link-row")).toBeVisible();
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  it("unlinks a sibling from its existing stack row", async () => {
+    const projectId = ProjectId.makeUnsafe("stack-project");
+    const queryClient = createQueryClient();
+    const repository = "example/synara";
+    const sibling = { ...earlierPullRequest, baseBranch: "main" };
+    const current = { ...pullRequest, baseBranch: sibling.headBranch };
+    seedThreadLinks([
+      { pullRequest: sibling, source: "created", linkedAt: "2026-11-13T09:00:00.000Z" },
+      { pullRequest: current, source: "agent", linkedAt: "2026-11-13T10:00:00.000Z" },
+    ]);
+    queryClient.setQueryData(pullRequestQueryKeys.detail({ projectId, repository, number: 321 }), {
+      mergeCapabilities: { merge: true, squash: true, rebase: true, deleteBranchOnMerge: false },
+      stack: {
+        entries: [
+          { ...sibling, position: 1, mergeStateStatus: null },
+          { ...current, position: 2, mergeStateStatus: null },
+        ],
+        number: 300,
+        size: 2,
+        position: 2,
+        baseBranch: "main",
+      },
+    });
+    await render(section(queryClient, vi.fn(), { projectId }));
+
+    const earlierRow = page.getByTestId("pr-stack-row");
+    await expect.element(earlierRow).toHaveTextContent("#300 Earlier work");
+    await earlierRow.getByRole("button", { name: "Unlink from this chat" }).click();
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.pull-request.unlink",
+        threadId,
+        url: sibling.url,
+      }),
     );
   });
 

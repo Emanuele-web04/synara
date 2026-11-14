@@ -26,6 +26,7 @@ import type {
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
+  findPullRequestLink,
   pullRequestLinkKey,
   resolveCurrentPullRequestLink,
   visiblePullRequestLinks,
@@ -431,7 +432,13 @@ export function EnvironmentPullRequestSection({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const linkedPullRequests = visiblePullRequestLinks(threadPullRequestLinks);
   const currentLink = resolveCurrentPullRequestLink(threadPullRequestLinks);
-  const branchPr = gitStatus?.pr ?? null;
+  const reportedBranchPr = gitStatus?.pr ?? null;
+  // Git status can still report a PR after its thread link was dismissed.
+  const branchPr =
+    reportedBranchPr &&
+    findPullRequestLink(threadPullRequestLinks, reportedBranchPr.url)?.dismissedAt == null
+      ? reportedBranchPr
+      : null;
   // The thread's own PR wins over whatever the checkout's branch has: a shared checkout can sit
   // on another thread's branch, and a linked PR stays the thread's PR after the branch moves.
   // When both are the same PR, the branch status is the fresher copy.
@@ -513,6 +520,18 @@ export function EnvironmentPullRequestSection({
       });
   };
 
+  const renderUnlinkButton = (url: string) => (
+    <button
+      type="button"
+      className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-60 outline-none hover:opacity-100 focus-visible:opacity-100"
+      aria-label={t("git:unlinkPullRequest")}
+      title={t("git:unlinkPullRequest")}
+      onClick={() => unlinkPullRequest(url)}
+    >
+      <XIcon className="size-3.5" aria-hidden />
+    </button>
+  );
+
   const linkDialog =
     threadPullRequestLinks !== null ? (
       <PullRequestThreadDialog
@@ -555,9 +574,10 @@ export function EnvironmentPullRequestSection({
       ? detailQuery.data.stack.entries.filter((entry) => entry.number !== displayPr.number)
       : [];
   const displayPrKey = pullRequestLinkKey(displayPr.url);
-  const displayPrIsLinked = linkedPullRequests.some(
-    (link) => pullRequestLinkKey(link.pullRequest.url) === displayPrKey,
+  const linkedPullRequestKeys = new Set(
+    linkedPullRequests.map((link) => pullRequestLinkKey(link.pullRequest.url)),
   );
+  const displayPrIsLinked = linkedPullRequestKeys.has(displayPrKey);
   // The thread's other linked PRs; stack siblings already have their own rows above.
   const stackRowKeys = new Set(stackRows.map((entry) => pullRequestLinkKey(entry.url)));
   const otherLinkedPullRequests = linkedPullRequests
@@ -1165,6 +1185,9 @@ export function EnvironmentPullRequestSection({
                 ) : null
               }
             />
+            {linkedPullRequestKeys.has(pullRequestLinkKey(entry.url))
+              ? renderUnlinkButton(entry.url)
+              : null}
           </div>
         );
       })}
@@ -1196,15 +1219,7 @@ export function EnvironmentPullRequestSection({
                 label={<span className="truncate">{label}</span>}
               />
             </button>
-            <button
-              type="button"
-              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-60 outline-none hover:opacity-100 focus-visible:opacity-100"
-              aria-label={t("git:unlinkPullRequest")}
-              title={t("git:unlinkPullRequest")}
-              onClick={() => unlinkPullRequest(linkedPr.url)}
-            >
-              <XIcon className="size-3.5" aria-hidden />
-            </button>
+            {renderUnlinkButton(linkedPr.url)}
           </div>
         );
       })}

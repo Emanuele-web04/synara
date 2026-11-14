@@ -32,6 +32,7 @@ import {
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import {
+  findPullRequestLink,
   linkPullRequest,
   pullRequestLinksEqual,
   refreshPullRequestSnapshots,
@@ -2140,6 +2141,13 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
 
     case "thread.pull-request.link": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      // Command-created links may arrive after the user has already unlinked the PR.
+      if (
+        command.source === "created" &&
+        findPullRequestLink(thread.pullRequests, command.pullRequest.url)?.dismissedAt != null
+      ) {
+        return [];
+      }
       const occurredAt = nowIso();
       return pullRequestLinksEvent({
         command,

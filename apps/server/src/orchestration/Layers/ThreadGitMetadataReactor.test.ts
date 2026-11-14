@@ -784,42 +784,63 @@ describe("ThreadGitMetadataReactor", () => {
       },
     }) as unknown as ProviderRuntimeEvent;
 
-  it("links a pull request an agent created with gh pr create", async () => {
-    const threadId = ThreadId.makeUnsafe("command-created-thread");
-    const createdUrl = "https://github.com/Emanuele-web04/synara/pull/601";
-    const harness = await createHarness({
-      threads: [
-        {
-          id: threadId,
-          projectId: ProjectId.makeUnsafe("project-1"),
-          envMode: "local",
-          worktreePath: null,
-          branch: "feat/thing",
-          lastKnownPr: null,
-        },
-      ],
-      branchByCwd: { "/repo": "feat/thing" },
-    });
+  it.each(["unlinked", "discovered"] as const)(
+    "keeps a command-created pull request attached after its branch changes (%s)",
+    async (initialLink) => {
+      const threadId = ThreadId.makeUnsafe("command-created-thread");
+      const createdUrl = "https://github.com/Emanuele-web04/synara/pull/601";
+      const harness = await createHarness({
+        threads: [
+          {
+            id: threadId,
+            projectId: ProjectId.makeUnsafe("project-1"),
+            envMode: "local",
+            worktreePath: null,
+            branch: "feat/thing",
+            lastKnownPr: null,
+            pullRequests:
+              initialLink === "discovered"
+                ? [
+                    {
+                      pullRequest: { ...pullRequest, url: createdUrl },
+                      source: "discovered",
+                      linkedAt: "2026-08-07T09:00:00.000Z",
+                    },
+                  ]
+                : [],
+          },
+        ],
+        branchByCwd: { "/repo": "feat/thing" },
+      });
 
-    await harness.publish(
-      commandCompletedEvent(
+      await harness.publish(
+        commandCompletedEvent(
+          threadId,
+          "item-create",
+          'bash -lc \'gh pr create --title "Thing" --body "Body"\'',
+          `Creating pull request for feat/thing into main\n\n${createdUrl}\n`,
+        ),
+      );
+      await waitFor(() => harness.commands.length === 1);
+      await harness.drain();
+
+      expect(harness.resolvedPullRequestReferences).toEqual([createdUrl]);
+      expect(harness.commands[0]).toMatchObject({
+        type: "thread.pull-request.link",
         threadId,
-        "item-create",
-        'bash -lc \'gh pr create --title "Thing" --body "Body"\'',
-        `Creating pull request for feat/thing into main\n\n${createdUrl}\n`,
-      ),
-    );
-    await waitFor(() => harness.commands.length === 1);
-    await harness.drain();
-
-    expect(harness.resolvedPullRequestReferences).toEqual([createdUrl]);
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.pull-request.link",
-      threadId,
-      source: "created",
-      pullRequest: { url: createdUrl },
-    });
-  });
+        source: "created",
+        pullRequest: { url: createdUrl },
+      });
+      // Discovery clears branch-managed links when the checkout moves to another branch.
+      expect(
+        syncDiscoveredPullRequest(
+          harness.threads.get(threadId)?.pullRequests,
+          null,
+          "2026-08-07T10:05:00.000Z",
+        ),
+      ).toMatchObject([{ source: "created", pullRequest: { url: createdUrl } }]);
+    },
+  );
 
   it("does not re-link a pull request the user unlinked", async () => {
     const threadId = ThreadId.makeUnsafe("command-unlinked-thread");

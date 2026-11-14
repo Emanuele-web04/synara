@@ -7,6 +7,8 @@ import {
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import {
   findPullRequestLink,
+  isExplicitPullRequestLinkSource,
+  isPullRequestLinkVisible,
   pullRequestLinkKey,
   resolveBranchManagedPullRequest,
   threadPullRequestsEqual,
@@ -359,17 +361,20 @@ const make = Effect.gen(function* () {
     capacity: THREAD_GIT_METADATA_REACTOR_CAPACITY,
   });
 
-  // Safety net for `gh pr create` run by an agent that never called the link tool. A PR that is
-  // already linked, or that the user unlinked (tombstone), is left alone.
+  // Preserve command-created PRs across branch changes, even if discovery linked them first.
   const linkCommandCreatedPullRequests = Effect.fnUntraced(function* (
     job: CommandCreatedPullRequests,
   ) {
     const threadOption = yield* projectionSnapshotQuery.getThreadShellById(job.threadId);
     const thread = Option.getOrUndefined(threadOption);
     if (!thread || thread.archivedAt != null) return;
-    const pending = job.urls.filter(
-      (url) => findPullRequestLink(thread.pullRequests, url) === null,
-    );
+    const pending = job.urls.filter((url) => {
+      const link = findPullRequestLink(thread.pullRequests, url);
+      return (
+        link === null ||
+        (isPullRequestLinkVisible(link) && !isExplicitPullRequestLinkSource(link.source))
+      );
+    });
     if (pending.length === 0) return;
     const context = yield* resolveWorkspaceContext(job.threadId);
     if (!context) return;
