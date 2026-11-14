@@ -12,7 +12,7 @@ import type {
   ServerProviderStatus,
   ServerSettings,
 } from "@synara/contracts";
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 
 import {
   getProviderInstanceOptions,
@@ -32,6 +32,7 @@ import {
 } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
+  hasForegroundProviderModelDiscovery,
   prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
@@ -96,6 +97,10 @@ export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
 export const NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS = 24 * 60 * 60_000;
 
 const EMPTY_PROVIDER_STATUSES: readonly ServerProviderStatus[] = [];
+
+// Track which in-flight queries were started only by a passive warm. A query
+// joined by an explicit create or protected by a picker refresh stays live.
+const passiveModelPrefetches = new WeakMap<Query, Promise<void>>();
 
 function providerStartOptionsForInstance(
   settings: ProviderModelPrefetchSettings,
@@ -322,6 +327,7 @@ export function prefetchProviderModelsForNewThread(
     providers?: ReadonlyArray<ProviderKind>;
     foregroundProvider?: ProviderKind;
     foregroundInstanceId?: ProviderInstanceId;
+    passive?: boolean;
   },
 ): void {
   const cwd = input.cwd ?? null;
@@ -341,7 +347,11 @@ export function prefetchProviderModelsForNewThread(
       cwd,
       priority: provider === (input.foregroundProvider ?? providers[0]) ? "prefetch" : "background",
     });
-    void queryClient.prefetchQuery({
+    const query = queryClient
+      .getQueryCache()
+      .find({ queryKey: modelsOptions.queryKey, exact: true });
+    const wasPending = query !== undefined && query.state.fetchStatus !== "idle";
+    const prefetch = queryClient.prefetchQuery({
       ...modelsOptions,
       ...(provider === "codex" || provider === "claudeAgent" ? { retry: 0 } : {}),
       staleTime:
@@ -350,6 +360,21 @@ export function prefetchProviderModelsForNewThread(
           : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS,
     });
+
+    if (input.passive && !wasPending) {
+      const started = queryClient.getQueryCache().find({
+        queryKey: modelsOptions.queryKey,
+        exact: true,
+      });
+      if (started && started.state.fetchStatus !== "idle") {
+        passiveModelPrefetches.set(started, prefetch);
+        void prefetch.then(() => {
+          if (passiveModelPrefetches.get(started) === prefetch) {
+            passiveModelPrefetches.delete(started);
+          }
+        });
+      }
+    }
 
     // Agent/mode lists ride along for providers that surface them next to models.
     const agentsOptions = providerAgentsPrefetchQueryOptions({
@@ -443,6 +468,11 @@ export function prefetchModelsForNewThread(
     fresh?: boolean;
     envMode?: DraftThreadEnvMode | null;
     includeDroid?: boolean;
+    /**
+     * Warm only the provider the new thread would start with. Use it where the
+     * user has not asked for a new thread yet; the picker loads the others.
+     */
+    selectedProviderOnly?: boolean;
   },
 ): void {
   const instanceSettings = {
@@ -554,7 +584,11 @@ export function prefetchModelsForNewThread(
     }
     return true;
   };
-  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(isProviderWarmable);
+  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(
+    (provider) =>
+      isProviderWarmable(provider) &&
+      (input.selectedProviderOnly !== true || provider === selectedProvider),
+  );
   const orderedProviders =
     selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
       ? providers
@@ -587,19 +621,26 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  // Hovering another project supersedes only inactive model prefetches. Active
-  // composer queries and exact-key prefetches keep running. Include both
-  // fetching and offline-paused queries so stale hover work cannot revive on
-  // reconnect and consume native admission.
+  const passive = input.selectedProviderOnly === true;
+  const isDesired = (queryKey: readonly unknown[]) =>
+    desiredModelQueryKeys.some(
+      (desired) =>
+        queryKey.length === desired.length &&
+        queryKey.every((value, index) => Object.is(value, desired[index])),
+    );
+  if (!passive) {
+    for (const queryKey of desiredModelQueryKeys) {
+      const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+      if (query) passiveModelPrefetches.delete(query);
+    }
+  }
   void queryClient.cancelQueries({
     queryKey: providerDiscoveryQueryKeys.modelsAll,
     type: "inactive",
     predicate: (query) =>
-      !desiredModelQueryKeys.some(
-        (queryKey) =>
-          query.queryKey.length === queryKey.length &&
-          query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
-      ),
+      (!passive || passiveModelPrefetches.has(query)) &&
+      !hasForegroundProviderModelDiscovery(query.queryKey) &&
+      !isDesired(query.queryKey),
   });
 
   if (shouldWarmSelectedDroid) {
@@ -615,5 +656,6 @@ export function prefetchModelsForNewThread(
     providers: orderedProviders,
     foregroundProvider: selectedProvider,
     foregroundInstanceId: selectedProviderInstanceId,
+    passive,
   });
 }

@@ -278,6 +278,103 @@ describe("providerModelsPrefetchQueryOptions", () => {
 });
 
 describe("prefetchModelsForNewThread", () => {
+  it("keeps explicit discovery running while passively warming the selected provider", async () => {
+    const queryClient = new QueryClient();
+    const explicitKey = providerDiscoveryQueryKeys.models(
+      "droid",
+      null,
+      null,
+      null,
+      "/tmp/project",
+    );
+    let finishDiscovery!: (value: string) => void;
+    const pending = queryClient.fetchQuery({
+      queryKey: explicitKey,
+      queryFn: () =>
+        new Promise<string>((resolve) => {
+          finishDiscovery = resolve;
+        }),
+    });
+    const result = pending.catch(() => "cancelled");
+    const prefetch = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
+      projectCwd: "/tmp/project",
+      selectedProviderOnly: true,
+    });
+
+    finishDiscovery("completed");
+    expect(await result).toBe("completed");
+    expect(modelKeysFromCalls(prefetch)).toEqual([
+      providerDiscoveryQueryKeys.models("codex", null, null, null, null),
+    ]);
+    queryClient.clear();
+  });
+
+  it.each([false, true])(
+    "only cancels an abandoned passive lookup without explicit create intent (%s)",
+    async (explicitCreate) => {
+      const queryClient = new QueryClient();
+      const modelResponse = { models: [], source: "disabled" };
+      let completeLookup!: () => void;
+      const heldLookup = new Promise<typeof modelResponse>((resolve) => {
+        completeLookup = () => resolve(modelResponse);
+      });
+      const listModels = vi.fn(({ cwd }: { cwd?: string }) =>
+        cwd === "/tmp/abandoned" ? heldLookup : Promise.resolve({ models: [], source: "disabled" }),
+      );
+      vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+        provider: {
+          listModels,
+          listAgents: vi
+            .fn()
+            .mockResolvedValue({ agents: [], source: "unsupported", cached: false }),
+          getComposerCapabilities: vi.fn().mockResolvedValue({}),
+        },
+      } as unknown as NativeApi);
+      const warm = (cwd: string, selectedProviderOnly: boolean) =>
+        prefetchModelsForNewThread(queryClient, {
+          settings: makeSettings(),
+          newChatDefault: newChatDefaultForProvider("opencode"),
+          projectCwd: cwd,
+          selectedProviderOnly,
+        });
+      const key = (cwd: string) =>
+        providerDiscoveryQueryKeys.models("opencode", null, null, null, cwd);
+
+      try {
+        warm("/tmp/abandoned", true);
+        await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+        if (explicitCreate) warm("/tmp/abandoned", false);
+        warm("/tmp/current", true);
+        if (explicitCreate) {
+          expect(queryClient.getQueryState(key("/tmp/abandoned"))?.fetchStatus).toBe("fetching");
+          completeLookup();
+        }
+
+        await vi.waitFor(() =>
+          expect(listModels).toHaveBeenCalledWith(
+            expect.objectContaining({ provider: "opencode", cwd: "/tmp/current" }),
+          ),
+        );
+        if (explicitCreate) {
+          expect(queryClient.getQueryData(key("/tmp/abandoned"))).toEqual({
+            models: [],
+            source: "disabled",
+          });
+        } else {
+          expect(queryClient.getQueryState(key("/tmp/abandoned"))?.fetchStatus).toBe("idle");
+          expect(queryClient.getQueryData(key("/tmp/abandoned"))).toBeUndefined();
+        }
+      } finally {
+        queryClient.clear();
+        completeLookup();
+      }
+    },
+  );
+
   it("warms every provider except Droid, selected provider first", async () => {
     const queryClient = new QueryClient();
     const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
