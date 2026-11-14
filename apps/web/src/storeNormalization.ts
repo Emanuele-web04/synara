@@ -224,6 +224,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
     left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
@@ -2101,6 +2102,10 @@ export function normalizeThreadFromReadModel(
     ...(resolvedHasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
       : {}),
+    // Only thread shells carry the server's background-task count; detail keeps it.
+    ...(previous?.pendingBackgroundTaskCount !== undefined
+      ? { pendingBackgroundTaskCount: previous.pendingBackgroundTaskCount }
+      : {}),
     turnDiffSummaries,
     activities,
     ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
@@ -2258,6 +2263,9 @@ export function normalizeThreadShellSnapshot(
       : {}),
     ...(incoming.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: incoming.hasActionableProposedPlan }
+      : {}),
+    ...(incoming.pendingBackgroundTaskCount !== undefined
+      ? { pendingBackgroundTaskCount: incoming.pendingBackgroundTaskCount }
       : {}),
     ...(previous?.pendingInteractions !== undefined
       ? { pendingInteractions: previous.pendingInteractions }
@@ -2417,15 +2425,19 @@ export function resolveThreadSidebarMetadata(
         session: thread.session,
       }),
     ),
-    // Thread-wide, so the sidebar keeps showing background work after a
-    // finished subagent wakes the agent into a newer turn.
-    pendingBackgroundWorkCount: Math.max(
-      derivePendingBackgroundWork({
-        activities: thread.activities,
-        latestTurn: thread.latestTurn,
-        session: thread.session,
-      })?.count ?? 0,
-      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }),
-    ),
+    // The server's count covers threads whose detail is not live here; local
+    // activity is only a fallback for servers that do not send it. Thread-wide,
+    // so background work stays visible after a finished subagent wakes the
+    // agent into a newer turn.
+    pendingBackgroundWorkCount:
+      thread.pendingBackgroundTaskCount ??
+      Math.max(
+        derivePendingBackgroundWork({
+          activities: thread.activities,
+          latestTurn: thread.latestTurn,
+          session: thread.session,
+        })?.count ?? 0,
+        countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }),
+      ),
   };
 }

@@ -27,7 +27,7 @@ import {
 } from "@synara/shared/pendingInteractions";
 
 import { advanceMessageTextSegments } from "./messageTextSegments";
-import { isSessionRunningTurn } from "./session-logic";
+import { isBackgroundWorkActivity, isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
   arraysShallowEqual,
@@ -97,6 +97,12 @@ function threadMessageUpdatesSummary(event: ThreadMessageSentEvent): boolean {
 
 function threadActivityUpdatesSummary(event: ThreadActivityAppendedEvent): boolean {
   return THREAD_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
+}
+
+// Background-work activity changes only the sidebar's "In Background" count, so it
+// refreshes the sidebar summary without re-deriving the thread's summary signals.
+function threadActivityUpdatesSidebarSummary(event: ThreadActivityAppendedEvent): boolean {
+  return threadActivityUpdatesSummary(event) || isBackgroundWorkActivity(event.payload.activity);
 }
 
 function threadMessageUpdatesSidebarSummary(event: ThreadMessageSentEvent): boolean {
@@ -599,6 +605,14 @@ function applyTurnDiffSummaryToThread(
     isProviderDiffPlaceholderRef(nextSummary.checkpointRef) &&
     nextSummary.status === "missing" &&
     thread.latestTurn?.turnId === nextSummary.turnId;
+  // A missing capture of any kind (a turn a background task woke has no git
+  // baseline) says nothing about how the turn ended either: like the server
+  // projector, the session stays the lifecycle authority for the latest turn.
+  const keepsLatestTurnLifecycle =
+    thread.latestTurn?.turnId === nextSummary.turnId &&
+    (thread.latestTurn.state === "interrupted" ||
+      thread.latestTurn.state === "error" ||
+      nextSummary.status === "missing");
   const latestTurn =
     thread.latestTurn === null || thread.latestTurn.turnId === nextSummary.turnId
       ? isSameTurnPlaceholder
@@ -609,13 +623,19 @@ function applyTurnDiffSummaryToThread(
             // Mirror of the server projection: the session already settled an
             // interrupted or failed turn; its checkpoint does not complete it.
             state:
-              thread.latestTurn?.turnId === nextSummary.turnId &&
-              (thread.latestTurn.state === "interrupted" || thread.latestTurn.state === "error")
+              keepsLatestTurnLifecycle && thread.latestTurn
                 ? thread.latestTurn.state
                 : checkpointStatusToLatestTurnState(nextSummary.status),
             requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
             startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
-            completedAt: nextSummary.completedAt,
+            // Without a capture the checkpoint's time is not the turn's end
+            // either: a running turn stays open and a settled one keeps its end.
+            completedAt:
+              nextSummary.status === "missing" && keepsLatestTurnLifecycle && thread.latestTurn
+                ? thread.latestTurn.state === "running"
+                  ? null
+                  : (thread.latestTurn.completedAt ?? nextSummary.completedAt)
+                : nextSummary.completedAt,
             // Prefer the incoming assistantMessageId when present; otherwise keep
             // the previous one from the same turn. Turn-diff events may arrive
             // before the message has been finalized and carry a null id — they
@@ -1639,7 +1659,7 @@ function applyOrchestrationEvent(
           ...options,
           recomputeSummarySignals: threadActivityUpdatesSummary(event),
           updateSidebarSummary:
-            options?.updateSidebarSummary === true || threadActivityUpdatesSummary(event),
+            options?.updateSidebarSummary === true || threadActivityUpdatesSidebarSummary(event),
         },
       );
 
@@ -1900,6 +1920,7 @@ function applyThreadActivityEventBatch(
     return state;
   }
   const updatesSummary = events.some(threadActivityUpdatesSummary);
+  const updatesSidebarSummary = events.some(threadActivityUpdatesSidebarSummary);
   return applyThreadUpdate(
     state,
     firstEvent.payload.threadId,
@@ -1946,7 +1967,7 @@ function applyThreadActivityEventBatch(
     {
       ...options,
       recomputeSummarySignals: updatesSummary,
-      updateSidebarSummary: options.updateSidebarSummary === true || updatesSummary,
+      updateSidebarSummary: options.updateSidebarSummary === true || updatesSidebarSummary,
     },
   );
 }

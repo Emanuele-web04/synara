@@ -1279,6 +1279,12 @@ export const OrchestrationThreadShell = Schema.Struct({
   goal: Schema.optional(ThreadGoal),
   ...ThreadGoalTimingFields,
   session: Schema.NullOr(OrchestrationSession),
+  /**
+   * Server-authoritative count of background tasks still outstanding anywhere
+   * in the thread while its session can finish them (session present and not
+   * stopped/errored); 0 otherwise. Absent from older servers.
+   */
+  pendingBackgroundTaskCount: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 

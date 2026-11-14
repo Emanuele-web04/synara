@@ -1564,6 +1564,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         ),
     );
     const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
+    // A response a background task woke continues the reply above it; its
+    // "Resumed: …" line marks where the new part starts even with no work to fold.
+    const showsHeaderWithoutWork =
+      row.turnHeader !== undefined &&
+      (row.turnHeader.outcome !== "completed" || (row.turnHeader.resumedBy?.length ?? 0) > 0);
     const isCollapsedWorkExpanded = hasCollapsedWork
       ? (expandedCollapsedWork[row.message.id] ?? false)
       : false;
@@ -1680,9 +1685,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           </div>
         )}
         {row.turnHeader &&
-          (hasCollapsedWork ||
-            pinnedBackgroundEntries.length > 0 ||
-            row.turnHeader.outcome !== "completed") &&
+          (hasCollapsedWork || pinnedBackgroundEntries.length > 0 || showsHeaderWithoutWork) &&
           !conversationOnly && (
             <div className="mb-3">
               {hasCollapsedWork ? (
@@ -1724,7 +1727,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </CollapsiblePanel>
                   <div className="h-px w-full bg-border" />
                 </Collapsible>
-              ) : row.turnHeader.outcome !== "completed" ? (
+              ) : showsHeaderWithoutWork ? (
                 <TurnHeaderLine
                   kind="settled"
                   header={row.turnHeader}
@@ -2398,8 +2401,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             row.inlineWorkEntries ?? [],
             row.inlineWorkGroupId ?? null,
           );
+          // A background task carried this reply on: the reply's last answer owns
+          // the time and the at-rest actions, so it ends once. This answer keeps
+          // copy/fork/pin on hover, in the same row, so nothing shifts when the
+          // woken response starts writing below it.
+          const responseContinues = row.assistantResponseContinues === true;
+          const responseActionClassName = responseContinues
+            ? MESSAGE_HOVER_REVEAL_CLASS_NAME
+            : undefined;
           const assistantCopyState = resolveAssistantMessageCopyState({
-            text: row.message.text ?? null,
+            text: row.assistantReplyCopyText ?? row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.assistantCopyStreaming,
           });
@@ -2437,7 +2448,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showDeliveredNote =
             isTerminalAssistantMessage && subagentDeliveredMessageIds.has(row.message.id);
           const assistantMeta = [
-            isTerminalAssistantMessage
+            isTerminalAssistantMessage && !responseContinues
               ? formatDayAwareTimestamp(
                   row.message.createdAt,
                   timestampFormat,
@@ -3016,12 +3027,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
-                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                      <MessageCopyButton
+                        text={assistantCopyState.text ?? ""}
+                        {...(responseActionClassName ? { className: responseActionClassName } : {})}
+                      />
                     ) : null}
                     {showForkAction ? (
                       <MessageActionButton
                         label={t("chat:forkThreadFromThisTurn")}
                         tooltip={t("chat:forkFromHere")}
+                        className={responseActionClassName}
                         onClick={() => onForkFromMessage?.(row.message.id)}
                       >
                         <GitForkIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
@@ -3038,7 +3053,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             : t("chat:timeline_pinToPanel")
                         }
                         aria-pressed={messagePinned}
-                        className={messagePinned ? "text-foreground" : undefined}
+                        // A pinned answer keeps its pin visible so it can always be unpinned.
+                        className={messagePinned ? "text-foreground" : responseActionClassName}
                         onClick={() => onTogglePinMessage?.(row.message.id)}
                       >
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
