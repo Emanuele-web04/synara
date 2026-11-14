@@ -304,7 +304,7 @@ import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
-import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
+import { hasUnseenSnoozeReturn, resolveThreadProjectLabel } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "@synara/profile-ui/logo";
 import { AsciiWaveBackground } from "./chat/AsciiWaveBackground";
@@ -6858,6 +6858,20 @@ export default function ChatView({
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
+          projectCrumb={
+            // Only the plain title row (tabs off) names the project. The editor rail already
+            // sits inside it, and chats outside a project (home chats, groups) have none.
+            !showOpenThreadTabs &&
+            !isEditorRail &&
+            !isContainerLandingProject &&
+            activeProject?.kind === "project"
+              ? {
+                  name: resolveThreadProjectLabel(activeProject),
+                  cwd: activeProject.cwd,
+                  appearance: activeProject.appearance ?? null,
+                }
+              : null
+          }
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
