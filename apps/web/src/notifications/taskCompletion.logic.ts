@@ -580,14 +580,13 @@ export function collectCompletedThreadCandidates(
     if (!previousThread) {
       continue;
     }
-    // Every check below reads only these inputs, and with all three unchanged the
-    // previous-snapshot dedupe further down always skips the thread. This runs on
-    // every store flush for every loaded thread, so skip the per-thread activity
-    // folds instead of replaying them for threads that did not move.
+    // Skip activity folds for unchanged threads on every store flush. A shell
+    // count update can settle background work while the detail stays frozen.
     if (
       previousThread.latestTurn === thread.latestTurn &&
       previousThread.session === thread.session &&
-      previousThread.activities === thread.activities
+      previousThread.activities === thread.activities &&
+      previousThread.pendingBackgroundTaskCount === thread.pendingBackgroundTaskCount
     ) {
       continue;
     }
