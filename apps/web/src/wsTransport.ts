@@ -1641,8 +1641,8 @@ export class WsTransport {
     this.disposed = true;
     this.unaryRequestQueue.close(new Error("Transport disposed"));
     this.clearRecoveryEscalationTimer();
-    // Abort before anything else: a pending negotiate must fail now rather
-    // than resolve later and build a runtime this teardown will not see.
+    // Abort pending startup waits and negotiation before either can create
+    // a runtime this teardown will not see.
     this.lifetime.abort(new Error("Transport disposed"));
     this.setState("disposed");
     this.resetAllStreamCapacityRetries();
@@ -1750,7 +1750,7 @@ export class WsTransport {
     const featureSession: FeatureSession = { id: ++this.featureSessionCounter, failed: false };
     const clientPromise = (async () => {
       if (this.backendReady) {
-        await this.backendReady;
+        await awaitWithAbort(this.backendReady, this.lifetime.signal);
         if (this.disposed) throw new Error("Transport disposed");
       }
       const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
