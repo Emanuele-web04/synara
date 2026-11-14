@@ -71,6 +71,10 @@ export function ExecutionFolderPicker({
     setError(null);
     setRequested({ path: `${value.replace(/[\\/]+$/, "")}/` });
   };
+  // Keep exact filesystem paths while accepting incidental spaces in typed input.
+  const canSelectFolder =
+    listing && (path === listing.parentPath || path.trim() === listing.parentPath);
+
   return (
     <Dialog
       open
@@ -159,7 +163,7 @@ export function ExecutionFolderPicker({
             Cancel
           </Button>
           <Button
-            disabled={!listing || path.trim() !== listing.parentPath}
+            disabled={!canSelectFolder}
             onClick={() => listing && onClose(listing.parentPath)}
           >
             Use folder

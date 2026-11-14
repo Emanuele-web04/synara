@@ -100,6 +100,8 @@ it("keeps the last readable folder usable after a folder fails to open", async (
   const browse = vi.fn(async ({ partialPath }: { partialPath: string }) => {
     if (partialPath === "/Volumes/SSD/")
       throw new Error("EPERM: operation not permitted, scandir '/Volumes/SSD'");
+    if (partialPath === "/Volumes/Backup/Photos /")
+      return { parentPath: "/Volumes/Backup/Photos ", entries: [] };
     if (partialPath === "/Volumes/Backup/")
       return {
         parentPath: "/Volumes/Backup",
@@ -123,6 +125,7 @@ it("keeps the last readable folder usable after a folder fails to open", async (
   await page.getByRole("button", { name: "Backup", exact: true }).click();
   await expect.element(page.getByRole("button", { name: "Photos", exact: true })).toBeVisible();
   expect(page.getByRole("alert").elements()).toHaveLength(0);
+  await page.getByRole("button", { name: "Photos", exact: true }).click();
   await page.getByRole("button", { name: "Use folder" }).click();
-  expect(await selected).toBe("/Volumes/Backup");
+  expect(await selected).toBe("/Volumes/Backup/Photos ");
 });
