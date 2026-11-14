@@ -22,6 +22,64 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.5.4",
+    date: "Nov 14",
+    features: [
+      {
+        id: "multiple-pull-requests",
+        title: "Manage multiple pull requests in one chat",
+        description:
+          "Link, view and manage several pull requests from the same thread, including stacked work.",
+      },
+      {
+        id: "multi-folder-worktrees",
+        title: "Use worktrees with multi-folder projects",
+        description:
+          "Add or remove source folders in Edit project and start worktree chats in multi-folder projects.",
+        details:
+          "Only the primary folder is isolated in the worktree. Additional folders remain live and changes in them affect the original folders.",
+      },
+      {
+        id: "remote-reconnect",
+        title: "Reconnect to your computers more easily",
+        description:
+          "Remote computers reconnect automatically when possible, and the computer picker offers a reconnect action. Folder browsing also recovers more gracefully from errors.",
+      },
+      {
+        id: "background-tasks",
+        title: "Keep track of background work",
+        description:
+          "Background tasks now live in the Environment panel. Status stays more accurate, and replies resumed by completed tasks are easier to follow and copy.",
+      },
+      {
+        id: "safer-diffs",
+        title: "Keep incoming Git history out of turn changes",
+        description:
+          "Turn diffs and file Undo avoid treating qualifying merged or checked-out history as edits, while retaining actual changes and conflict resolutions.",
+      },
+      {
+        id: "skills-plans-reliability",
+        title: "More reliable skills and Claude plans",
+        description:
+          "Typed and shared skills reach Claude and Codex more reliably, and Claude turn plans appear again. Temporary Cloudflare blocks are distinguished from sign-in failures; Claude retries blocked turns automatically.",
+      },
+      {
+        id: "performance",
+        title: "Less waiting and background work",
+        description:
+          "Synara starts more promptly, opens large threads with less backend work and avoids warming unused providers. The new-chat background pauses after five seconds without input.",
+        details:
+          "In a Linux source-build test with 20 open threads across 12 projects, median process-tree memory fell from 3,009 MB to 766 MB. Results depend on installed providers and workload; packaged apps and other platforms were not measured.",
+      },
+      {
+        id: "chat-polish",
+        title: "Clearer chat details",
+        description:
+          "The project appears beside the chat title when tabs are off, and images sharing a paragraph with text get their own row.",
+      },
+    ],
+  },
+  {
     version: "1.5.3",
     date: "Nov 12",
     features: [

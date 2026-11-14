@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.5.4 — 2026-11-14
+
+**More flexible projects and pull requests, smoother Remote recovery, and less background work.**
+
+### Added
+
+- Link and manage multiple pull requests in a thread, including stacked work. Existing single-PR links are preserved.
+- Edit a project's additional source folders and use worktree chats in multi-folder projects. Only the primary folder is isolated; additional folders remain live.
+- Claude turn plans are displayed again through Synara's plan tool.
+
+### Changed
+
+- Background tasks appear in the Environment panel. Responses resumed by completed tasks form a clearer reply, with a single copy action for the complete reply.
+- The computer picker offers reconnect, and eligible disconnected Remote computers reconnect automatically. Folder browsing retains the last readable location after an error.
+- Turn diffs and file Undo exclude qualifying incoming Git history while retaining authored changes and conflict resolutions; older checkpoints keep their original behavior.
+- Provider discovery warms only the provider a new thread would use until more are needed. On a Linux source-build test with 20 threads across 12 projects, median process-tree memory fell from 3,009 MB to 766 MB (75%); this depends on installed providers and workload, and packaged apps, macOS and Windows were not measured.
+- Desktop startup avoids unnecessary connection backoff and, for a data home with no thread history, a recovery wait. Large-thread reads use existing indexes. The new-chat background pauses after five seconds without input.
+- With tabs off, a project chat shows its project alongside the title. Images sharing a paragraph with text appear on their own row, and project logos have a clearer border.
+
+### Fixed
+
+- Typed and shared skills reach Claude and Codex more reliably, including skills from another provider's folder.
+- Temporary Cloudflare 403 blocks are distinguished from authentication failures. Claude retries blocked turns after 5, 15 and 45 seconds; stopping or steering cancels a waiting retry.
+- Background task status no longer relies on stale client activity for threads without a live detail stream, and resumed replies no longer briefly appear interrupted because of a missing checkpoint.
+- Remote folder browsing remains usable after navigation errors, including paths with leading or trailing whitespace.
+
+### Verification
+
+The release checkpoint records local checks and their inputs. The exact-tag workflow must pass quality, server tests, native packages, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Packaged startup does not establish manual installation, upgrades or live provider behavior. The separate analytics service migration and deployment are not part of the desktop release.
+
 ## 1.5.3 — 2026-11-12
 
 **Clearer settings and chats, more reliable accounts, and less background work.**
