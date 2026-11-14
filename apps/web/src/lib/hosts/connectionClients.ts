@@ -55,7 +55,9 @@ export async function bootstrapExecutionContext(): Promise<void> {
     let resumeBootstrap: (() => void) | undefined;
     unregisterConnectionRecovery = readWorkspaceFrame()?.registerConnectionRecovery?.({
       resume: (options) => {
-        if (lifetime.signal.aborted) return;
+        // Polls can wake a parked bootstrap but must not supersede an in-flight connect.
+        if (lifetime.signal.aborted || (options?.automatic && !resumeBootstrap && !execution))
+          return;
         recoveryVersion++;
         resumeBootstrap?.();
         execution?.resumeRemoteConnection(options);

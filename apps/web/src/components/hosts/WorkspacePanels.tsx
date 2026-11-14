@@ -370,10 +370,11 @@ export function WorkspacePanels() {
     ...connectionsQueryOptions(),
     enabled: controller && account.data?.state === "signed-in",
   });
+  // A successful poll can advance frame retries even when React Query reuses the payload.
   useEffect(() => {
     if (controller && account.data && connections.data)
       restoreConnectedWorkspaces(connections.data, account.data);
-  }, [controller, account.data, connections.data]);
+  }, [controller, account.data, connections.data, connections.dataUpdatedAt]);
   const { handleNewChat } = useHandleNewChat();
   const localChatRef = useRef(handleNewChat);
   localChatRef.current = handleNewChat;
