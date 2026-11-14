@@ -197,6 +197,36 @@ describe("summarizeToolCallGroup", () => {
     expect(summary?.failedCount).toBe(1);
   });
 
+  it("counts background launches and their failures without a live state", () => {
+    const background = (id: string, status: "running" | "failed") =>
+      workEntry({
+        id,
+        label: "Background task",
+        backgroundTask: {
+          taskId: id,
+          taskType: "local_bash",
+          description: null,
+          command: "bun run dev",
+          status,
+          startedAt: "2026-06-05T00:00:00.000Z",
+          completedAt: status === "running" ? null : "2026-06-05T00:00:01.000Z",
+          exitCode: status === "failed" ? 1 : null,
+        },
+      });
+    const summary = summarizeToolCallGroup([
+      command("c1", "nc -z 127.0.0.1 3947"),
+      background("b1", "failed"),
+      background("b2", "running"),
+    ]);
+    expect(summary?.label).toBe("Ran 1 command, 2 in background");
+    expect(summary?.failedLabel).toBe("1 failed");
+    // A task still running must not keep the line open as live work.
+    expect(summary?.hasRunningEntry).toBe(false);
+    expect(
+      summarizeToolCallGroup([background("b3", "running"), background("b4", "running")]),
+    ).toMatchObject({ label: "2 in background", iconCategory: "background" });
+  });
+
   it("names at most three kinds and folds the rest into other actions", () => {
     const summary = summarizeToolCallGroup([
       claudeRead("r1", "/repo/a.ts"),

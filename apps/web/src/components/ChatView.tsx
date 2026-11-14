@@ -316,6 +316,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
+import { BackgroundTaskStopContext } from "./chat/BackgroundTaskRow";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
@@ -486,6 +487,7 @@ import { useComposerDiscovery } from "./chat/useComposerDiscovery";
 import { useComposerReferences } from "./chat/useComposerReferences";
 import { useComposerSingleRow } from "./chat/useComposerSingleRow";
 import { useComposerVoiceController } from "./chat/useComposerVoiceController";
+import { useStopBackgroundTask } from "./chat/useThreadBackgroundTasks";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
@@ -1929,6 +1931,10 @@ export default function ChatView({
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
+  // Embedded and editor chats have no Environment panel to reach their tasks.
+  const backgroundTaskStopThreadId =
+    !environmentEnabled && isServerThread && !isSidechatExpired ? activeThreadId : null;
+  const stopBackgroundTask = useStopBackgroundTask(backgroundTaskStopThreadId);
   const isComposerEditorDisabled =
     isConnecting ||
     isComposerApprovalState ||
@@ -3962,31 +3968,6 @@ export default function ChatView({
       });
     });
   }, [onInterrupt, t]);
-
-  // Background command rows offer Stop while their task runs. A rejected stop
-  // leaves the row running, so the failure is reported instead of swallowed.
-  const onStopBackgroundTask = useCallback(
-    (taskId: string) => {
-      const api = readNativeApi();
-      if (!api || !activeThread) return;
-      void api.orchestration
-        .dispatchCommand({
-          type: "thread.task.stop",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          taskId,
-          createdAt: new Date().toISOString(),
-        })
-        .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: t("chat:couldNotStopTheBackgroundTask"),
-            description: error instanceof Error ? error.message : t("chat:tryAgainInAMoment"),
-          });
-        });
-    },
-    [activeThread, t],
-  );
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -7208,7 +7189,6 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    onStopBackgroundTask={onStopBackgroundTask}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
@@ -7537,7 +7517,11 @@ export default function ChatView({
   );
   return (
     <ChatLinkActionsContext.Provider value={chatLinkActions}>
-      {chatView}
+      <BackgroundTaskStopContext.Provider
+        value={backgroundTaskStopThreadId ? stopBackgroundTask : null}
+      >
+        {chatView}
+      </BackgroundTaskStopContext.Provider>
     </ChatLinkActionsContext.Provider>
   );
 }

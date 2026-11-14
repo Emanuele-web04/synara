@@ -58,7 +58,7 @@ export function canSubmitUserMessageEdit(input: {
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
-  | { kind: "work"; id: string; entry: WorkLogEntry; backgroundTaskConsumed?: true }
+  | { kind: "work"; id: string; entry: WorkLogEntry }
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
@@ -66,51 +66,11 @@ export type CollapsedTurnItem =
 // narration and rich rows pass through individually.
 export type CollapsedTurnChunk =
   | { kind: "item"; item: CollapsedTurnItem }
-  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] }
-  | { kind: "background-group"; id: string; entries: WorkLogEntry[] };
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
 
 export type WorkEntryChunk =
   | { kind: "item"; id: string; entry: WorkLogEntry }
-  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] }
-  | { kind: "background-group"; id: string; entries: WorkLogEntry[] };
-
-// A cascade of background task rows reads as noise past a couple; three or
-// more in a row share one expandable line.
-export const MIN_BACKGROUND_TASK_GROUP_SIZE = 3;
-
-function isBackgroundTaskItem(
-  item: CollapsedTurnItem,
-): item is Extract<CollapsedTurnItem, { kind: "work" }> {
-  return item.kind === "work" && item.entry.backgroundTask !== undefined;
-}
-
-// Splits runs of 3+ consecutive background task rows into their own group.
-function groupBackgroundTaskRuns(chunks: ReadonlyArray<CollapsedTurnChunk>): CollapsedTurnChunk[] {
-  const grouped: CollapsedTurnChunk[] = [];
-  let run: Extract<CollapsedTurnItem, { kind: "work" }>[] = [];
-  const flushRun = () => {
-    if (run.length >= MIN_BACKGROUND_TASK_GROUP_SIZE) {
-      grouped.push({
-        kind: "background-group",
-        id: run[0]!.id,
-        entries: run.map((item) => item.entry),
-      });
-    } else {
-      for (const item of run) grouped.push({ kind: "item", item });
-    }
-    run = [];
-  };
-  for (const chunk of chunks) {
-    if (chunk.kind === "item" && isBackgroundTaskItem(chunk.item)) {
-      run.push(chunk.item);
-      continue;
-    }
-    flushRun();
-    grouped.push(chunk);
-  }
-  flushRun();
-  return grouped;
-}
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
 
 export function chunkCollapsedTurnItems(
   items: ReadonlyArray<CollapsedTurnItem>,
@@ -147,14 +107,14 @@ export function chunkCollapsedTurnItems(
     chunks.push({ kind: "item", item });
   }
   flushPendingRun();
-  return groupBackgroundTaskRuns(chunks);
+  return chunks;
 }
 
 export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntryChunk[] {
   return chunkCollapsedTurnItems(
     entries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
   ).map((chunk) => {
-    if (chunk.kind === "tool-group" || chunk.kind === "background-group") return chunk;
+    if (chunk.kind === "tool-group") return chunk;
     if (chunk.item.kind !== "work") {
       throw new Error("Work-entry chunking produced an unexpected narration item.");
     }
@@ -171,8 +131,6 @@ export interface WorkEntryRenderPlanChunk {
   entries: WorkLogEntry[];
   summary: ToolCallGroupSummary | null;
   liveEntry: WorkLogEntry | null;
-  // Three or more background task rows sharing one expandable line.
-  backgroundGroup?: boolean;
 }
 
 // Keep the latest activity description visible as technical calls arrive.
@@ -196,15 +154,6 @@ export function planWorkEntryRenderChunks(
     if (chunk.kind === "item") {
       return { id: chunk.id, entries: [chunk.entry], summary: null, liveEntry: null };
     }
-    if (chunk.kind === "background-group") {
-      return {
-        id: chunk.id,
-        entries: chunk.entries,
-        summary: null,
-        liveEntry: null,
-        backgroundGroup: true,
-      };
-    }
     const summary = summarizeToolCallGroup(chunk.entries);
     const isLiveTail = options.tailIsLive && index === chunks.length - 1;
     const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
@@ -220,7 +169,7 @@ export function planWorkEntryRenderChunks(
 // A folded chunk renders as one line (settled summary or live newest call)
 // instead of listing its rows.
 export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
-  return chunk.summary !== null || chunk.liveEntry !== null || chunk.backgroundGroup === true;
+  return chunk.summary !== null || chunk.liveEntry !== null;
 }
 
 // How a folded chunk renders: the line's summary, the rows its disclosure
@@ -492,10 +441,6 @@ export function deriveTurnTimingByTurnId(input: {
   return timings;
 }
 
-// A background task still running when its turn ended stays pinned under the
-// folded turn's header: its status is the turn's lasting result. One the turn
-// started and settled itself (a dev server it stopped) folds with its work.
-// A successful later response can also consume that exact task completion.
 function isSubagentRunWorkRow(entries: ReadonlyArray<WorkLogEntry>): boolean {
   return entries.length > 0 && entries.every((entry) => entry.subagentRun);
 }
@@ -512,21 +457,6 @@ export function isPinnedSubagentRunEntry(
   const run = entry.subagentRun;
   if (!run || !liveEntryIds || liveEntryIds.size === 0) return false;
   return liveEntryIds.has(entry.id) || (run.entryIds ?? []).some((id) => liveEntryIds.has(id));
-}
-
-export function isPinnedBackgroundTaskEntry(
-  entry: WorkLogEntry,
-  turnEndedAt: string | null,
-  backgroundTaskConsumed = false,
-): boolean {
-  const task = entry.backgroundTask;
-  if (!task) return false;
-  if (task.completedAt === null || turnEndedAt === null) return true;
-  const completedMs = Date.parse(task.completedAt);
-  const endedMs = Date.parse(turnEndedAt);
-  if (Number.isNaN(completedMs) || Number.isNaN(endedMs)) return true;
-  if (backgroundTaskConsumed && task.status === "finished") return false;
-  return completedMs > endedMs;
 }
 
 const TURN_RESUMED_TASK_MESSAGES = {
@@ -1700,10 +1630,6 @@ function collapseSettledTurns(
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
-  // Match the exact native completion activity, not a reused task id, label,
-  // or timestamp (task.updated can settle a row before task.completed wakes us).
-  const consumedCompletions = new Map<string, WorkLogEntry>();
-
   const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
     for (const entry of entries) {
       into.push({ kind: "work", id: entry.id, entry });
@@ -1924,9 +1850,8 @@ function collapseSettledTurns(
       resumedBy,
     };
 
-    // Only a successful, settled response consumes its wake. Until then the
-    // launching row keeps the task visible; unrelated later replies cannot do so.
-    // Reused-turn timing can retain an old end before the wake: discarding that
+    // Only a successful, settled response consumes its wake; unrelated later
+    // replies cannot do so. Reused-turn timing can retain an old end before the wake: discarding that
     // duration must not discard an explicit failure/stop outcome as success.
     if (
       header.outcome === "completed" &&
@@ -1939,9 +1864,7 @@ function collapseSettledTurns(
     ) {
       const consumedWakeEntries = wakeEntries.filter((entry) => {
         const completion = entry.backgroundTaskCompletion;
-        if (!completion || (completion.outcome ?? "finished") !== "finished") return false;
-        consumedCompletions.set(entry.id, entry);
-        return true;
+        return completion !== undefined && (completion.outcome ?? "finished") === "finished";
       });
       // Keep the wake's details available in Worked without duplicating a
       // completed notification between the two genuine final answers.
@@ -1986,30 +1909,6 @@ function collapseSettledTurns(
       rows.splice(index, 1);
     }
     pass -= recapIndices.length;
-  }
-
-  if (consumedCompletions.size === 0) return;
-  for (const row of rows) {
-    if (row.kind !== "message" || !row.collapsedTurnItems) continue;
-    for (const item of row.collapsedTurnItems) {
-      if (item.kind !== "work") continue;
-      const task = item.entry.backgroundTask;
-      if (!task || task.status !== "finished" || task.completedAt === null) continue;
-      const wake = task.completionActivityId
-        ? consumedCompletions.get(task.completionActivityId)
-        : undefined;
-      const completion = wake?.backgroundTaskCompletion;
-      if (
-        !completion ||
-        completion.taskId !== task.taskId ||
-        (completion.taskType !== null &&
-          task.taskType !== null &&
-          completion.taskType !== task.taskType) ||
-        (wake?.turnId && item.entry.turnId && wake.turnId !== item.entry.turnId)
-      )
-        continue;
-      item.backgroundTaskConsumed = true;
-    }
   }
 }
 
@@ -2298,10 +2197,7 @@ function collapsedTurnItemsEqual(
     const other = right[index]!;
     if (item.kind !== other.kind || item.id !== other.id) return false;
     if (item.kind === "work" && other.kind === "work") {
-      return (
-        item.backgroundTaskConsumed === other.backgroundTaskConsumed &&
-        workLogEntryContentEqual(item.entry, other.entry)
-      );
+      return workLogEntryContentEqual(item.entry, other.entry);
     }
     if (item.kind === "narration" && other.kind === "narration") {
       return item.message === other.message;
