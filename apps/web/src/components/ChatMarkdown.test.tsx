@@ -337,6 +337,36 @@ $$
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("puts images that share a paragraph with prose on their own row", async () => {
+    const markup = await renderMarkdown(
+      "Retry:\n![a](https://example.com/a.png)\n![b](https://example.com/b.png)  \nAfter.\n\n" +
+        "![solo](https://example.com/solo.png) ![pair](https://example.com/pair.png)",
+    );
+
+    expect(markup).toContain(
+      '<p>Retry:\n<span class="chat-markdown-image-row"><img src="https://example.com/a.png" alt="a" loading="lazy"/>\n<img src="https://example.com/b.png" alt="b" loading="lazy"/></span>After.</p>',
+    );
+    // Image-only paragraphs already stand alone and keep their inline flow.
+    expect(markup).toContain(
+      '<p><img src="https://example.com/solo.png" alt="solo" loading="lazy"/> <img src="https://example.com/pair.png" alt="pair" loading="lazy"/></p>',
+    );
+  });
+
+  it("keeps the image row class in sanitized authored previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={'Shot: ![a](https://example.com/a.png)\n\n<span class="evil">x</span>'}
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+
+    expect(rendered).toContain('<span class="chat-markdown-image-row"><img');
+    expect(rendered).not.toContain('class="evil"');
+  });
+
   it("preserves bracketed TeX that also resembles a dollar-free Markdown link", async () => {
     const markup = await renderMarkdown("Math $[f](x)$ and $2[f](x)$.");
 
