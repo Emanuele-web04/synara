@@ -11,6 +11,7 @@ import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
 
+import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
@@ -38,6 +39,7 @@ import {
   ProviderTaskReconciliation,
   type ProviderReviewTarget,
   type ProviderStartOptions,
+  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderTurnStartResult,
   type OrchestrationSession,
@@ -111,7 +113,24 @@ import {
 } from "../../provider/Errors.ts";
 import { PersistenceDecodeError, PersistenceSqlError } from "../../persistence/Errors.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
-import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
+import {
+  buildInlineSkillInstructions,
+  formatInlineSkillInstructions,
+  loadInlineSkillBlocks,
+  selectSkillsToInline,
+  shouldInlineSkillForProvider,
+} from "../../provider/skillPromptInjection.ts";
+import {
+  extractPromptSkillTokenNames,
+  leadingPromptSkillTokenName,
+  leadingSlashTokenName,
+  resolvePromptSkillReferences,
+} from "../../provider/promptSkillReferences.ts";
+import {
+  discoverSkillsCatalog,
+  filterDisabledSkills,
+  skillNameKey,
+} from "../../provider/skillsCatalog.ts";
 import {
   PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
   withProviderDebugModePrompt,
@@ -139,6 +158,8 @@ import {
   ProviderService,
   type ProviderRuntimeSessionStopTarget,
 } from "../../provider/Services/ProviderService.ts";
+import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
+import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -447,12 +468,33 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 // Codex app-server still expects `$skill` text next to the structured skill item.
+// Claude Code runs a leading `/name` as its own command. Only a `.claude` skill
+// written as a clean command stays one; any other leading skill (shared from another
+// provider's folder, or glued to punctuation) becomes a `$name` mention next to its
+// inlined instructions instead of failing as an unknown command.
 export function normalizeSkillMentionTextForProvider(input: {
   readonly provider: ProviderKind;
   readonly messageText: string;
-  readonly skills?: ReadonlyArray<ProviderSkillReference>;
+  readonly skills?: ReadonlyArray<ProviderSkillReference> | undefined;
+  readonly claudeConfigDir?: string | undefined;
 }): string {
-  if (input.provider !== "codex" || !input.skills || input.skills.length === 0) {
+  if (!input.skills || input.skills.length === 0) {
+    return input.messageText;
+  }
+  if (input.provider === "claudeAgent") {
+    const leadingName = leadingPromptSkillTokenName(input.messageText);
+    if (leadingName === null) return input.messageText;
+    const leadingKey = skillNameKey(leadingName);
+    const leadingSkill = input.skills.find((skill) => skillNameKey(skill.name) === leadingKey);
+    if (leadingSkill === undefined) return input.messageText;
+    const claudeLoadsItself =
+      !shouldInlineSkillForProvider("claudeAgent", leadingSkill.path, input.claudeConfigDir) &&
+      leadingSlashTokenName(input.messageText) === leadingName;
+    return claudeLoadsItself
+      ? input.messageText
+      : input.messageText.replace(/^(\s*)\//, (_match, whitespace: string) => `${whitespace}$`);
+  }
+  if (input.provider !== "codex") {
     return input.messageText;
   }
 
@@ -1073,6 +1115,7 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerDiscovery = yield* ProviderDiscoveryService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
   // Resolved at make time: fibers that run turn dispatch do not inherit the
@@ -1225,6 +1268,100 @@ const make = Effect.gen(function* () {
       thread,
       projects: [project],
     });
+  });
+
+  // Match the home/config directory of the Claude process that owns the turn.
+  const resolveClaudeSkillConfigDir = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    instanceId: string | undefined,
+  ) {
+    let providerOptions = threadProviderOptions.get(threadId);
+    if (!threadProviderOptions.has(threadId)) {
+      const settings = yield* serverSettings.getSettings;
+      const instance = resolveProviderInstance(settings, { provider: "claudeAgent", instanceId });
+      providerOptions = mergeProviderStartOptions(
+        providerStartOptionsFromServerSettings(settings),
+        instance ? providerStartOptionsFromInstance(instance) : undefined,
+      );
+    }
+    const claude = providerOptions?.claudeAgent;
+    const env = buildClaudeInstanceProcessEnv(claude?.homePath, claude?.environment, {
+      homeDir: serverConfig.homeDir,
+      isolationRootDir: serverConfig.stateDir,
+      ...(instanceId !== undefined ? { providerInstanceId: instanceId } : {}),
+    });
+    return resolve(
+      env.CLAUDE_CONFIG_DIR?.trim() || resolve(env.HOME ?? serverConfig.homeDir, ".claude"),
+    );
+  });
+
+  // Menu picks arrive as exact references. Typed tokens use Codex's instance-aware
+  // catalog so its native skill paths take precedence over shared names.
+  const resolveTurnSkills = Effect.fnUntraced(function* (input: {
+    readonly provider: ProviderKind;
+    readonly threadId: ThreadId;
+    readonly instanceId: string | undefined;
+    readonly cwd: string | undefined;
+    readonly claudeConfigDir?: string | undefined;
+    readonly messageText: string;
+    readonly attached: ReadonlyArray<ProviderSkillReference> | undefined;
+    readonly resolveTypedSkills: boolean;
+  }): Effect.fn.Return<ReadonlyArray<ProviderSkillReference> | undefined> {
+    // Automatic discovery needs the active profile's native catalog. Other
+    // providers still get their exact references from explicit menu selections.
+    if (
+      !input.resolveTypedSkills ||
+      (input.provider !== "codex" && input.provider !== "claudeAgent")
+    ) {
+      return input.attached;
+    }
+    let available: ReadonlyArray<ProviderSkillDescriptor>;
+    if (input.provider === "codex" && input.cwd !== undefined) {
+      available = yield* providerDiscovery
+        .listSkills({
+          provider: input.provider,
+          threadId: input.threadId,
+          cwd: input.cwd,
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        })
+        .pipe(
+          Effect.map((result) => result.skills),
+          Effect.catch((error) =>
+            Effect.logWarning("typed Codex skill resolution skipped: skill discovery unavailable", {
+              threadId: input.threadId,
+              error,
+            }).pipe(Effect.as([])),
+          ),
+        );
+    } else {
+      const catalog = yield* Effect.tryPromise(() =>
+        discoverSkillsCatalog({
+          cwd: input.cwd ?? null,
+          homeDir: serverConfig.homeDir,
+          synaraBaseDir: serverConfig.baseDir,
+          provider: input.provider,
+          claudeConfigDir: input.claudeConfigDir,
+        }),
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("typed skill resolution skipped: skills catalog unavailable", {
+            provider: input.provider,
+            error,
+          }).pipe(Effect.as([])),
+        ),
+      );
+      const disabledSkills = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.skills.disabled),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      );
+      available = filterDisabledSkills(catalog, disabledSkills);
+    }
+    const resolved = resolvePromptSkillReferences({
+      text: input.messageText,
+      attached: input.attached,
+      available,
+    });
+    return resolved.length > 0 ? resolved : input.attached;
   });
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
@@ -3530,6 +3667,13 @@ const make = Effect.gen(function* () {
     const authoredMessageText = computerInvocation
       ? computerInvocation.prompt || "Use Synara Computer for this task."
       : input.messageText;
+    // Typed skill tokens count only in words a person or automation wrote, not in
+    // another agent's message or a generated goal continuation.
+    const resolveTypedSkills =
+      input.dispatchOrigin !== "agent" &&
+      input.turnKind !== "goal-continuation" &&
+      extractPromptSkillTokenNames(authoredMessageText).length > 0;
+    const hasSkills = resolveTypedSkills || (input.skills?.length ?? 0) > 0;
     // The project packet is ambient context, not user words: it prefixes the
     // assembled provider input rather than joining `<latest_user_message>`.
     const projectContextPrefix = projectContext.trim().length > 0 ? `${projectContext}\n\n` : "";
@@ -3575,12 +3719,32 @@ const make = Effect.gen(function* () {
       // text-only subagent steering channel.
       const steerProvider = (providerThread.session?.providerName ??
         providerThread.modelSelection.provider) as ProviderKind;
+      const steerInstanceId =
+        providerThread.session?.providerInstanceId ?? providerThread.modelSelection.instanceId;
+      const steerClaudeConfigDir =
+        steerProvider === "claudeAgent" && hasSkills
+          ? yield* resolveClaudeSkillConfigDir(providerThread.id, steerInstanceId)
+          : undefined;
+      const steerSkills = yield* resolveTurnSkills({
+        provider: steerProvider,
+        threadId: providerThread.id,
+        instanceId: steerInstanceId,
+        claudeConfigDir: steerClaudeConfigDir,
+        cwd: yield* resolveProjectedThreadWorkspaceCwd(
+          steerProvider === "codex" ? providerThread : thread,
+        ),
+        messageText: authoredMessageText,
+        attached: input.skills,
+        resolveTypedSkills,
+      });
+      // No `providerInput`: a subagent steer is never a native slash command, so
+      // Claude gets every referenced skill inline.
       const steerSkillInlineText =
-        input.skills !== undefined && input.skills.length > 0
+        steerSkills !== undefined && steerSkills.length > 0
           ? yield* Effect.tryPromise(() =>
               buildInlineSkillInstructions({
                 provider: steerProvider,
-                skills: input.skills ?? [],
+                skills: steerSkills,
                 maxChars: Math.max(
                   0,
                   PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
@@ -3611,7 +3775,8 @@ const make = Effect.gen(function* () {
             input.attachments,
             PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
           ),
-          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          skills: steerSkills,
+          claudeConfigDir: steerClaudeConfigDir,
         }),
       });
       if (
@@ -3641,7 +3806,7 @@ const make = Effect.gen(function* () {
         ...(normalizedSteerAttachments.length > 0
           ? { attachments: normalizedSteerAttachments }
           : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(steerSkills !== undefined ? { skills: steerSkills } : {}),
         ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       });
       return;
@@ -4031,35 +4196,46 @@ const make = Effect.gen(function* () {
           ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
           : boundaryMessageText
       }`;
-    const providerInputWithMentionContext = withProviderThreadStatePrompts({
-      interactionMode: input.interactionMode,
-      goal: activeThreadGoal(thread),
-      text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
+    const providerWorkspaceCwd =
+      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+    const claudeConfigDir =
+      selectedProvider === "claudeAgent" && hasSkills
+        ? yield* resolveClaudeSkillConfigDir(
+            activeSession.threadId,
+            activeSession.providerInstanceId,
+          )
+        : undefined;
+    const turnSkills = yield* resolveTurnSkills({
+      provider: selectedProvider as ProviderKind,
+      threadId: activeSession.threadId,
+      instanceId: activeSession.providerInstanceId,
+      claudeConfigDir,
+      cwd: providerWorkspaceCwd,
+      messageText: authoredMessageText,
+      attached: input.skills,
+      resolveTypedSkills,
     });
-    // Portable skills fallback: providers that cannot load the referenced skill
-    // file natively get the skill instructions inlined into the prompt.
-    const skillInlineText =
-      input.skills !== undefined && input.skills.length > 0
+    // Portable skills fallback: skills the provider cannot load natively travel
+    // inline. Each file is read once here; which ones go inline depends on the
+    // final prompt, and the stale-resume retry below can wrap it differently.
+    const inlineSkillBlocks: ReadonlyMap<string, string> =
+      turnSkills !== undefined && turnSkills.length > 0
         ? yield* Effect.tryPromise(() =>
-            buildInlineSkillInstructions({
-              provider: selectedProvider as ProviderKind,
-              skills: input.skills ?? [],
-              maxChars: Math.max(
-                0,
-                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
-                  providerInputWithMentionContext.length -
-                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
-              ),
-            }),
+            loadInlineSkillBlocks(
+              selectSkillsToInline({
+                provider: selectedProvider as ProviderKind,
+                skills: turnSkills,
+              }),
+            ),
           ).pipe(
             Effect.catch((error) =>
               Effect.logWarning("failed to inline portable skill instructions", {
                 threadId: input.threadId,
                 error,
-              }).pipe(Effect.as("")),
+              }).pipe(Effect.as(new Map<string, string>())),
             ),
           )
-        : "";
+        : new Map<string, string>();
     const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
       // Native control commands must remain the first token in every mode.
       if (
@@ -4069,6 +4245,31 @@ const make = Effect.gen(function* () {
         return input.messageText.trim();
       }
       const withMentionContext = `${composeProviderInput(bootstrap)}${mentionContextSuffix}`;
+      const promptWithoutSkills = withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: withMentionContext,
+      });
+      const skillInlineText =
+        turnSkills !== undefined && turnSkills.length > 0
+          ? formatInlineSkillInstructions({
+              skills: selectSkillsToInline({
+                provider: selectedProvider as ProviderKind,
+                skills: turnSkills,
+                claudeConfigDir,
+                // A steer may join a running turn, where Claude's own `/name`
+                // loading is not guaranteed, so it gets every skill inline.
+                ...(input.dispatchMode === "steer" ? {} : { providerInput: promptWithoutSkills }),
+              }),
+              blocks: inlineSkillBlocks,
+              maxChars: Math.max(
+                0,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                  promptWithoutSkills.length -
+                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+              ),
+            })
+          : "";
       const withSkills = skillInlineText
         ? `${withMentionContext}\n\n${skillInlineText}`
         : withMentionContext;
@@ -4083,7 +4284,8 @@ const make = Effect.gen(function* () {
               input.attachments,
               PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
             ),
-            ...(input.skills !== undefined ? { skills: input.skills } : {}),
+            skills: turnSkills,
+            claudeConfigDir,
           }),
         }),
       );
@@ -4117,13 +4319,11 @@ const make = Effect.gen(function* () {
     const providerTurnInput = {
       threadId: input.threadId,
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-      ...(input.skills !== undefined ? { skills: input.skills } : {}),
+      ...(turnSkills !== undefined ? { skills: turnSkills } : {}),
       ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
-    const providerWorkspaceCwd =
-      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
     // Baseline capture may time out, but provider execution must never bypass
     // an Undo that still owns this checkout. Keep the activation wait outside
     // the baseline deadline and release it after provider admission/cleanup.

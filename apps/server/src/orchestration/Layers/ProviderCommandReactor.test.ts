@@ -111,6 +111,7 @@ import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
+import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
@@ -570,6 +571,8 @@ describe("ProviderCommandReactor", () => {
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
+    readonly skillCatalogHomeDir?: string;
+    readonly listNativeSkills?: ProviderAdapterShape<ProviderAdapterError>["listSkills"];
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
@@ -666,6 +669,9 @@ describe("ProviderCommandReactor", () => {
           ? { model: sessionModelSelection.model }
           : {}),
         threadId,
+        ...(input.providerInstanceId !== undefined
+          ? { providerInstanceId: input.providerInstanceId }
+          : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
         createdAt: now,
@@ -1031,7 +1037,20 @@ describe("ProviderCommandReactor", () => {
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
-    const reactorLayer = makeProviderCommandReactorLive(input);
+    const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
+      Layer.provide(
+        Layer.succeed(ProviderAdapterRegistry, {
+          getByProvider: () =>
+            Effect.succeed({
+              listSkills: input?.listNativeSkills,
+            } as ProviderAdapterShape<ProviderAdapterError>),
+          listProviders: () => Effect.succeed([]),
+        }),
+      ),
+    );
+    const reactorLayer = makeProviderCommandReactorLive(input).pipe(
+      Layer.provide(providerDiscoveryLayer),
+    );
     const layer = Layer.mergeAll(reactorLayer, ProviderRuntimeIngestionLive).pipe(
       Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(projectAgentRepositoryLayer),
@@ -1080,7 +1099,13 @@ describe("ProviderCommandReactor", () => {
             : {}),
         }),
       ),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(
+        ServerConfig.layerTest(
+          process.cwd(),
+          baseDir,
+          input?.skillCatalogHomeDir ? { homeDir: input.skillCatalogHomeDir } : undefined,
+        ),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
       Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
@@ -14257,6 +14282,240 @@ describe("ProviderCommandReactor", () => {
     expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
       threadId: ThreadId.makeUnsafe("thread-1"),
       numTurns: 1,
+    });
+  });
+
+  describe("typed skills", () => {
+    // The harness session runs in /tmp/provider-project, whose project skill folders
+    // the shared catalog scans. Unique names keep real user skills out of the way.
+    const projectRoot = "/tmp/provider-project";
+    const suffix = Math.random().toString(36).slice(2, 10);
+    const claudeSkillName = `synara-test-claude-${suffix}`;
+    const codexSkillName = `synara-test-codex-${suffix}`;
+    const createdSkillDirs: string[] = [];
+
+    function writeProjectSkill(root: ".claude" | ".codex", name: string, body: string): string {
+      const dir = path.join(projectRoot, root, "skills", name);
+      fs.mkdirSync(dir, { recursive: true });
+      createdSkillDirs.push(dir);
+      const skillPath = path.join(dir, "SKILL.md");
+      fs.writeFileSync(skillPath, `---\nname: ${name}\ndescription: test skill\n---\n${body}\n`);
+      return skillPath;
+    }
+
+    function writeSkills() {
+      return {
+        claudePath: writeProjectSkill(".claude", claudeSkillName, "CLAUDE SKILL BODY"),
+        codexPath: writeProjectSkill(".codex", codexSkillName, "CODEX SKILL BODY"),
+      };
+    }
+
+    afterEach(() => {
+      for (const dir of createdSkillDirs.splice(0))
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    async function sendTyped(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      text: string,
+      dispatchOrigin?: "user" | "agent",
+    ) {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `typed-skill-${Math.random().toString(36).slice(2)}`,
+        text,
+        createdAt: new Date().toISOString(),
+        ...(dispatchOrigin ? { dispatchOrigin } : {}),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      return harness.sendTurn.mock.calls[0]![0];
+    }
+
+    const claudeHarness = () =>
+      createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      });
+
+    it("gives Claude the instructions of a skill typed mid-sentence", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`<skill name="${claudeSkillName}"`);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
+    it("lets Claude Code load a .claude skill that starts the message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`/${claudeSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).not.toContain("<skill name=");
+    });
+
+    it("inlines a leading Claude skill followed by a colon as a mention", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName}: fix the bugs`);
+      expect(turn.input?.startsWith(`$${claudeSkillName}: fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
+    it("hands Claude a leading skill shared from Codex as a mention with its instructions", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${codexSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`$${codexSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CODEX SKILL BODY");
+    });
+
+    it("sends typed skills to Codex as $mentions with skill references", async () => {
+      const { claudePath, codexPath } = writeSkills();
+      const turn = await sendTyped(
+        await createHarness(),
+        `Use /${codexSkillName} and /${claudeSkillName} now`,
+      );
+      expect(turn.input).toContain(`Use $${codexSkillName} and $${claudeSkillName} now`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: codexPath },
+        { name: claudeSkillName, path: claudePath },
+      ]);
+      // Codex loads its own folder natively; the shared Claude skill travels inline.
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.input).not.toContain("CODEX SKILL BODY");
+    });
+
+    it("sends the active Codex profile's copy of a typed skill before its default-home copy", async () => {
+      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-codex-skill-home-"));
+      createdSkillDirs.push(homeDir);
+      const customHome = path.join(homeDir, "work-codex");
+      const skillDir = path.join("skills", codexSkillName);
+      for (const codexHome of [path.join(homeDir, ".codex"), customHome]) {
+        fs.mkdirSync(path.join(codexHome, skillDir), { recursive: true });
+        fs.writeFileSync(
+          path.join(codexHome, skillDir, "SKILL.md"),
+          `---\nname: ${codexSkillName}\ndescription: test skill\n---\n`,
+        );
+      }
+      const turn = await sendTyped(
+        await createHarness({
+          threadModelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5" },
+          skillCatalogHomeDir: homeDir,
+          serverSettings: {
+            providerInstances: {
+              codex_work: { driver: "codex", enabled: true, config: { homePath: customHome } },
+            },
+          },
+          listNativeSkills: ({ homePath }) =>
+            Effect.succeed({
+              skills: homePath
+                ? [
+                    {
+                      name: codexSkillName,
+                      path: path.join(homePath, skillDir, "SKILL.md"),
+                      enabled: true,
+                    },
+                  ]
+                : [],
+            }),
+        }),
+        `Please use /${codexSkillName}`,
+      );
+      expect(turn.input).toContain(`Please use $${codexSkillName}`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: path.join(customHome, skillDir, "SKILL.md") },
+      ]);
+    });
+
+    it.each(["homePath", "configDir"] as const)(
+      "uses the active Claude %s for typed skills and native slash commands",
+      async (configuredDir) => {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-claude-skill-home-"));
+        createdSkillDirs.push(homeDir);
+        const customHome = path.join(homeDir, "work-claude");
+        const customConfig =
+          configuredDir === "homePath" ? path.join(customHome, ".claude") : customHome;
+        const skillDir = path.join("skills", claudeSkillName);
+        const defaultConfig = path.join(homeDir, ".claude");
+        for (const [configDir, body] of [
+          [defaultConfig, "DEFAULT CLAUDE SKILL BODY"],
+          [customConfig, "CUSTOM CLAUDE SKILL BODY"],
+        ] as const) {
+          fs.mkdirSync(path.join(configDir, skillDir), { recursive: true });
+          fs.writeFileSync(
+            path.join(configDir, skillDir, "SKILL.md"),
+            `---\nname: ${claudeSkillName}\ndescription: test skill\n---\n${body}\n`,
+          );
+        }
+        const makeHarness = () =>
+          createHarness({
+            threadModelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-opus-4-6",
+            },
+            skillCatalogHomeDir: homeDir,
+            serverSettings: {
+              providerInstances: {
+                claude_work: {
+                  driver: "claudeAgent",
+                  enabled: true,
+                  config: { [configuredDir]: customHome },
+                },
+              },
+            },
+          });
+
+        const inline = await sendTyped(await makeHarness(), `Please use /${claudeSkillName}`);
+        expect(inline.input).toContain("CUSTOM CLAUDE SKILL BODY");
+        expect(inline.input).not.toContain("DEFAULT CLAUDE SKILL BODY");
+        const command = `/${claudeSkillName} review this`;
+        const native = await sendTyped(await makeHarness(), command);
+        expect(native.input?.startsWith(command)).toBe(true);
+        expect(native.input).not.toContain("<skill name=");
+        expect(native.skills).toEqual([
+          { name: claudeSkillName, path: path.join(customConfig, skillDir, "SKILL.md") },
+        ]);
+      },
+    );
+
+    it("keeps typed and explicitly attached OMP skills on their existing paths", async () => {
+      const { claudePath } = writeSkills();
+      const skill = { name: claudeSkillName, path: claudePath };
+      const text = `Please use $${claudeSkillName}`;
+      const makeHarness = () =>
+        createHarness({ threadModelSelection: { provider: "omp", model: "model-a" } });
+
+      const typed = await sendTyped(await makeHarness(), text);
+      expect(typed.input).toBe(text);
+      expect(typed.skills).toBeUndefined();
+
+      const attachedHarness = await makeHarness();
+      await Effect.runPromise(
+        attachedHarness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-omp-explicit-skill"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId("omp-explicit-skill"),
+            role: "user",
+            text,
+            attachments: [],
+            skills: [skill],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(() => attachedHarness.sendTurn.mock.calls.length === 1);
+      const attached = attachedHarness.sendTurn.mock.calls[0]![0];
+      expect(attached.skills).toEqual([skill]);
+      expect(attached.input).toContain("CLAUDE SKILL BODY");
+    });
+
+    it("ignores skill tokens in another agent's message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please /${claudeSkillName}`, "agent");
+      expect(turn.skills).toBeUndefined();
+      expect(turn.input).not.toContain("<skill name=");
     });
   });
 
