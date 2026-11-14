@@ -1688,7 +1688,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                     </div>
                   </CollapsiblePanel>
-                  <div className="h-px w-full bg-border" />
+                  {/* The hairline closes "Worked for"; a resumed turn's line stands alone. */}
+                  {row.turnHeader.resumedBy?.length ? null : (
+                    <div className="h-px w-full bg-border" />
+                  )}
                 </Collapsible>
               ) : row.turnHeader.outcome !== "completed" ? (
                 <TurnHeaderLine
@@ -3036,8 +3039,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         )}
 
       {row.kind === "working-header" && !conversationOnly && (
-        // Non-collapsible twin of the settled turn header: same tone, size and
-        // hairline, but counting up live.
+        // Non-collapsible twin of the settled turn header: same tone and size,
+        // but counting up live.
         <TurnHeaderLine
           kind="live"
           startedAt={row.createdAt}

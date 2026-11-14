@@ -245,6 +245,14 @@ describe("MessagesTimeline tool group collapse", () => {
         .poll(() => isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs"))
         .toBe(false);
       await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      // Only "Worked for" closes with a hairline; the wake's "Resumed" line stands alone.
+      const hairlineAfter = (label: string) =>
+        findSummaryTrigger(label)
+          ?.closest(".group\\/collapsed-work")
+          ?.querySelector(":scope > .h-px") ?? null;
+      expect(hairlineAfter("Worked for")).not.toBeNull();
+      expect(findSummaryTrigger("Resumed")).not.toBeNull();
+      expect(hairlineAfter("Resumed")).toBeNull();
       findSummaryTrigger("Worked for")!.click();
       await expect
         .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
