@@ -770,3 +770,23 @@ admission policy; 14 exact-target tests, 57 input tests and three tree tests pas
 with the clipping repair. The live serial/parallel tree comparison stays ignored.
 The overlay enumeration regression fails before filtering; all four window-list
 tests and the exact foreground-classification tests pass afterwards.
+
+### Revision 41: combined attachment and recovery integration
+
+Revision 41 combines the revision 40 changes above with the attachment and
+recovery text-evidence changes. The host checks the native revision at runtime;
+this distinct revision prevents either earlier revision 40 binary from being
+accepted as the combined payload. Patch and Linux follow-on checksums are
+updated together. The protocol shape is unchanged.
+
+The attachment and recovery integration additionally treats Electron processes as
+untrusted even when a partial AX tree omits the web ancestor. Partial AX echoes,
+including zero or one character, cannot become delivered-character counts or
+retry offsets. After one keyboard dispatch to web content or Electron, the
+driver skips AX drain polling that cannot provide renderer evidence. The result
+remains unverifiable; native non-web read-back and cancellation/release rules
+are unchanged. No input path is replayed.
+
+See [the recovery and efficiency follow-up](../../../../docs/computer-use-cua/recovery-efficiency-2026-10-13.md)
+for API behavior and qualification limits. The validation results above describe
+the earlier upstream integration, not a new native qualification of this merge.

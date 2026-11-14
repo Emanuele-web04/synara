@@ -14,6 +14,10 @@ export function registerNativeComputerElement(node: ComputerUiNode, identity: st
   nativeIdentities.set(node, identity);
 }
 
+export function hasNativeComputerElement(node: ComputerUiNode): boolean {
+  return nativeIdentities.has(node);
+}
+
 export function retainComputerElementRef<T extends object>(ref: T, node: ComputerUiNode): T {
   if (nativeIdentities.has(node)) observedRefs.set(ref, node);
   return ref;

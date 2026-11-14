@@ -39,6 +39,14 @@ import type { McpToolCallResult } from "./protocol.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
 import { makeAgentGatewayComputerBrowserTools } from "./computerBrowserTools.ts";
 
+import {
+  COMPUTER_APP_PLAYBOOK_POLICY,
+  COMPUTER_APP_PLAYBOOK_SECTIONS,
+  COMPUTER_APP_PLAYBOOK_TOPICS,
+  computerAppPlaybookEvidence,
+} from "./computerAppPlaybooks.ts";
+import { filterToolsByCapability } from "./toolRuntime.ts";
+
 const THREAD = "thread-computer";
 
 function resultJson(result: McpToolCallResult): unknown {
@@ -5090,6 +5098,50 @@ describe("computer action element diffs", () => {
 });
 
 describe("computer_get_state app hint", () => {
+  it("offers only an on-demand Notion pointer for the exact app, once per thread", async () => {
+    const template = {
+      bounds: { x: 10, y: 10, width: 900, height: 700 },
+      focused: true,
+      minimized: false,
+      visible: true,
+    };
+    const backend = new FakeComputerBackend({
+      windows: [
+        { ...template, id: "notion-window", title: "Workspace", appName: "Notion" },
+        { ...template, id: "other-window", title: "Notion", appName: "Chrome" },
+      ],
+    });
+    const { call, manager } = await setup(backend);
+    try {
+      expect(resultJson(await call("computer_get_state", {}))).not.toHaveProperty("appHint");
+      expect(
+        resultJson(await call("computer_get_state", { window_id: "other-window" })),
+      ).not.toHaveProperty("appHint");
+      const first = resultJson(
+        await call("computer_get_state", { window_id: "notion-window" }),
+      ) as { appHint: string };
+      expect(first.appHint).toContain('computer_help({topic:"notion"})');
+      expect(first.appHint).toContain("not interaction-tested");
+      expect(first.appHint.length).toBeLessThan(160);
+      expect(first.appHint).not.toContain(COMPUTER_APP_PLAYBOOK_SECTIONS.notion);
+      expect(
+        resultJson(await call("computer_get_state", { window_id: "notion-window" })),
+      ).not.toHaveProperty("appHint");
+      expect(
+        resultJson(
+          await call(
+            "computer_get_state",
+            { window_id: "notion-window" },
+            undefined,
+            "another-thread",
+          ),
+        ),
+      ).toHaveProperty("appHint", first.appHint);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("attaches a verified note once per thread for a scoped app read", async () => {
     const backend = new FakeComputerBackend({
       windows: [
@@ -6029,6 +6081,123 @@ describe("computer_run flow control", () => {
 });
 
 describe("computer_help", () => {
+  it.each(COMPUTER_APP_PLAYBOOK_TOPICS)(
+    "serves only requested %s guidance without input or approval",
+    async (topic) => {
+      const authorize = vi.fn(async () => false);
+      const { call, manager, backend, byName } = await setup(new FakeComputerBackend(), authorize);
+      try {
+        const before = [...byName.keys()];
+        const result = await call("computer_help", { topic });
+        expect(result.isError).not.toBe(true);
+        expect(resultJson(result)).toEqual({
+          topic,
+          text: COMPUTER_APP_PLAYBOOK_SECTIONS[topic],
+          playbook: computerAppPlaybookEvidence(topic),
+          policy: COMPUTER_APP_PLAYBOOK_POLICY,
+          toolGuidance: expect.stringContaining("never replay uncertain delivery"),
+        });
+        expect(authorize).not.toHaveBeenCalled();
+        expect(backend.callsFor("getUiTree")).toHaveLength(0);
+        expect(backend.callsFor("click")).toHaveLength(0);
+        expect([...byName.keys()]).toEqual(before);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("keeps app bodies and source metadata out of the default help schema/index", async () => {
+    const { call, manager, byName, tools } = await setup();
+    try {
+      const index = resultJson(await call("computer_help", {})) as { topics: string };
+      expect(Object.keys(index)).toEqual(["topics", "toolGuidance"]);
+      for (const topic of COMPUTER_APP_PLAYBOOK_TOPICS) {
+        expect(index.topics).toContain(`${topic} — `);
+        expect(index.topics).not.toContain(COMPUTER_APP_PLAYBOOK_SECTIONS[topic]);
+      }
+      expect(index.topics).not.toContain("https://");
+      const help = byName.get("computer_help")!;
+      expect(JSON.stringify(help.definition.inputSchema)).not.toContain('"enum"');
+      expect(help).toMatchObject({
+        requiredCapability: "computer:control",
+        requiresActiveTurn: true,
+      });
+      expect(help.definition.annotations).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+      });
+      expect(filterToolsByCapability(tools, new Set<string>())).toHaveLength(0);
+      expect(computerToolRequiresApproval("computer_help")).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("adds all app evidence only when all chapters are explicitly requested", async () => {
+    const { call, manager } = await setup();
+    try {
+      const all = resultJson(await call("computer_help", { topic: "all" })) as {
+        chapters: string;
+        policy: string;
+        playbooks: Record<string, unknown>;
+      };
+      expect(all.policy).toBe(COMPUTER_APP_PLAYBOOK_POLICY);
+      expect(Object.keys(all.playbooks)).toEqual(COMPUTER_APP_PLAYBOOK_TOPICS);
+      for (const topic of COMPUTER_APP_PLAYBOOK_TOPICS) {
+        expect(all.chapters).toContain(COMPUTER_APP_PLAYBOOK_SECTIONS[topic]);
+        expect(all.playbooks[topic]).toEqual(computerAppPlaybookEvidence(topic));
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    ["VS Code", "vscode"],
+    ["YouTube Music", "youtube_music"],
+    ["roblox-studio", "roblox_studio"],
+    ["Apple Music", "apple_music"],
+    ["general social media", "social_media"],
+  ])("routes display name %s to %s without a new tool", async (input, topic) => {
+    const { call, manager } = await setup();
+    try {
+      expect(resultJson(await call("computer_help", { topic: input }))).toMatchObject({
+        topic,
+        playbook: { support: "documentation-backed", interactionTesting: "not-performed" },
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["constructor", "__proto__", "toString", "notion.evil", "hasOwnProperty"])(
+    "refuses non-chapter %s instead of inherited properties",
+    async (topic) => {
+      const { call, manager } = await setup();
+      try {
+        expect((await call("computer_help", { topic })).isError).toBe(true);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("reading guidance cannot approve a subsequent consequential action", async () => {
+    const authorize = vi.fn(async () => false);
+    const { call, manager, backend } = await setup(new FakeComputerBackend(), authorize);
+    try {
+      await call("computer_help", { topic: "github" });
+      expect(authorize).not.toHaveBeenCalled();
+      const result = await call("computer_kill_app", { window_id: "fake-calculator" });
+      expect(result.isError).toBe(true);
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(backend.callsFor("killApp")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("looks up the registered browser catalog and the returned prepare tool is callable", async () => {
     const backend = new FakeComputerBackend({ browser: true });
     const { call, byName, manager } = await setup(backend, async () => true);
@@ -6207,5 +6376,417 @@ describe("computer_help", () => {
     } finally {
       await manager.dispose();
     }
+  });
+});
+
+describe("computer engine recovery and efficiency", () => {
+  it.each(["computer_type_text", "computer_run"])(
+    "%s selects keyboard typing explicitly, without a semantic fallback",
+    async (tool) => {
+      const typeTextWithKeyboard = vi.fn(async () => ({
+        effect: "dispatched-unknown" as const,
+      }));
+      const { backend, manager, call } = await setup(
+        Object.assign(new FakeComputerBackend(), { typeTextWithKeyboard }),
+        async () => true,
+      );
+      try {
+        const fields = {
+          text: "A rich editor draft",
+          window_id: "fake-calculator",
+          typing_mode: "keyboard",
+        };
+        const result = await call(
+          tool,
+          tool === "computer_run"
+            ? { delivery_mode: "foreground", steps: [{ type: "type_text", ...fields }] }
+            : { ...fields, delivery_mode: "foreground", include_screenshot: false },
+        );
+        expect(result.isError).not.toBe(true);
+        expect(typeTextWithKeyboard).toHaveBeenCalledExactlyOnceWith(fields.text, fields.window_id);
+        expect(backend.callsFor("typeText")).toHaveLength(0);
+        expect(backend.callsFor("setValue")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { text: "draft", window_id: "fake-calculator", typing_mode: "keyboard" },
+    { text: "draft", typing_mode: "keyboard", delivery_mode: "foreground" },
+    {
+      text: "draft",
+      window_id: "fake-calculator",
+      typing_mode: "keyboard",
+      ref: 1,
+      delivery_mode: "foreground",
+    },
+    { text: "draft", window_id: "fake-calculator", typing_mode: "unknown" },
+  ])("refuses an unsafe/invalid typing route before sending input: %j", async (args) => {
+    const typeTextWithKeyboard = vi.fn(async () => ({}));
+    const { backend, manager, call } = await setup(
+      Object.assign(new FakeComputerBackend(), { typeTextWithKeyboard }),
+      async () => true,
+    );
+    try {
+      expect((await call("computer_type_text", args)).isError).toBe(true);
+      expect(typeTextWithKeyboard).not.toHaveBeenCalled();
+      expect(backend.callsFor("typeText")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not implement keyboard mode by silently falling back on an unsupported backend", async () => {
+    const { backend, manager, call } = await setup(new FakeComputerBackend(), async () => true);
+    try {
+      const result = await call("computer_type_text", {
+        text: "draft",
+        window_id: "fake-calculator",
+        typing_mode: "keyboard",
+        delivery_mode: "foreground",
+      });
+      expect(resultJson(result)).toMatchObject({
+        error: "unsupported_operation",
+        effect: "not-dispatched",
+      });
+      expect(backend.callsFor("typeText")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([true, false])(
+    "returns inline recovery evidence only when screenshots are enabled (%s), without replaying",
+    async (includeScreenshot) => {
+      const backend = new FakeComputerBackend();
+      const type = vi
+        .spyOn(backend, "typeText")
+        .mockRejectedValue(new CuaActionError("Delivery count unavailable", "dispatched-unknown"));
+      const { manager, call } = await setup(backend);
+      try {
+        const result = await call("computer_type_text", {
+          text: "draft",
+          window_id: "fake-calculator",
+          include_screenshot: includeScreenshot,
+        });
+        expect(result.isError).toBe(true);
+        expect(resultJson(result)).toMatchObject({
+          effect: "dispatched-unknown",
+          retryAllowed: false,
+        });
+        expect(type).toHaveBeenCalledTimes(1);
+        expect(result.content.some((part) => part.type === "image")).toBe(includeScreenshot);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("does not replace an uncertain dispatch with a recovery-capture failure", async () => {
+    const backend = new FakeComputerBackend();
+    vi.spyOn(backend, "typeText").mockRejectedValue(
+      new CuaActionError("Original uncertainty", "dispatched-unknown", "original"),
+    );
+    const { manager, call } = await setup(backend);
+    vi.spyOn(manager, "captureActionScreenshot").mockRejectedValue(
+      new Error("Capture unavailable"),
+    );
+    try {
+      const result = await call("computer_type_text", {
+        text: "draft",
+        window_id: "fake-calculator",
+      });
+      expect(resultJson(result)).toMatchObject({ error: "original", effect: "dispatched-unknown" });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["computer_scroll", "computer_run"])(
+    "%s offers larger explicit navigation while keeping the default reading overlap",
+    async (tool) => {
+      const { manager, call } = await setup();
+      try {
+        await call("computer_screenshot", { window_id: "fake-calculator" });
+        const scroll = vi.spyOn(manager, "scrollCalibrated").mockResolvedValue({
+          result: {
+            computerId: manager.computerId,
+            action: "computer_scroll",
+            windowId: "fake-calculator",
+          },
+        });
+        const fields = { window_id: "fake-calculator", delta_y: 10000 };
+        for (const mode of ["read", "navigate"]) {
+          await call(
+            tool,
+            tool === "computer_run"
+              ? { steps: [{ type: "scroll", ...fields, scroll_mode: mode }] }
+              : { ...fields, scroll_mode: mode, include_screenshot: false },
+          );
+        }
+        const [, , , reading] = scroll.mock.calls[0]!;
+        const [, , , navigation] = scroll.mock.calls[1]!;
+        expect(navigation).toBe(reading * 6);
+        expect(navigation).toBeLessThanOrEqual(6000);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("does not block a third scroll whose actual movement was measured", async () => {
+    const { manager, call } = await setup();
+    try {
+      await call("computer_screenshot", { window_id: "fake-calculator" });
+      const scroll = vi.spyOn(manager, "scrollCalibrated").mockResolvedValue({
+        result: {
+          computerId: manager.computerId,
+          action: "computer_scroll",
+          windowId: "fake-calculator",
+          delivery: { path: "cua", verified: "unverifiable", effect: "dispatched-unknown" },
+          scroll: {
+            requested: { deltaX: 0, deltaY: 100 },
+            injected: { deltaX: 0, deltaY: 100 },
+            traveledY: 100,
+          },
+        },
+      });
+      for (let n = 0; n < 4; n++) {
+        const result = await call("computer_scroll", {
+          window_id: "fake-calculator",
+          delta_y: 100,
+          include_screenshot: false,
+        });
+        expect(result.isError).not.toBe(true);
+        expect(resultJson(result)).toMatchObject({
+          delivery: { effect: "dispatched-unknown" },
+          scrollObservation: { status: "movement-observed" },
+        });
+      }
+      expect(scroll).toHaveBeenCalledTimes(4);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("stops a batch before its next input when the surface has not settled", async () => {
+    const { backend, manager, call } = await setup();
+    vi.spyOn(manager, "waitForSettle").mockResolvedValue({
+      mode: "observer",
+      settled: false,
+      waitedMs: 10,
+      eventsSeen: 4,
+    });
+    try {
+      const result = await call("computer_run", {
+        steps: [
+          { type: "wait", duration_ms: 10, settle: true, window_id: "fake-calculator" },
+          { type: "type_text", text: "must not run", window_id: "fake-calculator" },
+        ],
+      });
+      expect(resultJson(result)).toMatchObject({
+        stopped: true,
+        stoppedReason: "surface_not_settled",
+        completed: 1,
+      });
+      expect(backend.callsFor("typeText")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("includes an explicitly requested screenshot after one settle wait", async () => {
+    const { manager, call } = await setup();
+    const settle = vi
+      .spyOn(manager, "waitForSettle")
+      .mockResolvedValue({ mode: "observer", settled: true, waitedMs: 10, eventsSeen: 0 });
+    try {
+      const result = await call("computer_wait", {
+        duration_ms: 100,
+        settle: true,
+        window_id: "fake-calculator",
+        include_screenshot: true,
+      });
+      expect(result.content.some((part) => part.type === "image")).toBe(true);
+      expect(settle).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a paste without replacing an unsaveable clipboard", async () => {
+    const backend = new FakeComputerBackend();
+    vi.spyOn(backend, "readClipboard").mockRejectedValue(new Error("Binary clipboard"));
+    const { manager, call } = await setup(backend);
+    try {
+      const result = await call("computer_paste", { window_id: "fake-calculator", text: "draft" });
+      expect(resultJson(result)).toMatchObject({
+        error: "clipboard_preservation_unavailable",
+        effect: "not-dispatched",
+      });
+      expect(backend.callsFor("writeClipboard")).toHaveLength(0);
+      expect(backend.callsFor("hotkey")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not restore old clipboard text over a newer user copy", async () => {
+    const backend = new FakeComputerBackend();
+    vi.spyOn(backend, "readClipboard")
+      .mockResolvedValueOnce("old text")
+      .mockResolvedValueOnce("new human copy");
+    const { manager, call } = await setup(backend);
+    try {
+      const result = await call("computer_paste", {
+        window_id: "fake-calculator",
+        text: "draft",
+        include_screenshot: false,
+      });
+      expect(resultJson(result)).toMatchObject({ clipboardRestored: false });
+      expect(backend.callsFor("writeClipboard").map((entry) => entry.args[0])).toEqual(["draft"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("conditional readiness barriers", () => {
+  it("exposes disappearance and exact-value waits without sending input", async () => {
+    const { call, backend } = await setup();
+    const absent = resultJson(
+      await call("computer_wait", {
+        duration_ms: 0,
+        label: "Missing",
+        window_id: "fake-calculator",
+        absent: true,
+        include_screenshot: false,
+      }),
+    );
+    expect(absent).toMatchObject({ status: "ready", checks: 1 });
+    const value = resultJson(
+      await call("computer_wait", {
+        duration_ms: 0,
+        label: "Display",
+        window_id: "fake-calculator",
+        value_equals: "not the display value",
+        include_screenshot: false,
+      }),
+    );
+    expect(value).toMatchObject({ status: "timeout", checks: 1 });
+    expect(backend.callsFor("click")).toHaveLength(0);
+  });
+
+  it("stops the batch before input even when an unmet wait says continue_on_error", async () => {
+    const { call, backend } = await setup();
+    const result = resultJson(
+      await call("computer_run", {
+        include_screenshot: false,
+        steps: [
+          {
+            type: "wait",
+            duration_ms: 0,
+            window_id: "fake-calculator",
+            label: "Display",
+            value_equals: "not ready",
+            continue_on_error: true,
+          },
+          { type: "click", window_id: "fake-calculator", label: "1" },
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ stopped: true, stoppedReason: "control_not_ready" });
+    expect(backend.callsFor("click")).toHaveLength(0);
+  });
+
+  it.each(["control", "settle"] as const)(
+    "stops input after a thrown %s wait even with continue_on_error",
+    async (mode) => {
+      const { call, backend, manager, see } = await setup();
+      try {
+        await see();
+        const error = new ComputerBackendError("Accessibility transport disconnected");
+        const wait =
+          mode === "settle"
+            ? vi.spyOn(manager, "waitForSettle").mockRejectedValueOnce(error)
+            : vi.spyOn(manager, "getState").mockRejectedValueOnce(error);
+        const result = resultJson(
+          await call("computer_run", {
+            include_screenshot: false,
+            steps: [
+              {
+                type: "wait",
+                duration_ms: 0,
+                window_id: "fake-calculator",
+                continue_on_error: true,
+                ...(mode === "settle"
+                  ? { settle: true }
+                  : { label: "Display", value_equals: "ready" }),
+              },
+              { type: "click", window_id: "fake-calculator", label: "Calculate" },
+            ],
+          }),
+        );
+        expect(wait).toHaveBeenCalled();
+        expect(backend.callsFor("click")).toHaveLength(0);
+        expect(result).toMatchObject({
+          stopped: true,
+          stoppedReason: mode === "settle" ? "surface_not_settled" : "control_not_ready",
+          completed: 0,
+          steps: [
+            {
+              step: 0,
+              type: "wait",
+              ok: false,
+              error: { code: "step_failed", message: error.message },
+            },
+          ],
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("prevalidates the entire batch before dispatching an earlier input", async () => {
+    const { call, backend } = await setup();
+    const result = await call("computer_run", {
+      steps: [
+        { type: "click", window_id: "fake-calculator", label: "1" },
+        {
+          type: "wait",
+          duration_ms: 10,
+          label: "Display",
+          window_id: "fake-calculator",
+          absent: true,
+          value_equals: "x",
+        },
+      ],
+    });
+    expect(result.isError).toBe(true);
+    expect(backend.callsFor("click")).toHaveLength(0);
+  });
+
+  it.each([
+    { absent: true },
+    { value_equals: "" },
+    { stable_ms: 1 },
+    { label: "Display", stable_ms: 11 },
+    { label: "Display", stable_ms: 0.5 },
+    { label: "Display", value_equals: "x", settle: true },
+  ])("rejects invalid wait combinations %j", async (condition) => {
+    const { call } = await setup();
+    expect(
+      (
+        await call("computer_wait", {
+          duration_ms: 10,
+          window_id: "fake-calculator",
+          include_screenshot: false,
+          ...condition,
+        })
+      ).isError,
+    ).toBe(true);
   });
 });

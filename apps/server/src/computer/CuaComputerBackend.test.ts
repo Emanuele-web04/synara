@@ -4358,3 +4358,29 @@ describe("Linux native input dialect", () => {
     expect(f.calls.at(-1)?.modelObservation).toBe(false);
   });
 });
+
+describe("explicit rich-editor keyboard insertion", () => {
+  it("selects one native synthetic route before dispatch, without AX writes", async () => {
+    const f = fixture({ nativeRevision: 39 });
+    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.typeTextWithKeyboard("draft", "cua:10:20"),
+    );
+    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(1);
+    expect(f.calls.find((call) => call.name === "type_text")).toMatchObject({
+      deliveryMode: "foreground",
+      args: { text: "draft", force_synthetic: true, delay_ms: 10, window_id: 20 },
+    });
+    expect(f.calls.filter((call) => call.name === "set_value")).toHaveLength(0);
+    await f.backend.dispose();
+  });
+
+  it("refuses background keyboard mode without making a driver call", async () => {
+    const f = fixture({ nativeRevision: 39 });
+    await expect(f.backend.typeTextWithKeyboard("draft", "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    expect(f.calls).toHaveLength(0);
+    await f.backend.dispose();
+  });
+});
