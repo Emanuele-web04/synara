@@ -3,48 +3,87 @@
 // Layer: Checkpointing utilities.
 // Exports: checkpoint HEAD trailer helpers and `git diff -z` parsers used by CheckpointStore.
 
-/**
- * Checkpoint commits record the repository HEAD they were captured on. A turn
- * that merges, pulls, rebases, checks out or resets onto commits that already
- * existed changes the working tree without authoring those changes; the HEAD
- * pair lets diffs leave that history out.
- */
+import { createHash } from "node:crypto";
+
+/** Checkpoints record the HEAD and its reflog anchor at capture time. */
 export const CHECKPOINT_HEAD_TRAILER = "Synara-Head";
-
+const CHECKPOINT_REFLOG_TRAILER = "Synara-Head-Reflog";
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+const REFLOG_ANCHOR = /^[0-9a-f]{64}$/;
 
-export function formatCheckpointHeadTrailer(headCommit: string): string {
-  return `${CHECKPOINT_HEAD_TRAILER}: ${headCommit}`;
+export function formatCheckpointHeadTrailer(headCommit: string, reflogEntry?: string): string {
+  const head = `${CHECKPOINT_HEAD_TRAILER}: ${headCommit}`;
+  return reflogEntry === undefined
+    ? head
+    : `${head}\n${CHECKPOINT_REFLOG_TRAILER}: ${checkpointReflogAnchor(reflogEntry)}`;
+}
+
+export function checkpointReflogAnchor(entry: string): string {
+  return createHash("sha256").update(entry, "utf8").digest("hex");
 }
 
 export interface CheckpointCommitMetadata {
-  /** Committer time of the checkpoint itself, in Unix seconds. */
-  readonly capturedAtSeconds: number | null;
   /** HEAD at capture time; null for legacy checkpoints and unborn branches. */
   readonly head: string | null;
+  readonly reflogAnchor?: string;
 }
 
-/** Reads `git cat-file commit` output for a checkpoint commit. */
+/** Reads the HEAD and reflog anchor from the checkpoint commit message. */
 export function parseCheckpointCommit(raw: string): CheckpointCommitMetadata {
   const separator = raw.indexOf("\n\n");
-  const header = separator === -1 ? raw : raw.slice(0, separator);
   const message = separator === -1 ? "" : raw.slice(separator + 2);
-  const committer = /^committer .* (\d+) [+-]\d{4}$/m.exec(header);
-  const capturedAtSeconds = committer ? Number(committer[1]) : null;
   let head: string | null = null;
+  let reflogAnchor: string | undefined;
   for (const line of message.split("\n")) {
-    const prefix = `${CHECKPOINT_HEAD_TRAILER}: `;
-    if (!line.startsWith(prefix)) continue;
-    const value = line.slice(prefix.length).trim();
-    head = OBJECT_ID.test(value) ? value : null;
+    const headPrefix = `${CHECKPOINT_HEAD_TRAILER}: `;
+    const reflogPrefix = `${CHECKPOINT_REFLOG_TRAILER}: `;
+    if (line.startsWith(headPrefix)) {
+      const value = line.slice(headPrefix.length).trim();
+      head = OBJECT_ID.test(value) ? value : null;
+    } else if (line.startsWith(reflogPrefix)) {
+      const value = line.slice(reflogPrefix.length).trim();
+      reflogAnchor = REFLOG_ANCHOR.test(value) ? value : undefined;
+    }
   }
-  return {
-    capturedAtSeconds:
-      capturedAtSeconds !== null && Number.isSafeInteger(capturedAtSeconds)
-        ? capturedAtSeconds
-        : null,
-    head,
-  };
+  return reflogAnchor === undefined ? { head } : { head, reflogAnchor };
+}
+
+/** A reflog operation attesting how existing history entered the working branch. */
+export interface IntegratedHistoryTip {
+  readonly commit: string;
+  readonly kind: "direct" | "incoming";
+}
+
+interface HeadReflogEntry {
+  readonly head: string;
+  readonly action: string;
+  readonly anchor: string;
+}
+
+/** Reject incomplete or ambiguous slices instead of treating dates as provenance. */
+export function checkpointHeadTransitions(
+  raw: string,
+  from: CheckpointCommitMetadata,
+  to: CheckpointCommitMetadata,
+): HeadReflogEntry[] | null {
+  if (!from.reflogAnchor || !to.reflogAnchor || !from.head || !to.head) return null;
+  const entries: HeadReflogEntry[] = [];
+  for (const record of raw.split("\0")) {
+    if (!record) continue;
+    const match = /^([0-9a-f]+)\tHEAD@\{[0-9]+ [+-][0-9]{4}\}\t(.*)$/.exec(record);
+    if (!match?.[1] || !OBJECT_ID.test(match[1]) || match[2] === undefined) return null;
+    entries.push({ head: match[1], action: match[2], anchor: checkpointReflogAnchor(record) });
+  }
+  const starts = entries.filter(
+    (entry) => entry.head === from.head && entry.anchor === from.reflogAnchor,
+  );
+  const ends = entries.filter(
+    (entry) => entry.head === to.head && entry.anchor === to.reflogAnchor,
+  );
+  if (starts.length !== 1 || ends.length !== 1) return null;
+  const start = entries.indexOf(starts[0]!);
+  const end = entries.indexOf(ends[0]!);
+  return start > end ? entries.slice(end, start + 1).toReversed() : null;
 }
 
 export interface RawDiffEntry {

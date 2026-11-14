@@ -739,6 +739,18 @@ describe("CheckpointStoreLive history integration", () => {
       }),
     );
 
+  const undo = () =>
+    run(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store.reverseCheckpointDiff({
+          cwd,
+          fromCheckpointRef: fromRef,
+          toCheckpointRef: toRef,
+        });
+      }),
+    );
+
   // main gains CI files and a shared change; feature diverges from it.
   const prepareDivergedBranches = () => {
     cwd = mkdtempSync(join(tmpdir(), "synara-history-integration-"));
@@ -791,18 +803,7 @@ describe("CheckpointStoreLive history integration", () => {
     expect(diffedPaths(await turnDiff())).toEqual(["conflict-resolved.txt", "src/app.ts"]);
 
     const mergeCommit = git(["rev-parse", "HEAD"]).trim();
-    await run(
-      Effect.gen(function* () {
-        const store = yield* CheckpointStore;
-        expect(
-          yield* store.reverseCheckpointDiff({
-            cwd,
-            fromCheckpointRef: fromRef,
-            toCheckpointRef: toRef,
-          }),
-        ).toBe(true);
-      }),
-    );
+    expect(await undo()).toBe(true);
     expect(readFileSync(join(cwd, "src", "app.ts"), "utf8")).toBe("app v1\n");
     expect(readFileSync(join(cwd, "conflict-resolved.txt"), "utf8")).toBe("feature side\n");
     expect(readFileSync(join(cwd, ".github", "CI.md"), "utf8")).toBe("ci\n");
@@ -867,23 +868,41 @@ describe("CheckpointStoreLive history integration", () => {
       await capture(toRef);
 
       expect(diffedPaths(await turnDiff())).toEqual(["pkg/own"]);
-      await run(
-        Effect.gen(function* () {
-          const store = yield* CheckpointStore;
-          expect(
-            yield* store.reverseCheckpointDiff({
-              cwd,
-              fromCheckpointRef: fromRef,
-              toCheckpointRef: toRef,
-            }),
-          ).toBe(true);
-        }),
-      );
+      expect(await undo()).toBe(true);
       expect(readFileSync(join(cwd, "incoming"), "utf8")).toBe("incoming change\n");
       expect(readFileSync(join(cwd, "own"), "utf8")).toBe("initial\n");
     } finally {
       cwd = repositoryRoot;
     }
+  });
+
+  it("keeps only the authored commit after switching to an existing branch", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    git(["switch", "main"]);
+    write("src/app.ts", "authored on main\n");
+    git(["commit", "-am", "Turn work"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/app.ts"]);
+    expect(await undo()).toBe(true);
+    expect(readFileSync(join(cwd, "src/app.ts"), "utf8")).toBe("app v1\n");
+    expect(git(["status", "--porcelain", "--", "src/feature.ts"])).toBe("");
+  });
+
+  it("keeps a novel rebase resolution when Git preserves the old commit dates", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    expect(() => git(["rebase", "--committer-date-is-author-date", "main"])).toThrow();
+    write("conflict-theirs.txt", "novel turn resolution\n");
+    git(["checkout", "--ours", "--", "conflict-resolved.txt"]);
+    git(["add", "-A"]);
+    git(["-c", "core.editor=true", "rebase", "--continue"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["conflict-theirs.txt"]);
   });
 
   it("keeps commits made during the turn in the turn diff", async () => {
@@ -964,6 +983,20 @@ describe("CheckpointStoreLive history integration", () => {
     await capture(toRef);
 
     expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+  });
+
+  it("shows the full diff but keeps Undo from reversing history after reflog expiry", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+    git(["switch", "--detach", "main"]);
+    write("src/app.ts", "authored change\n");
+    await capture(toRef);
+    git(["reflog", "expire", "--expire=all", "HEAD"]);
+
+    expect(diffedPaths(await turnDiff())).toContain(".github/CI.md");
+    await expect(undo()).rejects.toThrow("Undo could not be applied");
+    expect(readFileSync(join(cwd, ".github/CI.md"), "utf8")).toBe("ci\n");
+    expect(readFileSync(join(cwd, "src/app.ts"), "utf8")).toBe("authored change\n");
   });
 
   it("keeps the full diff for checkpoints captured before HEAD was recorded", async () => {

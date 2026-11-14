@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checkpointReflogAnchor,
   chunkArgumentGroups,
   formatCheckpointHeadTrailer,
   parseCheckpointCommit,
@@ -10,7 +11,8 @@ import {
 const HEAD = "0123456789abcdef0123456789abcdef01234567";
 
 describe("parseCheckpointCommit", () => {
-  it("reads the capture time and recorded HEAD", () => {
+  it("reads the recorded HEAD and reflog anchor", () => {
+    const entry = `${HEAD}\tHEAD@{1731456001 -0500}\tcommit: sample`;
     const raw = [
       "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904",
       "author Synara <synara@users.noreply.github.com> 1731456000 +0100",
@@ -18,11 +20,14 @@ describe("parseCheckpointCommit", () => {
       "",
       "Synara checkpoint ref=refs/synara/checkpoints/a/turn/1",
       "",
-      formatCheckpointHeadTrailer(HEAD),
+      formatCheckpointHeadTrailer(HEAD, entry),
       "",
     ].join("\n");
 
-    expect(parseCheckpointCommit(raw)).toEqual({ capturedAtSeconds: 1731456001, head: HEAD });
+    expect(parseCheckpointCommit(raw)).toEqual({
+      head: HEAD,
+      reflogAnchor: checkpointReflogAnchor(entry),
+    });
   });
 
   it("treats checkpoints without a valid recorded HEAD as legacy", () => {

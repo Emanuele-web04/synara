@@ -32,6 +32,8 @@ import { CheckpointRef } from "@synara/contracts";
 import { CHECKPOINT_REFS_PREFIX } from "../Utils.ts";
 import {
   type CheckpointCommitMetadata,
+  type IntegratedHistoryTip,
+  checkpointHeadTransitions,
   chunkArgumentGroups,
   formatCheckpointHeadTrailer,
   parseCheckpointCommit,
@@ -40,9 +42,9 @@ import {
 } from "../historyIntegration.ts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
-// Bounds the walk over commits created during a diffed range and the history
-// tips checked against it; anything beyond stays visible as an edit.
-const HISTORY_INTEGRATION_MAX_COMMITS = 1_000;
+// Bound history lookups independently of branch age or repository size.
+const CHECKPOINT_REFLOG_MAX_ENTRIES = 1_000;
+const CHECKPOINT_REFLOG_MAX_OUTPUT_BYTES = 1_000_000;
 const HISTORY_INTEGRATION_MAX_TIPS = 8;
 const CHECKPOINT_METADATA_CACHE_MAX_ENTRIES = 512;
 
@@ -82,6 +84,30 @@ const makeCheckpointStore = Effect.gen(function* () {
           return commit.length > 0 ? commit : null;
         }),
       );
+
+  // HEAD's reflog is worktree-local. The same byte format anchors capture
+  // and diff, including when a later branch switch has moved the current HEAD.
+  const readHeadReflog = (cwd: string, limit: number) =>
+    git.execute({
+      operation: "CheckpointStore.readHeadReflog",
+      cwd,
+      args: [
+        "reflog",
+        "show",
+        "--date=raw",
+        "--no-color",
+        "--no-decorate",
+        "--no-show-signature",
+        "--format=%H%x09%gD%x09%gs",
+        "-z",
+        "-n",
+        String(limit),
+        "HEAD",
+      ],
+      env: { LC_ALL: "C" },
+      allowNonZeroExit: true,
+      maxOutputBytes: CHECKPOINT_REFLOG_MAX_OUTPUT_BYTES,
+    });
 
   const hasHeadCommit = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
     git
@@ -246,8 +272,18 @@ const makeCheckpointStore = Effect.gen(function* () {
             }
 
             const message = `Synara checkpoint ref=${input.checkpointRef}`;
-            // Recorded so diffs can leave out history this turn only checked out.
+            // Anchor the recorded HEAD without trusting commit timestamps.
             const headCommit = yield* resolveHeadCommit(input.cwd);
+            const newestReflogEntry = headCommit
+              ? yield* readHeadReflog(input.cwd, 1).pipe(
+                  Effect.map((result) =>
+                    result.code === 0 && result.stdout.startsWith(`${headCommit}\t`)
+                      ? result.stdout.split("\0", 1)[0]
+                      : undefined,
+                  ),
+                  Effect.orElseSucceed(() => undefined),
+                )
+              : undefined;
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,
@@ -256,7 +292,9 @@ const makeCheckpointStore = Effect.gen(function* () {
                 treeOid,
                 "-m",
                 message,
-                ...(headCommit ? ["-m", formatCheckpointHeadTrailer(headCommit)] : []),
+                ...(headCommit
+                  ? ["-m", formatCheckpointHeadTrailer(headCommit, newestReflogEntry)]
+                  : []),
               ],
               env: commitEnv,
             });
@@ -427,7 +465,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       })
       .pipe(
         Effect.map((result) => {
-          if (result.code !== 0) return { capturedAtSeconds: null, head: null };
+          if (result.code !== 0) return { head: null };
           const metadata = parseCheckpointCommit(result.stdout);
           checkpointMetadataCache.set(commitOid, metadata);
           if (checkpointMetadataCache.size > CHECKPOINT_METADATA_CACHE_MAX_ENTRIES) {
@@ -439,116 +477,184 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
   };
 
-  const listChangedPaths = (cwd: string, from: string, to: string) =>
+  const listChangedPaths = (cwd: string, from: string, to: string, projectRelative = false) =>
     git
       .execute({
         operation: "CheckpointStore.changedPaths",
         cwd,
-        args: ["diff", "--name-only", "-z", "--no-renames", "--no-relative", from, to],
+        args: [
+          "diff",
+          "--name-only",
+          "-z",
+          "--no-renames",
+          projectRelative ? "--relative" : "--no-relative",
+          from,
+          to,
+        ],
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
       })
       .pipe(Effect.map((result) => parseNameOnlyPaths(result.stdout)));
 
-  /**
-   * Commits that entered HEAD between two checkpoints without being created
-   * after the first one: the incoming side of a merge or rebase, or the target
-   * of a pull, checkout or reset.
-   */
+  // Reflog operations identify external transitions. Parent checks make sure a
+  // rewritten or expired reflog cannot pass for a sequence of authored commits.
   const resolveIntegratedHistoryTips = (input: {
     readonly cwd: string;
-    readonly fromHead: string;
-    readonly toHead: string;
-    readonly fromCapturedAtSeconds: number;
+    readonly from: CheckpointCommitMetadata;
+    readonly to: CheckpointCommitMetadata;
   }) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.resolveIntegratedHistoryTips";
-      const created = yield* git.execute({
-        operation,
-        cwd: input.cwd,
-        args: [
-          "rev-list",
-          "--parents",
-          `--max-age=${input.fromCapturedAtSeconds}`,
-          `--max-count=${HISTORY_INTEGRATION_MAX_COMMITS + 1}`,
-          input.toHead,
-          `^${input.fromHead}`,
-        ],
-      });
-      const createdCommits = new Map<string, string[]>();
-      for (const line of created.stdout.split("\n")) {
-        const [commit, ...parents] = line.trim().split(/\s+/);
-        if (commit) createdCommits.set(commit, parents);
-      }
-      // A truncated walk could mistake an omitted new commit for incoming history.
-      if (createdCommits.size > HISTORY_INTEGRATION_MAX_COMMITS) return [];
-      // Nothing was committed in range, so the new HEAD is existing history.
-      if (createdCommits.size === 0) return [input.toHead];
+      const reflog = yield* readHeadReflog(input.cwd, CHECKPOINT_REFLOG_MAX_ENTRIES + 1);
+      if (reflog.code !== 0) return null;
+      const entries = checkpointHeadTransitions(reflog.stdout, input.from, input.to);
+      if (!entries || entries.length > CHECKPOINT_REFLOG_MAX_ENTRIES) return null;
 
-      const candidates = new Set<string>();
-      for (const parents of createdCommits.values()) {
-        for (const parent of parents) {
-          if (parent !== input.fromHead && !createdCommits.has(parent)) candidates.add(parent);
-        }
+      // Read parent ids in bounded batches, including replayed commits, to
+      // catch discontinuities left by a partially expired reflog.
+      const commits = new Set<string>();
+      for (const { head, action } of entries.slice(1)) {
+        if (/^(commit|cherry-pick: |revert: |merge |pull[ :]|rebase \()/.test(action))
+          commits.add(head);
       }
-      const tips: string[] = [];
-      for (const candidate of candidates) {
-        if (tips.length >= HISTORY_INTEGRATION_MAX_TIPS) break;
-        // A parent already behind the starting HEAD (amend, reset then commit)
-        // is not incoming history; its differences stay visible as edits.
-        const ancestor = yield* git.execute({
+      const parentsByCommit = new Map<string, string[]>();
+      for (const chunk of chunkArgumentGroups([...commits].map((commit) => [commit]))) {
+        const parents = yield* git.execute({
           operation,
           cwd: input.cwd,
-          args: ["merge-base", "--is-ancestor", candidate, input.fromHead],
-          allowNonZeroExit: true,
+          args: [
+            "show",
+            "--no-patch",
+            "--no-show-signature",
+            "--no-notes",
+            "--no-decorate",
+            "--no-color",
+            "--format=%H%x09%P",
+            ...chunk,
+          ],
         });
-        if (ancestor.code === 1) tips.push(candidate);
+        for (const line of parents.stdout.trimEnd().split("\n")) {
+          const [commit, parentList] = line.split("\t");
+          if (commit && parentList) parentsByCommit.set(commit, parentList.split(" "));
+        }
       }
-      return tips;
+
+      let previous = entries[0]!.head;
+      let rebasing = false;
+      let integrationFound = false;
+      const tips: IntegratedHistoryTip[] = [];
+      for (const { head, action } of entries.slice(1)) {
+        const parents = parentsByCommit.get(head);
+        if (rebasing) {
+          if (action.startsWith("rebase (finish):") && head === previous) {
+            rebasing = false;
+          } else if (!/^rebase \((?:pick|continue)\):/.test(action) || parents?.[0] !== previous) {
+            return null;
+          }
+        } else if (action.startsWith("rebase (start): checkout ")) {
+          if (integrationFound) return null;
+          integrationFound = true;
+          rebasing = true;
+          tips.push({ commit: head, kind: "incoming" });
+        } else if (head !== previous) {
+          if (
+            /^(checkout: moving from |reset: moving to )/.test(action) ||
+            /^(merge |pull[ :]).*: Fast-forward$/.test(action)
+          ) {
+            if (integrationFound) return null;
+            integrationFound = true;
+            tips.push({ commit: head, kind: "direct" });
+          } else if (
+            /^(commit(?: \(merge\))?:|cherry-pick: |revert: |merge |pull[ :])/.test(action)
+          ) {
+            if (!parents || parents[0] !== previous) return null;
+            if (parents.length > 1) {
+              if (integrationFound || parents.length > HISTORY_INTEGRATION_MAX_TIPS + 1)
+                return null;
+              integrationFound = true;
+              for (const commit of parents.slice(1)) {
+                tips.push({ commit, kind: "incoming" });
+              }
+            }
+          } else {
+            return null;
+          }
+        }
+        previous = head;
+      }
+      return rebasing ? null : tips;
     });
 
-  // Compare incoming paths against their common ancestor when the final HEAD
-  // contains new commits. An existing target reached directly replaces the
-  // starting tree, so compare it to the starting HEAD instead.
+  // Merge/rebase paths must actually change since the common ancestor.
+  // A direct checkout or reset replaces the starting tree instead.
   const listIntegratedPaths = (input: {
     readonly cwd: string;
     readonly fromHead: string;
     readonly toHead: string;
-    readonly tip: string;
+    readonly tip: IntegratedHistoryTip;
   }) =>
     Effect.gen(function* () {
       const { cwd, fromHead, toHead, tip } = input;
       let baseline = fromHead;
-      if (tip !== toHead) {
+      if (tip.kind === "incoming") {
         const bases = (yield* git.execute({
           operation: "CheckpointStore.resolveIntegratedMergeBase",
           cwd,
-          args: ["merge-base", "--all", fromHead, tip],
+          args: ["merge-base", "--all", fromHead, tip.commit],
         })).stdout.trim();
-        if (bases.length === 0 || bases.includes("\n")) return new Set<string>();
+        if (bases.length === 0 || bases.includes("\n")) return null;
         baseline = bases;
       }
       const [incomingPaths, finalDifferences] = yield* Effect.all([
-        listChangedPaths(cwd, baseline, tip),
-        tip === toHead ? Effect.succeed(new Set<string>()) : listChangedPaths(cwd, tip, toHead),
+        listChangedPaths(cwd, baseline, tip.commit),
+        tip.commit === toHead
+          ? Effect.succeed(new Set<string>())
+          : listChangedPaths(cwd, tip.commit, toHead),
       ]);
       for (const path of finalDifferences) incomingPaths.delete(path);
       return incomingPaths;
     });
 
-  /**
-   * The diff target that shows only what changed on top of history moves.
-   *
-   * A path is left out only when it was clean against HEAD at both checkpoints
-   * and its final content equals an integrated history tip, so local edits,
-   * conflict resolutions and discarded uncommitted work stay visible. Legacy
-   * checkpoints without a recorded HEAD, or any lookup failure, keep the full
-   * diff.
-   */
+  // Keep the raw patch when we cannot assign history, but permit Undo only
+  // when that patch is independent of the recorded HEAD movement in its scope.
+  const keepUnclassifiedDiff = (
+    input: {
+      readonly cwd: string;
+      readonly fromCommitOid: string;
+      readonly toCommitOid: string;
+      readonly forUndo?: boolean;
+    },
+    fromHead: string,
+    toHead: string,
+  ) =>
+    Effect.gen(function* () {
+      if (input.forUndo) {
+        const overlap = yield* Effect.all([
+          listChangedPaths(input.cwd, fromHead, toHead, true),
+          listChangedPaths(input.cwd, input.fromCommitOid, input.toCommitOid, true),
+        ]).pipe(
+          Effect.map(([headPaths, checkpointPaths]) =>
+            [...checkpointPaths].some((path) => headPaths.has(path)),
+          ),
+          Effect.orElseSucceed(() => true),
+        );
+        if (overlap) {
+          return yield* new CheckpointInvariantError({
+            operation: "CheckpointStore.resolveAuthoredDiffTarget",
+            detail:
+              "Undo could not be applied because the workspace changed since this checkpoint.",
+          });
+        }
+      }
+      return input.toCommitOid;
+    });
+
+  // Only filter clean paths whose final content matches proven incoming history.
   const resolveAuthoredDiffTarget = (input: {
     readonly cwd: string;
     readonly fromCommitOid: string;
     readonly toCommitOid: string;
-  }): Effect.Effect<string> =>
+    readonly forUndo?: boolean;
+  }): Effect.Effect<string, CheckpointInvariantError> =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.resolveAuthoredDiffTarget";
       const [from, to] = yield* Effect.all(
@@ -560,16 +666,12 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
       const fromHead = from.head;
       const toHead = to.head;
-      if (!fromHead || !toHead || fromHead === toHead || from.capturedAtSeconds === null) {
-        return input.toCommitOid;
-      }
+      if (!fromHead || !toHead || fromHead === toHead) return input.toCommitOid;
 
-      const tips = yield* resolveIntegratedHistoryTips({
-        cwd: input.cwd,
-        fromHead,
-        toHead,
-        fromCapturedAtSeconds: from.capturedAtSeconds,
-      });
+      const tips = yield* resolveIntegratedHistoryTips({ cwd: input.cwd, from, to }).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (tips === null) return yield* keepUnclassifiedDiff(input, fromHead, toHead);
       if (tips.length === 0) return input.toCommitOid;
 
       const changes = parseRawDiff(
@@ -606,11 +708,14 @@ const makeCheckpointStore = Effect.gen(function* () {
         ],
         { concurrency: 4 },
       );
+      if (integratedPaths.some((paths) => paths === null)) {
+        return yield* keepUnclassifiedDiff(input, fromHead, toHead);
+      }
       const integrated = changes.filter(
         (change) =>
           !dirtyAtStart!.has(change.path) &&
           !dirtyAtEnd!.has(change.path) &&
-          integratedPaths.some((paths) => paths.has(change.path)),
+          integratedPaths.some((paths) => paths?.has(change.path)),
       );
       if (integrated.length === 0) return input.toCommitOid;
       if (integrated.length === changes.length) return input.fromCommitOid;
@@ -669,12 +774,23 @@ const makeCheckpointStore = Effect.gen(function* () {
         (tempDir) => fs.remove(tempDir, { recursive: true }).pipe(Effect.ignore),
       );
     }).pipe(
-      Effect.catch((error) =>
-        Effect.logDebug("checkpoint diff keeps integrated history", {
+      Effect.catch((error) => {
+        if (error instanceof CheckpointInvariantError) return Effect.fail(error);
+        if (input.forUndo) {
+          return Effect.fail(
+            new CheckpointInvariantError({
+              operation: "CheckpointStore.resolveAuthoredDiffTarget",
+              detail:
+                "Undo could not be applied because the workspace changed since this checkpoint.",
+              cause: error,
+            }),
+          );
+        }
+        return Effect.logDebug("checkpoint diff keeps integrated history", {
           cwd: input.cwd,
           detail: error.message,
-        }).pipe(Effect.as(input.toCommitOid)),
-      ),
+        }).pipe(Effect.as(input.toCommitOid));
+      }),
     );
 
   const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
@@ -934,6 +1050,7 @@ const makeCheckpointStore = Effect.gen(function* () {
         cwd: input.cwd,
         fromCommitOid,
         toCommitOid,
+        forUndo: true,
       });
 
       const diff = yield* git.execute({
