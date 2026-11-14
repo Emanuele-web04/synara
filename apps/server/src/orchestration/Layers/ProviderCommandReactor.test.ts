@@ -14476,6 +14476,41 @@ describe("ProviderCommandReactor", () => {
       },
     );
 
+    it("keeps typed and explicitly attached OMP skills on their existing paths", async () => {
+      const { claudePath } = writeSkills();
+      const skill = { name: claudeSkillName, path: claudePath };
+      const text = `Please use $${claudeSkillName}`;
+      const makeHarness = () =>
+        createHarness({ threadModelSelection: { provider: "omp", model: "model-a" } });
+
+      const typed = await sendTyped(await makeHarness(), text);
+      expect(typed.input).toBe(text);
+      expect(typed.skills).toBeUndefined();
+
+      const attachedHarness = await makeHarness();
+      await Effect.runPromise(
+        attachedHarness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-omp-explicit-skill"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId("omp-explicit-skill"),
+            role: "user",
+            text,
+            attachments: [],
+            skills: [skill],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(() => attachedHarness.sendTurn.mock.calls.length === 1);
+      const attached = attachedHarness.sendTurn.mock.calls[0]![0];
+      expect(attached.skills).toEqual([skill]);
+      expect(attached.input).toContain("CLAUDE SKILL BODY");
+    });
+
     it("ignores skill tokens in another agent's message", async () => {
       writeSkills();
       const turn = await sendTyped(await claudeHarness(), `Please /${claudeSkillName}`, "agent");

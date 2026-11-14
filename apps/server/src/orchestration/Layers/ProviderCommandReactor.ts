@@ -1307,7 +1307,12 @@ const make = Effect.gen(function* () {
     readonly attached: ReadonlyArray<ProviderSkillReference> | undefined;
     readonly resolveTypedSkills: boolean;
   }): Effect.fn.Return<ReadonlyArray<ProviderSkillReference> | undefined> {
-    if (!input.resolveTypedSkills) {
+    // Automatic discovery needs the active profile's native catalog. Other
+    // providers still get their exact references from explicit menu selections.
+    if (
+      !input.resolveTypedSkills ||
+      (input.provider !== "codex" && input.provider !== "claudeAgent")
+    ) {
       return input.attached;
     }
     let available: ReadonlyArray<ProviderSkillDescriptor>;
