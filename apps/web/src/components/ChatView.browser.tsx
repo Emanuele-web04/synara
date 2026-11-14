@@ -109,7 +109,7 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
-import { makeDomainEvent } from "../storeTestFixtures";
+import { makeActivity, makeDomainEvent } from "../storeTestFixtures";
 import {
   acknowledgeStartupAnnouncementsForTest,
   createBrowserTestServerConfig,
@@ -3461,6 +3461,87 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("stops a background task from the embedded side chat after its turn settles", async () => {
+    const sidechatId = ThreadId.makeUnsafe("sidechat-background-task");
+    const turnId = TurnId.makeUnsafe("sidechat-background-turn");
+    const taskId = "sidechat-task";
+    const reply = createAssistantMessage({
+      id: MessageId.makeUnsafe("sidechat-background-reply"),
+      text: "The build continues in the background.",
+      offsetSeconds: 3,
+    });
+    const base = addThreadToSnapshot(
+      createSnapshotWithInlineToolOverflow({ active: false }),
+      sidechatId,
+    );
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: base.threads.map((thread) =>
+        thread.id === sidechatId
+          ? {
+              ...thread,
+              sidechatSourceThreadId: THREAD_ID,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: NOW_ISO,
+                startedAt: NOW_ISO,
+                completedAt: reply.updatedAt,
+                assistantMessageId: reply.id,
+              },
+              messages: [
+                {
+                  ...createUserMessage({
+                    id: MessageId.makeUnsafe("sidechat-background-user"),
+                    text: "Build in the background",
+                    offsetSeconds: 0,
+                  }),
+                  turnId,
+                },
+                { ...reply, turnId, completedAt: reply.updatedAt },
+              ],
+              activities: [
+                makeActivity({
+                  kind: "runtime.warning",
+                  tone: "info",
+                  createdAt: isoAt(2),
+                  turnId,
+                  summary: "Moved to background",
+                  payload: {
+                    nativeEventType: "background_tasks_changed",
+                    data: {
+                      tasks: [
+                        { task_id: taskId, task_type: "local_bash", description: "Build app" },
+                      ],
+                    },
+                  },
+                }),
+              ],
+            }
+          : thread,
+      ),
+    };
+    useRightDockStore.getState().openPane(THREAD_ID, { kind: "sidechat", threadId: sidechatId });
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const transcriptReply = page.getByText(reply.text, { exact: true });
+      await expect.element(transcriptReply).toBeVisible();
+      const sidechat = page.elementLocator(
+        transcriptReply.element().closest("[data-dock-pane-id]")!,
+      );
+      await sidechat.getByRole("button", { name: /^Worked for/ }).click();
+      await expect.element(sidechat.getByText("Build app", { exact: true })).toBeVisible();
+      await sidechat.getByRole("button", { name: "Stop background task Build app" }).click();
+      await expect
+        .poll(() => wsRequests.map(readDispatchedCommand))
+        .toContainEqual(
+          expect.objectContaining({ type: "thread.task.stop", threadId: sidechatId, taskId }),
+        );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it.each([
     { kind: "forked", repository: "acme/widgets", opens: "the host chat dock" },

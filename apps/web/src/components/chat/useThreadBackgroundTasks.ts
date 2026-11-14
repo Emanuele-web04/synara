@@ -1,7 +1,6 @@
 // FILE: useThreadBackgroundTasks.ts
-// Purpose: The thread's background tasks for the Environment panel summary and the
-//          right-dock Background tasks list, plus the Stop control both share. The
-//          transcript keeps no live rows for them, so these are their only controls.
+// Purpose: Background tasks for the Environment summary and right-dock list,
+//          plus Stop dispatch shared by the list and chats without Environment.
 // Layer: Chat hooks
 // Exports: useThreadBackgroundTasks, useStopBackgroundTask
 

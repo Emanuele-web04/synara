@@ -1,24 +1,30 @@
 // FILE: BackgroundTaskRow.tsx
 // Purpose: The transcript row a background task keeps once its tool run is
 //          expanded: "`sleep 20 && echo done` · running", then "finished 20s" /
-//          "failed · exit 1" / "stopped" in place. Static on purpose: the live
-//          clock and Stop live in the Environment panel and the right-dock
-//          Background tasks list, so the transcript never ticks.
+//          "failed · exit 1" / "stopped" in place. The transcript never ticks.
+//          Stop is available here only when the chat has no Environment panel.
 // Layer: Web chat presentation component
-// Exports: BackgroundTaskRow
+// Exports: BackgroundTaskRow, BackgroundTaskStopContext
 
-import { BackgroundTrayIcon } from "~/lib/icons";
+import { createContext, useContext } from "react";
+
+import { BackgroundTrayIcon, StopIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import type { WorkLogBackgroundTask } from "../../workLog";
 import { deriveLiteralCommand } from "../../lib/toolCallLabel";
+import { Button } from "../ui/button";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
 import { useTranslation } from "~/i18n";
+
+// ChatView supplies Stop only for the transcript that owns the task.
+export const BackgroundTaskStopContext = createContext<((taskId: string) => void) | null>(null);
 
 export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSizePx: number }) {
   const { t } = useTranslation();
 
   const { task, fontSizePx } = props;
+  const onStop = useContext(BackgroundTaskStopContext);
   // A running task shows no clock here; settled ones keep how long they ran.
   const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt, t);
   const command = task.command ? deriveLiteralCommand(task.command) : null;
@@ -57,6 +63,19 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
           {status.label}
         </span>
         {task.status !== "running" && status.elapsed ? <span>{status.elapsed}</span> : null}
+        {task.status === "running" && onStop ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="shrink-0 text-foreground/80"
+            onClick={() => onStop(task.taskId)}
+            aria-label={t("chat:stopBackgroundTask", { value0: subject })}
+          >
+            <StopIcon className="size-2.5" />
+            {t("chat:stop")}
+          </Button>
+        ) : null}
       </span>
     </div>
   );
