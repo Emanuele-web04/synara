@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -271,6 +273,8 @@ describe("external MCP computer control scope", () => {
       Layer.provide(projectionTurnsLayer),
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
+      Layer.provide(Layer.succeed(ProjectAgentService, {} as never)),
+      Layer.provide(NodeServices.layer),
     );
     const testLayer = Layer.mergeAll(gatewayLayer, serviceLayer, SqlitePersistenceMemory);
 

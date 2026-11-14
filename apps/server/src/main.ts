@@ -1,3 +1,4 @@
+import * as NodePath from "node:path";
 import { requestLocalRemoteAccess, saveRemoteInvitation } from "./remotePairing/cli";
 import { accountApiIssuer, accountStateDirectory, readAccountFile } from "./accountAuth";
 import { startRemoteBillingPolicy } from "./remoteBillingPolicy";
@@ -33,7 +34,7 @@ import {
   Stream,
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 import { EXTERNAL_MCP_MAX_WAIT_MS, type ServerSettings } from "@synara/contracts";
 import { NetService } from "@synara/shared/Net";
 import {
@@ -1300,12 +1301,126 @@ const remoteCommand = Command.make("remote").pipe(
   ]),
 );
 
+// `project` and `hub` reuse the task CLI path: one external MCP tools/call per item, so
+// they inherit the integration's scopes ("projects:create", "hubs:manage") and audit trail.
+const runIntegrationTools = (
+  integration: Option.Option<string>,
+  calls: ReadonlyArray<{ readonly tool: string; readonly args: Record<string, unknown> }>,
+) =>
+  Effect.gen(function* () {
+    const root = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+    const integrationId = Option.getOrUndefined(integration);
+    for (const call of calls) {
+      const { exitCode } = yield* Effect.tryPromise({
+        try: () =>
+          runExternalMcpToolCommand({
+            baseDir,
+            tool: call.tool,
+            arguments: call.args,
+            ...(integrationId ? { integrationId } : {}),
+          }),
+        catch: (cause) => new StartupError({ message: `${call.tool} failed.`, cause }),
+      });
+      // Keep going: one bad folder should not hide the result of the others.
+      if (exitCode !== 0) process.exitCode = exitCode;
+    }
+  });
+
+// The server resolves paths against its own cwd, so relative folders are made absolute here.
+const absoluteWorkspacePath = (value: string) =>
+  value === "~" || value.startsWith("~/") ? value : NodePath.resolve(value);
+
+const workspacePathsArgument = Argument.string("path").pipe(
+  Argument.withDescription("Local folder (absolute or ~/...)."),
+  Argument.atLeast(1),
+);
+
+const baseProjectCommand = Command.make("project", { integration: mcpIntegrationFlag }).pipe(
+  Command.withDescription(
+    'Register local folders as Synara projects through the paired external MCP integration (needs the "Manage projects and hubs" permission).',
+  ),
+);
+const projectAddCommand = Command.make(
+  "add",
+  {
+    paths: workspacePathsArgument,
+    title: optionalString(
+      "title",
+      "Project title (single folder only; defaults to the folder name).",
+    ),
+  },
+  ({ paths, title }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseProjectCommand;
+      if (Option.isSome(title) && paths.length > 1) {
+        return yield* new StartupError({ message: "--title applies to a single folder." });
+      }
+      yield* runIntegrationTools(
+        parent.integration,
+        paths.map((workspacePath) => ({
+          tool: "synara_add_project",
+          args: compactToolArguments({
+            workspacePath: absoluteWorkspacePath(workspacePath),
+            title: Option.getOrUndefined(title),
+          }),
+        })),
+      );
+    }),
+).pipe(Command.withDescription("Add one or more existing folders as projects (idempotent)."));
+const projectCommand = baseProjectCommand.pipe(Command.withSubcommands([projectAddCommand]));
+
+const baseHubCommand = Command.make("hub", { integration: mcpIntegrationFlag }).pipe(
+  Command.withDescription(
+    'Create Synara Hubs and link projects into them through the paired external MCP integration (needs the "Manage projects and hubs" permission).',
+  ),
+);
+const hubCreateCommand = Command.make(
+  "create",
+  { title: Argument.string("title").pipe(Argument.withDescription("Hub title.")) },
+  ({ title }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseHubCommand;
+      yield* runIntegrationTools(parent.integration, [
+        { tool: "synara_create_hub", args: { title } },
+      ]);
+    }),
+).pipe(Command.withDescription("Create a Hub, or print the existing Hub with that title."));
+const hubLinkCommand = Command.make(
+  "link",
+  {
+    hub: Flag.string("hub").pipe(
+      Flag.withDescription("Hub project id (from `synara hub create`)."),
+    ),
+    paths: workspacePathsArgument,
+  },
+  ({ hub, paths }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseHubCommand;
+      yield* runIntegrationTools(
+        parent.integration,
+        paths.map((workspacePath) => ({
+          tool: "synara_link_hub_project",
+          // Stable per (hub, folder) so a retried command replays instead of duplicating.
+          args: {
+            requestId: `cli-link:${hub}:${absoluteWorkspacePath(workspacePath)}`,
+            hubProjectId: hub,
+            workspacePath: absoluteWorkspacePath(workspacePath),
+          },
+        })),
+      );
+    }),
+).pipe(Command.withDescription("Link existing projects (by folder) into a Hub."));
+const hubCommand = baseHubCommand.pipe(Command.withSubcommands([hubCreateCommand, hubLinkCommand]));
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
   Command.withSubcommands([
     serverToolsCommand,
     mcpCommand,
     taskCommand,
+    projectCommand,
+    hubCommand,
     authCommand,
     statusCommand,
     remoteCommand,

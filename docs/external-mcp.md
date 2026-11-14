@@ -140,6 +140,17 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
 - `synara_wait_for_task` — wait for an authorized task without changing it.
 - `synara_read_task` — read tasks created by the integration. Reading other tasks requires the
   separate `tasks:read-project` scope.
+- `synara_add_project` — register an existing local folder as an ordinary project (idempotent per
+  folder). Requires `projects:create`.
+- `synara_create_hub` — create a Hub, or return the Hub that already has that title. Requires
+  `hubs:manage` and the Hubs feature on this host.
+- `synara_link_hub_project` — link a project into a Hub by `linkedProjectId` or `workspacePath`,
+  with a stable `requestId`. Requires `hubs:manage`; both projects must be allowed.
+
+Both management scopes are granted together by the "Manage projects and hubs" switch in Settings.
+Creating projects or Hubs also requires an integration scoped to all projects, because a row
+created outside an explicit project list would be invisible to the integration. Linking runs with
+the same user authority as the Hub settings dialog; the coordinator is still configured in the app.
 
 Creation requires an explicit `projectId`, `provider`, `model`, `prompt`, and stable `requestId`.
 The default environment is a managed worktree and the default runtime is approval-required. Local
@@ -161,6 +172,9 @@ synara task capabilities --project <projectId>
 synara task create --project <projectId> --provider claudeAgent --model <slug> -m "Fix the flaky test"
 synara task wait --thread <threadId> --timeout-ms 600000
 synara task read --thread <threadId>
+synara project add ~/code/api ~/code/web       # needs "Manage projects and hubs"
+synara hub create "Platform"                    # prints hubProjectId
+synara hub link --hub <hubProjectId> ~/code/api ~/code/web
 ```
 
 `task create` generates a `--request-id` when omitted; pass your own to retry safely without

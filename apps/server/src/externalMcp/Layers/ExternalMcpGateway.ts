@@ -6,16 +6,29 @@ import {
   ExternalMcpCreateTaskInput,
   ExternalMcpReadTaskInput,
   ExternalMcpWaitTaskInput,
+  ExternalMcpAddProjectInput,
+  ExternalMcpCreateHubInput,
+  ExternalMcpLinkHubProjectInput,
+  CommandId,
   ProjectId,
   ThreadId,
   type ExternalMcpCapability,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema } from "effect";
+import { randomUUID } from "node:crypto";
+import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { prepareGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
+import { makeDispatchCommandNormalizer } from "../../orchestration/dispatchCommandNormalization.ts";
+import {
+  GROUPS_BETA_ONLY_MESSAGE,
+  isServerGroupsEnabled,
+} from "../../projectAgent/groupsBetaGate.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { canonicalizeProjectWorkspaceRoot } from "../../projectWorkspaceRoot.ts";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -131,6 +144,9 @@ export function filterExternalMcpTools(
 const decodeExternalCreateTask = Schema.decodeUnknownEffect(ExternalMcpCreateTaskInput);
 const decodeExternalReadTask = Schema.decodeUnknownEffect(ExternalMcpReadTaskInput);
 const decodeExternalWaitTask = Schema.decodeUnknownEffect(ExternalMcpWaitTaskInput);
+const decodeExternalAddProject = Schema.decodeUnknownEffect(ExternalMcpAddProjectInput);
+const decodeExternalCreateHub = Schema.decodeUnknownEffect(ExternalMcpCreateHubInput);
+const decodeExternalLinkHubProject = Schema.decodeUnknownEffect(ExternalMcpLinkHubProjectInput);
 
 function externalErrorResult(error: unknown) {
   if (error instanceof GatewayToolError) return gatewayToolErrorResult(error);
@@ -182,6 +198,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   const git = yield* GitCore;
   const serverConfig = yield* ServerConfig;
   const operationRepository = yield* AgentGatewayOperationRepository;
+  const projectAgentService = yield* ProjectAgentService;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository: {
@@ -716,6 +735,282 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
+  // Workspace management reuses the same normalization as the app's WS dispatch, so a
+  // project or Hub created here is indistinguishable from one created in the UI.
+  const normalizeWorkspaceCommand = makeDispatchCommandNormalizer<GatewayToolError>({
+    attachmentsDir: serverConfig.attachmentsDir,
+    chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+    groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+    fileSystem,
+    path,
+    canonicalizeProjectWorkspaceRoot: (workspaceRoot, options) =>
+      canonicalizeProjectWorkspaceRoot({
+        homeDir: serverConfig.homeDir,
+        workspaceRoot,
+        ...(options?.createIfMissing !== undefined
+          ? { createIfMissing: options.createIfMissing }
+          : {}),
+      }).pipe(
+        Effect.mapError((error) => new GatewayToolError("invalid_input", error.message)),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+    listGroupWorkspaceRoots: () =>
+      snapshotQuery.getCommandReadModel().pipe(
+        Effect.map((readModel) =>
+          readModel.projects
+            .filter((project) => project.kind === "group" && project.deletedAt === null)
+            .map((project) => ({ projectId: project.id, workspaceRoot: project.workspaceRoot })),
+        ),
+        Effect.mapError(
+          () => new GatewayToolError("repository_error", "Failed to list hub workspace roots."),
+        ),
+      ),
+    prepareGroupWorkspaceRoot: (workspaceRoot) =>
+      prepareGroupWorkspaceRoot(workspaceRoot).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to prepare hub workspace", { workspaceRoot, cause }),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+  });
+
+  // Creating rows outside an explicit project list would leave them invisible to the
+  // integration, so both create tools require the "all projects" scope.
+  const assertAllProjectsScope = (context: ExternalToolContext) =>
+    context.client.integration.projectScope === "all"
+      ? Effect.void
+      : Effect.fail(
+          new GatewayToolError(
+            "capability_denied",
+            'Creating projects or hubs requires an integration scoped to "all" projects.',
+          ),
+        );
+
+  const dispatchProjectCreate = (input: {
+    readonly kind: "project" | "group";
+    readonly title: string;
+    readonly workspaceRoot: string;
+  }) =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.makeUnsafe(randomUUID());
+      const { command, prepareWorkspaceRoot } = yield* normalizeWorkspaceCommand({
+        command: {
+          type: "project.create",
+          commandId: CommandId.makeUnsafe(randomUUID()),
+          projectId,
+          kind: input.kind,
+          title: input.title,
+          workspaceRoot: input.workspaceRoot,
+          createWorkspaceRootIfMissing: input.kind === "group",
+          isPinned: false,
+          createdAt: new Date().toISOString(),
+        },
+      });
+      yield* orchestrationEngine.dispatch(command);
+      // Scaffolding only runs once the decider accepted the command (same order as wsRpc).
+      if (prepareWorkspaceRoot) yield* prepareWorkspaceRoot;
+      return {
+        projectId,
+        workspaceRoot:
+          command.type === "project.create" ? command.workspaceRoot : input.workspaceRoot,
+      };
+    });
+
+  const addProjectTool: ExternalTool = {
+    requiredCapability: "projects:create",
+    definition: {
+      name: "synara_add_project",
+      description:
+        "Register an existing local folder as an ordinary Synara project. Idempotent per folder: an already-registered folder returns its project. Requires an integration scoped to all projects.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspacePath: { type: "string", description: "Absolute folder path, or ~/..." },
+          title: { type: "string", maxLength: 240 },
+        },
+        required: ["workspacePath"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Add a Synara project",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const input = yield* decodeExternalAddProject(args).pipe(
+          Effect.mapError((cause) => new ToolInputError(errorText(cause))),
+        );
+        yield* assertAllProjectsScope(context);
+        yield* context.assertActive();
+        const workspaceRoot = yield* canonicalizeProjectWorkspaceRoot({
+          homeDir: serverConfig.homeDir,
+          workspaceRoot: input.workspacePath,
+        }).pipe(
+          Effect.mapError((error) => new GatewayToolError("invalid_input", error.message)),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
+        const existing = yield* snapshotQuery.getActiveProjectByWorkspaceRoot(workspaceRoot);
+        if (Option.isSome(existing)) {
+          return mcpToolResultJson({
+            projectId: existing.value.id,
+            title: existing.value.title,
+            workspaceRoot: existing.value.workspaceRoot,
+            created: false,
+          });
+        }
+        const title = input.title ?? path.basename(workspaceRoot);
+        const created = yield* dispatchProjectCreate({ kind: "project", title, workspaceRoot });
+        return mcpToolResultJson({ ...created, title, created: true });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
+  const createHubTool: ExternalTool = {
+    requiredCapability: "hubs:manage",
+    definition: {
+      name: "synara_create_hub",
+      description:
+        "Create a Synara Hub with this title, or return the existing Hub with the same title. Link repositories with synara_link_hub_project; configure the coordinator in the app. Requires an integration scoped to all projects.",
+      inputSchema: {
+        type: "object",
+        properties: { title: { type: "string", maxLength: 240 } },
+        required: ["title"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Create a Synara Hub",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const input = yield* decodeExternalCreateHub(args).pipe(
+          Effect.mapError((cause) => new ToolInputError(errorText(cause))),
+        );
+        if (!isServerGroupsEnabled()) {
+          return yield* Effect.fail(
+            new GatewayToolError("capability_denied", GROUPS_BETA_ONLY_MESSAGE),
+          );
+        }
+        yield* assertAllProjectsScope(context);
+        yield* context.assertActive();
+        const readModel = yield* snapshotQuery.getCommandReadModel();
+        const existing = readModel.projects.find(
+          (project) =>
+            project.kind === "group" &&
+            project.deletedAt === null &&
+            project.title.toLowerCase() === input.title.toLowerCase(),
+        );
+        if (existing) {
+          return mcpToolResultJson({
+            hubProjectId: existing.id,
+            title: existing.title,
+            workspaceRoot: existing.workspaceRoot,
+            created: false,
+          });
+        }
+        const created = yield* dispatchProjectCreate({
+          kind: "group",
+          title: input.title,
+          // The normalizer derives the real folder under the Hubs root from the title.
+          workspaceRoot: path.join(serverConfig.groupsWorkspaceRoot, input.title),
+        });
+        return mcpToolResultJson({
+          hubProjectId: created.projectId,
+          title: input.title,
+          workspaceRoot: created.workspaceRoot,
+          created: true,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
+  const linkHubProjectTool: ExternalTool = {
+    requiredCapability: "hubs:manage",
+    definition: {
+      name: "synara_link_hub_project",
+      description:
+        "Link an existing ordinary Synara project into a Hub, by linkedProjectId or workspacePath, so the Hub can start threads in it. requestId is a stable idempotency key. Both projects must be allowed for this integration.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string", maxLength: 256 },
+          hubProjectId: { type: "string" },
+          linkedProjectId: { type: "string" },
+          workspacePath: { type: "string" },
+        },
+        required: ["requestId", "hubProjectId"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Link a project into a Synara Hub",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const input = yield* decodeExternalLinkHubProject(args).pipe(
+          Effect.mapError((cause) => new ToolInputError(errorText(cause))),
+        );
+        if ((input.linkedProjectId === undefined) === (input.workspacePath === undefined)) {
+          return yield* Effect.fail(
+            new ToolInputError("Pass exactly one of linkedProjectId or workspacePath."),
+          );
+        }
+        const linkedProjectId = yield* Effect.gen(function* () {
+          if (input.linkedProjectId !== undefined) return input.linkedProjectId;
+          const workspaceRoot = yield* canonicalizeProjectWorkspaceRoot({
+            homeDir: serverConfig.homeDir,
+            workspaceRoot: input.workspacePath!,
+          }).pipe(
+            Effect.mapError((error) => new GatewayToolError("invalid_input", error.message)),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+          const project = yield* snapshotQuery.getActiveProjectByWorkspaceRoot(workspaceRoot);
+          if (Option.isNone(project)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "not_found",
+                `No Synara project owns "${workspaceRoot}". Add it with synara_add_project first.`,
+              ),
+            );
+          }
+          return project.value.id;
+        });
+        yield* externalMcp.assertProject(context.client, input.hubProjectId);
+        yield* externalMcp.assertProject(context.client, linkedProjectId);
+        yield* context.assertActive();
+        // The owner granted "hubs:manage" explicitly, so the link runs with the same
+        // user authority as linking from the Hub settings dialog.
+        const overview = yield* projectAgentService.linkProject(
+          {
+            requestId: `external-mcp:${context.client.integration.integrationId}:${input.requestId}`,
+            projectId: input.hubProjectId,
+            linkedProjectId,
+          },
+          { kind: "user" },
+        );
+        return mcpToolResultJson({
+          hubProjectId: input.hubProjectId,
+          linkedProjectId,
+          linkedProjectIds: overview.linkedProjectIds,
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
   const tools: ReadonlyArray<ExternalTool> = [
     overviewTool,
     capabilitiesTool,
@@ -723,6 +1018,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     createTaskTool,
     waitTaskTool,
     readTaskTool,
+    addProjectTool,
+    createHubTool,
+    linkHubProjectTool,
   ];
   const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]));
 

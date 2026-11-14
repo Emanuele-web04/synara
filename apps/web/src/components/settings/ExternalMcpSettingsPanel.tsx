@@ -73,6 +73,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
   const [allowComputerControl, setAllowComputerControl] = useState(false);
+  const [allowWorkspaceManage, setAllowWorkspaceManage] = useState(false);
   const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -102,8 +103,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
     if (allowLocal) next.push("runtime:local");
     if (allowFullAccess) next.push("runtime:full-access");
     if (allowComputerControl) next.push("computer:control");
+    if (allowWorkspaceManage) next.push("projects:create", "hubs:manage");
     return next;
-  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
+  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead, allowWorkspaceManage]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -373,6 +375,17 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   </div>
                 </div>
                 <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-ui leading-snug font-medium">
+                    {t("settings:manageProjectsAndHubs")}
+                  </div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
+                    {t("settings:manageProjectsAndHubsDescription")}
+                  </div>
+                </div>
+                <Switch checked={allowWorkspaceManage} onCheckedChange={setAllowWorkspaceManage} />
               </div>
             </DisclosureRegion>
           </SettingsRow>

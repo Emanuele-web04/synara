@@ -145,7 +145,7 @@ import {
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
-import { realpathNearestExisting } from "./realpathNearestExisting";
+import { canonicalizeProjectWorkspaceRoot as canonicalizeSharedProjectWorkspaceRoot } from "./projectWorkspaceRoot";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
@@ -808,55 +808,23 @@ const makeWsRpcHandlersLayer = () =>
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
       ) => effect.pipe(Effect.mapError((cause) => toPullRequestsRpcError(cause, fallbackMessage)));
-      const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
+      const canonicalizeProjectWorkspaceRoot = (
         workspaceRoot: string,
         options: { readonly createIfMissing?: boolean } = {},
-      ) {
-        const rawWorkspaceRoot = workspaceRoot.trim();
-        const expandedWorkspaceRoot =
-          rawWorkspaceRoot === "~"
-            ? config.homeDir
-            : rawWorkspaceRoot.startsWith("~/") || rawWorkspaceRoot.startsWith("~\\")
-              ? path.join(config.homeDir, rawWorkspaceRoot.slice(2))
-              : rawWorkspaceRoot;
-        const normalizedWorkspaceRoot = path.resolve(expandedWorkspaceRoot);
-        let workspaceStat = yield* fileSystem
-          .stat(normalizedWorkspaceRoot)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!workspaceStat) {
-          if (!options.createIfMissing) {
-            return yield* new WsRpcError({
-              message: `Project directory does not exist: ${normalizedWorkspaceRoot}`,
-            });
-          }
-          yield* fileSystem.makeDirectory(normalizedWorkspaceRoot, { recursive: true }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new WsRpcError({
-                  message: `Failed to create project directory: ${normalizedWorkspaceRoot}`,
-                  cause,
-                }),
-            ),
-          );
-          workspaceStat = yield* fileSystem
-            .stat(normalizedWorkspaceRoot)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          if (!workspaceStat) {
-            return yield* new WsRpcError({
-              message: `Failed to create project directory: ${normalizedWorkspaceRoot}`,
-            });
-          }
-        }
-        if (workspaceStat.type !== "Directory") {
-          return yield* new WsRpcError({
-            message: `Project path is not a directory: ${normalizedWorkspaceRoot}`,
-          });
-        }
-        return yield* realpathNearestExisting(normalizedWorkspaceRoot).pipe(
+      ) =>
+        canonicalizeSharedProjectWorkspaceRoot({
+          homeDir: config.homeDir,
+          workspaceRoot,
+          ...(options.createIfMissing !== undefined
+            ? { createIfMissing: options.createIfMissing }
+            : {}),
+        }).pipe(
+          Effect.mapError(
+            (error) => new WsRpcError({ message: error.message, cause: error.cause }),
+          ),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
-      });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
       // Claude Outbox layout). Keeping a single implementation keeps error handling and
