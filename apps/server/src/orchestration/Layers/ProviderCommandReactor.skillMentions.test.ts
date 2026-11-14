@@ -30,4 +30,44 @@ describe("normalizeSkillMentionTextForProvider", () => {
       }),
     ).toBe("Use /check-code please");
   });
+
+  describe("Claude", () => {
+    const claudeSkill = { name: "reviewer", path: "/home/.claude/skills/reviewer/SKILL.md" };
+    const sharedCodexSkill = {
+      name: "check-code",
+      path: "/home/.codex/skills/check-code/SKILL.md",
+    };
+
+    it("turns a leading skill shared from another provider into a $mention", () => {
+      expect(
+        normalizeSkillMentionTextForProvider({
+          provider: "claudeAgent",
+          messageText: "/check-code fix the bugs and keep /check-code notes",
+          skills: [sharedCodexSkill],
+        }),
+      ).toBe("$check-code fix the bugs and keep /check-code notes");
+    });
+
+    it("turns a leading .claude skill glued to punctuation into a $mention", () => {
+      expect(
+        normalizeSkillMentionTextForProvider({
+          provider: "claudeAgent",
+          messageText: "/reviewer, then fix the bugs",
+          skills: [claudeSkill],
+        }),
+      ).toBe("$reviewer, then fix the bugs");
+    });
+
+    it("keeps a leading .claude skill and mid-sentence tokens for Claude Code", () => {
+      for (const messageText of ["/reviewer fix the bugs", "Please /check-code this"]) {
+        expect(
+          normalizeSkillMentionTextForProvider({
+            provider: "claudeAgent",
+            messageText,
+            skills: [claudeSkill, sharedCodexSkill],
+          }),
+        ).toBe(messageText);
+      }
+    });
+  });
 });

@@ -70,7 +70,9 @@ import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
 import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
+import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { useTranslation } from "~/i18n";
+import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -85,6 +87,13 @@ interface ChatHeaderProps {
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
   activeProjectName: string | undefined;
+  // The project the chat belongs to, shown ahead of the title ("project / chat") when the
+  // row has no tabs. Null for chats outside a project (home chats, groups).
+  projectCrumb?: {
+    name: string;
+    cwd: string;
+    appearance: ProjectAppearance | null;
+  } | null;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
     title: string;
@@ -433,6 +442,7 @@ export function ChatHeader({
   activeThreadEntryPoint,
   activeProvider,
   activeProjectName,
+  projectCrumb: projectCrumbProp,
   threadBreadcrumbs,
   className,
   threadTabs,
@@ -493,6 +503,7 @@ export function ChatHeader({
   const isSidechat = isSidechatProp ?? false;
   const environment = environmentProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
+  const projectCrumb = projectCrumbProp ?? null;
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const { additions: diffAdditions, deletions: diffDeletions, hasChanges } = diffTotals;
@@ -671,6 +682,25 @@ export function ChatHeader({
               <div
                 className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}
               >
+                {projectCrumb ? (
+                  <>
+                    <span
+                      className="flex min-w-0 max-w-[40%] items-center gap-1.5 text-muted-foreground"
+                      title={projectCrumb.name}
+                    >
+                      <ProjectSidebarIcon
+                        cwd={projectCrumb.cwd}
+                        expanded={false}
+                        appearance={projectCrumb.appearance}
+                        glyphClassName="size-3.5 shrink-0"
+                      />
+                      <span className="truncate font-system-ui text-ui">{projectCrumb.name}</span>
+                    </span>
+                    <span aria-hidden className="shrink-0 text-ui text-muted-foreground/35">
+                      /
+                    </span>
+                  </>
+                ) : null}
                 <div
                   className={cn(
                     "flex min-w-0 items-center gap-2",

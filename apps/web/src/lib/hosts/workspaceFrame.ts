@@ -117,6 +117,8 @@ export interface WorkspaceFrameBinding {
     sessions(): readonly WorkspaceSession[];
     subscribe(listener: () => void): () => void;
     newChat(): Promise<string>;
+    /** Redial one connected computer through the controller and retry its workspace. */
+    reconnect?(environmentId: string): Promise<void>;
     createProject(): void;
     prepareAutomation?(draft?: WorkspaceAutomationDraft): string;
     navigate(path: string): void;

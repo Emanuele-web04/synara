@@ -6,6 +6,7 @@ import type {
   AgentGatewayMcpConnection,
 } from "./Services/AgentGatewayCredentials.ts";
 import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
+import { TURN_PLAN_CAPABILITY } from "./turnPlanTools.ts";
 
 export interface AgentGatewaySessionLeaseOptions {
   readonly additionalCapabilities?: readonly AgentGatewayCapability[];
@@ -37,10 +38,25 @@ export function agentGatewayCapabilitiesFor(
   return capabilities;
 }
 
+/**
+ * Capabilities a provider holds because its adapter consumes the tool, not
+ * because of a start option. Only the Claude adapter turns `synara_update_plan`
+ * calls into the turn's task list; providers with a native plan never see it.
+ */
+export function agentGatewayProviderCapabilitiesFor(
+  provider: ProviderKind,
+): readonly AgentGatewayCapability[] {
+  return provider === "claudeAgent" ? [TURN_PLAN_CAPABILITY] : [];
+}
+
 export function agentGatewaySessionLeaseOptionsFor(
   input: AgentGatewayCapabilityInput,
+  provider?: ProviderKind,
 ): AgentGatewaySessionLeaseOptions | undefined {
-  const additionalCapabilities = agentGatewayCapabilitiesFor(input);
+  const additionalCapabilities = [
+    ...agentGatewayCapabilitiesFor(input),
+    ...(provider === undefined ? [] : agentGatewayProviderCapabilitiesFor(provider)),
+  ];
   return additionalCapabilities.length === 0 ? undefined : { additionalCapabilities };
 }
 
@@ -207,7 +223,7 @@ export function acquireAgentGatewaySessionLease(
 ): AgentGatewaySessionLease | undefined {
   if (credentials === undefined) return undefined;
 
-  const options = agentGatewaySessionLeaseOptionsFor(capabilityInput);
+  const options = agentGatewaySessionLeaseOptionsFor(capabilityInput, provider);
   const connection =
     options === undefined
       ? credentials.connectionForThread(threadId, provider)

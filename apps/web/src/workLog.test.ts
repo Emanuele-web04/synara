@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveSubagentTaskEnds,
+  deriveThreadBackgroundTasks,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
@@ -1111,6 +1112,39 @@ describe("deriveWorkLogEntries", () => {
           },
         },
       ]);
+    });
+
+    // The Environment panel and the right-dock list read the thread's tasks
+    // without transcript rows; they must describe the same tasks the same way.
+    it("lists the thread's tasks with their launch commands, matching the transcript rows", () => {
+      const activities = [
+        launchCall("launch-a", "toolu_a", "sleep 4 && echo a", "2026-10-10T00:15:20.000Z"),
+        launchCall("launch-b", "toolu_b", "false", "2026-10-10T00:15:20.100Z"),
+        notice(
+          "moved",
+          [
+            ["task-a", "a"],
+            ["task-b", "b"],
+          ],
+          "2026-10-10T00:15:20.300Z",
+        ),
+        taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.301Z"),
+        taskStarted("task-b", "toolu_b", "2026-10-10T00:15:20.302Z"),
+        taskCompleted(
+          "task-b",
+          "failed",
+          'Background command "b" failed with exit code 1',
+          "2026-10-10T00:15:21.302Z",
+        ),
+      ];
+      const rowTasks = deriveWorkLogEntries(activities, undefined, options).flatMap((entry) =>
+        entry.backgroundTask ? [entry.backgroundTask] : [],
+      );
+      expect(rowTasks.map((task) => [task.command, task.status, task.exitCode])).toEqual([
+        ["sleep 4 && echo a", "running", null],
+        ["false", "failed", 1],
+      ]);
+      expect(deriveThreadBackgroundTasks(activities)).toEqual(rowTasks);
     });
 
     it("updates the same row in place when the task finishes, fails or is stopped", () => {

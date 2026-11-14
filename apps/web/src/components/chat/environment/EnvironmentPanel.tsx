@@ -65,7 +65,9 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentBackgroundTasksSection } from "./EnvironmentBackgroundTasksSection";
 import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import { useThreadBackgroundTasks } from "../useThreadBackgroundTasks";
 import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
@@ -301,6 +303,8 @@ export function EnvironmentPanel({
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { settings } = useAppSettings();
   const openRightDockPane = useRightDockStore((store) => store.openPane);
+  // Derived only while the panel is open; a closed panel needs no task list.
+  const backgroundTasks = useThreadBackgroundTasks(open ? activeThreadId : null);
   const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
@@ -486,6 +490,16 @@ export function EnvironmentPanel({
                     : t("chat:anErrorOccurredWhileDeletingTheSideChat"),
               });
             });
+          }}
+        />
+      ) : null}
+
+      {activeThreadId ? (
+        <EnvironmentBackgroundTasksSection
+          tasks={backgroundTasks}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "backgroundTasks" });
+            onClose();
           }}
         />
       ) : null}

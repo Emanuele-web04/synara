@@ -162,6 +162,59 @@ describe("workspace connection recovery", () => {
   });
 });
 
+describe("failed workspace frames", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("remounts a failed frame when the controller reports it reachable, backing off between tries", async () => {
+    vi.useFakeTimers();
+    const api = await registry();
+    api.addWorkspaceSession(host("one"));
+    const generation = () => api.readWorkspaceSessions()[0]?.frameGeneration ?? 0;
+    api.updateWorkspaceSession("one", { error: "This computer is unavailable." });
+    api.restoreConnectedWorkspaces(connections("one"), signedIn);
+    expect(generation()).toBe(1);
+    expect(api.readWorkspaceSessions()[0]?.error).toBeUndefined();
+
+    api.updateWorkspaceSession("one", { error: "Still asleep" });
+    api.restoreConnectedWorkspaces(connections("one"), signedIn);
+    expect(generation()).toBe(1);
+    vi.advanceTimersByTime(5_000);
+    api.restoreConnectedWorkspaces(connections("one"), signedIn);
+    expect(generation()).toBe(2);
+
+    // A frame that became ready starts the backoff over.
+    api.updateWorkspaceSession("one", { navigation: { navigate: vi.fn() } as never });
+    api.updateWorkspaceSession("one", { error: "Slept again", navigation: undefined });
+    api.restoreConnectedWorkspaces(connections("one"), signedIn);
+    expect(generation()).toBe(3);
+
+    // Unhealthy controller state never remounts a failed frame.
+    api.updateWorkspaceSession("one", { error: "Offline" });
+    vi.advanceTimersByTime(60_000);
+    const response = connections("one");
+    api.restoreConnectedWorkspaces(
+      {
+        ...response,
+        connections: response.connections.map((connection) =>
+          Object.assign(connection, { state: "reconnecting" as const }),
+        ),
+      },
+      signedIn,
+    );
+    expect(generation()).toBe(3);
+  });
+
+  it("remounts a failed frame when its computer is connected again from Connections", async () => {
+    const api = await registry();
+    api.addWorkspaceSession(host("one"));
+    api.updateWorkspaceSession("one", { error: "This computer is unavailable." });
+    const session = api.addWorkspaceSession(host("one"));
+    expect(session.frameGeneration).toBe(1);
+    expect(session.error).toBeUndefined();
+    expect(api.readWorkspaceSessions()).toEqual([session]);
+  });
+});
+
 describe("workspace ownership", () => {
   it.each(["offline", "removed", "frame replaced", "host replaced"])(
     "rejects captured sidebar actions after the owner is %s",

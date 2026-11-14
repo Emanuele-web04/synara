@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildInlineSkillInstructions,
+  selectSkillsToInline,
   shouldInlineSkillForProvider,
 } from "./skillPromptInjection.ts";
 
@@ -148,4 +149,54 @@ describe("buildInlineSkillInstructions", () => {
       }
     },
   );
+});
+
+describe("selectSkillsToInline", () => {
+  const claudeSkill = { name: "reviewer", path: claudeSkillPath };
+  const sharedCodexSkill = { name: "check-code", path: codexSkillPath };
+
+  it("leaves a leading .claude skill to Claude Code's own /name loading", () => {
+    expect(
+      selectSkillsToInline({
+        provider: "claudeAgent",
+        skills: [claudeSkill],
+        providerInput: "/reviewer look at this diff",
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["mid-sentence", "Please run /reviewer on this diff"],
+    ["behind Synara's goal or project preamble", "<goal>Ship it</goal>\n\n/reviewer look"],
+  ])("inlines a .claude skill typed %s", (_case, providerInput) => {
+    expect(
+      selectSkillsToInline({ provider: "claudeAgent", skills: [claudeSkill], providerInput }),
+    ).toEqual([claudeSkill]);
+  });
+
+  it("inlines every Claude skill when native loading is not guaranteed", () => {
+    expect(
+      selectSkillsToInline({ provider: "claudeAgent", skills: [claudeSkill, sharedCodexSkill] }),
+    ).toEqual([claudeSkill, sharedCodexSkill]);
+  });
+
+  it("inlines a skill shared from another provider's folder even when it leads", () => {
+    expect(
+      selectSkillsToInline({
+        provider: "claudeAgent",
+        skills: [sharedCodexSkill, claudeSkill],
+        providerInput: "/check-code then /reviewer",
+      }),
+    ).toEqual([sharedCodexSkill, claudeSkill]);
+  });
+
+  it("keeps the path rule for other providers regardless of position", () => {
+    expect(
+      selectSkillsToInline({
+        provider: "codex",
+        skills: [claudeSkill, sharedCodexSkill],
+        providerInput: "/check-code",
+      }),
+    ).toEqual([claudeSkill]);
+  });
 });

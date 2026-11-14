@@ -1631,6 +1631,45 @@ describe("store event reducer", () => {
     });
   });
 
+  it.each(["completed", "running"] as const)(
+    "keeps a %s turn's lifecycle when its checkpoint capture is missing",
+    (state) => {
+      // A turn a background task woke has no git baseline, so its checkpoint is
+      // "missing"; that must not repaint the answer as interrupted.
+      const initialState = makeState(
+        makeThread({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-woken"),
+            state,
+            requestedAt: "2026-02-27T00:01:00.000Z",
+            startedAt: "2026-02-27T00:01:00.000Z",
+            completedAt: state === "completed" ? "2026-02-27T00:01:30.000Z" : null,
+            assistantMessageId: null,
+          },
+        }),
+      );
+
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.turn-diff-completed", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: TurnId.makeUnsafe("turn-woken"),
+          completedAt: "2026-02-27T00:01:31.000Z",
+          status: "missing",
+          files: [],
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread-1/turn/4"),
+          assistantMessageId: MessageId.makeUnsafe("assistant-woken"),
+          checkpointTurnCount: 4,
+        }),
+      ]);
+
+      expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
+        state,
+        completedAt: state === "completed" ? "2026-02-27T00:01:30.000Z" : null,
+        assistantMessageId: MessageId.makeUnsafe("assistant-woken"),
+      });
+    },
+  );
+
   it("does not leak the previous turn's assistantMessageId into a null-id summary for a different turn", () => {
     const existingAssistantMessageId = MessageId.makeUnsafe("assistant-turn-1");
     const initialState = makeState(
@@ -1971,6 +2010,66 @@ describe("store event reducer", () => {
       text: "streaming delta",
       streaming: true,
     });
+  });
+
+  it("clears the sidebar background count when a background task ends after its turn", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const activityEvent = (activity: ReturnType<typeof makeActivity>, sequence: number) =>
+      makeDomainEvent("thread.activity-appended", { threadId, activity }, { sequence });
+    const settledTurn = {
+      turnId: TurnId.makeUnsafe("turn-1"),
+      state: "completed" as const,
+      requestedAt: "2026-02-27T00:00:00.000Z",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      completedAt: "2026-02-27T00:01:00.000Z",
+      assistantMessageId: null,
+    };
+    const backgrounded = applyOrchestrationEvents(
+      makeState(
+        makeThread({
+          latestTurn: settledTurn,
+          session: {
+            provider: "claudeAgent",
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:01:00.000Z",
+          },
+        }),
+      ),
+      [
+        activityEvent(
+          makeActivity({
+            id: "moved-to-background",
+            kind: "runtime.warning",
+            turnId: "turn-1",
+            sequence: 1,
+            payload: {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "task-bg", task_type: "local_bash" }] },
+            },
+          }),
+          1,
+        ),
+      ],
+    );
+    expect(backgrounded.sidebarThreadSummaryById[threadId]?.pendingBackgroundWorkCount).toBe(1);
+
+    // The live stream path pins sidebar summaries unless the event can change them.
+    const settled = applyOrchestrationEventsHotPath(backgrounded, [
+      activityEvent(
+        makeActivity({
+          id: "task-bg-completed",
+          kind: "task.completed",
+          turnId: "turn-1",
+          sequence: 2,
+          payload: { taskId: "task-bg", status: "completed" },
+        }),
+        2,
+      ),
+    ]);
+
+    expect(settled.sidebarThreadSummaryById[threadId]?.pendingBackgroundWorkCount).toBe(0);
   });
 
   it("replaces duplicate live activities by id instead of appending duplicate ids", () => {
