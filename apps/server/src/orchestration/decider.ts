@@ -4,6 +4,8 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationThread,
+  OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   ProjectKind,
   ThreadGoalAchievement,
 } from "@synara/contracts";
@@ -29,6 +31,15 @@ import {
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+import {
+  findPullRequestLink,
+  linkPullRequest,
+  pullRequestLinksEqual,
+  refreshPullRequestSnapshots,
+  resolveCurrentPullRequest,
+  syncDiscoveredPullRequest,
+  unlinkPullRequest,
+} from "@synara/shared/threadPullRequestLinks";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
@@ -226,6 +237,61 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+/**
+ * One `thread.meta-updated` carrying the full PR link list and the current PR derived from it,
+ * or no event when nothing changed (background refreshes must not append no-op events).
+ */
+function pullRequestLinksEvent(input: {
+  readonly command: Pick<OrchestrationCommand, "commandId">;
+  readonly thread: OrchestrationThread;
+  readonly nextLinks: ReadonlyArray<OrchestrationThreadPullRequestLink>;
+  readonly occurredAt: string;
+}): ReadonlyArray<Omit<OrchestrationEvent, "sequence">> {
+  if (pullRequestLinksEqual(input.thread.pullRequests, input.nextLinks)) return [];
+  return [
+    {
+      ...withEventBase({
+        aggregateKind: "thread",
+        aggregateId: input.thread.id,
+        occurredAt: input.occurredAt,
+        commandId: input.command.commandId,
+      }),
+      type: "thread.meta-updated",
+      payload: {
+        threadId: input.thread.id,
+        pullRequests: [...input.nextLinks],
+        lastKnownPr: resolveCurrentPullRequest(input.nextLinks),
+        updatedAt: input.occurredAt,
+      },
+    },
+  ];
+}
+
+/**
+ * Clients built before PR links still send `thread.meta.update { lastKnownPr }`. A PR is an
+ * explicit user link; `null` used to clear the single slot, so it now clears only the
+ * branch-managed links and keeps explicit ones.
+ */
+function legacyPullRequestPatch(
+  thread: OrchestrationThread,
+  lastKnownPr: OrchestrationThreadPullRequest | null | undefined,
+  occurredAt: string,
+): {
+  readonly pullRequests?: OrchestrationThreadPullRequestLink[];
+  readonly lastKnownPr?: OrchestrationThreadPullRequest | null;
+} {
+  if (lastKnownPr === undefined) return {};
+  const pullRequests =
+    lastKnownPr === null
+      ? syncDiscoveredPullRequest(thread.pullRequests, null, occurredAt)
+      : linkPullRequest(thread.pullRequests, {
+          pullRequest: lastKnownPr,
+          source: "user",
+          linkedAt: occurredAt,
+        });
+  return { pullRequests, lastKnownPr: resolveCurrentPullRequest(pullRequests) };
 }
 
 function userMessageUpsertEvent(input: {
@@ -1456,7 +1522,16 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
                 sidechatExpiredAt: null,
               }
             : {}),
-          lastKnownPr: command.lastKnownPr,
+          // A PR carried into a new thread comes from the PR checkout flow (or a draft that
+          // inherited it), so it is an explicit link that branch discovery must not drop.
+          lastKnownPr: command.lastKnownPr ?? null,
+          pullRequests: command.lastKnownPr
+            ? linkPullRequest([], {
+                pullRequest: command.lastKnownPr,
+                source: "checkout",
+                linkedAt: command.createdAt,
+              })
+            : [],
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1981,7 +2056,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
             : {}),
           ...(command.subagentRole !== undefined ? { subagentRole: command.subagentRole } : {}),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
-          ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
+          ...legacyPullRequestPatch(thread, command.lastKnownPr, occurredAt),
           ...(command.pinnedMessages !== undefined
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
@@ -2052,6 +2127,49 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           },
         },
       ];
+    }
+
+    case "thread.pull-request.link": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      // Command-created links may arrive after the user has already unlinked the PR.
+      if (
+        command.source === "created" &&
+        findPullRequestLink(thread.pullRequests, command.pullRequest.url)?.dismissedAt != null
+      ) {
+        return [];
+      }
+      const occurredAt = nowIso();
+      return pullRequestLinksEvent({
+        command,
+        thread,
+        occurredAt,
+        nextLinks: linkPullRequest(thread.pullRequests, {
+          pullRequest: command.pullRequest,
+          source: command.source ?? "user",
+          linkedAt: occurredAt,
+        }),
+      });
+    }
+
+    case "thread.pull-request.unlink": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = nowIso();
+      const nextLinks = unlinkPullRequest(thread.pullRequests, command.url, occurredAt);
+      if (nextLinks === null) return [];
+      return pullRequestLinksEvent({ command, thread, occurredAt, nextLinks });
+    }
+
+    case "thread.pull-request.sync": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = nowIso();
+      let nextLinks = [...(thread.pullRequests ?? [])];
+      if (command.discovered !== undefined) {
+        nextLinks = syncDiscoveredPullRequest(nextLinks, command.discovered, occurredAt);
+      }
+      if (command.snapshots !== undefined) {
+        nextLinks = refreshPullRequestSnapshots(nextLinks, command.snapshots);
+      }
+      return pullRequestLinksEvent({ command, thread, occurredAt, nextLinks });
     }
 
     case "thread.pinned-message.add": {

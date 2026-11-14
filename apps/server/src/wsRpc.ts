@@ -23,6 +23,10 @@ import { EditorLanguageService } from "./editor/languageService";
 import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
+import {
+  pullRequestFromGitActionResult,
+  refreshReopenedThreadPullRequest,
+} from "./git/gitActionPullRequest";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
 import { execFile } from "node:child_process";
 
@@ -51,6 +55,7 @@ import {
   type DeviceEvent,
   type ComputerEvent,
   type GitRemoveWorktreeInput,
+  type GitRunStackedActionResult,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
@@ -62,6 +67,7 @@ import {
   type OrchestrationShellStreamItem,
   type ProjectId,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadPullRequest,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
@@ -69,7 +75,18 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import * as Arr from "effect/Array";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -627,7 +644,7 @@ const makeWsRpcHandlersLayer = () =>
         Effect.gen(function* () {
           const settings = yield* serverSettings.getSettings;
           const routing = resolveTextGenerationRouting(settings, input);
-          yield* gitManager.runStackedAction(
+          const result = yield* gitManager.runStackedAction(
             {
               ...input,
               ...(routing.modelSelection
@@ -637,7 +654,9 @@ const makeWsRpcHandlersLayer = () =>
             },
             { actionId: input.actionId, progressReporter: { publish } },
           );
-          yield* refreshGitStatusInBackground(input.cwd);
+          yield* input.threadId !== undefined
+            ? linkGitActionPullRequestInBackground(input.threadId, input.cwd, result)
+            : refreshGitStatusInBackground(input.cwd);
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(toWsRpcError(cause, "Git action failed"))),
         ),
@@ -1057,6 +1076,43 @@ const makeWsRpcHandlersLayer = () =>
           Effect.forkDetach,
           Effect.asVoid,
         );
+
+      // The thread owns the PR its git action created, or the open PR it pushed to. Linking is
+      // server-side so a client that disconnects after the action cannot drop the association.
+      const linkGitActionPullRequestInBackground = (
+        threadId: ThreadId,
+        cwd: string,
+        result: GitRunStackedActionResult,
+      ) => {
+        const dispatchLink = (
+          pullRequest: OrchestrationThreadPullRequest,
+          source: "created" | "user",
+        ) =>
+          orchestrationEngine.dispatch({
+            type: "thread.pull-request.link",
+            commandId: CommandId.makeUnsafe(`server:git-action-pr:${crypto.randomUUID()}`),
+            threadId,
+            pullRequest,
+            source,
+          });
+        return Effect.gen(function* () {
+          const created = pullRequestFromGitActionResult(result);
+          if (created) yield* dispatchLink(created, "created");
+          const status = yield* gitStatusBroadcaster.refreshStatus(cwd);
+          if (!created && result.push.status === "pushed" && status.pr?.state === "open") {
+            yield* dispatchLink(status.pr, "user");
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("git action pull request link failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+      };
 
       const validateArchiveWorktreeRemoval = (input: GitRemoveWorktreeInput) =>
         Effect.gen(function* () {
@@ -2360,7 +2416,37 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.pullRequestsDiff]: (input) =>
           pullRequestsEffect(pullRequests.diff(input), "Failed to load pull request diff"),
         [WS_METHODS.pullRequestsAction]: (input) =>
-          pullRequestsEffect(pullRequests.action(input), "Pull request action failed"),
+          pullRequestsEffect(
+            pullRequests.action(input).pipe(
+              Effect.tap((result) => {
+                const threadId = input.threadId;
+                if (input.action !== "reopen" || !threadId) return Effect.void;
+                // GitHub has already accepted the reopen. Persist it even if the caller
+                // disconnects, and report local refresh failures without failing the action.
+                return Effect.gen(function* () {
+                  const thread = Option.getOrUndefined(
+                    yield* projectionReadModelQuery.getThreadShellById(threadId),
+                  );
+                  if (!thread || thread.projectId !== result.projectId) return;
+                  yield* refreshReopenedThreadPullRequest({
+                    thread,
+                    repository: result.repository,
+                    number: result.number,
+                    dispatch: orchestrationEngine.dispatch,
+                  });
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("reopened pull request link refresh failed", {
+                      threadId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                  Effect.uninterruptible,
+                );
+              }),
+            ),
+            "Pull request action failed",
+          ),
         [WS_METHODS.pullRequestsComment]: (input) =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>

@@ -975,6 +975,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
+          pullRequests: [],
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           latestHumanMessageAt: null,
           // A present empty pending-interaction projection is authoritative;
@@ -2362,6 +2363,48 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.number, 1);
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.headBranch, "synara/greeting-1");
+
+      // A row the link backfill never reached exposes its single PR as a legacy link.
+      assert.deepEqual(
+        shellSnapshot.threads[0]?.pullRequests?.map((link) => [link.source, link.linkedAt]),
+        [["legacy", "2026-02-25T00:00:03.000Z"]],
+      );
+      assert.equal(snapshot.threads[0]?.pullRequests?.[0]?.pullRequest.number, 1);
+
+      // Stored links win over the legacy slot.
+      const second = {
+        pullRequest: {
+          number: 2,
+          title: "Second",
+          url: "https://github.com/Emanuele-web04/openclap/pull/2",
+          baseBranch: "main",
+          headBranch: "synara/second",
+          state: "merged",
+        },
+        source: "agent",
+        linkedAt: "2026-02-25T00:00:04.000Z",
+      };
+      yield* sql`
+        UPDATE projection_threads SET pull_requests_json = ${JSON.stringify([second])}
+        WHERE thread_id = 'thread-pr'
+      `;
+      const relinked = yield* snapshotQuery.getShellSnapshot();
+      assert.deepEqual(
+        relinked.threads[0]?.pullRequests?.map((link) => [link.source, link.pullRequest.number]),
+        [["agent", 2]],
+      );
+
+      // A list this build cannot fully decode is not fatal: it reads as the legacy slot.
+      yield* sql`
+        UPDATE projection_threads
+        SET pull_requests_json = ${JSON.stringify([second, { source: "future-source" }])}
+        WHERE thread_id = 'thread-pr'
+      `;
+      const undecodable = yield* snapshotQuery.getShellSnapshot();
+      assert.deepEqual(
+        undecodable.threads[0]?.pullRequests?.map((link) => [link.source, link.pullRequest.number]),
+        [["legacy", 1]],
+      );
     }),
   );
 
@@ -2814,6 +2857,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
+          pullRequests: [],
           goal: "",
           goalStartedAt: null,
           goalPausedAt: null,

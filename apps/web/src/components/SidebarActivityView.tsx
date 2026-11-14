@@ -1369,6 +1369,7 @@ export function SidebarActivityView({
                   branch: thread.branch,
                   hasDedicatedWorktree: thread.worktreePath !== null,
                   lastKnownPr: thread.lastKnownPr ?? null,
+                  pullRequests: thread.pullRequests,
                 })
         }
         status={external ? external.status : resolveThreadStatus(thread)}

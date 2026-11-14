@@ -158,7 +158,7 @@ layer("reconcileMigrationLineage", (it) => {
       const executed = yield* runMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [136, 137, 138, 139, 140, 141, 142, 143],
+        [136, 137, 138, 139, 140, 141, 142, 143, 144],
       );
       assert.deepStrictEqual(yield* read(), before);
       assert.deepStrictEqual(
@@ -735,6 +735,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
         [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -830,6 +831,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 141, name: "ProjectionThreadsUsageLimitRecovery" },
           { migration_id: 142, name: "AuthAccessOrigin" },
           { migration_id: 143, name: "UsageAnalyticsDeletedTokens" },
+          { migration_id: 144, name: "ProjectionThreadsPullRequestLinks" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -1005,6 +1007,7 @@ agentGatewayRetentionLegacyLayer(
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
           [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1143,6 +1146,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
         [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1222,6 +1226,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
           [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
         ],
       );
 
@@ -1355,6 +1360,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
         [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1430,6 +1436,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
           [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

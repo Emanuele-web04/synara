@@ -58,6 +58,10 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { normalizePersistedModelSelection } from "../../persistence/modelSelectionCompatibility.ts";
+import {
+  PullRequestLinksJsonColumn,
+  resolveStoredPullRequestLinks,
+} from "../../persistence/pullRequestLinksColumn.ts";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import {
   BACKGROUND_TASKS_CHANGED_NATIVE_EVENT_TYPE,
@@ -135,6 +139,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     goalAchievements: Schema.optional(
@@ -163,6 +168,7 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
     modelSelection: ModelSelectionJsonUnknown,
   }),
@@ -843,6 +849,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     sidechatLastActivityAt: threadRow.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: threadRow.sidechatExpiredAt ?? null,
     lastKnownPr: threadRow.lastKnownPr,
+    pullRequests: resolveStoredPullRequestLinks(threadRow),
     latestTurn: input.latestTurn,
     latestUserMessageAt: threadRow.latestUserMessageAt,
     latestHumanMessageAt: threadRow.latestHumanMessageAt ?? null,
@@ -919,6 +926,7 @@ function toProjectedThread(input: {
     sidechatLastActivityAt: threadRow.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: threadRow.sidechatExpiredAt ?? null,
     lastKnownPr: threadRow.lastKnownPr,
+    pullRequests: resolveStoredPullRequestLinks(threadRow),
     latestTurn: input.latestTurn,
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
@@ -1157,6 +1165,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
@@ -1220,6 +1229,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
@@ -1982,6 +1992,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
@@ -2053,6 +2064,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
@@ -2540,6 +2552,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
