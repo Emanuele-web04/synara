@@ -718,6 +718,23 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: { ...CLAUDE_EXTENDED_THINKING_CAPABILITIES, supportsFastMode: false },
     },
     {
+      slug: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      capabilities: {
+        reasoningEffortLevels: [
+          claudeApiEffortOption("low", "Low"),
+          claudeApiEffortOption("medium", "Medium", { isDefault: true }),
+          claudeApiEffortOption("high", "High"),
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+        autoCompactWindowOptions: CLAUDE_AUTO_COMPACT_WINDOWS,
+        contextWindowTokens: 1_000_000,
+      },
+    },
+    {
       slug: "claude-haiku-4-5",
       name: "Claude Haiku 4.5",
       capabilities: {
@@ -999,6 +1016,14 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "claude-sonnet-4",
       name: "Claude Sonnet 4",
       capabilities: cursorCapabilities({ thinking: true }),
+    },
+    {
+      slug: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      capabilities: cursorCapabilities({
+        efforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      }),
     },
     {
       slug: "claude-haiku-4-5",
