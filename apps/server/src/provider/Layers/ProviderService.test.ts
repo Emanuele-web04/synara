@@ -3458,8 +3458,23 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
       assert.strictEqual(recoveredStart?.threadId, threadId);
       assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
+      // The reactor reads these grants to notice a folder edit on a recovered runtime.
+      assert.deepStrictEqual(
+        yield* provider.getSessionAdditionalDirectories!(threadId),
+        additionalDirectories,
+      );
 
       yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("reports no folder grants for a thread without a persisted runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      assert.strictEqual(
+        yield* provider.getSessionAdditionalDirectories!(asThreadId("thread-without-binding")),
+        undefined,
+      );
     }),
   );
 

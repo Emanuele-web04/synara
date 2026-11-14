@@ -536,6 +536,9 @@ export function projectEvent(
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
                   ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
+                  ...(payload.additionalFolders !== undefined
+                    ? { additionalFolders: payload.additionalFolders }
+                    : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,

@@ -226,6 +226,15 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       { discard: true },
     );
 
+  // Extra folders of a multi-folder project must already exist (only the primary folder may
+  // be created from a hand-typed path) and are stored canonical.
+  const canonicalizeAdditionalFolders = (folders: ReadonlyArray<string> | undefined) =>
+    folders === undefined
+      ? Effect.succeed(undefined)
+      : Effect.forEach(folders, (folder) => options.canonicalizeProjectWorkspaceRoot(folder), {
+          concurrency: 1,
+        });
+
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
       // Known trade-off: canonicalization may create the (empty) root directory before the
@@ -244,16 +253,9 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
       );
-      // Extra folders of a multi-folder project must already exist: only the primary
-      // folder may be created from a hand-typed path.
-      const additionalFolders =
-        input.command.additionalFolders === undefined
-          ? undefined
-          : yield* Effect.forEach(
-              input.command.additionalFolders,
-              (folder) => options.canonicalizeProjectWorkspaceRoot(folder),
-              { concurrency: 1 },
-            );
+      const additionalFolders = yield* canonicalizeAdditionalFolders(
+        input.command.additionalFolders,
+      );
       const command = {
         ...input.command,
         workspaceRoot,
@@ -266,7 +268,22 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       };
     }
 
-    if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
+    if (
+      input.command.type === "project.meta.update" &&
+      (input.command.workspaceRoot !== undefined || input.command.additionalFolders !== undefined)
+    ) {
+      const additionalFolders = yield* canonicalizeAdditionalFolders(
+        input.command.additionalFolders,
+      );
+      if (input.command.workspaceRoot === undefined) {
+        return {
+          command: {
+            ...input.command,
+            ...(additionalFolders !== undefined ? { additionalFolders } : {}),
+          } satisfies OrchestrationCommand,
+          prepareWorkspaceRoot: null,
+        };
+      }
       const requestedWorkspaceRoot = yield* resolveGroupWorkspaceRoot({
         kind: input.command.kind,
         title: input.command.title,
@@ -282,6 +299,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       const command = {
         ...input.command,
         workspaceRoot,
+        ...(additionalFolders !== undefined ? { additionalFolders } : {}),
         createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
       return {

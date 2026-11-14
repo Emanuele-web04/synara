@@ -825,6 +825,9 @@ describe("ProviderCommandReactor", () => {
     const hasLiveRuntimeTasks = vi.fn<NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>>(
       () => Effect.succeed(false),
     );
+    const getSessionAdditionalDirectories = vi.fn<
+      NonNullable<ProviderServiceShape["getSessionAdditionalDirectories"]>
+    >(() => Effect.succeed(undefined));
     const steerSubagent = vi.fn<ProviderServiceShape["steerSubagent"]>(() => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -970,6 +973,7 @@ describe("ProviderCommandReactor", () => {
       stopTask,
       backgroundTask,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       steerSubagent,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -1292,6 +1296,7 @@ describe("ProviderCommandReactor", () => {
       stopTask,
       backgroundTask,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       steerSubagent,
       respondToRequest,
       respondToUserInput,
@@ -2989,7 +2994,7 @@ describe("ProviderCommandReactor", () => {
       ).not.toContain("<project_folders>");
     });
 
-    it("refuses a worktree chat instead of isolating only the primary folder", async () => {
+    it("runs a worktree chat in its worktree and keeps the extra folders live", async () => {
       const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -2998,18 +3003,131 @@ describe("ProviderCommandReactor", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           envMode: "worktree",
           branch: "synara/multi-folder",
-          worktreePath: "/tmp/provider-project/.worktrees/multi-folder",
+          worktreePath: "/tmp/provider-worktrees/multi-folder",
         }),
       );
       await dispatchTurn(harness, "worktree");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
-      expect(harness.startSession).not.toHaveBeenCalled();
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect((await readHarnessThread(harness))?.session?.lastError).toContain(
-        "Worktree mode supports only single-folder projects.",
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        cwd: "/tmp/provider-worktrees/multi-folder",
+        additionalDirectories: ["/tmp/provider-api"],
+      });
+      const sentInput = (harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string }).input;
+      expect(sentInput).toContain(
+        [
+          "- multi-folder: /tmp/provider-worktrees/multi-folder (primary, worktree of /tmp/provider-project)",
+          "- provider-api: /tmp/provider-api",
+          "Edit the primary folder only inside its worktree path above, never in the original checkout. The other folders are not isolated: edits there apply directly.",
+        ].join("\n"),
       );
     });
+
+    it("restarts the live session with the edited folders on the next turn", async () => {
+      const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
+      await dispatchTurn(harness, "before-edit");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      harness.startSession.mockClear();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("multi-folder-edit-folders"),
+          projectId: asProjectId("project-1"),
+          additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+        }),
+      );
+      await harness.drain();
+      // Editing the folders never restarts an idle session on its own.
+      expect(harness.startSession).not.toHaveBeenCalled();
+
+      await dispatchTurn(harness, "after-edit");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+      const restartInput = harness.startSession.mock.calls[0]?.[1] as {
+        readonly additionalDirectories?: ReadonlyArray<string>;
+        readonly resumeCursor?: unknown;
+      };
+      expect(restartInput.additionalDirectories).toEqual([
+        "/tmp/provider-api",
+        "/tmp/provider-docs",
+      ]);
+      expect(restartInput.resumeCursor).toBeDefined();
+      expect((harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string }).input).toContain(
+        "- provider-docs: /tmp/provider-docs",
+      );
+      expect(harness.stopSession).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { persisted: ["/tmp/provider-api"], restarts: true },
+      { persisted: ["/tmp/provider-api", "/tmp/provider-docs"], restarts: false },
+    ])(
+      "compares a recovered session against its persisted folder grants (restarts: $restarts)",
+      async ({ persisted, restarts }) => {
+        const modelSelection: ModelSelection = {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+        };
+        const harness = await createHarness({
+          threadModelSelection: modelSelection,
+          projectAdditionalFolders: ["/tmp/provider-api"],
+        });
+        const threadId = ThreadId.makeUnsafe("thread-1");
+        const now = new Date().toISOString();
+        // Started outside the reactor, like a runtime prewarmed after a server restart.
+        const recovered = await Effect.runPromise(
+          harness.startSession(threadId, {
+            threadId,
+            provider: "claudeAgent",
+            modelSelection,
+            runtimeMode: "approval-required",
+            cwd: "/tmp/provider-project",
+            additionalDirectories: persisted,
+          }),
+        );
+        harness.getSessionAdditionalDirectories.mockImplementation(() => Effect.succeed(persisted));
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("seed-recovered-session"),
+            threadId,
+            createdAt: now,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "claudeAgent",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: now,
+            },
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("multi-folder-edit-recovered"),
+            projectId: asProjectId("project-1"),
+            additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+          }),
+        );
+        await dispatchTurn(harness, "recovered");
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+        expect(harness.getSessionAdditionalDirectories).toHaveBeenCalledWith(threadId);
+        if (restarts) {
+          expect(harness.startSession).toHaveBeenCalledTimes(2);
+          expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+            additionalDirectories: ["/tmp/provider-api", "/tmp/provider-docs"],
+            resumeCursor: recovered.resumeCursor,
+          });
+        } else {
+          expect(harness.startSession).toHaveBeenCalledTimes(1);
+        }
+        expect(harness.stopSession).not.toHaveBeenCalled();
+      },
+    );
 
     it("refuses a provider that cannot be granted the extra folders", async () => {
       const harness = await createHarness({

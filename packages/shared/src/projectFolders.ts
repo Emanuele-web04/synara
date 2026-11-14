@@ -2,7 +2,7 @@
 // Purpose: Validate, label, and describe the source folders of a multi-folder project.
 // Layer: Shared util (server decider/provider wiring and the web Create project dialog)
 // Exports: findProjectFolderProblem, deriveProjectFolderLabels, buildProjectFoldersPreamble,
-//          projectFoldersSessionIssue, PROJECT_FOLDERS_WORKTREE_ISSUE
+//          projectFoldersSessionIssue
 
 import type { ProviderKind } from "@synara/contracts";
 
@@ -12,21 +12,13 @@ import { isWorkspaceRootWithin, normalizeWorkspaceRootForComparison } from "./th
 /** Providers that can grant extra folders natively: Codex writable roots, Claude additional directories. */
 const MULTI_FOLDER_PROVIDERS: ReadonlySet<string> = new Set(["codex", "claudeAgent"]);
 
-/** Worktree mode would isolate only the primary folder while the others are edited live. */
-export const PROJECT_FOLDERS_WORKTREE_ISSUE =
-  "Worktree mode supports only single-folder projects. Use Local mode for this multi-folder project.";
-
 /**
- * Why a chat in a multi-folder project cannot run, or null when it can. Worktree chats
- * would isolate only the primary folder while editing the others live, and other
- * providers cannot be granted the extra folders, so both are refused instead of
- * silently dropping folders.
+ * Why a chat in a multi-folder project cannot run, or null when it can. Providers that
+ * cannot be granted the extra folders are refused instead of silently dropping folders.
+ * Worktree chats are allowed: the worktree isolates the primary folder and the other
+ * folders stay live.
  */
-export function projectFoldersSessionIssue(input: {
-  readonly provider: string;
-  readonly worktree: boolean;
-}): string | null {
-  if (input.worktree) return PROJECT_FOLDERS_WORKTREE_ISSUE;
+export function projectFoldersSessionIssue(input: { readonly provider: string }): string | null {
   if (!MULTI_FOLDER_PROVIDERS.has(input.provider)) {
     const name = PROVIDER_DESCRIPTOR_BY_KIND[input.provider as ProviderKind]?.displayName;
     return `${name ?? input.provider} cannot access a project's additional folders. Use Codex or Claude for this multi-folder project.`;
@@ -98,19 +90,33 @@ export function deriveProjectFolderLabels(paths: ReadonlyArray<string>): Readonl
 
 /**
  * Ambient context for a multi-folder project, prefixed to the provider input like the
- * project packet. Null for a single-folder project.
+ * project packet. Null for a single-folder project. `primaryFolder` is where the chat
+ * runs: the project's primary folder, or its worktree for a worktree chat.
  */
 export function buildProjectFoldersPreamble(input: {
   readonly primaryFolder: string;
   readonly additionalFolders: ReadonlyArray<string>;
+  /** The project's primary folder when `primaryFolder` is a worktree of it. */
+  readonly worktreeOf?: string | null | undefined;
 }): string | null {
   if (input.additionalFolders.length === 0) return null;
   const paths = [input.primaryFolder, ...input.additionalFolders];
   const labels = deriveProjectFolderLabels(paths);
+  const worktreeOf = input.worktreeOf?.trim() ? input.worktreeOf : null;
   return [
     "<project_folders>",
     "This project spans several folders. You can read and edit all of them:",
-    ...paths.map((path, index) => `- ${labels[index]}: ${path}${index === 0 ? " (primary)" : ""}`),
+    ...paths.map(
+      (path, index) =>
+        `- ${labels[index]}: ${path}${
+          index === 0 ? (worktreeOf ? ` (primary, worktree of ${worktreeOf})` : " (primary)") : ""
+        }`,
+    ),
+    ...(worktreeOf
+      ? [
+          "Edit the primary folder only inside its worktree path above, never in the original checkout. The other folders are not isolated: edits there apply directly.",
+        ]
+      : []),
     "Use absolute paths for files outside the primary folder.",
     "</project_folders>",
   ].join("\n");

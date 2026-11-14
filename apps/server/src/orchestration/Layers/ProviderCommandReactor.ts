@@ -1231,6 +1231,9 @@ const make = Effect.gen(function* () {
   // was actually spawned with so a changed value restarts the runtime instead
   // of silently reusing a session provisioned under the old approval set.
   const threadSessionAutoApproveSynaraTools = new Map<string, boolean>();
+  // The extra project folders each live session was granted. Editing a project's folders
+  // restarts the session (keeping its resume cursor) so the provider sees the new set.
+  const threadSessionAdditionalDirectories = new Map<string, ReadonlyArray<string>>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -2424,6 +2427,7 @@ const make = Effect.gen(function* () {
       threadProviderOptions.delete(threadId);
       threadSessionModelSelections.delete(threadId);
       threadSessionComputerControl.delete(threadId);
+      threadSessionAdditionalDirectories.delete(threadId);
       const editResendPrefix = `${threadId}:`;
       for (const key of editResendTurnStartKeys) {
         if (key.startsWith(editResendPrefix)) {
@@ -2809,8 +2813,9 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
-    // Multi-folder projects grant their extra folders natively; refuse the chats that
-    // could not honor them rather than silently dropping folders.
+    // Multi-folder projects grant their extra folders natively; refuse the providers that
+    // could not honor them rather than silently dropping folders. Worktree chats isolate
+    // only the primary folder; the extra folders stay live.
     const workspaceProject = yield* projectionSnapshotQuery
       .getProjectShellById(thread.projectId)
       .pipe(
@@ -2825,10 +2830,7 @@ const make = Effect.gen(function* () {
       );
     const additionalDirectories = Option.getOrUndefined(workspaceProject)?.additionalFolders ?? [];
     if (additionalDirectories.length > 0) {
-      const folderIssue = projectFoldersSessionIssue({
-        provider: preferredProvider,
-        worktree: workspaceState !== "local",
-      });
+      const folderIssue = projectFoldersSessionIssue({ provider: preferredProvider });
       if (folderIssue !== null) {
         return yield* new ProviderAdapterValidationError({
           provider: preferredProvider,
@@ -2941,6 +2943,28 @@ const make = Effect.gen(function* () {
     const workspaceChanged =
       activeSessionBeforeEnsure !== undefined &&
       providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
+    // A runtime this process recovered or prewarmed is not in the cache, so read the grants
+    // it was launched with from its persisted binding before deciding it can be reused.
+    const previousAdditionalDirectories =
+      threadSessionAdditionalDirectories.get(threadId) ??
+      (activeSessionBeforeEnsure !== undefined && providerService.getSessionAdditionalDirectories
+        ? yield* providerService.getSessionAdditionalDirectories(threadId).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("provider command reactor could not read session folder grants", {
+                threadId,
+                cause,
+              }),
+            ),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined);
+    if (previousAdditionalDirectories !== undefined) {
+      threadSessionAdditionalDirectories.set(threadId, previousAdditionalDirectories);
+    }
+    const additionalDirectoriesChanged =
+      activeSessionBeforeEnsure !== undefined &&
+      previousAdditionalDirectories !== undefined &&
+      !isDeepStrictEqual(previousAdditionalDirectories, additionalDirectories);
     // Starting another provider stops this runtime. Only Hand off may end its
     // background tasks that way, after the user agrees to stop them.
     const replacesOtherProviderRuntime =
@@ -2949,7 +2973,7 @@ const make = Effect.gen(function* () {
     // Background tasks may share the old process. Never kill them merely to
     // apply a project relocation, including when metadata cleared the projection.
     if (
-      (workspaceChanged || replacesOtherProviderRuntime) &&
+      (workspaceChanged || additionalDirectoriesChanged || replacesOtherProviderRuntime) &&
       providerService.hasLiveRuntimeTasks &&
       (yield* providerService.hasLiveRuntimeTasks({ threadId }))
     ) {
@@ -2958,7 +2982,9 @@ const make = Effect.gen(function* () {
         operation: "thread.turn.start",
         issue: replacesOtherProviderRuntime
           ? "Finish or stop this thread's background tasks before switching providers."
-          : "Finish or stop this thread's background tasks before resuming in the new project path.",
+          : workspaceChanged
+            ? "Finish or stop this thread's background tasks before resuming in the new project path."
+            : "Finish or stop this thread's background tasks before using the project's updated folders.",
       });
     }
     const reusableSession =
@@ -3034,6 +3060,7 @@ const make = Effect.gen(function* () {
         !runtimeModeChanged &&
         !providerChanged &&
         !workspaceChanged &&
+        !additionalDirectoriesChanged &&
         !providerInstanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -3067,6 +3094,7 @@ const make = Effect.gen(function* () {
         !runtimeModeChanged &&
         !providerChanged &&
         !workspaceChanged &&
+        !additionalDirectoriesChanged &&
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -3119,6 +3147,7 @@ const make = Effect.gen(function* () {
         runtimeModeChanged,
         providerChanged,
         workspaceChanged,
+        additionalDirectoriesChanged,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
@@ -3136,7 +3165,10 @@ const make = Effect.gen(function* () {
       // keeps its history in the new session's first turn.
       const restartedOutcome = yield* startProviderSessionWithOutcome(
         resumeCursor,
-        (workspaceChanged || providerChanged || shouldRestartForModelChange) &&
+        (workspaceChanged ||
+          additionalDirectoriesChanged ||
+          providerChanged ||
+          shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
       ).pipe(
         // The live-turn check above sees only turns. The adapter also refuses
@@ -3175,6 +3207,7 @@ const make = Effect.gen(function* () {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
       threadSessionModelSelections.set(threadId, desiredModelSelection);
+      threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
       if (options?.enableComputerControl !== undefined) {
         threadSessionComputerControl.set(threadId, options.enableComputerControl);
       }
@@ -3262,6 +3295,7 @@ const make = Effect.gen(function* () {
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
+        threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
         threadSessionComputerControl.set(threadId, forkComputerControl);
         threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
         setThreadProviderOptions(threadId, resolvedProviderOptions);
@@ -3365,6 +3399,7 @@ const make = Effect.gen(function* () {
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
+    threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
     threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
     if (options?.enableComputerControl !== undefined) {
       threadSessionComputerControl.set(threadId, options.enableComputerControl);
@@ -3647,11 +3682,20 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.catch(() => Effect.succeed("")));
     // A multi-folder project lists its folders as ambient context too, so every input
     // budget below already reserves room for it.
+    // A worktree chat edits the primary folder in its worktree, so point the model there.
     const threadProject = yield* resolveThreadWorkspaceProject(thread);
+    const threadWorktreePath =
+      resolveThreadWorkspaceState({
+        envMode: thread.envMode,
+        worktreePath: thread.worktreePath,
+      }) === "worktree-ready"
+        ? thread.worktreePath
+        : null;
     const projectFoldersPreamble = threadProject
       ? buildProjectFoldersPreamble({
-          primaryFolder: threadProject.workspaceRoot,
+          primaryFolder: threadWorktreePath ?? threadProject.workspaceRoot,
           additionalFolders: threadProject.additionalFolders ?? [],
+          worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
         })
       : null;
     const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]

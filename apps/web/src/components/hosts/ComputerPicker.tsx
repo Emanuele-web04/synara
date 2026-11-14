@@ -18,6 +18,7 @@ import { buttonVariants } from "../ui/button";
 import { isHostSettingsSection, type SettingsSectionId } from "../../settingsNavigation";
 import { PickerTriggerButton } from "../chat/PickerTriggerButton";
 import { ComposerPickerMenuPopup } from "../chat/ComposerPickerMenuPopup";
+import { COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME } from "../chat/composerPickerStyles";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 
@@ -164,6 +165,7 @@ export function ComputerPicker({
   onManage,
   onReconnect,
   purpose = "Computer",
+  triggerClassName,
 }: {
   computers: readonly ComputerChoice[];
   value: string;
@@ -172,6 +174,7 @@ export function ComputerPicker({
   onManage?: (() => void) | undefined;
   onReconnect?: ((environmentId: string) => Promise<void>) | undefined;
   purpose?: string;
+  triggerClassName?: string;
 }) {
   const selected = computers.find((computer) => computer.id === value);
   if (!onManage && computers.length === 1)
@@ -187,6 +190,7 @@ export function ComputerPicker({
             title={selected?.detail}
             variant="ghost"
             disabled={disabled}
+            {...(triggerClassName ? { className: triggerClassName } : {})}
           />
         }
       />
@@ -369,6 +373,8 @@ export function NewChatComputerPicker() {
       onChange={(id) => void select(id)}
       onManage={() => navigate("/settings?section=connections")}
       onReconnect={reconnect}
+      // Same primary text and capsule hover as the project chip beside it.
+      triggerClassName={COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME}
     />
   );
 }

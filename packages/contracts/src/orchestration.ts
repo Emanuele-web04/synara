@@ -1443,6 +1443,11 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  /**
+   * Replaces the extra source folders of an ordinary project; `[]` makes it single-folder
+   * again. Each folder must already exist; the primary stays `workspaceRoot`.
+   */
+  additionalFolders: Schema.optional(ProjectAdditionalFolders),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -2330,6 +2335,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  additionalFolders: Schema.optional(ProjectAdditionalFolders),
   updatedAt: IsoDateTime,
 });
 
