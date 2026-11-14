@@ -681,11 +681,15 @@ describe("CheckpointStoreLive history integration", () => {
   let cwd = "";
   let runtime: ManagedRuntime.ManagedRuntime<CheckpointStore, unknown> | null = null;
 
-  const git = (args: string[], options: { readonly existing?: boolean } = {}) =>
+  const git = (
+    args: string[],
+    options: { readonly existing?: boolean; readonly input?: string } = {},
+  ) =>
     execFileSync("git", args, {
       cwd,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      input: options.input,
+      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       env: options.existing
         ? {
             ...process.env,
@@ -848,6 +852,69 @@ describe("CheckpointStoreLive history integration", () => {
 
     write("src/feature.ts", "feature v2\n");
     git(["commit", "-am", "Turn work"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+  });
+
+  it.each(["file-to-directory", "directory-to-file"])(
+    "filters an incoming %s replacement without losing the turn's own edit",
+    async (direction) => {
+      prepareDivergedBranches();
+      const [before, after] =
+        direction === "file-to-directory"
+          ? (["shape", "shape/child"] as const)
+          : (["shape/child", "shape"] as const);
+      git(["switch", "-c", "incoming"]);
+      write(before, "before\n");
+      commitExisting("Original entry");
+      git(["branch", "working"]);
+      git(["rm", before]);
+      write(after, "after\n");
+      commitExisting("Replace entry");
+      git(["switch", "working"]);
+      await capture(fromRef);
+
+      git(["merge", "--ff-only", "incoming"]);
+      write("src/app.ts", "app v2\n");
+      await capture(toRef);
+
+      expect(diffedPaths(await turnDiff())).toEqual(["src/app.ts"]);
+    },
+  );
+
+  it("keeps a feature-only deletion when the merged branch never changed that path", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    git(["rm", "src/feature.ts"]);
+    git(["commit", "-m", "Delete feature-only file during the turn"]);
+    git(["merge", "--no-edit", "-Xtheirs", "main"]);
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);
+  });
+
+  it("keeps authored changes when the history walk would omit the first new commit", async () => {
+    prepareDivergedBranches();
+    await capture(fromRef);
+
+    write("src/feature.ts", "feature v2\n");
+    git(["commit", "-am", "Turn work"]);
+    const authoredHead = git(["rev-parse", "HEAD"]).trim();
+    const identity = `Test User <test@example.com> ${Math.ceil(Date.now() / 1000)} +0000`;
+    git(["fast-import", "--quiet"], {
+      input:
+        Array.from({ length: 1_000 }, (_, index) =>
+          [
+            "commit refs/heads/feature",
+            `committer ${identity}`,
+            "data 0",
+            ...(index === 0 ? [`from ${authoredHead}`] : []),
+            "",
+          ].join("\n"),
+        ).join("\n") + "\n",
+    });
     await capture(toRef);
 
     expect(diffedPaths(await turnDiff())).toEqual(["src/feature.ts"]);

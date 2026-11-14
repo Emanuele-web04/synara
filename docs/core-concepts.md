@@ -519,9 +519,10 @@ checkpoints; a live preview is not proof that a turn finished.
 Turn and thread diffs, their changed-file lists and file Undo leave out history the task only moved
 onto: a merged, pulled, rebased or checked-out branch, or a reset to an existing commit. Synara
 records `HEAD` on each checkpoint and omits a path only when it was clean at both ends and its final
-content matches a commit that existed before the starting checkpoint. Local edits, conflict
-resolutions, commits made during the turn and uncommitted work a reset discarded stay visible.
-Checkpoints captured before this change keep the full diff.
+content matches a change brought in by existing history. For a merge, the incoming branch must
+have changed that path since the common ancestor. Local edits, conflict resolutions, commits made
+during the turn and uncommitted work a reset discarded stay visible. If the history walk exceeds its
+limit, or the checkpoints predate this change, Synara keeps the full diff.
 
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;

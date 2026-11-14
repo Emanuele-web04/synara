@@ -469,7 +469,7 @@ const makeCheckpointStore = Effect.gen(function* () {
           "rev-list",
           "--parents",
           `--max-age=${input.fromCapturedAtSeconds}`,
-          `--max-count=${HISTORY_INTEGRATION_MAX_COMMITS}`,
+          `--max-count=${HISTORY_INTEGRATION_MAX_COMMITS + 1}`,
           input.toHead,
           `^${input.fromHead}`,
         ],
@@ -479,6 +479,8 @@ const makeCheckpointStore = Effect.gen(function* () {
         const [commit, ...parents] = line.trim().split(/\s+/);
         if (commit) createdCommits.set(commit, parents);
       }
+      // A truncated walk could mistake an omitted new commit for incoming history.
+      if (createdCommits.size > HISTORY_INTEGRATION_MAX_COMMITS) return [];
       // Nothing was committed in range, so the new HEAD is existing history.
       if (createdCommits.size === 0) return [input.toHead];
 
@@ -502,6 +504,36 @@ const makeCheckpointStore = Effect.gen(function* () {
         if (ancestor.code === 1) tips.push(candidate);
       }
       return tips;
+    });
+
+  // A merged branch must have changed a path itself before its contents
+  // can explain a change in the final tree. For a checkout, compare directly
+  // with the starting HEAD because the branch switch replaces that tree.
+  const listIntegratedPaths = (input: {
+    readonly cwd: string;
+    readonly fromHead: string;
+    readonly toHead: string;
+    readonly tip: string;
+    readonly isDescendant: boolean;
+  }) =>
+    Effect.gen(function* () {
+      const { cwd, fromHead, toHead, tip, isDescendant } = input;
+      let baseline = fromHead;
+      if (isDescendant && tip !== toHead) {
+        const bases = (yield* git.execute({
+          operation: "CheckpointStore.resolveIntegratedMergeBase",
+          cwd,
+          args: ["merge-base", "--all", fromHead, tip],
+        })).stdout.trim();
+        if (bases.length === 0 || bases.includes("\n")) return new Set<string>();
+        baseline = bases;
+      }
+      const [incomingPaths, finalDifferences] = yield* Effect.all([
+        listChangedPaths(cwd, baseline, tip),
+        tip === toHead ? Effect.succeed(new Set<string>()) : listChangedPaths(cwd, tip, toHead),
+      ]);
+      for (const path of finalDifferences) incomingPaths.delete(path);
+      return incomingPaths;
     });
 
   /**
@@ -559,14 +591,28 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
       if (changes.length === 0) return input.toCommitOid;
 
-      const [dirtyAtStart, dirtyAtEnd, ...tipDifferences] = yield* Effect.all(
+      const ancestry = tips.includes(toHead)
+        ? undefined
+        : yield* git.execute({
+            operation,
+            cwd: input.cwd,
+            args: ["merge-base", "--is-ancestor", fromHead, toHead],
+            allowNonZeroExit: true,
+          });
+      if (ancestry && ancestry.code !== 0 && ancestry.code !== 1) return input.toCommitOid;
+
+      const [dirtyAtStart, dirtyAtEnd, ...integratedPaths] = yield* Effect.all(
         [
           listChangedPaths(input.cwd, fromHead, input.fromCommitOid),
           listChangedPaths(input.cwd, toHead, input.toCommitOid),
           ...tips.map((tip) =>
-            tip === toHead
-              ? Effect.succeed(new Set<string>())
-              : listChangedPaths(input.cwd, tip, toHead),
+            listIntegratedPaths({
+              cwd: input.cwd,
+              fromHead,
+              toHead,
+              tip,
+              isDescendant: ancestry?.code === 0,
+            }),
           ),
         ],
         { concurrency: 4 },
@@ -575,7 +621,7 @@ const makeCheckpointStore = Effect.gen(function* () {
         (change) =>
           !dirtyAtStart!.has(change.path) &&
           !dirtyAtEnd!.has(change.path) &&
-          tipDifferences.some((differences) => !differences.has(change.path)),
+          integratedPaths.some((paths) => paths.has(change.path)),
       );
       if (integrated.length === 0) return input.toCommitOid;
       if (integrated.length === changes.length) return input.fromCommitOid;
@@ -596,10 +642,18 @@ const makeCheckpointStore = Effect.gen(function* () {
               args: ["read-tree", input.toCommitOid],
               env,
             });
-            // Put integrated paths back to their starting entries; raw diff
-            // paths are repository-relative, so update from the top level.
+            // Remove incoming entries before restoring their predecessors.
+            // A path can switch between a file and a directory.
             const restored = integrated.filter((change) => change.status !== "A");
             const removed = integrated.filter((change) => change.status === "A");
+            for (const chunk of chunkArgumentGroups(removed.map((change) => [change.path]))) {
+              yield* git.execute({
+                operation,
+                cwd: topLevel,
+                args: ["update-index", "--force-remove", "--", ...chunk],
+                env,
+              });
+            }
             for (const chunk of chunkArgumentGroups(
               restored.map((change) => [
                 "--cacheinfo",
@@ -612,14 +666,6 @@ const makeCheckpointStore = Effect.gen(function* () {
                 operation,
                 cwd: topLevel,
                 args: ["update-index", "--add", ...chunk],
-                env,
-              });
-            }
-            for (const chunk of chunkArgumentGroups(removed.map((change) => [change.path]))) {
-              yield* git.execute({
-                operation,
-                cwd: topLevel,
-                args: ["update-index", "--force-remove", "--", ...chunk],
                 env,
               });
             }
