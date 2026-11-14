@@ -32,10 +32,19 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         yield* fs.writeFileString(target, `contents of ${file}`);
       }
 
+      for (const notice of ["LICENSE", "ATTRIBUTION.md"]) {
+        yield* fs.writeFileString(path.join(root, notice), `full text of ${notice}`);
+      }
       yield* stageDesktopRuntimeResources(buildResources, runtimeResources, {
         flavor: "production",
         repositoryRoot: root,
       });
+      for (const notice of ["LICENSE", "ATTRIBUTION.md"]) {
+        assert.equal(
+          yield* fs.readFileString(path.join(runtimeResources, notice)),
+          `full text of ${notice}`,
+        );
+      }
       assert.equal(yield* fs.exists(path.join(runtimeResources, "dock-icon-beta.png")), false);
 
       for (const file of runtimeFiles) {
@@ -83,10 +92,19 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
       ]) {
         yield* fs.writeFileString(path.join(buildResources, file), "blue bundled brand");
       }
+      for (const notice of ["LICENSE", "ATTRIBUTION.md"]) {
+        yield* fs.writeFileString(path.join(repositoryRoot, notice), `full text of ${notice}`);
+      }
       yield* stageDesktopRuntimeResources(buildResources, runtimeResources, {
         flavor: "beta",
         repositoryRoot,
       });
+      for (const notice of ["LICENSE", "ATTRIBUTION.md"]) {
+        assert.equal(
+          yield* fs.readFileString(path.join(runtimeResources, notice)),
+          `full text of ${notice}`,
+        );
+      }
       assert.equal(
         yield* fs.readFileString(path.join(runtimeResources, "dock-icon.png")),
         "white default",
