@@ -12,6 +12,7 @@ import {
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { refreshReopenedThreadPullRequest } from "../git/gitActionPullRequest";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -245,6 +246,55 @@ describe("thread pull request links", () => {
     expect(threadOf(readModel).pullRequests).toEqual(thread.pullRequests);
     expect(threadOf(readModel).lastKnownPr).toBeNull();
   });
+
+  it.each([false, true])(
+    "persists a reopen observation across replay and honors a concurrent unlink (%s)",
+    async (unlinkWhileReopening) => {
+      let readModel = await readModelWithThread();
+      const closed = pr(1, { state: "closed" });
+      ({ readModel } = await dispatch(readModel, {
+        type: "thread.pull-request.link",
+        commandId: commandId(),
+        threadId: THREAD_ID,
+        pullRequest: closed,
+        source: "user",
+      }));
+
+      const threadBeforeReopen = threadOf(readModel);
+      const beforeUpdate = readModel;
+      let events: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> = [];
+      await Effect.runPromise(
+        refreshReopenedThreadPullRequest({
+          thread: threadBeforeReopen,
+          repository: "ACME/app",
+          number: closed.number,
+          dispatch: (command) =>
+            Effect.promise(async () => {
+              if (unlinkWhileReopening) {
+                ({ readModel } = await dispatch(readModel, {
+                  type: "thread.pull-request.unlink",
+                  commandId: commandId(),
+                  threadId: THREAD_ID,
+                  url: closed.url,
+                }));
+              }
+              ({ readModel, events } = await dispatch(readModel, command));
+            }),
+        }),
+      );
+
+      const saved = threadOf(readModel);
+      if (unlinkWhileReopening) {
+        expect(events).toEqual([]);
+        expect(saved.lastKnownPr).toBeNull();
+        expect(saved.pullRequests?.[0]?.dismissedAt).toEqual(expect.any(String));
+      } else {
+        const reloaded = threadOf(await apply(beforeUpdate, events));
+        expect(reloaded.lastKnownPr).toEqual(pr(1));
+        expect(reloaded.pullRequests?.[0]?.source).toBe("user");
+      }
+    },
+  );
 
   it("links a PR carried into a new thread as a checkout link", async () => {
     const thread = threadOf(await readModelWithThread(pr(3)));

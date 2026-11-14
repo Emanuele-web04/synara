@@ -15,6 +15,7 @@ import type {
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import {
   isExplicitPullRequestLinkSource,
+  isPullRequestDismissed,
   resolveCurrentPullRequestLink,
 } from "@synara/shared/threadPullRequestLinks";
 import { useQueries } from "@tanstack/react-query";
@@ -132,6 +133,7 @@ export function useThreadPullRequests(input: {
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
         hasExplicitPullRequest: hasExplicitCurrentPullRequest(thread.pullRequests),
+        pullRequests: thread.pullRequests,
         hasDedicatedWorktree: thread.worktreePath !== null,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
@@ -226,6 +228,7 @@ export function useThreadPullRequests(input: {
         if (persistedPr) map.set(target.threadId, persistedPr);
         continue;
       }
+      const livePullRequest = status?.pr ?? null;
       map.set(
         target.threadId,
         resolveSidebarThreadPullRequest({
@@ -233,7 +236,10 @@ export function useThreadPullRequests(input: {
           liveBranch: status?.branch ?? null,
           hasLiveStatus: status !== undefined,
           hasDedicatedWorktree: target.hasDedicatedWorktree,
-          livePullRequest: status?.pr ?? null,
+          livePullRequest:
+            livePullRequest && !isPullRequestDismissed(target.pullRequests, livePullRequest.url)
+              ? livePullRequest
+              : null,
           persistedPullRequest: persistedPr,
         }),
       );

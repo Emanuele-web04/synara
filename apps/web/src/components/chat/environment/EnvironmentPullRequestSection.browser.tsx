@@ -556,6 +556,8 @@ describe("EnvironmentPullRequestSection thread links", () => {
     for (const queryClient of queryClients) queryClient.clear();
     queryClients.clear();
     dispatchCommand.mockReset();
+    runPullRequestAction.mockReset();
+    getPullRequestDetail.mockReset();
     useStore.setState((state) => {
       const { [threadId]: _removed, ...threadShellById } = state.threadShellById ?? {};
       return { threadShellById };
@@ -612,6 +614,33 @@ describe("EnvironmentPullRequestSection thread links", () => {
     await expect
       .element(page.getByText("#321 Keep PR context visible", { exact: true }))
       .not.toBeInTheDocument();
+  });
+
+  it("passes the linking thread when reopening a PR on another branch", async () => {
+    const projectId = ProjectId.makeUnsafe("stack-project");
+    seedThreadLinks([
+      {
+        pullRequest: { ...pullRequest, state: "closed" },
+        source: "created",
+        linkedAt: "2026-11-13T09:00:00.000Z",
+      },
+    ]);
+    getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+    runPullRequestAction.mockReturnValue(new Promise(() => {}));
+    await render(section(createLinkedQueryClient(), vi.fn(), { projectId }));
+
+    await page.getByRole("button", { name: "#321 Keep PR context visible Closed" }).click();
+    await page.getByRole("menuitem", { name: /^Status/ }).hover();
+    await page.getByRole("menuitem", { name: "Reopen", exact: true }).click();
+
+    await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+    expect(runPullRequestAction).toHaveBeenCalledWith({
+      projectId,
+      repository: "example/synara",
+      number: 321,
+      action: "reopen",
+      threadId,
+    });
   });
 
   it("unlinks a sibling from its existing stack row", async () => {

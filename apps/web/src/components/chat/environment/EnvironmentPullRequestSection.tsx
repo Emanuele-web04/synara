@@ -26,7 +26,7 @@ import type {
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
-  findPullRequestLink,
+  isPullRequestDismissed,
   pullRequestLinkKey,
   resolveCurrentPullRequestLink,
   visiblePullRequestLinks,
@@ -435,8 +435,7 @@ export function EnvironmentPullRequestSection({
   const reportedBranchPr = gitStatus?.pr ?? null;
   // Git status can still report a PR after its thread link was dismissed.
   const branchPr =
-    reportedBranchPr &&
-    findPullRequestLink(threadPullRequestLinks, reportedBranchPr.url)?.dismissedAt == null
+    reportedBranchPr && !isPullRequestDismissed(threadPullRequestLinks, reportedBranchPr.url)
       ? reportedBranchPr
       : null;
   // The thread's own PR wins over whatever the checkout's branch has: a shared checkout can sit
@@ -685,7 +684,14 @@ export function EnvironmentPullRequestSection({
       timeout: 0,
     });
     void actionMutation
-      .mutateAsync({ ...actionInput, action, ...(method ? { mergeMethod: method } : {}) })
+      .mutateAsync({
+        ...actionInput,
+        action,
+        ...(method ? { mergeMethod: method } : {}),
+        ...(action === "reopen" && activeThreadId && displayPrIsLinked
+          ? { threadId: activeThreadId }
+          : {}),
+      })
       .then((result) => {
         toastManager.update(toastId, {
           type: "success",

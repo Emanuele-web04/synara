@@ -23,7 +23,10 @@ import { EditorLanguageService } from "./editor/languageService";
 import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
-import { pullRequestFromGitActionResult } from "./git/gitActionPullRequest";
+import {
+  pullRequestFromGitActionResult,
+  refreshReopenedThreadPullRequest,
+} from "./git/gitActionPullRequest";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
 import { execFile } from "node:child_process";
 
@@ -2438,7 +2441,37 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.pullRequestsDiff]: (input) =>
           pullRequestsEffect(pullRequests.diff(input), "Failed to load pull request diff"),
         [WS_METHODS.pullRequestsAction]: (input) =>
-          pullRequestsEffect(pullRequests.action(input), "Pull request action failed"),
+          pullRequestsEffect(
+            pullRequests.action(input).pipe(
+              Effect.tap((result) => {
+                const threadId = input.threadId;
+                if (input.action !== "reopen" || !threadId) return Effect.void;
+                // GitHub has already accepted the reopen. Persist it even if the caller
+                // disconnects, and report local refresh failures without failing the action.
+                return Effect.gen(function* () {
+                  const thread = Option.getOrUndefined(
+                    yield* projectionReadModelQuery.getThreadShellById(threadId),
+                  );
+                  if (!thread || thread.projectId !== result.projectId) return;
+                  yield* refreshReopenedThreadPullRequest({
+                    thread,
+                    repository: result.repository,
+                    number: result.number,
+                    dispatch: orchestrationEngine.dispatch,
+                  });
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("reopened pull request link refresh failed", {
+                      threadId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                  Effect.uninterruptible,
+                );
+              }),
+            ),
+            "Pull request action failed",
+          ),
         [WS_METHODS.pullRequestsComment]: (input) =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>

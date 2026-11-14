@@ -61,6 +61,14 @@ export function findPullRequestLink(
   return (links ?? []).find((link) => pullRequestLinkKey(link.pullRequest.url) === key) ?? null;
 }
 
+/** Git status can keep reporting an unlinked PR while its branch is still checked out. */
+export function isPullRequestDismissed(
+  links: PullRequestLinks | null | undefined,
+  url: string,
+): boolean {
+  return findPullRequestLink(links, url)?.dismissedAt != null;
+}
+
 function linkedAtMs(link: OrchestrationThreadPullRequestLink): number {
   const parsed = Date.parse(link.linkedAt);
   return Number.isFinite(parsed) ? parsed : 0;
