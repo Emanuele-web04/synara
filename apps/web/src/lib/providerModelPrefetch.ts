@@ -596,20 +596,20 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  // Hovering another project supersedes only inactive model prefetches. Active
-  // composer queries and exact-key prefetches keep running. Include both
-  // fetching and offline-paused queries so stale hover work cannot revive on
-  // reconnect and consume native admission.
-  void queryClient.cancelQueries({
-    queryKey: providerDiscoveryQueryKeys.modelsAll,
-    type: "inactive",
-    predicate: (query) =>
-      !desiredModelQueryKeys.some(
-        (queryKey) =>
-          query.queryKey.length === queryKey.length &&
-          query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
-      ),
-  });
+  // An explicit create can supersede stale work. A passive warm has a narrower
+  // keep list and must leave the other queries an explicit create started alone.
+  if (input.selectedProviderOnly !== true) {
+    void queryClient.cancelQueries({
+      queryKey: providerDiscoveryQueryKeys.modelsAll,
+      type: "inactive",
+      predicate: (query) =>
+        !desiredModelQueryKeys.some(
+          (queryKey) =>
+            query.queryKey.length === queryKey.length &&
+            query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
+        ),
+    });
+  }
 
   if (shouldWarmSelectedDroid) {
     prefetchDroidModelsForNewThread(queryClient, {

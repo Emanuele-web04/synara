@@ -278,6 +278,41 @@ describe("providerModelsPrefetchQueryOptions", () => {
 });
 
 describe("prefetchModelsForNewThread", () => {
+  it("keeps explicit discovery running while passively warming the selected provider", async () => {
+    const queryClient = new QueryClient();
+    const explicitKey = providerDiscoveryQueryKeys.models(
+      "droid",
+      null,
+      null,
+      null,
+      "/tmp/project",
+    );
+    let finishDiscovery!: (value: string) => void;
+    const pending = queryClient.fetchQuery({
+      queryKey: explicitKey,
+      queryFn: () =>
+        new Promise<string>((resolve) => {
+          finishDiscovery = resolve;
+        }),
+    });
+    const result = pending.catch(() => "cancelled");
+    const prefetch = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      newChatDefault: newChatDefaultForProvider("codex"),
+      projectCwd: "/tmp/project",
+      selectedProviderOnly: true,
+    });
+
+    finishDiscovery("completed");
+    expect(await result).toBe("completed");
+    expect(modelKeysFromCalls(prefetch)).toEqual([
+      providerDiscoveryQueryKeys.models("codex", null, null, null, null),
+    ]);
+    queryClient.clear();
+  });
+
   it("warms every provider except Droid, selected provider first", async () => {
     const queryClient = new QueryClient();
     const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
