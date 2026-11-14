@@ -484,7 +484,7 @@ export function normalizeSkillMentionTextForProvider(input: {
     if (leadingSkill === undefined) return input.messageText;
     const claudeLoadsItself =
       !shouldInlineSkillForProvider("claudeAgent", leadingSkill.path) &&
-      leadingSlashTokenName(input.messageText) !== null;
+      leadingSlashTokenName(input.messageText) === leadingName;
     return claudeLoadsItself
       ? input.messageText
       : input.messageText.replace(/^(\s*)\//, (_match, whitespace: string) => `${whitespace}$`);

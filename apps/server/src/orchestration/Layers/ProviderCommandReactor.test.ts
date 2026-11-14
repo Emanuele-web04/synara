@@ -14326,6 +14326,14 @@ describe("ProviderCommandReactor", () => {
       expect(turn.input).not.toContain("<skill name=");
     });
 
+    it("inlines a leading Claude skill followed by a colon as a mention", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName}: fix the bugs`);
+      expect(turn.input?.startsWith(`$${claudeSkillName}: fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
     it("hands Claude a leading skill shared from Codex as a mention with its instructions", async () => {
       writeSkills();
       const turn = await sendTyped(await claudeHarness(), `/${codexSkillName} fix the bugs`);
