@@ -21,6 +21,7 @@ import {
   spawnProcess as spawnPlatformProcess,
   type RuntimeSpawnOptions,
 } from "@synara/shared/processRuntime";
+import { ProcessArgumentValidationError } from "@synara/shared/platformProcess";
 import { Effect, Layer, Option, Queue, Stream } from "effect";
 
 import {
@@ -164,6 +165,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   readonly turns: StoredTurn[];
   activeTurnId?: TurnId | undefined;
   activeProcess?: ChildProcess | undefined;
+  activeProcessLifecycle?: ReturnType<typeof superviseAntigravityTurnProcess>;
   activePrompt?: string | undefined;
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
@@ -498,13 +500,16 @@ export async function runAntigravityHelperProcess(
     timeoutMs?: number;
     environment?: Readonly<Record<string, string>>;
   } = {},
+  dependencies: Pick<AntigravityAdapterDependencies, "spawnProcess" | "teardownProcessTree"> = {},
 ): Promise<{
   stdout: string;
   stderr: string;
   code: number;
 }> {
   return await new Promise((resolve, reject) => {
-    const child = spawnPlatformProcess(command, args, {
+    const spawnProcess = dependencies.spawnProcess ?? spawnPlatformProcess;
+    const teardownProcessTree = dependencies.teardownProcessTree ?? teardownChildProcessTree;
+    const child = spawnProcess(command, args, {
       cwd: options.cwd,
       env: buildProviderChildEnvironment({
         provider: PROVIDER,
@@ -521,6 +526,10 @@ export async function runAntigravityHelperProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout.removeListener("data", onStdout);
+      child.stderr.removeListener("data", onStderr);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
       callback();
     };
     const timer = setTimeout(() => {
@@ -528,7 +537,7 @@ export async function runAntigravityHelperProcess(
       // Do not return until the supervised tree teardown has observed the
       // root exit and verified captured descendants are gone. A direct signal
       // can leave an updater/helper descendant alive on Windows.
-      void teardownChildProcessTree(child).then(
+      void teardownProcessTree(child).then(
         (result) =>
           finish(() =>
             reject(
@@ -555,18 +564,184 @@ export async function runAntigravityHelperProcess(
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => output.append("stdout", chunk));
-    child.stderr.on("data", (chunk) => output.append("stderr", chunk));
-    child.once("error", (cause) => {
+    const onStdout = (chunk: string) => output.append("stdout", chunk);
+    const onStderr = (chunk: string) => output.append("stderr", chunk);
+    const onError = (cause: Error) => {
       if (timedOut) return;
       finish(() => reject(cause));
-    });
-    child.once("close", (code) => {
+    };
+    const onClose = (code: number | null) => {
       if (timedOut) return;
       const { stdout, stderr } = output.snapshot();
       finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
-    });
+    };
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.once("error", onError);
+    child.once("close", onClose);
   });
+}
+
+interface AntigravityProcessTerminal {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly spawnError?: Error;
+  readonly inputError?: Error;
+  readonly teardownError?: unknown;
+}
+
+export function superviseAntigravityTurnProcess(
+  child: ChildProcess,
+  input: {
+    readonly inputDelivery?: Promise<void>;
+    readonly cancelInput?: () => void;
+    readonly teardownProcessTree: typeof teardownChildProcessTree;
+    readonly detachOutput: () => void;
+    readonly onFinalize: (terminal: AntigravityProcessTerminal) => Promise<void>;
+  },
+) {
+  let teardownPromise: ReturnType<typeof teardownChildProcessTree> | undefined;
+  let finalizationStarted = false;
+  let resolveFinalization!: () => void;
+  let rejectFinalization!: (cause: unknown) => void;
+  const finalization = new Promise<void>((resolve, reject) => {
+    resolveFinalization = resolve;
+    rejectFinalization = reject;
+  });
+  // Natural exits have no awaiting caller. Their terminal callback still reports
+  // the failure; teardown callers observe this same rejecting completion promise.
+  void finalization.catch(() => undefined);
+
+  let inputError: Error | undefined;
+  const inputSettled = input.inputDelivery?.catch((cause: unknown) => {
+    inputError =
+      cause instanceof Error ? cause : new Error("Antigravity prompt delivery failed.", { cause });
+  });
+
+  const teardown = () => {
+    teardownPromise ??= Promise.resolve().then(async () => {
+      const result = await input.teardownProcessTree(child);
+      if (result.signalErrors.length > 0)
+        throw new AggregateError(result.signalErrors, "Antigravity process teardown was unproven.");
+      return result;
+    });
+    return teardownPromise;
+  };
+  const beginFinalization = (terminal: AntigravityProcessTerminal) => {
+    if (finalizationStarted) return;
+    finalizationStarted = true;
+    child.removeListener("error", onError);
+    child.removeListener("close", onClose);
+    input.detachOutput();
+    void (async () => {
+      if (terminal.spawnError || Object.hasOwn(terminal, "teardownError")) input.cancelInput?.();
+      // A clean exit cannot prove delivery of a prompt written to stdin. Keep
+      // delivery failure distinct from spawn/teardown failure and await it.
+      if (inputSettled) await inputSettled;
+      let teardownError = terminal.teardownError;
+      let teardownFailed = Object.hasOwn(terminal, "teardownError");
+      // An asynchronous spawn failure has no process tree. Every requested stop
+      // and abnormal exit of an existing process must await the same teardown.
+      if (
+        teardownPromise ||
+        (terminal.spawnError || inputError
+          ? child.pid !== undefined
+          : terminal.code !== 0 || terminal.signal !== null)
+      ) {
+        try {
+          await teardown();
+        } catch (cause) {
+          teardownError = cause;
+          teardownFailed = true;
+        }
+      }
+      let finalizerError: unknown;
+      let finalizerFailed = false;
+      try {
+        await input.onFinalize({
+          ...terminal,
+          ...(inputError ? { inputError } : {}),
+          ...(teardownFailed ? { teardownError } : {}),
+        });
+      } catch (cause) {
+        finalizerError = cause;
+        finalizerFailed = true;
+      }
+      if (teardownFailed) throw teardownError;
+      if (terminal.spawnError) throw terminal.spawnError;
+      if (inputError) throw inputError;
+      if (finalizerFailed) throw finalizerError;
+    })().then(resolveFinalization, rejectFinalization);
+  };
+  const onError = (spawnError: Error) =>
+    beginFinalization({ code: null, signal: null, spawnError });
+  const onClose = (code: number | null, signal: NodeJS.Signals | null) =>
+    beginFinalization({ code, signal });
+  child.once("error", onError);
+  child.once("close", onClose);
+  const teardownAndFinalize = async () => {
+    if (!finalizationStarted) {
+      try {
+        await teardown();
+      } catch (teardownError) {
+        beginFinalization({ code: child.exitCode, signal: child.signalCode, teardownError });
+      }
+    }
+    // A successful teardown proves root exit, but close can still be draining
+    // stdout and hooks. Do not release the caller until that work also ends.
+    await finalization;
+  };
+  // Do not leave a CLI waiting for a prompt after delivery fails. This shares
+  // the same owned teardown and terminal as a racing Cancel or process exit.
+  void input.inputDelivery
+    ?.catch(() => (child.pid === undefined ? finalization : teardownAndFinalize()))
+    .catch(() => undefined);
+  return {
+    child,
+    finalization,
+    teardown,
+    teardownAndFinalize,
+  };
+}
+
+function deliverAntigravityPrompt(child: ChildProcess, prompt: string) {
+  let cancel!: () => void;
+  const completion = new Promise<void>((resolveDelivery, rejectDelivery) => {
+    const stdin = child.stdin;
+    cancel = () => {
+      rejectDelivery(new Error("Antigravity prompt delivery stopped before completion."));
+      stdin?.destroy();
+    };
+    if (!stdin) {
+      rejectDelivery(new Error("Antigravity prompt stdin is unavailable."));
+      return;
+    }
+    let delivered = false;
+    const onError = (cause: Error) => rejectDelivery(cause);
+    stdin.once("error", onError);
+    stdin.once("close", () => {
+      stdin.removeListener("error", onError);
+      if (!delivered) rejectDelivery(new Error("Antigravity prompt stdin closed before delivery."));
+    });
+    try {
+      // The documented stream-json input protocol accepts one user event and
+      // keeps the active turn alive after EOF. No prompt bytes reach argv.
+      stdin.end(
+        `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`,
+        (cause?: Error | null) => {
+          if (cause) {
+            rejectDelivery(cause);
+            return;
+          }
+          delivered = true;
+          resolveDelivery();
+        },
+      );
+    } catch (cause) {
+      rejectDelivery(cause);
+    }
+  });
+  return { completion, cancel };
 }
 
 export async function readCompleteAntigravityLines(
@@ -1288,9 +1463,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       method: string,
     ): Effect.Effect<void, ProviderAdapterRequestError> => {
       const child = context.activeProcess;
-      if (!child) return Effect.void;
+      const lifecycle = context.activeProcessLifecycle;
+      if (!child && !lifecycle) return Effect.void;
       return Effect.tryPromise({
-        try: () => teardownProcessTree(child),
+        try: async () => {
+          if (lifecycle) return lifecycle.teardownAndFinalize();
+          const result = await teardownProcessTree(child!);
+          if (result.signalErrors.length > 0)
+            throw new AggregateError(
+              result.signalErrors,
+              "Antigravity process teardown was unproven.",
+            );
+        },
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -1497,7 +1681,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const child = context.activeProcess;
       context.stopTeardownRequested = true;
-      context.stopTeardownPromise = teardownProcessTree(child);
+      context.stopTeardownPromise =
+        context.activeProcessLifecycle?.teardown() ?? teardownProcessTree(child);
       void context.stopTeardownPromise.catch(() => {
         try {
           child.kill("SIGKILL");
@@ -2584,12 +2769,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           activeTurnId: turnId,
           updatedAt: new Date().toISOString(),
         };
-        offer({
-          ...base(context),
-          type: "turn.started",
-          payload: { model },
-        } satisfies ProviderRuntimeEvent);
-
         const conversationId = context.conversationId;
         const args: string[] = [
           ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
@@ -2606,6 +2785,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           providerPrompt,
         ];
         let child: AntigravityChildProcess;
+        let usePromptStdin = false;
         try {
           const spawnProcess =
             dependencies.spawnProcess ??
@@ -2614,7 +2794,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 ...options,
                 requireExecutable: true,
               }) as AntigravityChildProcess);
-          child = spawnProcess(context.binaryPath, args, {
+          const spawnOptions: RuntimeSpawnOptions = {
             lowerPriority: yield* providerProcessPriorityEnabled,
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
@@ -2628,8 +2808,44 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 : {}),
             }),
             stdio: ["ignore", "pipe", "pipe"],
-          });
+          };
+          try {
+            child = spawnProcess(context.binaryPath, args, spawnOptions);
+          } catch (cause) {
+            if (
+              !(cause instanceof ProcessArgumentValidationError) ||
+              cause.kind !== "argument" ||
+              cause.argumentIndex !== args.length - 1
+            ) {
+              throw cause;
+            }
+            // Only a proven pre-spawn rejection of the prompt can select the
+            // documented input protocol. The shared launcher validates the
+            // command and every remaining argument again; OS failures never retry.
+            child = spawnProcess(
+              context.binaryPath,
+              [...args.slice(0, -2), "--input-format", "stream-json"],
+              { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] },
+            );
+            usePromptStdin = true;
+          }
         } catch (cause) {
+          // Shared launch validation can reject before a child exists. Roll
+          // back only this unlaunched turn, without leaving a running session
+          // or publishing a start event that no close handler can settle.
+          if (sessions.get(input.threadId) === context && context.activeTurnId === turnId) {
+            const turnIndex = context.turns.findIndex((turn) => turn.id === turnId);
+            if (turnIndex >= 0) context.turns.splice(turnIndex, 1);
+            delete context.activeTurnId;
+            delete context.activePrompt;
+            delete context.eventFile;
+            const { activeTurnId: _activeTurnId, ...inactiveSession } = context.session;
+            context.session = {
+              ...inactiveSession,
+              status: "ready",
+              updatedAt: new Date().toISOString(),
+            };
+          }
           releaseTurnGatewayLease(context, gatewaySessionLease);
           yield* Effect.promise(() => fs.rm(runDir, { recursive: true, force: true }));
           return yield* new ProviderAdapterRequestError({
@@ -2644,11 +2860,33 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           sessions.get(input.threadId) === context &&
           context.activeProcess === child &&
           context.activeTurnId === turnId;
-        child.once("spawn", () => {
-          if (ownsTurn() && policyDeliveryState.harnessPolicyDelivered === true) {
+        const promptDelivery = usePromptStdin
+          ? deliverAntigravityPrompt(child, providerPrompt)
+          : undefined;
+        let spawned = false;
+        let inputDelivered = !usePromptStdin;
+        const commitPolicyDelivery = () => {
+          if (
+            spawned &&
+            inputDelivered &&
+            ownsTurn() &&
+            policyDeliveryState.harnessPolicyDelivered === true
+          ) {
             context.harnessPolicyDelivered = true;
           }
-        });
+        };
+        const onSpawn = () => {
+          spawned = true;
+          commitPolicyDelivery();
+        };
+        child.once("spawn", onSpawn);
+        void promptDelivery?.completion.then(
+          () => {
+            inputDelivered = true;
+            commitPolicyDelivery();
+          },
+          () => undefined,
+        );
         const output = createBoundedProcessOutput();
         // Keep the complete stdout stream for legacy plain-text responses. The
         // bounded capture above is reserved for diagnostics/raw process-exit
@@ -2663,185 +2901,262 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk) => {
+        const onStdout = (chunk: string) => {
           const text = String(chunk);
           responseStdout.push(text);
           outputParser.write(text);
           output.append("stdout", chunk);
-        });
-        child.stderr.on("data", (chunk) => {
+        };
+        const onStderr = (chunk: string) => {
           output.append("stderr", chunk);
           if (stderrEvidenceOverflow) return;
           const evidence = (stderrEvidence + String(chunk)).trimStart();
           stderrEvidenceOverflow = evidence.trimEnd().length > 128;
           stderrEvidence = evidence.slice(0, 129);
-        });
+        };
+        child.stdout.on("data", onStdout);
+        child.stderr.on("data", onStderr);
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
-        child.once("error", (cause) => {
-          clearInterval(timer);
-          if (!ownsTurn()) return;
-          offer({
-            ...base(context, { includeTurn: false }),
-            type: "runtime.error",
-            payload: {
-              message: messageFromCause(cause, "Failed to launch Antigravity CLI."),
-              class: "transport_error",
-            },
-            raw: raw("process-error", cause),
-          } satisfies ProviderRuntimeEvent);
-        });
-        child.once("close", (code, signal) => {
-          clearInterval(timer);
-          void (async () => {
-            if (!ownsTurn()) {
+        const lifecycle = superviseAntigravityTurnProcess(child, {
+          ...(promptDelivery
+            ? { inputDelivery: promptDelivery.completion, cancelInput: promptDelivery.cancel }
+            : {}),
+          teardownProcessTree,
+          detachOutput: () => {
+            clearInterval(timer);
+            child.removeListener("spawn", onSpawn);
+            child.stdout.removeListener("data", onStdout);
+            child.stderr.removeListener("data", onStderr);
+          },
+          onFinalize: async (terminal) => {
+            const { code, signal, spawnError, inputError, teardownError } = terminal;
+            const processError = spawnError ?? inputError;
+            const teardownFailed = Object.hasOwn(terminal, "teardownError");
+            let finalizationFailed = false;
+            try {
+              if (!ownsTurn()) {
+                releaseTurnGatewayLease(context, gatewaySessionLease);
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+              if (processError || teardownFailed) {
+                offer({
+                  ...base(context, { includeTurn: false }),
+                  type: "runtime.error",
+                  payload: {
+                    message: messageFromCause(
+                      teardownFailed ? teardownError : processError,
+                      "Antigravity process finalization failed.",
+                    ),
+                    class: "transport_error",
+                  },
+                  raw: raw("process-error", { spawnError, inputError, teardownError }),
+                } satisfies ProviderRuntimeEvent);
+              }
+              // Another path may already have settled (interrupt / stop-hook kill).
+              // Still drain hooks/stdout before deciding, but never double-complete.
+              const completedTurnId = turnId;
+              await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
+              if (!ownsTurn()) {
+                releaseTurnGatewayLease(context, gatewaySessionLease);
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+              // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
+              // soon as that process exits, before post-processing or a later turn
+              // can begin, so an unconsumed bootstrap from this turn cannot cross
+              // into the next turn's authority.
               releaseTurnGatewayLease(context, gatewaySessionLease);
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
-            }
-            // Another path may already have settled (interrupt / stop-hook kill).
-            // Still drain hooks/stdout before deciding, but never double-complete.
-            const completedTurnId = turnId;
-            await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
-            if (!ownsTurn()) {
-              releaseTurnGatewayLease(context, gatewaySessionLease);
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
-            }
-            // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
-            // soon as that process exits, before post-processing or a later turn
-            // can begin, so an unconsumed bootstrap from this turn cannot cross
-            // into the next turn's authority.
-            releaseTurnGatewayLease(context, gatewaySessionLease);
-            const pollInFlightAtClose = context.hookPollPromise;
-            if (pollInFlightAtClose) {
-              await pollInFlightAtClose.catch(() => undefined);
+              const pollInFlightAtClose = context.hookPollPromise;
+              if (pollInFlightAtClose) {
+                await pollInFlightAtClose.catch(() => undefined);
+                if (!ownsTurn()) {
+                  await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                  return;
+                }
+              }
+              await pollHookFile(context).catch(() => undefined);
               if (!ownsTurn()) {
                 await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
                 return;
               }
-            }
-            await pollHookFile(context).catch(() => undefined);
-            if (!ownsTurn()) {
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
-            }
-            const { stdout: boundedStdout, stderr } = output.snapshot();
-            const hasStderrEvidence = stderrEvidenceOverflow || stderrEvidence.trim().length > 0;
-            const stderrOnlyExactTimeout =
-              !stderrEvidenceOverflow && isAntigravityPostResponseTimeout(stderrEvidence);
-            const printResult = outputParser.finish();
-            const responseText = printResult?.response ?? responseStdout.join("").trim();
-            if (!context.sawAssistant && responseText) {
-              emitTextItem(
-                context,
-                {
-                  step_index: Number.MAX_SAFE_INTEGER,
-                  type: "PRINT_OUTPUT",
-                  content: responseText,
-                },
-                "assistant_message",
-                "assistant_text",
-              );
-            }
-            if (context.turnTerminalEmitted) {
-              if (context.activeProcess === child) delete context.activeProcess;
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
-            }
-            // Only our stop-hook teardown may replace a missing clean process exit. A
-            // provider ERROR is authoritative unless it is the exact timeout emitted
-            // after a durable final response (agy can report this after the reply is visible).
-            const completedAfterStopTeardown =
-              context.stopTeardownRequested === true &&
-              printResult?.completedResponse === true &&
-              context.sawAssistant &&
-              !hasStderrEvidence &&
-              context.pendingTools.length === 0 &&
-              context.pendingBackgroundTasks.size === 0 &&
-              context.pendingAnonymousBackgroundTasks.length === 0;
-            const exactPostResponseTimeout =
-              isAntigravityPostResponseTimeout(printResult?.terminalError) ||
-              (printResult?.hasExplicitResultError !== true &&
-                printResult?.terminalError === undefined &&
-                stderrOnlyExactTimeout);
-            const benignPostResponseTimeout =
-              context.stopTeardownPromise !== undefined &&
-              !context.interrupted &&
-              printResult?.hasConflictingResultError !== true &&
-              signal === null &&
-              (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
-              (printResult?.streamError === undefined ||
-                isAntigravityPostResponseTimeout(printResult.streamError)) &&
-              (!hasStderrEvidence || stderrOnlyExactTimeout) &&
-              exactPostResponseTimeout &&
-              printResult?.hasCompleteAssistantResponse === true &&
-              context.sawAssistant &&
-              context.pendingTools.length === 0 &&
-              context.pendingBackgroundTasks.size === 0 &&
-              context.pendingAnonymousBackgroundTasks.length === 0;
-            // Only the existing stop-hook teardown can have captured helpers
-            // while their parent was alive. A snapshot after close is insufficient.
-            let completedAfterBenignPostResponseTimeout = false;
-            if (benignPostResponseTimeout) {
-              try {
-                const teardown = await context.stopTeardownPromise;
-                completedAfterBenignPostResponseTimeout =
-                  teardown?.capturedBeforeRootExit === true && teardown.signalErrors.length === 0;
-              } catch {
-                // Keep the provider failure when process exit cannot be proven.
+              const { stdout: boundedStdout, stderr } = output.snapshot();
+              const hasStderrEvidence = stderrEvidenceOverflow || stderrEvidence.trim().length > 0;
+              const stderrOnlyExactTimeout =
+                !stderrEvidenceOverflow && isAntigravityPostResponseTimeout(stderrEvidence);
+              const printResult = outputParser.finish();
+              const responseText = printResult?.response ?? responseStdout.join("").trim();
+              // Explicit cancellation owns the outcome while close/finalization
+              // drains. Do not publish a buffered fallback reply after Cancel.
+              if (
+                !context.interrupted &&
+                !inputError &&
+                !context.turnTerminalEmitted &&
+                !context.sawAssistant &&
+                responseText
+              ) {
+                emitTextItem(
+                  context,
+                  {
+                    step_index: Number.MAX_SAFE_INTEGER,
+                    type: "PRINT_OUTPUT",
+                    content: responseText,
+                  },
+                  "assistant_message",
+                  "assistant_text",
+                );
               }
-              if (!ownsTurn()) {
+              if (context.turnTerminalEmitted) {
+                if (context.activeProcess === child) delete context.activeProcess;
                 await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
                 return;
               }
+              // Only our stop-hook teardown may replace a missing clean process exit. A
+              // provider ERROR is authoritative unless it is the exact timeout emitted
+              // after a durable final response (agy can report this after the reply is visible).
+              const completedAfterStopTeardown =
+                context.stopTeardownRequested === true &&
+                printResult?.completedResponse === true &&
+                context.sawAssistant &&
+                !hasStderrEvidence &&
+                context.pendingTools.length === 0 &&
+                context.pendingBackgroundTasks.size === 0 &&
+                context.pendingAnonymousBackgroundTasks.length === 0;
+              const exactPostResponseTimeout =
+                isAntigravityPostResponseTimeout(printResult?.terminalError) ||
+                (printResult?.hasExplicitResultError !== true &&
+                  printResult?.terminalError === undefined &&
+                  stderrOnlyExactTimeout);
+              const benignPostResponseTimeout =
+                context.stopTeardownPromise !== undefined &&
+                !context.interrupted &&
+                printResult?.hasConflictingResultError !== true &&
+                signal === null &&
+                (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
+                (printResult?.streamError === undefined ||
+                  isAntigravityPostResponseTimeout(printResult.streamError)) &&
+                (!hasStderrEvidence || stderrOnlyExactTimeout) &&
+                exactPostResponseTimeout &&
+                printResult?.hasCompleteAssistantResponse === true &&
+                context.sawAssistant &&
+                context.pendingTools.length === 0 &&
+                context.pendingBackgroundTasks.size === 0 &&
+                context.pendingAnonymousBackgroundTasks.length === 0;
+              // Only the existing stop-hook teardown can have captured helpers
+              // while their parent was alive. A snapshot after close is insufficient.
+              let completedAfterBenignPostResponseTimeout = false;
+              if (benignPostResponseTimeout) {
+                try {
+                  const teardown = await context.stopTeardownPromise;
+                  completedAfterBenignPostResponseTimeout =
+                    teardown?.capturedBeforeRootExit === true && teardown.signalErrors.length === 0;
+                } catch {
+                  // Keep the provider failure when process exit cannot be proven.
+                }
+                if (!ownsTurn()) {
+                  await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                  return;
+                }
+              }
+              const completedAfterExpectedPostResponseExit =
+                !processError &&
+                !teardownFailed &&
+                (completedAfterStopTeardown || completedAfterBenignPostResponseTimeout);
+              const interrupted =
+                context.interrupted ||
+                (!processError &&
+                  !teardownFailed &&
+                  (printResult?.state === "interrupted" ||
+                    (signal !== null &&
+                      printResult?.state !== "failed" &&
+                      !completedAfterExpectedPostResponseExit)));
+              const failed =
+                !interrupted &&
+                !completedAfterExpectedPostResponseExit &&
+                (processError !== undefined ||
+                  teardownFailed ||
+                  (code ?? 1) !== 0 ||
+                  (printResult !== undefined && printResult.state !== "completed"));
+              if (failed && stderr.trim()) {
+                offer({
+                  ...base(context, { includeTurn: false }),
+                  type: "runtime.error",
+                  payload: { message: stderr.trim(), class: "provider_error" },
+                  raw: raw("stderr", { code, stderr }),
+                } satisfies ProviderRuntimeEvent);
+              }
+              settleActiveTurn(context, {
+                state: interrupted ? "interrupted" : failed ? "failed" : "completed",
+                stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
+                ...(failed
+                  ? {
+                      errorMessage:
+                        (teardownFailed
+                          ? messageFromCause(
+                              teardownError,
+                              "Antigravity process teardown was unproven.",
+                            )
+                          : processError?.message) ||
+                        printResult?.error ||
+                        stderr.trim() ||
+                        (printResult?.state === undefined && printResult !== undefined
+                          ? "Antigravity CLI exited without a complete result."
+                          : undefined) ||
+                        `Antigravity CLI exited with code ${code ?? 1}.`,
+                    }
+                  : {}),
+                raw: raw("process-exit", {
+                  code,
+                  signal,
+                  stdout: boundedStdout,
+                  stderr,
+                }),
+              });
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+            } catch (cause) {
+              finalizationFailed = true;
+              // Natural exits have no awaiting teardown caller. A failure while
+              // draining or retiring the turn must still produce a visible
+              // terminal and remain available to a later stop caller.
+              if (ownsTurn()) {
+                const errorMessage = messageFromCause(
+                  teardownFailed ? teardownError : (processError ?? cause),
+                  "Antigravity process finalization failed.",
+                );
+                offer({
+                  ...base(context, { includeTurn: false }),
+                  type: "runtime.error",
+                  payload: { message: errorMessage, class: "transport_error" },
+                  raw: raw("finalization-error", { cause, spawnError, inputError, teardownError }),
+                } satisfies ProviderRuntimeEvent);
+                settleActiveTurn(context, {
+                  state: context.interrupted ? "interrupted" : "failed",
+                  stopReason: context.interrupted ? "interrupted" : "error",
+                  ...(!context.interrupted ? { errorMessage } : {}),
+                });
+              }
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              throw cause;
+            } finally {
+              // A later stop must still observe failed cleanup after the terminal
+              // event has been consumed. Only successful cleanup releases ownership.
+              if (
+                !teardownFailed &&
+                !finalizationFailed &&
+                context.activeProcessLifecycle === lifecycle
+              )
+                delete context.activeProcessLifecycle;
             }
-            const completedAfterExpectedPostResponseExit =
-              completedAfterStopTeardown || completedAfterBenignPostResponseTimeout;
-            const interrupted =
-              context.interrupted ||
-              printResult?.state === "interrupted" ||
-              (signal !== null &&
-                printResult?.state !== "failed" &&
-                !completedAfterExpectedPostResponseExit);
-            const failed =
-              !interrupted &&
-              !completedAfterExpectedPostResponseExit &&
-              ((code ?? 1) !== 0 ||
-                (printResult !== undefined && printResult.state !== "completed"));
-            if (failed && stderr.trim()) {
-              offer({
-                ...base(context, { includeTurn: false }),
-                type: "runtime.error",
-                payload: { message: stderr.trim(), class: "provider_error" },
-                raw: raw("stderr", { code, stderr }),
-              } satisfies ProviderRuntimeEvent);
-            }
-            settleActiveTurn(context, {
-              state: interrupted ? "interrupted" : failed ? "failed" : "completed",
-              stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
-              ...(failed
-                ? {
-                    errorMessage:
-                      printResult?.error ||
-                      stderr.trim() ||
-                      (printResult?.state === undefined && printResult !== undefined
-                        ? "Antigravity CLI exited without a complete result."
-                        : undefined) ||
-                      `Antigravity CLI exited with code ${code ?? 1}.`,
-                  }
-                : {}),
-              raw: raw("process-exit", {
-                code,
-                signal,
-                stdout: boundedStdout,
-                stderr,
-              }),
-            });
-            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-          })();
+          },
         });
+        context.activeProcessLifecycle = lifecycle;
+        offer({
+          ...base(context),
+          type: "turn.started",
+          payload: { model },
+        } satisfies ProviderRuntimeEvent);
         return {
           threadId: input.threadId,
           turnId,

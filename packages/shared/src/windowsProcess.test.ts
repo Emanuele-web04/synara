@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import * as Path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ProcessArgumentValidationError } from "./platformProcess";
 
 import {
   buildWindowsBatchCommandArgs,
@@ -215,6 +216,29 @@ describe("windowsProcess", () => {
       /Cannot safely execute Windows batch argument/,
     );
   });
+
+  it.each(["\r", "\n", "&", "|", "<", ">", "^", "%"])(
+    "identifies the rejected token without weakening batch refusal (%j)",
+    (character) => {
+      for (const kind of ["command", "argument"] as const) {
+        let failure: unknown;
+        try {
+          buildWindowsBatchCommandArgs(
+            kind === "command" ? `C:\\bad${character}path\\agy.cmd` : "C:\\tools\\agy.cmd",
+            ["--model", "safe", `prompt${character}value`],
+          );
+        } catch (cause) {
+          failure = cause;
+        }
+        expect(failure).toBeInstanceOf(ProcessArgumentValidationError);
+        expect(failure).toMatchObject({
+          kind,
+          argumentIndex: kind === "argument" ? 2 : undefined,
+          message: `Cannot safely execute Windows batch ${kind} containing cmd.exe control characters.`,
+        });
+      }
+    },
+  );
 
   it("allows batch paths with spaces and parentheses", () => {
     expect(
