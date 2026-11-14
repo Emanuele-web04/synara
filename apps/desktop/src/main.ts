@@ -317,6 +317,7 @@ import {
   resolveBrowserHostPipeBackendEnv,
 } from "./browserUsePipeServer";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
+import { resolveEarlyLocalEnvironmentId } from "./localEnvironmentId";
 import {
   repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
@@ -5395,6 +5396,20 @@ function registerIpcHandlers(): void {
     // live URL instead of trusting build-time or inherited renderer env.
     event.returnValue =
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
+  });
+
+  ipcMain.removeHandler(IPC.backendReady);
+  ipcMain.handle(IPC.backendReady, async () => {
+    await backendInitialWindowOpenInFlight;
+  });
+
+  ipcMain.removeAllListeners(IPC.localEnvironmentId);
+  ipcMain.on(IPC.localEnvironmentId, (event: IpcMainEvent) => {
+    event.returnValue = resolveEarlyLocalEnvironmentId({
+      stateDir: STATE_DIR,
+      flavor: desktopFlavor,
+      env: process.env,
+    });
   });
 
   ipcMain.removeAllListeners(IPC.zoomFactor);

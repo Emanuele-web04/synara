@@ -1061,6 +1061,13 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
+  /** Resolves once the desktop has seen its backend become ready, or stop trying. */
+  whenBackendReady?: () => Promise<void>;
+  /**
+   * The environment id persisted in this app's data home, read without the
+   * backend. Null before the backend's first start.
+   */
+  getLocalEnvironmentId?: () => string | null;
   remoteResourceUrl?: (hostId: string, reference: RemoteResourceReference) => string | null;
   /**
    * Absolute filesystem path for a File from drag/drop or file inputs.

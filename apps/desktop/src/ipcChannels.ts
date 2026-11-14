@@ -68,6 +68,8 @@ export const DESKTOP_IPC_CHANNELS = {
   zoomFactorChanged: "desktop:zoom-factor-changed",
   remoteResourceUrl: "desktop:remote-resource-url",
   wsUrl: "desktop:get-ws-url",
+  backendReady: "desktop:backend-ready",
+  localEnvironmentId: "desktop:get-local-environment-id",
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",
   // Renderer preview demand for the native frame tap: the helper captures only

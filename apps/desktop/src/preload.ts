@@ -152,6 +152,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   productAnalytics: productAnalyticsBridge,
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
+  whenBackendReady: () => ipcRenderer.invoke(IPC.backendReady),
+  getLocalEnvironmentId: () => {
+    try {
+      const environmentId: unknown = ipcRenderer.sendSync(IPC.localEnvironmentId);
+      return typeof environmentId === "string" && environmentId.length > 0 ? environmentId : null;
+    } catch {
+      return null;
+    }
+  },
   remoteResourceUrl: (hostId, reference) =>
     ipcRenderer.sendSync(IPC.remoteResourceUrl, hostId, reference),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
