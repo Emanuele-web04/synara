@@ -13,6 +13,7 @@ export function ModelCatalogRefresh(props: {
   provider: ProviderKind;
   instanceId: ProviderInstanceId;
   onRefresh: ProviderModelCatalog["refreshModels"];
+  silent?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -51,7 +52,7 @@ export function ModelCatalogRefresh(props: {
     };
   }, [provider, instanceId]);
 
-  if (!failed) return null;
+  if (!failed || props.silent) return null;
 
   return (
     <div className="flex items-center justify-end gap-2 border-t border-border px-2 py-1">

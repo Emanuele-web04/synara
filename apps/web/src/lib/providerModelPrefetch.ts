@@ -12,7 +12,7 @@ import type {
   ServerProviderStatus,
   ServerSettings,
 } from "@synara/contracts";
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 
 import {
   getProviderInstanceOptions,
@@ -32,6 +32,7 @@ import {
 } from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
+  hasForegroundProviderModelDiscovery,
   prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
@@ -96,6 +97,10 @@ export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
 export const NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS = 24 * 60 * 60_000;
 
 const EMPTY_PROVIDER_STATUSES: readonly ServerProviderStatus[] = [];
+
+// Track which in-flight queries were started only by a passive warm. A query
+// joined by an explicit create or protected by a picker refresh stays live.
+const passiveModelPrefetches = new WeakMap<Query, Promise<void>>();
 
 function providerStartOptionsForInstance(
   settings: ProviderModelPrefetchSettings,
@@ -322,6 +327,7 @@ export function prefetchProviderModelsForNewThread(
     providers?: ReadonlyArray<ProviderKind>;
     foregroundProvider?: ProviderKind;
     foregroundInstanceId?: ProviderInstanceId;
+    passive?: boolean;
   },
 ): void {
   const cwd = input.cwd ?? null;
@@ -341,7 +347,11 @@ export function prefetchProviderModelsForNewThread(
       cwd,
       priority: provider === (input.foregroundProvider ?? providers[0]) ? "prefetch" : "background",
     });
-    void queryClient.prefetchQuery({
+    const query = queryClient
+      .getQueryCache()
+      .find({ queryKey: modelsOptions.queryKey, exact: true });
+    const wasPending = query !== undefined && query.state.fetchStatus !== "idle";
+    const prefetch = queryClient.prefetchQuery({
       ...modelsOptions,
       ...(provider === "codex" || provider === "claudeAgent" ? { retry: 0 } : {}),
       staleTime:
@@ -350,6 +360,21 @@ export function prefetchProviderModelsForNewThread(
           : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS,
     });
+
+    if (input.passive && !wasPending) {
+      const started = queryClient.getQueryCache().find({
+        queryKey: modelsOptions.queryKey,
+        exact: true,
+      });
+      if (started && started.state.fetchStatus !== "idle") {
+        passiveModelPrefetches.set(started, prefetch);
+        void prefetch.then(() => {
+          if (passiveModelPrefetches.get(started) === prefetch) {
+            passiveModelPrefetches.delete(started);
+          }
+        });
+      }
+    }
 
     // Agent/mode lists ride along for providers that surface them next to models.
     const agentsOptions = providerAgentsPrefetchQueryOptions({
@@ -596,20 +621,27 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  // An explicit create can supersede stale work. A passive warm has a narrower
-  // keep list and must leave the other queries an explicit create started alone.
-  if (input.selectedProviderOnly !== true) {
-    void queryClient.cancelQueries({
-      queryKey: providerDiscoveryQueryKeys.modelsAll,
-      type: "inactive",
-      predicate: (query) =>
-        !desiredModelQueryKeys.some(
-          (queryKey) =>
-            query.queryKey.length === queryKey.length &&
-            query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
-        ),
-    });
+  const passive = input.selectedProviderOnly === true;
+  const isDesired = (queryKey: readonly unknown[]) =>
+    desiredModelQueryKeys.some(
+      (desired) =>
+        queryKey.length === desired.length &&
+        queryKey.every((value, index) => Object.is(value, desired[index])),
+    );
+  if (!passive) {
+    for (const queryKey of desiredModelQueryKeys) {
+      const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+      if (query) passiveModelPrefetches.delete(query);
+    }
   }
+  void queryClient.cancelQueries({
+    queryKey: providerDiscoveryQueryKeys.modelsAll,
+    type: "inactive",
+    predicate: (query) =>
+      (!passive || passiveModelPrefetches.has(query)) &&
+      !hasForegroundProviderModelDiscovery(query.queryKey) &&
+      !isDesired(query.queryKey),
+  });
 
   if (shouldWarmSelectedDroid) {
     prefetchDroidModelsForNewThread(queryClient, {
@@ -624,5 +656,6 @@ export function prefetchModelsForNewThread(
     providers: orderedProviders,
     foregroundProvider: selectedProvider,
     foregroundInstanceId: selectedProviderInstanceId,
+    passive,
   });
 }

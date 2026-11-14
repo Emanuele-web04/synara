@@ -182,7 +182,7 @@ function groupRowElements(
 export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const { t } = useTranslation();
 
-  const { onOpenChange, open, lockedProvider, threadId } = props;
+  const { onOpenChange, onRefreshModels, open, lockedProvider, threadId } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
   const activeProvider = lockedProvider ?? props.provider;
@@ -370,6 +370,21 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const openProviderTab = providerTabs.find((providerTab) => providerTab.instanceId === tab);
   const tabAccount = tab === STARRED_TAB ? null : (openProviderTab ?? providerTabs[0] ?? null);
   const setupMessage = tab === STARRED_TAB ? null : (tabAccount?.setupMessage ?? null);
+  // Load only the accounts represented in Starred, after the picker opens.
+  const starredAccounts =
+    isMenuOpen && tab === STARRED_TAB
+      ? providerTabs.filter(
+          (account) =>
+            !account.blocked &&
+            !account.setupMessage &&
+            usableStarredModels.some(
+              (entry) =>
+                entry.provider === account.provider &&
+                starredModelInstanceId(entry) === account.instanceId,
+            ),
+        )
+      : [];
+
   const openProviderSettings = () => {
     setMenuOpen(false);
     appHistory.push("/settings?section=providers");
@@ -684,14 +699,24 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               </div>
             )}
           </div>
-          {isMenuOpen && tabAccount && !setupMessage && props.onRefreshModels ? (
+          {isMenuOpen && tabAccount && !setupMessage && onRefreshModels ? (
             <ModelCatalogRefresh
               key={tabAccount.instanceId}
               provider={tabAccount.provider}
               instanceId={tabAccount.instanceId}
-              onRefresh={props.onRefreshModels}
+              onRefresh={onRefreshModels}
             />
           ) : null}
+          {onRefreshModels &&
+            starredAccounts.map((account) => (
+              <ModelCatalogRefresh
+                key={account.instanceId}
+                provider={account.provider}
+                instanceId={account.instanceId}
+                onRefresh={onRefreshModels}
+                silent
+              />
+            ))}
           <ComposerModelPickerTraitRows
             provider={props.provider}
             providerInstanceId={props.selectedProviderInstanceId}
