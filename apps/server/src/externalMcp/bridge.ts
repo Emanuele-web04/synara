@@ -990,3 +990,70 @@ export async function serveExternalMcpStdio(input: {
   await Promise.all(inFlight);
   await outputQueue;
 }
+
+export interface ExternalMcpToolCallResult {
+  readonly isError: boolean;
+  readonly text: string;
+  readonly structuredContent?: Record<string, unknown>;
+}
+
+/**
+ * One-shot `tools/call` against the paired external MCP endpoint. Reuses the
+ * stdio bridge's runtime discovery, HMAC runtime proof, and stored credential,
+ * so the CLI gets exactly the integration's granted scopes and nothing more.
+ */
+export async function callExternalMcpTool(input: {
+  readonly baseDir: string;
+  readonly integrationId?: string;
+  readonly name: string;
+  readonly arguments: Record<string, unknown>;
+  readonly fetchImpl?: ExternalMcpFetch;
+}): Promise<ExternalMcpToolCallResult> {
+  const credential = readExternalMcpClientCredential(input.baseDir, input.integrationId);
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: input.name, arguments: input.arguments },
+  });
+  const response = await fetchWithRestartRecovery({
+    baseDir: input.baseDir,
+    credential: credential.credential,
+    body,
+    ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+  });
+  if (response.status === 401) {
+    throw new ExternalMcpBridgeError(
+      "Synara rejected the stored external MCP credential because it was revoked, expired, or replaced. Pair the integration again from Settings.",
+    );
+  }
+  const text = await readExternalMcpResponseText(response, requestTimeoutForBody(body));
+  let decoded: {
+    readonly result?: {
+      readonly isError?: boolean;
+      readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>;
+      readonly structuredContent?: Record<string, unknown>;
+    };
+    readonly error?: { readonly message?: string };
+  };
+  try {
+    decoded = JSON.parse(text) as typeof decoded;
+  } catch {
+    throw new ExternalMcpBridgeError(
+      `Synara external MCP request failed with HTTP ${response.status}.`,
+    );
+  }
+  if (decoded.error || !decoded.result) {
+    throw new ExternalMcpBridgeError(
+      decoded.error?.message ?? `Synara external MCP request failed with HTTP ${response.status}.`,
+    );
+  }
+  const result = decoded.result;
+  return {
+    isError: result.isError === true,
+    text: (result.content ?? [])
+      .flatMap((part) => (part.type === "text" && typeof part.text === "string" ? [part.text] : []))
+      .join("\n"),
+    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+  };
+}
