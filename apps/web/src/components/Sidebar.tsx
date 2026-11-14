@@ -180,6 +180,11 @@ import {
   randomUUID,
 } from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
+import {
+  canMoveThreadToProject,
+  moveThreadToProject,
+  resolveMoveToProjectTargets,
+} from "../lib/moveThreadToProject";
 import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
@@ -3613,6 +3618,19 @@ export default function Sidebar() {
     },
     [postGroupPickupMessage, t],
   );
+  const handleMoveThreadToProject = useCallback(
+    async (thread: Thread, targetProjectId: ProjectId) => {
+      const result = await moveThreadToProject({ threadId: thread.id, targetProjectId });
+      if (!result.ok) {
+        toastManager.add({
+          type: "error",
+          title: t("workspace:couldNotMoveTheThreadToTheProject"),
+          description: result.message || t("workspace:theThreadCouldNotBeMovedToThatProject"),
+        });
+      }
+    },
+    [t],
+  );
 
   const handleThreadContextMenu = useCallback(
     async (
@@ -3779,6 +3797,36 @@ export default function Sidebar() {
             ],
           )
         : [];
+      const moveToProjectTargets = canMoveThreadToProject({
+        thread,
+        sourceProject: projects.find((project) => project.id === thread.projectId),
+        workspacePaths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+        isCoordinatorThread: coordinatorThreadIds.has(threadId),
+      })
+        ? resolveMoveToProjectTargets({
+            projects: ordinarySpaceProjects,
+            currentProjectId: thread.projectId,
+            workspacePaths: {
+              homeDir,
+              chatWorkspaceRoot,
+              studioWorkspaceRoot,
+              groupsWorkspaceRoot,
+            },
+          })
+        : [];
+      const moveToProjectItems = contextMenuGroup(
+        {
+          id: "move-to-project",
+          label: t("common:moveTo"),
+          icon: THREAD_CONTEXT_MENU_ICONS.group,
+          separatorBefore: hubItems.length === 0,
+        },
+        moveToProjectTargets.map((project) => ({
+          id: `move-to-project:${project.id}`,
+          label: t("workspace:moveTo", { value0: resolveSidebarProjectRowLabel(project) }),
+          icon: THREAD_CONTEXT_MENU_ICONS.group,
+        })),
+      );
       const clicked = await api.contextMenu.show(
         [
           {
@@ -3876,6 +3924,7 @@ export default function Sidebar() {
               ]
             : []),
           ...extraItems,
+          ...moveToProjectItems,
           ...hubItems,
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
@@ -4051,6 +4100,14 @@ export default function Sidebar() {
         }
         return;
       }
+      if (typeof clicked === "string" && clicked.startsWith("move-to-project:")) {
+        const targetProjectId = clicked.slice("move-to-project:".length);
+        const target = moveToProjectTargets.find((project) => project.id === targetProjectId);
+        if (target) {
+          await handleMoveThreadToProject(thread, target.id);
+        }
+        return;
+      }
       if (clicked === "fork:local" || clicked === "fork:worktree") {
         await forkThread(thread, clicked === "fork:worktree" ? "worktree" : "local");
         return;
@@ -4078,9 +4135,11 @@ export default function Sidebar() {
       handoffThread,
       membersLoaded,
       moveThreadToGroup,
+      handleMoveThreadToProject,
       handleMarkThreadUnread,
       navigate,
       openRenameThreadDialog,
+      ordinarySpaceProjects,
       pinnedThreadIdSet,
       projectCwdById,
       projects,
@@ -4095,6 +4154,10 @@ export default function Sidebar() {
       toggleThreadPinned,
       t,
       setSnoozeDialogThreadId,
+      homeDir,
+      chatWorkspaceRoot,
+      studioWorkspaceRoot,
+      groupsWorkspaceRoot,
     ],
   );
   // The open-thread tabs open this same menu for their thread, with their close rows added.
