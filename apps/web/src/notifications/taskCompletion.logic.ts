@@ -534,6 +534,15 @@ function hadUnsettledTurn(thread: Thread | undefined): boolean {
   return !thread.latestTurn?.completedAt && isRunningStatus(thread.session?.status);
 }
 
+// Thread-wide background tasks still running: the server's count when it sends
+// one (local activity can be frozen for a thread whose detail is not live here).
+function outstandingBackgroundWork(thread: Thread): number {
+  return (
+    thread.pendingBackgroundTaskCount ??
+    countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session })
+  );
+}
+
 function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
   if (!thread?.latestTurn?.startedAt || !thread.latestTurn.completedAt) {
     return false;
@@ -599,7 +608,11 @@ export function collectCompletedThreadCandidates(
     }
     // Background subagents can keep running after the turn settles; "Finished
     // working." would be premature while tracked background tasks are live.
+    // The server's thread-wide count wins when sent: local activity can be
+    // frozen for a thread whose detail is not live here, and a server 0 means
+    // nothing is outstanding in any turn.
     if (
+      thread.pendingBackgroundTaskCount !== 0 &&
       (derivePendingBackgroundWork({
         activities: thread.activities,
         latestTurn: thread.latestTurn,
@@ -608,10 +621,7 @@ export function collectCompletedThreadCandidates(
     ) {
       continue;
     }
-    if (
-      options.waitForSubagents &&
-      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }) > 0
-    ) {
+    if (options.waitForSubagents && outstandingBackgroundWork(thread) > 0) {
       continue;
     }
     if (!previousThread.session && !previousThread.latestTurn?.completedAt) {
@@ -626,13 +636,7 @@ export function collectCompletedThreadCandidates(
       // A held completion can be released by the final task or session settling
       // without the parent entering another turn. Only dedupe a previously
       // settled snapshot if it was already eligible for the alert.
-      !(
-        options.waitForSubagents &&
-        countOutstandingBackgroundWork({
-          activities: previousThread.activities,
-          session: previousThread.session,
-        }) > 0
-      )
+      !(options.waitForSubagents && outstandingBackgroundWork(previousThread) > 0)
     ) {
       continue;
     }

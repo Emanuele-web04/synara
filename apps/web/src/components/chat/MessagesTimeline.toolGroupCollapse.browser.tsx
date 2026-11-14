@@ -118,6 +118,13 @@ function findSummaryTrigger(label: string): HTMLButtonElement | null {
   );
 }
 
+function copyButtonOpacity(messageId: string): string | null {
+  const button = document.querySelector(
+    `[data-message-id='${messageId}'] [aria-label='Copy message']`,
+  );
+  return button ? getComputedStyle(button).opacity : null;
+}
+
 function isVisibleOutsideClosedDisclosure(text: string): boolean {
   // The innermost element containing the text (command labels may span nested
   // spans, so a leaf-only check would miss them).
@@ -255,6 +262,63 @@ describe("MessagesTimeline tool group collapse", () => {
       await expect
         .element(screen.getByText("The new app is ready.", { exact: true }))
         .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("ends a reply a background task carried on once, with a Resumed line between", async () => {
+    const message = (id: string, role: "user" | "assistant", text: string, at: string) => ({
+      id,
+      kind: "message" as const,
+      createdAt: at,
+      message: {
+        id: MessageId.makeUnsafe(id),
+        role,
+        text,
+        createdAt: at,
+        streaming: false,
+        ...(role === "assistant" ? { completedAt: at } : {}),
+      },
+    });
+    const wakeAt = "2026-03-17T19:12:10.000Z";
+    const entries: TimelineEntry[] = [
+      message("request", "user", "Run the suite", "2026-03-17T19:12:00.000Z"),
+      message("first-answer", "assistant", "The suite is running.", "2026-03-17T19:12:04.000Z"),
+      {
+        id: "wake",
+        kind: "work",
+        createdAt: wakeAt,
+        entry: {
+          id: "wake",
+          createdAt: wakeAt,
+          label: "Background task finished: Full suite",
+          tone: "info",
+          backgroundTaskCompletion: {
+            taskId: "suite-task",
+            taskType: "local_bash",
+            description: "Full suite",
+            outcome: "finished",
+          },
+        },
+      },
+      message("follow-up", "assistant", "The suite passed.", "2026-03-17T19:12:12.000Z"),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} settled />, {
+      container: createTimelineHost(),
+    });
+    try {
+      await expect.element(screen.getByText("The suite passed.", { exact: true })).toBeVisible();
+      await expect
+        .element(screen.getByText("The suite is running.", { exact: true }))
+        .toBeVisible();
+      await expect.element(screen.getByText(/^Resumed: “Full suite” finished/)).toBeVisible();
+      // Only the reply's last answer shows its actions at rest; the earlier
+      // answer keeps them in place, revealed on hover.
+      await expect.poll(() => copyButtonOpacity("follow-up")).toBe("1");
+      await expect.poll(() => copyButtonOpacity("first-answer")).toBe("0");
+      await screen.getByText("The suite is running.", { exact: true }).hover();
+      await expect.poll(() => copyButtonOpacity("first-answer")).toBe("1");
     } finally {
       await screen.unmount();
     }

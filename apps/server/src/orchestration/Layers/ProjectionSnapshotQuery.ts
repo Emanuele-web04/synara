@@ -59,6 +59,11 @@ import {
 } from "../../persistence/Errors.ts";
 import { normalizePersistedModelSelection } from "../../persistence/modelSelectionCompatibility.ts";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
+import {
+  BACKGROUND_TASKS_CHANGED_NATIVE_EVENT_TYPE,
+  canSessionFinishBackgroundTasks,
+  foldOutstandingBackgroundTaskIds,
+} from "@synara/shared/backgroundTasks";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionSpace } from "../../persistence/Services/ProjectionSpaces.ts";
@@ -182,6 +187,17 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
     sequenceSource: Schema.optional(Schema.NullOr(Schema.Literal("orchestration"))),
   }),
 );
+// Only the activities that can change a thread's outstanding background tasks,
+// with the payload the shared fold reads and the keys that order the fold.
+const BackgroundTaskActivityDbRowSchema = Schema.Struct({
+  activityId: Schema.String,
+  threadId: ThreadId,
+  kind: Schema.String,
+  payload: Schema.fromJsonString(Schema.Unknown),
+  sequence: Schema.NullOr(Schema.Number),
+  createdAt: Schema.String,
+});
+type BackgroundTaskActivityDbRow = typeof BackgroundTaskActivityDbRowSchema.Type;
 type PendingInteractionRow = typeof OrchestrationPendingInteraction.Type;
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
@@ -743,10 +759,54 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
   };
 }
 
+// An end sorts after a patch or notice that shares its sequence and timestamp.
+function backgroundTaskActivityLifecycleRank(kind: string): number {
+  return kind === "task.completed" ? 2 : 1;
+}
+
+// The web client's activity order (compareActivitiesByOrder in
+// apps/web/src/workLog.ts) restricted to these kinds: sequence-less rows first,
+// then sequence, created_at, lifecycle rank (an end after a patch) and id.
+function compareBackgroundTaskActivityRows(
+  left: BackgroundTaskActivityDbRow,
+  right: BackgroundTaskActivityDbRow,
+): number {
+  if (left.sequence !== null && right.sequence !== null) {
+    if (left.sequence !== right.sequence) return left.sequence - right.sequence;
+  } else if (left.sequence !== null) {
+    return 1;
+  } else if (right.sequence !== null) {
+    return -1;
+  }
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) return createdAtComparison;
+  const rankComparison =
+    backgroundTaskActivityLifecycleRank(left.kind) -
+    backgroundTaskActivityLifecycleRank(right.kind);
+  if (rankComparison !== 0) return rankComparison;
+  return left.activityId.localeCompare(right.activityId);
+}
+
+function countPendingBackgroundTasksByThread(
+  rows: ReadonlyArray<BackgroundTaskActivityDbRow>,
+): Map<string, number> {
+  const rowsByThread = new Map<string, BackgroundTaskActivityDbRow[]>();
+  for (const row of rows) {
+    pushGrouped(rowsByThread, row.threadId, row);
+  }
+  const counts = new Map<string, number>();
+  for (const [threadId, threadRows] of rowsByThread) {
+    threadRows.sort(compareBackgroundTaskActivityRows);
+    counts.set(threadId, foldOutstandingBackgroundTaskIds(threadRows).length);
+  }
+  return counts;
+}
+
 function toProjectedThreadShellFromStoredSummary(input: {
   readonly threadRow: ProjectionThreadShellDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly session: OrchestrationSession | null;
+  readonly pendingBackgroundTaskCount: number;
 }): OrchestrationThreadShell {
   const { threadRow } = input;
   return {
@@ -809,6 +869,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     goalStartedAt: threadRow.goalStartedAt ?? null,
     goalPausedAt: threadRow.goalPausedAt ?? null,
     session: input.session,
+    pendingBackgroundTaskCount: input.pendingBackgroundTaskCount,
   };
 }
 
@@ -2507,6 +2568,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Served by the (kind, thread_id, ...) index from migration 043: one seek per
+  // kind and thread instead of a walk over the thread's whole activity
+  // history. Rows are ordered in memory (compareBackgroundTaskActivityRows):
+  // with an ORDER BY here SQLite prefers the (thread_id, sequence) indexes and
+  // walks every activity of the thread (3 ms vs 0.1 ms on a 4.4k-activity one).
+  const listBackgroundTaskActivityRowsByThreads = SqlSchema.findAll({
+    Request: ThreadIdsLookupInput,
+    Result: BackgroundTaskActivityDbRowSchema,
+    execute: ({ threadIds }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          kind,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE kind IN ('task.updated', 'task.completed', 'runtime.warning')
+          AND thread_id IN ${sql.in(threadIds)}
+          AND (
+            kind <> 'runtime.warning'
+            OR json_extract(payload_json, '$.nativeEventType') = ${BACKGROUND_TASKS_CHANGED_NATIVE_EVENT_TYPE}
+          )
+      `,
+  });
+
   const listThreadSessionRowsByThreads = SqlSchema.findAll({
     Request: ThreadIdsLookupInput,
     Result: ProjectionThreadSessionDbRowSchema,
@@ -3142,6 +3230,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  // Background tasks only count while their session can still finish them (the
+  // web client's rule); other threads report 0 without reading activity history.
+  const loadPendingBackgroundTaskCounts = (
+    sessionRows: Iterable<Pick<ProjectionThreadSessionDbRow, "threadId" | "status">>,
+    tracePrefix: string,
+  ) => {
+    const threadIds: ThreadId[] = [];
+    for (const row of sessionRows) {
+      if (canSessionFinishBackgroundTasks(row.status)) threadIds.push(row.threadId);
+    }
+    if (threadIds.length === 0) {
+      return Effect.succeed(new Map<string, number>());
+    }
+    return listBackgroundTaskActivityRowsByThreads({ threadIds }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          `${tracePrefix}:listBackgroundTaskActivities:query`,
+          `${tracePrefix}:listBackgroundTaskActivities:decodeRows`,
+        ),
+      ),
+      Effect.map(countPendingBackgroundTasksByThread),
+    );
+  };
+
   const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
     sql
       .withTransaction(
@@ -3212,6 +3324,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
           const latestTurns = collectProjectedLatestTurns(latestTurnRows);
           const sessions = collectProjectedSessions(sessionRows);
+          const liveThreadIds = new Set(
+            threadRows.filter((row) => row.deletedAt === null).map((row) => row.threadId),
+          );
+          const pendingBackgroundTaskCounts = yield* loadPendingBackgroundTaskCounts(
+            sessionRows.filter((row) => liveThreadIds.has(row.threadId)),
+            "ProjectionSnapshotQuery.getShellSnapshot",
+          );
 
           let updatedAt = collectBaseUpdatedAt({ spaceRows, projectRows, threadRows, stateRows });
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
@@ -3246,6 +3365,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   threadRow: row,
                   latestTurn: latestTurns.byThread.get(row.threadId) ?? null,
                   session: sessions.byThread.get(row.threadId) ?? null,
+                  pendingBackgroundTaskCount: pendingBackgroundTaskCounts.get(row.threadId) ?? 0,
                 }),
               ),
             updatedAt: updatedAt ?? new Date(0).toISOString(),
@@ -3646,6 +3766,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       ]);
 
+      const pendingBackgroundTaskCounts = yield* loadPendingBackgroundTaskCounts(
+        Option.toArray(sessionRow),
+        tracePrefix,
+      );
+
       return Option.some(
         toProjectedThreadShellFromStoredSummary({
           threadRow: threadRow.value,
@@ -3657,6 +3782,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             onNone: () => null,
             onSome: (row) => toProjectedSession(row),
           }),
+          pendingBackgroundTaskCount: pendingBackgroundTaskCounts.get(threadId) ?? 0,
         }),
       );
     });
@@ -3724,11 +3850,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           const messageActivityByThread = new Map(
             messageActivityRows.map((row) => [row.threadId, row.updatedAt] as const),
           );
+          const pendingBackgroundTaskCounts = yield* loadPendingBackgroundTaskCounts(
+            sessionRows,
+            tracePrefix,
+          );
           return threadRows.map((threadRow) => {
             const thread = toProjectedThreadShellFromStoredSummary({
               threadRow,
               latestTurn: latestTurnByThread.get(threadRow.threadId) ?? null,
               session: sessionByThread.get(threadRow.threadId) ?? null,
+              pendingBackgroundTaskCount: pendingBackgroundTaskCounts.get(threadRow.threadId) ?? 0,
             });
             const messageActivityAt = messageActivityByThread.get(threadRow.threadId);
             return messageActivityAt === undefined

@@ -17,6 +17,7 @@ import {
   computeStableMessagesTimelineRows,
   collectInlineVisuals,
   deriveMessagesTimelineRows,
+  deriveContinuedAssistantMessageIds,
   deriveTerminalAssistantMessageIds,
   deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
@@ -564,6 +565,27 @@ describe("deriveTerminalAssistantMessageIds", () => {
         { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:04Z" },
       ]),
     ).toEqual(new Set(["a2", "a3"]));
+  });
+});
+
+describe("deriveContinuedAssistantMessageIds", () => {
+  it("marks answers a wake carried on, but not ones a user message ended", () => {
+    const messages = [
+      { id: "u1", role: "user" as const, createdAt: "2026-01-01T00:00:00Z" },
+      { id: "a1", role: "assistant" as const, createdAt: "2026-01-01T00:00:01Z" },
+      { id: "wake", role: "user" as const, createdAt: "2026-01-01T00:00:02Z" },
+      { id: "a2", role: "assistant" as const, createdAt: "2026-01-01T00:00:03Z" },
+      { id: "u2", role: "user" as const, createdAt: "2026-01-01T00:00:04Z" },
+      { id: "a3", role: "assistant" as const, createdAt: "2026-01-01T00:00:05Z" },
+    ];
+
+    expect(
+      deriveContinuedAssistantMessageIds(
+        messages,
+        deriveTerminalAssistantMessageIds(messages),
+        new Set(["wake"]),
+      ),
+    ).toEqual(new Set(["a1"]));
   });
 });
 
@@ -1157,6 +1179,44 @@ describe("deriveMessagesTimelineRows", () => {
       "work:check-1",
     ]);
     expect(messageRow(rows, "report-2")?.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("ends a reply that background tasks carried on only once, on its last answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+    });
+
+    expect(messageRow(rows, "launched")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-2")?.assistantResponseContinues).toBeUndefined();
+    // Each response still owns its terminal answer (turn header, changed files).
+    expect(messageRow(rows, "launched")?.showAssistantCopyButton).toBe(true);
+    expect(messageRow(rows, "report-2")?.showAssistantCopyButton).toBe(true);
+  });
+
+  it("copies the whole reply from its last answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+    });
+
+    expect(messageRow(rows, "report-2")?.assistantReplyCopyText).toBe(
+      "Launched 2 subagents.\n\nReport 1\n\nReport 2",
+    );
+    expect(messageRow(rows, "launched")?.assistantReplyCopyText).toBeUndefined();
+  });
+
+  it("keeps the previous footer until the woken response writes an answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }).slice(0, -1),
+    });
+
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBeUndefined();
   });
 
   it("keeps the previous response folded before the woken response writes anything", () => {
