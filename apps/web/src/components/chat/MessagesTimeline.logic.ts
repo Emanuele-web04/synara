@@ -595,6 +595,11 @@ export type MessagesTimelineRow =
       turnEndMarker?: TurnEndMarker;
       durationStart: string;
       showAssistantCopyButton: boolean;
+      // Set on a terminal answer that a background task woke the agent to carry
+      // on; the woken response's final answer owns the time and at-rest actions.
+      assistantResponseContinues?: true;
+      // On the reply's last answer: the whole reply's answers, for its copy action.
+      assistantReplyCopyText?: string;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       // True while this row's turn is still running. The end-of-turn changes
@@ -984,6 +989,76 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
+/**
+ * Terminal assistant messages whose response a finished background task carried
+ * on: the woken response reads as the same reply, so only the last response of
+ * the chain ends with the copy/fork/pin/time row. A wake that has not produced
+ * any assistant text yet leaves the previous footer in place.
+ */
+export function deriveContinuedAssistantMessageIds(
+  messages: ReadonlyArray<TimelineDurationMessage>,
+  terminalAssistantMessageIds: ReadonlySet<string>,
+  wakeIds: ReadonlySet<string>,
+): Set<string> {
+  const continuedAssistantMessageIds = new Set<string>();
+  let latestTerminalId: string | null = null;
+  let wokenAfterTerminal = false;
+
+  for (const message of messages) {
+    if (wakeIds.has(message.id)) {
+      wokenAfterTerminal = latestTerminalId !== null;
+      continue;
+    }
+    if (message.role !== "assistant") {
+      latestTerminalId = null;
+      wokenAfterTerminal = false;
+      continue;
+    }
+    if (latestTerminalId !== null && wokenAfterTerminal) {
+      continuedAssistantMessageIds.add(latestTerminalId);
+    }
+    latestTerminalId = terminalAssistantMessageIds.has(message.id) ? message.id : null;
+    wokenAfterTerminal = false;
+  }
+
+  return continuedAssistantMessageIds;
+}
+
+/**
+ * Copy text for a reply's last answer when background tasks carried the reply
+ * on: every earlier answer of the reply, then its own, so one copy takes the
+ * whole reply. Answers that a user message ended copy only themselves.
+ */
+export function deriveReplyCopyTextByMessageId(
+  messages: ReadonlyArray<Pick<TimelineDurationMessage, "id" | "role"> & { text?: string }>,
+  terminalAssistantMessageIds: ReadonlySet<string>,
+  continuedAssistantMessageIds: ReadonlySet<string>,
+  wakeIds: ReadonlySet<string>,
+): Map<string, string> {
+  const replyCopyTextByMessageId = new Map<string, string>();
+  let earlierAnswers: string[] = [];
+
+  for (const message of messages) {
+    if (wakeIds.has(message.id)) continue;
+    if (message.role !== "assistant") {
+      earlierAnswers = [];
+      continue;
+    }
+    if (!terminalAssistantMessageIds.has(message.id)) continue;
+    const text = message.text?.trim() ?? "";
+    if (continuedAssistantMessageIds.has(message.id)) {
+      if (text) earlierAnswers.push(text);
+      continue;
+    }
+    if (earlierAnswers.length > 0 && text) {
+      replyCopyTextByMessageId.set(message.id, [...earlierAnswers, text].join("\n\n"));
+    }
+    earlierAnswers = [];
+  }
+
+  return replyCopyTextByMessageId;
+}
+
 // Notices, handoff boundaries, and connector proposals stay visible in their
 // own rows when a turn's work is grouped or folded.
 export function isStandaloneWorkEntry(
@@ -1035,15 +1110,28 @@ export function deriveMessagesTimelineRows(input: {
   const embeddedVisualOwners = collectInlineVisualEmbedOwners(input.timelineEntries);
   // A finished background task wakes the agent into a new response, so it ends
   // the previous response and starts the next one's clock like a user message.
-  const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
-    entry.kind === "message"
-      ? [entry.message]
-      : entry.kind === "work" && wakesAgent(entry.entry)
-        ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
-        : [],
+  const wakeIds = new Set<string>();
+  const responseMessages = input.timelineEntries.flatMap(
+    (entry): Array<TimelineDurationMessage & { text?: string }> => {
+      if (entry.kind === "message") return [entry.message];
+      if (entry.kind !== "work" || !wakesAgent(entry.entry)) return [];
+      wakeIds.add(entry.id);
+      return [{ id: entry.id, role: "user", createdAt: entry.createdAt }];
+    },
   );
   const durationStartByMessageId = computeMessageDurationStart(responseMessages);
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(responseMessages);
+  const continuedAssistantMessageIds = deriveContinuedAssistantMessageIds(
+    responseMessages,
+    terminalAssistantMessageIds,
+    wakeIds,
+  );
+  const replyCopyTextByMessageId = deriveReplyCopyTextByMessageId(
+    responseMessages,
+    terminalAssistantMessageIds,
+    continuedAssistantMessageIds,
+    wakeIds,
+  );
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
 
   const groupedEntriesEqual = (
@@ -1247,6 +1335,12 @@ export function deriveMessagesTimelineRows(input: {
       durationStart: durationStartByMessageId.get(message.id) ?? message.createdAt,
       showAssistantCopyButton:
         message.role === "assistant" && terminalAssistantMessageIds.has(message.id),
+      ...(continuedAssistantMessageIds.has(message.id)
+        ? { assistantResponseContinues: true as const }
+        : {}),
+      ...(replyCopyTextByMessageId.has(message.id)
+        ? { assistantReplyCopyText: replyCopyTextByMessageId.get(message.id)! }
+        : {}),
       assistantCopyStreaming: message.streaming || assistantTurnStillInProgress,
       assistantTurnInProgress: assistantTurnStillInProgress,
       assistantTurnDiffSummary:
@@ -2235,6 +2329,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         turnEndMarkersEqual(a.turnEndMarker, bm.turnEndMarker) &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
+        a.assistantResponseContinues === bm.assistantResponseContinues &&
+        a.assistantReplyCopyText === bm.assistantReplyCopyText &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnInProgress === bm.assistantTurnInProgress &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
