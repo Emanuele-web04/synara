@@ -1,6 +1,14 @@
 import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
 import {
+  CLAUDE_EDGE_BLOCK_CONTINUATION_PROMPT,
+  CLAUDE_EDGE_BLOCK_RETRY_DELAYS_MS,
+  CLAUDE_EDGE_BLOCKED_ERROR_CODE,
+  claudeEdgeBlockedMessage,
+  claudeEdgeBlockRetryWarning,
+  isClaudeEdgeBlockedError,
+} from "../claudeEdgeBlock.ts";
+import {
   claudeUsageLimitWindows,
   usageLimitResetAt,
   type UsageLimitWindows,
@@ -58,6 +66,7 @@ import {
   type ProviderUserInputAnswers,
   type RuntimeContentStreamKind,
   type RuntimeSessionState,
+  type RuntimeTaskListItem,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -121,7 +130,8 @@ import {
   Stream,
 } from "effect";
 
-import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
+import { buildClaudeMcpServers, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
+import { SYNARA_UPDATE_PLAN_TOOL_NAME } from "../../agentGateway/turnPlanTools.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
 import {
   isSynaraGatewayToolName,
@@ -161,6 +171,7 @@ import {
   hasOnlyCompletedClaudeTasks,
   hasUnfinishedClaudeTasks,
   normalizeClaudeTodoTasks,
+  normalizeSynaraPlanTasks,
   parseClaudeTrackedTasks,
   type ClaudeTrackedTask,
 } from "../claudeTaskTracker.ts";
@@ -269,6 +280,8 @@ interface ClaudeResumeState {
   readonly tokenAccountingVersion?: 1;
 }
 
+type ClaudeTurnErrorCode = SDKAssistantMessageError | typeof CLAUDE_EDGE_BLOCKED_ERROR_CODE;
+
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
@@ -292,10 +305,22 @@ interface ClaudeTurnState {
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
+  // The last plan the gateway accepted from synara_update_plan this turn.
+  synaraPlanTasks?: ReadonlyArray<RuntimeTaskListItem>;
   usageLimitWindows?: UsageLimitWindows;
   readonly assistantError?: {
-    readonly code: SDKAssistantMessageError;
+    readonly code: ClaudeTurnErrorCode;
     readonly message: string;
+    readonly httpStatus?: number;
+  };
+  // Result legs this turn already retried after an edge block. Their result
+  // usage is not settled separately, so completion folds it into the turn.
+  readonly edgeBlockRetry?: {
+    readonly attempts: number;
+    readonly processedTokens: number;
+    readonly cacheReadTokens: number;
+    // The latest blocked result; a Stop during the wait settles cost and model usage with it.
+    readonly lastResult: SDKResultMessage;
   };
   nextSyntheticAssistantBlockIndex: number;
   // Offset into assistantTextBlockOrder where the current assistant API
@@ -478,6 +503,9 @@ interface ClaudeSessionContext {
   // dropped by runtime ingestion and leaves the projection running forever.
   lastTurnId: TurnId | undefined;
   interruptRequestedTurnId: TurnId | undefined;
+  // An edge-block retry waiting to re-prompt the idle CLI. The turn stays open
+  // meanwhile; whoever takes this entry first owns (or cancels) the retry.
+  pendingEdgeBlockRetry?: { readonly turnId: TurnId; fiber?: Fiber.Fiber<void> } | undefined;
   lastKnownContextWindow: number | undefined;
   currentAutoCompactWindow: number | undefined;
   currentAlwaysThinkingEnabled: boolean | undefined;
@@ -755,6 +783,8 @@ export interface ClaudeAdapterLiveOptions {
   readonly nativeEventLogger?: EventNdjsonLogger;
   // Interval for polling a live workflow's transcript directory. Tests shrink it.
   readonly workflowRuntimePollIntervalMs?: number;
+  // Waits before each automatic retry of an edge-blocked turn. Tests shrink them.
+  readonly edgeBlockRetryDelaysMs?: ReadonlyArray<number>;
   readonly spawnClaudeCodeProcess?: (options: ClaudeSpawnOptions) => ClaudeOwnedProcess;
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
   readonly readClaudeCliVersion?: (input: {
@@ -1051,6 +1081,29 @@ function hasPendingUserInterrupt(context: ClaudeSessionContext): boolean {
 
 function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.makeUnsafe(value);
+}
+
+// What one SDK result reports for its main loop: the normalized usage, its
+// processed tokens (undefined when unknown) and its cache reads.
+function claudeResultLegUsage(context: ClaudeSessionContext, result: SDKResultMessage | undefined) {
+  const snapshot = normalizeClaudeTokenUsage(result?.usage, claudeEffectiveContextBudget(context));
+  const reportedZeroUsage =
+    result?.usage?.input_tokens === 0 &&
+    result.usage.output_tokens === 0 &&
+    (result.usage.cache_creation_input_tokens ?? 0) === 0 &&
+    (result.usage.cache_read_input_tokens ?? 0) === 0;
+  const cacheReadTokens = result?.usage?.cache_read_input_tokens;
+  return {
+    snapshot,
+    processedTokens:
+      snapshot?.totalProcessedTokens ?? snapshot?.usedTokens ?? (reportedZeroUsage ? 0 : undefined),
+    cacheReadTokens:
+      snapshot !== undefined &&
+      typeof cacheReadTokens === "number" &&
+      Number.isFinite(cacheReadTokens)
+        ? Math.max(0, Math.round(cacheReadTokens))
+        : undefined,
+  };
 }
 
 function claudeEffectiveContextBudget(context: ClaudeSessionContext): number | undefined {
@@ -1376,7 +1429,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
   return hasActiveClaudeRuntimeWork(context) || hasUnfinishedClaudeTasks(context.trackedTasks);
 }
 
+// Claude Code stopped offering its own task-list tools to current models; the
+// turn plan now arrives through Synara's gateway tool under the SDK's MCP name.
+const CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME = `mcp__${SYNARA_MCP_SERVER_NAME}__${SYNARA_UPDATE_PLAN_TOOL_NAME}`;
+
 function classifyToolItemType(toolName: string): CanonicalItemType {
+  if (toolName === CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME) {
+    return "plan";
+  }
   const normalized = toolName.toLowerCase();
   // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
   // terminal tool name before server names and broad edit/image checks interfere.
@@ -1943,6 +2003,12 @@ function normalizeClaudeUserVisibleErrorMessage(
   return sanitized;
 }
 
+// Claude Code prefixes API failures with "API Error: <status>"; keep only the status.
+function claudeApiErrorStatus(text: string): number | undefined {
+  const status = Number(/\bAPI Error: (\d{3})\b/.exec(text)?.[1]);
+  return status >= 100 && status <= 599 ? status : undefined;
+}
+
 function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
   switch (error) {
     case "authentication_failed":
@@ -1974,7 +2040,7 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
   }
 }
 
-function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageError): boolean {
+function claudeAssistantErrorRequiresProcessRestart(error: ClaudeTurnErrorCode): boolean {
   return (
     error === "authentication_failed" ||
     error === "oauth_org_not_allowed" ||
@@ -3327,11 +3393,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
-    // Normalizes Claude TodoWrite tool calls into the shared runtime task-list event.
+    // Emits a whole-list plan (TodoWrite, synara_update_plan) as the shared runtime task-list event.
     const emitTodoTasksUpdated = (
       context: ClaudeSessionContext,
       input: {
-        readonly toolInput: Record<string, unknown>;
+        readonly tasksPayload: { readonly tasks: ReadonlyArray<RuntimeTaskListItem> } | null;
         readonly toolUseId?: string | undefined;
         readonly rawMethod: string;
         readonly rawPayload: unknown;
@@ -3343,7 +3409,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        const tasksPayload = normalizeClaudeTodoTasks(input.toolInput);
+        const tasksPayload = input.tasksPayload;
         if (!tasksPayload) {
           return;
         }
@@ -3654,21 +3720,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // result.usage settles this turn's main loop, not the context size or
         // subagents. Successful results may correct provisional block output down.
-        const accumulatedSnapshot = normalizeClaudeTokenUsage(
-          result?.usage,
-          claudeEffectiveContextBudget(context),
-        );
-        const reportedZeroUsage =
-          result?.usage?.input_tokens === 0 &&
-          result.usage.output_tokens === 0 &&
-          (result.usage.cache_creation_input_tokens ?? 0) === 0 &&
-          (result.usage.cache_read_input_tokens ?? 0) === 0;
-        const resultProcessedTokens =
-          accumulatedSnapshot?.totalProcessedTokens ??
-          accumulatedSnapshot?.usedTokens ??
-          (reportedZeroUsage ? 0 : undefined);
-        if (resultProcessedTokens !== undefined) {
-          const reconciledTotal = context.processedTokenResultBaseline + resultProcessedTokens;
+        const {
+          snapshot: accumulatedSnapshot,
+          processedTokens: resultProcessedTokens,
+          cacheReadTokens: resultCacheReadTokens,
+        } = claudeResultLegUsage(context, result);
+        // Legs retried after an edge block left their results unsettled.
+        const retriedLegs = context.turnState?.edgeBlockRetry;
+        // Settling the retained blocked result: the carry already holds its tokens.
+        const resultCarried = result !== undefined && result === retriedLegs?.lastResult;
+        if (resultProcessedTokens !== undefined && !resultCarried) {
+          const reconciledTotal =
+            context.processedTokenResultBaseline +
+            (retriedLegs?.processedTokens ?? 0) +
+            resultProcessedTokens;
           context.processedTokenTotal =
             status === "completed"
               ? reconciledTotal
@@ -3727,14 +3792,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         );
         // A completed result settles the main loop exactly; otherwise use the
         // cache reads of the requests observed since the last settled turn.
-        const resultCacheReadTokens = result?.usage?.cache_read_input_tokens;
         const mainLoopCacheReadTokens = Math.min(
           mainLoopTokens,
-          status === "completed" &&
-            accumulatedSnapshot !== undefined &&
-            typeof resultCacheReadTokens === "number" &&
-            Number.isFinite(resultCacheReadTokens)
-            ? Math.max(0, Math.round(resultCacheReadTokens))
+          status === "completed" && resultCacheReadTokens !== undefined
+            ? resultCacheReadTokens + (retriedLegs?.cacheReadTokens ?? 0)
             : context.requestUsage.unsettledCacheReadTokens(),
         );
         // A synthetic/background UI turn may be auto-closed before the SDK emits
@@ -3898,6 +3959,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (settlesForegroundTasks) {
           yield* settleForegroundTasksAtTurnEnd(context, status);
         }
+        // synara_update_plan tells the model to leave its last step in_progress:
+        // a turn that ends normally checks the plan off, while an interrupted or
+        // failed one keeps the steps it never reached.
+        const synaraPlanTasks = turnState.synaraPlanTasks;
+        if (
+          status === "completed" &&
+          synaraPlanTasks?.some((task) => task.status !== "completed")
+        ) {
+          yield* emitTodoTasksUpdated(context, {
+            tasksPayload: {
+              tasks: synaraPlanTasks.map(({ task }) => ({ task, status: "completed" as const })),
+            },
+            rawMethod: "claude/result/synara-plan-finished",
+            rawPayload: result ?? { status },
+          });
+        }
 
         for (const block of turnState.assistantTextBlockOrder) {
           yield* completeAssistantTextBlock(context, block, {
@@ -4003,6 +4080,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(turnResultUsage ? { modelUsage: turnResultUsage.modelUsage } : {}),
             claudeResultObserved: result !== undefined,
             ...(turnState.assistantError ? { errorCode: turnState.assistantError.code } : {}),
+            ...(turnState.assistantError?.httpStatus !== undefined
+              ? { httpStatus: turnState.assistantError.httpStatus }
+              : {}),
             ...(status === "failed" && turnState.assistantError?.code === "rate_limit"
               ? {
                   usageLimit: {
@@ -4292,7 +4372,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
         if (tool.toolName === "TodoWrite") {
           yield* emitTodoTasksUpdated(context, {
-            toolInput: input.toolInput,
+            tasksPayload: normalizeClaudeTodoTasks(input.toolInput),
             toolUseId: tool.itemId,
             rawMethod: input.rawMethod,
             rawPayload: input.rawPayload,
@@ -4506,7 +4586,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             if (nextTool.toolName === "TodoWrite") {
               yield* emitTodoTasksUpdated(context, {
-                toolInput: nextTool.input,
+                tasksPayload: normalizeClaudeTodoTasks(nextTool.input),
                 toolUseId: nextTool.itemId,
                 rawMethod: "claude/stream_event/content_block_delta/input_json_delta",
                 rawPayload: message,
@@ -4673,6 +4753,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* updateResumeCursor(context);
             yield* emitTrackedTasksUpdated(context, {
               toolUseId: tool.itemId,
+              rawPayload: message,
+            });
+          }
+
+          // Shown only once the gateway accepted it, so a refused plan never
+          // reaches the user while the model is told to resend it.
+          if (tool.toolName === CLAUDE_SYNARA_UPDATE_PLAN_TOOL_NAME && !toolResult.isError) {
+            const tasksPayload = normalizeSynaraPlanTasks(tool.input);
+            if (tasksPayload && context.turnState) {
+              context.turnState.synaraPlanTasks = tasksPayload.tasks;
+            }
+            yield* emitTodoTasksUpdated(context, {
+              tasksPayload,
+              toolUseId: tool.itemId,
+              rawMethod: "claude/user/synara-plan-result",
               rawPayload: message,
             });
           }
@@ -5065,12 +5160,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         yield* ensureSyntheticTurn(context);
+        const errorText = message.error ? extractTextContent(message.message?.content) : "";
+        const edgeBlocked =
+          message.error !== undefined && isClaudeEdgeBlockedError(message.error, errorText);
         if (message.error && context.turnState) {
+          const httpStatus = edgeBlocked ? 403 : claudeApiErrorStatus(errorText);
           context.turnState = {
             ...context.turnState,
             assistantError: {
-              code: message.error,
-              message: claudeAssistantErrorMessage(message.error),
+              ...(edgeBlocked
+                ? {
+                    code: CLAUDE_EDGE_BLOCKED_ERROR_CODE,
+                    message: claudeEdgeBlockedMessage(
+                      context.turnState.edgeBlockRetry?.attempts ?? 0,
+                    ),
+                  }
+                : { code: message.error, message: claudeAssistantErrorMessage(message.error) }),
+              ...(httpStatus !== undefined ? { httpStatus } : {}),
             },
           };
         }
@@ -5194,7 +5300,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               });
             }
           }
-          yield* backfillAssistantTextBlocksFromSnapshot(context, message);
+          // The CLI's "Failed to authenticate" text for an edge block is not
+          // Claude's reply; the retry warning or turn error reports it instead.
+          if (!edgeBlocked) yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
         // Capture per-API-call usage from the assistant response for accurate
@@ -5283,6 +5391,98 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         yield* updateResumeCursor(context);
       });
 
+    // An edge block leaves the CLI idle with a healthy login. Keep the turn open
+    // and re-prompt the CLI after a backoff; false once the retry budget is spent.
+    const edgeBlockRetryDelaysMs =
+      options?.edgeBlockRetryDelaysMs ?? CLAUDE_EDGE_BLOCK_RETRY_DELAYS_MS;
+    const retryEdgeBlockedTurn = (
+      context: ClaudeSessionContext,
+      result: SDKResultMessage,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const turnState = context.turnState;
+        const attempt = (turnState?.edgeBlockRetry?.attempts ?? 0) + 1;
+        const delayMs = edgeBlockRetryDelaysMs[attempt - 1];
+        if (
+          turnState === undefined ||
+          delayMs === undefined ||
+          turnState.explicitCompaction !== undefined ||
+          context.stopped ||
+          hasPendingUserInterrupt(context)
+        ) {
+          return false;
+        }
+
+        // Settle the failed leg like a failed turn would, but carry it in the
+        // turn instead of advancing the result baseline past it.
+        const leg = claudeResultLegUsage(context, result);
+        const retried = turnState.edgeBlockRetry;
+        context.processedTokenTotal = Math.max(
+          context.processedTokenTotal,
+          context.processedTokenResultBaseline +
+            (retried?.processedTokens ?? 0) +
+            (leg.processedTokens ?? 0),
+        );
+        const { assistantError: _edgeBlock, ...retryingTurn } = turnState;
+        context.turnState = {
+          ...retryingTurn,
+          edgeBlockRetry: {
+            attempts: attempt,
+            processedTokens: context.processedTokenTotal - context.processedTokenResultBaseline,
+            cacheReadTokens: (retried?.cacheReadTokens ?? 0) + (leg.cacheReadTokens ?? 0),
+            lastResult: result,
+          },
+        };
+        const pending: NonNullable<ClaudeSessionContext["pendingEdgeBlockRetry"]> = {
+          turnId: turnState.turnId,
+        };
+        context.pendingEdgeBlockRetry = pending;
+        pending.fiber = yield* Effect.sleep(Duration.millis(delayMs)).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (context.pendingEdgeBlockRetry !== pending) return;
+              context.pendingEdgeBlockRetry = undefined;
+              if (context.stopped || context.turnState?.turnId !== pending.turnId) return;
+              Queue.offerUnsafe(context.promptQueue, {
+                type: "message",
+                message: {
+                  ...buildUserMessage({
+                    sdkContent: [{ type: "text", text: CLAUDE_EDGE_BLOCK_CONTINUATION_PROMPT }],
+                  }),
+                  isSynthetic: true,
+                },
+              });
+            }),
+          ),
+          Effect.forkIn(adapterScope),
+        );
+        yield* emitRuntimeWarning(
+          context,
+          claudeEdgeBlockRetryWarning({
+            attempt,
+            maxRetries: edgeBlockRetryDelaysMs.length,
+            delayMs,
+          }),
+          { errorCode: CLAUDE_EDGE_BLOCKED_ERROR_CODE, attempt },
+        );
+        return true;
+      });
+
+    // Cancels a waiting edge-block retry, optionally only for one turn. True
+    // when a retry was waiting: the idle CLI then owes that turn no result.
+    const cancelPendingEdgeBlockRetry = (
+      context: ClaudeSessionContext,
+      turnId?: TurnId,
+    ): Effect.Effect<boolean> =>
+      Effect.suspend(() => {
+        const pending = context.pendingEdgeBlockRetry;
+        if (!pending || (turnId !== undefined && pending.turnId !== turnId)) {
+          return Effect.succeed(false);
+        }
+        context.pendingEdgeBlockRetry = undefined;
+        return (pending.fiber ? Fiber.interrupt(pending.fiber) : Effect.void).pipe(Effect.as(true));
+      });
+
     const handleResultMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -5293,6 +5493,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         if (message.uuid && context.lastResultUuid === message.uuid) return;
         context.lastResultUuid = message.uuid;
+
+        if (
+          context.turnState?.assistantError?.code === CLAUDE_EDGE_BLOCKED_ERROR_CODE &&
+          (yield* retryEdgeBlockedTurn(context, message))
+        ) {
+          return;
+        }
 
         const assistantError = context.turnState?.assistantError;
         let status: ProviderRuntimeTurnStatus;
@@ -6627,6 +6834,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       Effect.gen(function* () {
         context.stopped = true;
         yield* Deferred.succeed(context.stoppedSignal, undefined);
+        yield* cancelPendingEdgeBlockRetry(context);
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.turnState?.turnId);
         context.gatewaySessionLease?.release();
 
@@ -8575,6 +8783,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               "turn/steer",
               new Error("Claude's prompt queue is closed."),
             );
+          // The steer itself resumes a CLI idle between edge-block retries.
+          yield* cancelPendingEdgeBlockRetry(context, liveTurnState.turnId);
 
           const steerText = input.input?.trim();
           if (steerText) {
@@ -8667,6 +8877,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (activeTurnId) {
           context.interruptRequestedTurnId = activeTurnId;
         }
+        const cancelledEdgeBlockRetry =
+          activeTurnId !== undefined && (yield* cancelPendingEdgeBlockRetry(context, activeTurnId));
         const acknowledged = yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,
@@ -8675,6 +8887,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
           }).pipe(Effect.timeoutOption(CLAUDE_INTERRUPT_TIMEOUT)),
         );
+        // Between edge-block retries the CLI is idle and emits no result for
+        // this Stop, so the adapter settles the turn itself.
+        if (cancelledEdgeBlockRetry && context.turnState?.turnId === activeTurnId) {
+          yield* completeTurn(
+            context,
+            "interrupted",
+            undefined,
+            context.turnState.edgeBlockRetry?.lastResult,
+          );
+        }
         if (Option.isNone(acknowledged)) {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,

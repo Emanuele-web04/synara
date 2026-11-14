@@ -143,6 +143,13 @@ tokens by provider. Unknown provider remains separate from Other. Each token sum
 shows its sample count; missing usage stays unknown and reported zero stays zero.
 Started events and mobile completion envelopes do not enter desktop turn totals.
 
+"Why turns failed" groups failed and error-interrupted turns by provider, fixed
+failure category, HTTP status, outcome and channel, with the last time each group
+was seen. `edge_blocked` separates a provider's Cloudflare 403 page from a real
+`auth` failure. Categories come from provider error codes on the client; no error
+text is stored. Rows exist only from clients that send the category and after
+migration `0014_product_turn_failures.sql`.
+
 These are client observations, not unique global executions: multiple installations
 can observe the same turn. Event UUID retries deduplicate, but cross-device turn
 identity is not collected. No provider/model cost or global billing claim is made.

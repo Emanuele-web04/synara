@@ -85,7 +85,7 @@ When you add a project on a connected computer from a named Space, the controlli
 
 ## Unsupported remote surfaces
 
-Agent-controlled browser, dev-server previews, Computer Use, device control, AppSnap and external editors are unavailable in remote execution. Both RPC admission and UI capabilities enforce this boundary. Local clipboard, export of received files and opening public links remain controller operations. Remote folder selection uses the execution filesystem.
+Agent-controlled browser, dev-server previews, Computer Use, device control, AppSnap and external editors are unavailable in remote execution. Both RPC admission and UI capabilities enforce this boundary. The local default that enables Computer Use in new chats does not apply to remote chats, so ordinary messages are not refused there. Local clipboard, export of received files and opening public links remain controller operations. Remote folder selection uses the execution filesystem.
 
 ## Persistence and verification
 
@@ -145,8 +145,10 @@ live check used the isolated controller's DNS override and did not send a real p
 Unsent chats expose a **Run on** computer picker beside the project picker. Selecting another
 computer opens that computer's own draft and project choices. The original draft remains on its
 owner; text, attachments and an existing provider session are not migrated. Started chats retain
-their execution host. Offline computers stay identifiable and unavailable; **Connect a computer**
-opens the existing connection setup. Entry points remain gated by the controller's remote capability.
+their execution host. Offline computers stay identifiable and unavailable; hovering or highlighting
+one reveals **Reconnect**, which asks the controller to redial it and retries its workspace without
+closing the picker. **Connect a computer** opens the existing connection setup. Entry points remain
+gated by the controller's remote capability.
 
 **Create project** now separates its display name from its source folder. Choose a computer before
 **Add folder**, browse that computer's filesystem, then confirm the project. A manual path remains
@@ -229,4 +231,4 @@ process in that fixture is deterministic; it is not a live model or physical-Mac
 
 ## Terminal renderer recovery
 
-The local `/ws/remote/:hostId` negotiation route carries allowlisted terminal relationship states to the renderer. Those refusals pause automatic negotiation until an explicit controller connect or a matching healthy controller relationship resumes the same frame. A genuine HTTP 426 protocol refusal requires verified manual retry; healthy controller polling cannot repair or resume an incompatible renderer. Bootstrap waits between bounded reads without replacing the workspace, while ordinary RPC deadlines and unknown-delivery ownership remain unchanged.
+The local `/ws/remote/:hostId` negotiation route carries allowlisted terminal relationship states to the renderer. Those refusals pause automatic negotiation until an explicit controller connect or a matching healthy controller relationship resumes the same frame. A sleeping or restarting host can also produce these states, so the controller supervisor retries a desired relationship in them on a slow schedule (one minute, doubling to five) instead of waiting forever; transient failures keep their own schedule. Each state change is logged once. A frame whose bootstrap failed is remounted when the controller reports its host connected or idle, backing off from five seconds to five minutes. A genuine HTTP 426 protocol refusal requires verified manual retry; healthy controller polling cannot repair or resume an incompatible renderer. Bootstrap waits between bounded reads without replacing the workspace, while ordinary RPC deadlines and unknown-delivery ownership remain unchanged.

@@ -7,6 +7,7 @@ import {
   type ProductAnalyticsFeature,
   type ProductAnalyticsInput,
   type ProductAnalyticsMode,
+  type ProductAnalyticsTurnFailure,
   type ReliabilityCode,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
@@ -111,6 +112,59 @@ function count(value: unknown): number | undefined {
     : undefined;
 }
 
+// Provider error codes (Claude SDK assistant errors, Codex error info) to fixed categories.
+const TURN_FAILURE_BY_ERROR_CODE: Record<string, ProductAnalyticsTurnFailure> = {
+  edge_blocked: "edge_blocked",
+  authentication_failed: "auth",
+  oauth_org_not_allowed: "auth",
+  cloud_credential_error: "auth",
+  unauthorized: "auth",
+  account_on_hold: "account",
+  verification_required: "account",
+  billing_error: "billing",
+  rate_limit: "rate_limit",
+  rateLimitExceeded: "rate_limit",
+  usageLimitExceeded: "usage_limit",
+  overloaded: "overloaded",
+  server_overloaded: "overloaded",
+  server_error: "server_error",
+  internalServerError: "server_error",
+  invalid_request: "invalid_request",
+  badRequest: "invalid_request",
+  model_not_found: "model_unavailable",
+  contextWindowExceeded: "context_limit",
+  max_output_tokens: "output_limit",
+  httpConnectionFailed: "network",
+  responseStreamConnectionFailed: "network",
+  responseStreamDisconnected: "network",
+};
+
+/**
+ * Why a turn failed or was interrupted by an error, as a fixed category. A cancelled
+ * turn without an error code is a user stop and has no failure.
+ */
+export function productTurnFailure(input: {
+  readonly outcome: "failed" | "cancelled";
+  readonly errorCode: unknown;
+  readonly httpStatus: number | undefined;
+}): ProductAnalyticsTurnFailure | undefined {
+  const code = typeof input.errorCode === "string" ? input.errorCode : undefined;
+  if (code === undefined && input.outcome === "cancelled") return undefined;
+  const mapped = code === undefined ? undefined : TURN_FAILURE_BY_ERROR_CODE[code];
+  if (mapped) return mapped;
+  const status = input.httpStatus;
+  if (status === 401) return "auth";
+  if (status === 429) return "rate_limit";
+  if (status !== undefined && status >= 500) return "server_error";
+  return "other";
+}
+
+function httpStatus(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
+}
+
 /** Observed live completions only: snapshots/history must never inflate adoption. */
 export class ProductTurnObserver {
   private readonly startedAt = Date.now();
@@ -161,6 +215,21 @@ export class ProductTurnObserver {
                 ? "claude"
                 : "other",
         };
+        if (outcome !== "succeeded") {
+          // Error text never leaves the app: only the category and the HTTP status.
+          const status = httpStatus(payload.httpStatus);
+          const failure = productTurnFailure({
+            outcome,
+            errorCode: payload.errorCode,
+            httpStatus: status,
+          });
+          if (failure !== undefined) {
+            Object.assign(input, {
+              failure,
+              ...(status !== undefined ? { httpStatus: status } : {}),
+            });
+          }
+        }
         // Read values only; model dictionary keys can be user-defined and never leave the app.
         const modelUsage = payload.modelUsage;
         if (modelUsage && typeof modelUsage === "object" && !Array.isArray(modelUsage)) {

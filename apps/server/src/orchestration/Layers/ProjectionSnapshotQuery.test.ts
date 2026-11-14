@@ -1074,6 +1074,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
+          pullRequests: [],
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           latestHumanMessageAt: null,
           // A present empty pending-interaction projection is authoritative;
@@ -2461,6 +2462,48 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.number, 1);
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.headBranch, "synara/greeting-1");
+
+      // A row the link backfill never reached exposes its single PR as a legacy link.
+      assert.deepEqual(
+        shellSnapshot.threads[0]?.pullRequests?.map((link) => [link.source, link.linkedAt]),
+        [["legacy", "2026-02-25T00:00:03.000Z"]],
+      );
+      assert.equal(snapshot.threads[0]?.pullRequests?.[0]?.pullRequest.number, 1);
+
+      // Stored links win over the legacy slot.
+      const second = {
+        pullRequest: {
+          number: 2,
+          title: "Second",
+          url: "https://github.com/Emanuele-web04/openclap/pull/2",
+          baseBranch: "main",
+          headBranch: "synara/second",
+          state: "merged",
+        },
+        source: "agent",
+        linkedAt: "2026-02-25T00:00:04.000Z",
+      };
+      yield* sql`
+        UPDATE projection_threads SET pull_requests_json = ${JSON.stringify([second])}
+        WHERE thread_id = 'thread-pr'
+      `;
+      const relinked = yield* snapshotQuery.getShellSnapshot();
+      assert.deepEqual(
+        relinked.threads[0]?.pullRequests?.map((link) => [link.source, link.pullRequest.number]),
+        [["agent", 2]],
+      );
+
+      // A list this build cannot fully decode is not fatal: it reads as the legacy slot.
+      yield* sql`
+        UPDATE projection_threads
+        SET pull_requests_json = ${JSON.stringify([second, { source: "future-source" }])}
+        WHERE thread_id = 'thread-pr'
+      `;
+      const undecodable = yield* snapshotQuery.getShellSnapshot();
+      assert.deepEqual(
+        undecodable.threads[0]?.pullRequests?.map((link) => [link.source, link.pullRequest.number]),
+        [["legacy", 1]],
+      );
     }),
   );
 
@@ -2601,6 +2644,120 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(firstThreadId.value, ThreadId.makeUnsafe("thread-first"));
       }
     }),
+  );
+
+  it.effect(
+    "counts outstanding background tasks on every shell read while the session is alive",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-11-13T10:00:00.000Z";
+        yield* sql`INSERT INTO projection_projects
+          (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES ('background-count-project', 'Background', '/tmp/background-count', '[]', ${now}, ${now})`;
+        const threads = {
+          alive: asThreadId("background-count-alive"),
+          finished: asThreadId("background-count-finished"),
+          stopped: asThreadId("background-count-stopped"),
+          errored: asThreadId("background-count-error"),
+          noSession: asThreadId("background-count-no-session"),
+        };
+        for (const threadId of Object.values(threads)) {
+          yield* sql`INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+            VALUES (${threadId}, 'background-count-project', 'Background',
+              '{"provider":"claudeAgent","model":"claude-opus-4-6"}', ${now}, ${now})`;
+          // Every thread holds the same still-running background work.
+          yield* sql`INSERT INTO projection_thread_activities
+            (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+            VALUES
+              (${`${threadId}-notice`}, ${threadId}, 'info', 'runtime.warning', 'Moved to background',
+                '{"nativeEventType":"background_tasks_changed","data":{"tasks":[{"task_id":"a"},{"task_id":"b"}]}}', 1, ${now}),
+              (${`${threadId}-patch`}, ${threadId}, 'info', 'task.updated', 'Task moved to background',
+                '{"taskId":"c","isBackgrounded":true}', 2, ${now})`;
+        }
+        for (const [threadId, status] of [
+          [threads.alive, "ready"],
+          [threads.finished, "running"],
+          [threads.stopped, "stopped"],
+          [threads.errored, "error"],
+        ] as const) {
+          yield* sql`INSERT INTO projection_thread_sessions
+            (thread_id, status, provider_name, runtime_mode, updated_at)
+            VALUES (${threadId}, ${status}, 'claudeAgent', 'full-access', ${now})`;
+        }
+        // Inserted out of id order so the fold must follow sequence: "a" ends,
+        // "c" ends and is backgrounded again, progress and unrelated warnings
+        // never count.
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES
+            ('alive-z-rebackground-c', ${threads.alive}, 'info', 'task.updated', 'Task moved to background',
+              '{"taskId":"c","isBackgrounded":true}', 6, ${now}),
+            ('alive-y-complete-a', ${threads.alive}, 'info', 'task.completed', 'Task completed',
+              '{"taskId":"a","status":"completed"}', 3, ${now}),
+            ('alive-x-pause-c', ${threads.alive}, 'info', 'task.updated', 'Task paused',
+              '{"taskId":"c","status":"paused"}', 4, ${now}),
+            ('alive-w-progress', ${threads.alive}, 'info', 'task.progress', 'Progress',
+              '{"taskId":"d","isBackgrounded":true}', 5, ${now}),
+            ('alive-v-warning', ${threads.alive}, 'info', 'runtime.warning', 'Runtime warning',
+              '{"nativeEventType":"other","data":{"tasks":[{"task_id":"e"}]}}', 7, ${now})`;
+        // Every task backgrounded on this thread has since ended.
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES
+            ('finished-a', ${threads.finished}, 'info', 'task.completed', 'Task completed',
+              '{"taskId":"a","status":"completed"}', 3, ${now}),
+            ('finished-b', ${threads.finished}, 'info', 'task.updated', 'Task killed',
+              '{"taskId":"b","status":"killed"}', 4, ${now}),
+            ('finished-c', ${threads.finished}, 'info', 'task.completed', 'Task failed',
+              '{"taskId":"c","status":"failed"}', 5, ${now})`;
+
+        const expected = {
+          [threads.alive]: 2,
+          [threads.finished]: 0,
+          [threads.stopped]: 0,
+          [threads.errored]: 0,
+          [threads.noSession]: 0,
+        };
+        const snapshot = yield* query.getShellSnapshot();
+        const batch = yield* query.getThreadShellsByIds(Object.values(threads));
+        const batchWithActivity = yield* query.getThreadShellsByIds(Object.values(threads), {
+          includeLatestMessageActivity: true,
+        });
+        for (const [threadId, count] of Object.entries(expected)) {
+          const id = asThreadId(threadId);
+          const single = Option.getOrThrow(yield* query.getThreadShellById(id));
+          assert.equal(single.pendingBackgroundTaskCount, count, `single ${threadId}`);
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === id)?.pendingBackgroundTaskCount,
+            count,
+            `snapshot ${threadId}`,
+          );
+          assert.equal(
+            batch.find((thread) => thread.id === id)?.pendingBackgroundTaskCount,
+            count,
+            `batch ${threadId}`,
+          );
+          assert.equal(
+            batchWithActivity.find((thread) => thread.id === id)?.pendingBackgroundTaskCount,
+            count,
+            `batch with activity ${threadId}`,
+          );
+        }
+
+        // The last outstanding tasks end: the count drops to zero.
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES
+            ('alive-end-b', ${threads.alive}, 'info', 'task.completed', 'Task completed',
+              '{"taskId":"b","status":"completed"}', 8, ${now}),
+            ('alive-end-c', ${threads.alive}, 'info', 'task.updated', 'Task updated',
+              '{"taskId":"c","isBackgrounded":false}', 9, ${now})`;
+        const settled = Option.getOrThrow(yield* query.getThreadShellById(threads.alive));
+        assert.equal(settled.pendingBackgroundTaskCount, 0);
+      }),
   );
 
   it.effect("hydrates shell reads from stored thread summary columns", () =>
@@ -2799,6 +2956,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatLastActivityAt: null,
           sidechatExpiredAt: null,
           lastKnownPr: null,
+          pullRequests: [],
           goal: "",
           goalStartedAt: null,
           goalPausedAt: null,
@@ -2827,6 +2985,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozeReminderAt: null,
           handoff: null,
+          pendingBackgroundTaskCount: 0,
           session: {
             threadId: ThreadId.makeUnsafe("thread-shell"),
             status: "ready",

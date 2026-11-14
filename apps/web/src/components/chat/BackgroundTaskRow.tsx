@@ -1,8 +1,8 @@
 // FILE: BackgroundTaskRow.tsx
-// Purpose: The one transcript row a background task keeps for its whole life:
-//          "`sleep 20 && echo done` · 12s [Stop]", then "finished 20s" /
-//          "failed · exit 1" / "stopped" in place. Borderless and muted, with
-//          the same tray glyph live or settled, like the transcript's tool rows.
+// Purpose: The transcript row a background task keeps once its tool run is
+//          expanded: "`sleep 20 && echo done` · running", then "finished 20s" /
+//          "failed · exit 1" / "stopped" in place. The transcript never ticks.
+//          Stop is available here only when the chat has no Environment panel.
 // Layer: Web chat presentation component
 // Exports: BackgroundTaskRow, BackgroundTaskStopContext
 
@@ -15,11 +15,9 @@ import type { WorkLogBackgroundTask } from "../../workLog";
 import { deriveLiteralCommand } from "../../lib/toolCallLabel";
 import { Button } from "../ui/button";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
-import { LiveElapsedTimer } from "./LiveElapsedTimer";
 import { useTranslation } from "~/i18n";
 
-// Stops a running background task; absent where the transcript cannot act on
-// the thread (read-only surfaces).
+// ChatView supplies Stop only for the transcript that owns the task.
 export const BackgroundTaskStopContext = createContext<((taskId: string) => void) | null>(null);
 
 export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSizePx: number }) {
@@ -27,9 +25,8 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
 
   const { task, fontSizePx } = props;
   const onStop = useContext(BackgroundTaskStopContext);
-  // A running task's clock ticks in LiveElapsedTimer; settled ones use their end.
+  // A running task shows no clock here; settled ones keep how long they ran.
   const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt, t);
-  const running = task.status === "running";
   const command = task.command ? deriveLiteralCommand(task.command) : null;
   const subject = command ?? task.description ?? t("chat:backgroundTask");
 
@@ -48,7 +45,6 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         )}
         aria-hidden
       >
-        {/* The ticking clock and Stop carry liveness; the glyph stays put. */}
         <BackgroundTrayIcon className="size-3.5" />
       </span>
       <span className={cn("min-w-0 truncate leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}>
@@ -61,17 +57,13 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         )}
       >
         <span
-          className={cn(running && "sr-only", task.status === "failed" && "text-destructive")}
+          className={cn(task.status === "failed" && "text-destructive")}
           data-background-task-label="true"
         >
           {status.label}
         </span>
-        {running ? (
-          <LiveElapsedTimer startedAt={task.startedAt} />
-        ) : status.elapsed ? (
-          <span>{status.elapsed}</span>
-        ) : null}
-        {running && onStop ? (
+        {task.status !== "running" && status.elapsed ? <span>{status.elapsed}</span> : null}
+        {task.status === "running" && onStop ? (
           <Button
             type="button"
             variant="ghost"

@@ -206,6 +206,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
+    deepEqualJson(left.pullRequests ?? [], right.pullRequests ?? []) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
     (left.isProjectImport ?? false) === (right.isProjectImport ?? false) &&
     deepEqualJson(left.claudeCacheReview ?? null, right.claudeCacheReview ?? null) &&
@@ -224,6 +225,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
     left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
@@ -1887,6 +1889,10 @@ export function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const pullRequests =
+    previous?.pullRequests && deepEqualJson(previous.pullRequests, incoming.pullRequests ?? [])
+      ? previous.pullRequests
+      : (incoming.pullRequests ?? []);
   const pinnedMessages =
     previous?.pinnedMessages &&
     deepEqualJson(previous.pinnedMessages, incoming.pinnedMessages ?? null)
@@ -2074,6 +2080,7 @@ export function normalizeThreadFromReadModel(
     sidechatLastActivityAt: incoming.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
+    pullRequests,
     handoff,
     ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
     usageLimitRecovery,
@@ -2100,6 +2107,10 @@ export function normalizeThreadFromReadModel(
       : {}),
     ...(resolvedHasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
+      : {}),
+    // Only thread shells carry the server's background-task count; detail keeps it.
+    ...(previous?.pendingBackgroundTaskCount !== undefined
+      ? { pendingBackgroundTaskCount: previous.pendingBackgroundTaskCount }
       : {}),
     turnDiffSummaries,
     activities,
@@ -2161,6 +2172,10 @@ export function normalizeThreadShellSnapshot(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const pullRequests =
+    previous?.pullRequests && deepEqualJson(previous.pullRequests, incoming.pullRequests ?? [])
+      ? previous.pullRequests
+      : (incoming.pullRequests ?? []);
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? resolveInitialLastVisitedAt(incoming, options);
   const nextWorktreePath = incoming.worktreePath;
@@ -2228,6 +2243,7 @@ export function normalizeThreadShellSnapshot(
     sidechatLastActivityAt: incoming.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: incoming.sidechatExpiredAt ?? null,
     lastKnownPr,
+    pullRequests,
     handoff,
     ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
     usageLimitRecovery,
@@ -2258,6 +2274,9 @@ export function normalizeThreadShellSnapshot(
       : {}),
     ...(incoming.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: incoming.hasActionableProposedPlan }
+      : {}),
+    ...(incoming.pendingBackgroundTaskCount !== undefined
+      ? { pendingBackgroundTaskCount: incoming.pendingBackgroundTaskCount }
       : {}),
     ...(previous?.pendingInteractions !== undefined
       ? { pendingInteractions: previous.pendingInteractions }
@@ -2417,15 +2436,19 @@ export function resolveThreadSidebarMetadata(
         session: thread.session,
       }),
     ),
-    // Thread-wide, so the sidebar keeps showing background work after a
-    // finished subagent wakes the agent into a newer turn.
-    pendingBackgroundWorkCount: Math.max(
-      derivePendingBackgroundWork({
-        activities: thread.activities,
-        latestTurn: thread.latestTurn,
-        session: thread.session,
-      })?.count ?? 0,
-      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }),
-    ),
+    // The server's count covers threads whose detail is not live here; local
+    // activity is only a fallback for servers that do not send it. Thread-wide,
+    // so background work stays visible after a finished subagent wakes the
+    // agent into a newer turn.
+    pendingBackgroundWorkCount:
+      thread.pendingBackgroundTaskCount ??
+      Math.max(
+        derivePendingBackgroundWork({
+          activities: thread.activities,
+          latestTurn: thread.latestTurn,
+          session: thread.session,
+        })?.count ?? 0,
+        countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }),
+      ),
   };
 }

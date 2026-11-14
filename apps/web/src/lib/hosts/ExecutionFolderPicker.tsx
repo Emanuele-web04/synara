@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "@synara/contracts";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import {
   Dialog,
   DialogPopup,
@@ -33,6 +34,8 @@ export function ExecutionFolderPicker({
   const pathRevision = useRef(0);
   const [requested, setRequested] = useState({ path: "~/" });
   const [listing, setListing] = useState<FilesystemBrowseResult | null>(null);
+  // A failed folder returns to the last readable one so Up and its folders stay usable.
+  const lastListing = useRef<FilesystemBrowseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -40,17 +43,22 @@ export function ExecutionFolderPicker({
     void browse({ partialPath: requested.path }).then(
       (result) => {
         if (cancelled) return;
+        lastListing.current = result;
         setListing(result);
         // A slow listing must not overwrite a path the user has started typing.
         if (pathRevision.current === revision) setPath(result.parentPath);
       },
       (cause: unknown) => {
-        if (!cancelled)
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Cannot read this folder. Check the connection and try again.",
-          );
+        // A remote host's browse runs in its workspace frame, so its Error fails a
+        // parent-realm `instanceof`; RPC defects also arrive as plain strings.
+        if (cancelled) return;
+        setListing(lastListing.current);
+        setError(
+          describeErrorMessage(
+            cause,
+            "Cannot read this folder. Check the connection and try again.",
+          ),
+        );
       },
     );
     return () => {
@@ -151,7 +159,7 @@ export function ExecutionFolderPicker({
             Cancel
           </Button>
           <Button
-            disabled={!listing || Boolean(error) || path.trim() !== listing.parentPath}
+            disabled={!listing || path.trim() !== listing.parentPath}
             onClick={() => listing && onClose(listing.parentPath)}
           >
             Use folder

@@ -10,6 +10,7 @@ import type {
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   OrchestrationThread,
   OrchestrationProposedPlanId,
   PinnedMessage,
@@ -268,11 +269,14 @@ export interface Thread extends ThreadWorkspaceState {
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  /** Server-authoritative outstanding background tasks; absent from older servers. */
+  pendingBackgroundTaskCount?: number;
   pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
@@ -325,11 +329,14 @@ export interface ThreadShell extends ThreadWorkspaceState {
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  /** Server-authoritative outstanding background tasks; absent from older servers. */
+  pendingBackgroundTaskCount?: number;
   pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
@@ -384,6 +391,7 @@ export interface SidebarThreadSummary {
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
 }
 
 /** Lightweight composer identity that ignores live turn/status churn. */

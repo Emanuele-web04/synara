@@ -3,6 +3,7 @@ import {
   parseComputerInvocation,
   resolveComputerInvocationMode,
 } from "@synara/shared/computerInvocation";
+import { resolveComputerControlDefault } from "../computerControlMode";
 import {
   MessageId,
   OrchestrationThreadActivity,
@@ -303,7 +304,7 @@ import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
-import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
+import { hasUnseenSnoozeReturn, resolveThreadProjectLabel } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "@synara/profile-ui/logo";
 import { AsciiWaveBackground } from "./chat/AsciiWaveBackground";
@@ -316,6 +317,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
+import { BackgroundTaskStopContext } from "./chat/BackgroundTaskRow";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
@@ -435,7 +437,7 @@ import {
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
-  COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
+  COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
   COMPOSER_SINGLE_ROW_EDITOR_CLASS_NAME,
@@ -486,6 +488,7 @@ import { useComposerDiscovery } from "./chat/useComposerDiscovery";
 import { useComposerReferences } from "./chat/useComposerReferences";
 import { useComposerSingleRow } from "./chat/useComposerSingleRow";
 import { useComposerVoiceController } from "./chat/useComposerVoiceController";
+import { useStopBackgroundTask } from "./chat/useThreadBackgroundTasks";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
@@ -1554,7 +1557,7 @@ export default function ChatView({
   // explicit default; clearing the draft removes request activation.
   const computerControlMode = resolveComputerInvocationMode({
     messageText: prompt,
-    enableComputerControl: settings.computerControlEnabled,
+    enableComputerControl: resolveComputerControlDefault(settings.computerControlEnabled),
   });
   const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
@@ -1929,6 +1932,10 @@ export default function ChatView({
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
+  // Embedded and editor chats have no Environment panel to reach their tasks.
+  const backgroundTaskStopThreadId =
+    !environmentEnabled && isServerThread && !isSidechatExpired ? activeThreadId : null;
+  const stopBackgroundTask = useStopBackgroundTask(backgroundTaskStopThreadId);
   const isComposerEditorDisabled =
     isConnecting ||
     isComposerApprovalState ||
@@ -3962,31 +3969,6 @@ export default function ChatView({
       });
     });
   }, [onInterrupt, t]);
-
-  // Background command rows offer Stop while their task runs. A rejected stop
-  // leaves the row running, so the failure is reported instead of swallowed.
-  const onStopBackgroundTask = useCallback(
-    (taskId: string) => {
-      const api = readNativeApi();
-      if (!api || !activeThread) return;
-      void api.orchestration
-        .dispatchCommand({
-          type: "thread.task.stop",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          taskId,
-          createdAt: new Date().toISOString(),
-        })
-        .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: t("chat:couldNotStopTheBackgroundTask"),
-            description: error instanceof Error ? error.message : t("chat:tryAgainInAMoment"),
-          });
-        });
-    },
-    [activeThread, t],
-  );
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -6035,11 +6017,7 @@ export default function ChatView({
           align="start"
           side="top"
           triggerVariant="ghost"
-          triggerClassName={cn(
-            "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
-            COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
-            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
-          )}
+          triggerClassName={COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME}
           showResetToHome={Boolean(
             isGroupContainer ? resolvedThreadWorkingDirectory : resolvedThreadWorktreePath,
           )}
@@ -6060,11 +6038,7 @@ export default function ChatView({
           align="start"
           side="top"
           triggerVariant="ghost"
-          triggerClassName={cn(
-            "h-8 px-2 py-1 sm:h-7 sm:px-2.5",
-            COMPOSER_FOLDER_PICKER_CAPSULE_HOVER_CLASS_NAME,
-            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
-          )}
+          triggerClassName={COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME}
           selectionMode="project"
           selectedProjectId={activeProject.id}
           selectedWorkspaceRoot={activeProject.cwd}
@@ -6876,6 +6850,20 @@ export default function ChatView({
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
+          projectCrumb={
+            // Only the plain title row (tabs off) names the project. The editor rail already
+            // sits inside it, and chats outside a project (home chats, groups) have none.
+            !showOpenThreadTabs &&
+            !isEditorRail &&
+            !isContainerLandingProject &&
+            activeProject?.kind === "project"
+              ? {
+                  name: resolveThreadProjectLabel(activeProject),
+                  cwd: activeProject.cwd,
+                  appearance: activeProject.appearance ?? null,
+                }
+              : null
+          }
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
@@ -7208,7 +7196,6 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    onStopBackgroundTask={onStopBackgroundTask}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
@@ -7537,7 +7524,11 @@ export default function ChatView({
   );
   return (
     <ChatLinkActionsContext.Provider value={chatLinkActions}>
-      {chatView}
+      <BackgroundTaskStopContext.Provider
+        value={backgroundTaskStopThreadId ? stopBackgroundTask : null}
+      >
+        {chatView}
+      </BackgroundTaskStopContext.Provider>
     </ChatLinkActionsContext.Provider>
   );
 }

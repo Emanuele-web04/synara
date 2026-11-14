@@ -172,20 +172,21 @@ Non-Git folders can still be useful for simpler work, but they do not provide th
 review guarantees.
 
 A project can also span several folders, such as a frontend, an API, and a shared package that
-change together. Add them under **Source folders** when you create the project. One folder is the
-primary folder: it is the project's working directory and keeps every single-folder behavior. The
-agent can read and edit the other folders too.
+change together. Add them under **Source folders** when you create the project, or later from
+**Edit project**. One folder is the primary folder: it is the project's working directory and keeps
+every single-folder behavior. The agent can read and edit the other folders too.
 
-Multi-folder projects have two limits for now:
+Multi-folder projects have these limits for now:
 
-- Chats run in Local mode. Worktree mode would isolate only the primary folder while the others
-  are edited live, so Synara refuses it.
+- Worktree mode isolates only the primary folder. The chat works in a worktree of the primary
+  folder, while the other folders are edited directly.
 - Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
   of silently working without them.
+- **Edit project** adds and removes the other folders; the primary folder moves only with
+  **Change project path**. A running chat picks up the new folder set on its next turn.
 
-The folder set is fixed when the project is created. Git actions, checkpoint diffs, and file undo
-cover only the primary folder. Edits in additional folders must be reviewed and
-recovered in those folders separately.
+Git actions, checkpoint diffs, and file undo cover only the primary folder. Edits in additional
+folders must be reviewed and recovered in those folders separately.
 
 ## Tasks and turns
 
@@ -516,6 +517,16 @@ baseline, mismatched patch, compacted payload or older event without integrity m
 unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
 checkpoints; a live preview is not proof that a turn finished.
 
+Turn and thread diffs, their changed-file lists and file Undo leave out history the task only moved
+onto: a merged, pulled, rebased or checked-out branch, or a reset to an existing commit. Synara
+records `HEAD` and a worktree reflog anchor on each checkpoint. It omits a path only when it was
+clean at both ends and its final content matches a change brought in by existing history. When a
+merge or rebase produces new commits, its incoming branch must have changed that path since the
+common ancestor. Local edits, conflict resolutions, commits made during the turn and uncommitted
+work a reset discarded stay visible. If Git history between the anchors is unavailable or
+ambiguous, Synara keeps the full diff and refuses file Undo when the patch overlaps changes
+between the recorded HEADs. Older checkpoints without a recorded HEAD keep the full diff.
+
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;
 separate Git worktrees remain independent. Stop the active turn before retrying Undo.
@@ -544,6 +555,31 @@ and Hub output discovery is unavailable for turns without a prepared Hub baselin
 also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
 files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
 activity keys remain unchanged for client and persisted-history compatibility.
+
+### Linked pull requests
+
+A chat keeps a list of the pull requests linked to it, each with where the link came from:
+
+- **Created**: the Create PR action (linked by the server, so a closed window cannot drop it), or
+  an agent's `gh pr create` that Synara recognized in the command output.
+- **Agent**: the agent called `synara_set_thread_pull_request` for a PR it created, took over, or
+  pushed to. Agents link every PR of a stack and do not link PRs they only read or review.
+- **User**: you linked it from the Environment panel, or pushed to its branch with a git action.
+- **Checkout**: the chat was started from a checked-out PR, or from another chat's workspace
+  together with that chat's current PR.
+- **Branch**: Synara found a PR on the chat's branch at the end of a turn.
+
+Linking adds to the list; it never replaces another PR. Branch discovery only manages its own
+links, so a PR linked any other way stays with the chat after the branch changes, and the
+sidebar badge keeps showing it. The current PR is the open one (the most recently linked open
+PR for a stack), otherwise the most recently linked one. The server refreshes the state of open
+linked PRs (every few minutes, faster for active chats) and stops once a PR is merged or closed;
+a failed refresh keeps the last known state.
+
+The Environment panel's pull request section shows the current PR and lists the other linked
+PRs. **Link pull request…** links a PR by URL or number, and **Unlink from this chat** removes a
+link without closing or changing the PR on GitHub. An unlinked PR is not re-added automatically
+by branch discovery or command recognition.
 
 ## Hubs
 

@@ -17,12 +17,12 @@ import {
   computeStableMessagesTimelineRows,
   collectInlineVisuals,
   deriveMessagesTimelineRows,
+  deriveContinuedAssistantMessageIds,
   deriveTerminalAssistantMessageIds,
   deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
   formatTurnHeaderLabel,
   formatTurnResumedBy,
-  isPinnedBackgroundTaskEntry,
   isPinnedSubagentRunEntry,
   normalizeCompactToolLabel,
   summarizeTurnFailureReason,
@@ -565,6 +565,27 @@ describe("deriveTerminalAssistantMessageIds", () => {
         { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:04Z" },
       ]),
     ).toEqual(new Set(["a2", "a3"]));
+  });
+});
+
+describe("deriveContinuedAssistantMessageIds", () => {
+  it("marks answers a wake carried on, but not ones a user message ended", () => {
+    const messages = [
+      { id: "u1", role: "user" as const, createdAt: "2026-01-01T00:00:00Z" },
+      { id: "a1", role: "assistant" as const, createdAt: "2026-01-01T00:00:01Z" },
+      { id: "wake", role: "user" as const, createdAt: "2026-01-01T00:00:02Z" },
+      { id: "a2", role: "assistant" as const, createdAt: "2026-01-01T00:00:03Z" },
+      { id: "u2", role: "user" as const, createdAt: "2026-01-01T00:00:04Z" },
+      { id: "a3", role: "assistant" as const, createdAt: "2026-01-01T00:00:05Z" },
+    ];
+
+    expect(
+      deriveContinuedAssistantMessageIds(
+        messages,
+        deriveTerminalAssistantMessageIds(messages),
+        new Set(["wake"]),
+      ),
+    ).toEqual(new Set(["a1"]));
   });
 });
 
@@ -1185,6 +1206,44 @@ describe("deriveMessagesTimelineRows", () => {
     expect(messageRow(rows, "report-2")?.collapsedTurnItems).toBeUndefined();
   });
 
+  it("ends a reply that background tasks carried on only once, on its last answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+    });
+
+    expect(messageRow(rows, "launched")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-2")?.assistantResponseContinues).toBeUndefined();
+    // Each response still owns its terminal answer (turn header, changed files).
+    expect(messageRow(rows, "launched")?.showAssistantCopyButton).toBe(true);
+    expect(messageRow(rows, "report-2")?.showAssistantCopyButton).toBe(true);
+  });
+
+  it("copies the whole reply from its last answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+    });
+
+    expect(messageRow(rows, "report-2")?.assistantReplyCopyText).toBe(
+      "Launched 2 subagents.\n\nReport 1\n\nReport 2",
+    );
+    expect(messageRow(rows, "launched")?.assistantReplyCopyText).toBeUndefined();
+  });
+
+  it("keeps the previous footer until the woken response writes an answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }).slice(0, -1),
+    });
+
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBeUndefined();
+  });
+
   it("keeps the previous response folded before the woken response writes anything", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
@@ -1244,41 +1303,6 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     expect(messageRow(rows, "watching")).toBeUndefined();
     expect(messageRow(rows, "done")?.turnHeader?.resumedBy).toBeNull();
-  });
-
-  it("pins only background tasks that outlived their turn", () => {
-    const runningTask = {
-      taskId: "task",
-      taskType: "local_bash",
-      description: "dev server",
-      command: "bun run dev",
-      status: "running" as const,
-      startedAt: "2026-01-01T00:00:00Z",
-      completedAt: null,
-      exitCode: null,
-    };
-    const plainWork: WorkLogEntry = {
-      id: "launch",
-      createdAt: "2026-01-01T00:00:00Z",
-      label: "Command run",
-      tone: "tool",
-    };
-    const turnEndedAt = "2026-01-01T00:05:00Z";
-    const pinned = (completedAt: string | null) =>
-      isPinnedBackgroundTaskEntry(
-        {
-          ...plainWork,
-          backgroundTask: completedAt
-            ? { ...runningTask, status: "stopped", completedAt }
-            : runningTask,
-        },
-        turnEndedAt,
-      );
-    expect(pinned(null)).toBe(true);
-    expect(pinned("2026-01-01T00:06:00Z")).toBe(true);
-    // The turn stopped its own server: the row folds with the turn's work.
-    expect(pinned("2026-01-01T00:04:00Z")).toBe(false);
-    expect(isPinnedBackgroundTaskEntry(plainWork, turnEndedAt)).toBe(false);
   });
 
   const outlivingTaskEntries = (
@@ -1342,140 +1366,6 @@ describe("deriveMessagesTimelineRows", () => {
       }),
     ];
   };
-
-  it.each([
-    { name: "successful consumed completion", options: {}, pinned: false },
-    {
-      name: "follow-up reusing its launch turn id",
-      options: { reuseLaunchTurn: true },
-      pinned: false,
-    },
-    { name: "still running", options: { status: "running" as const }, pinned: true },
-    { name: "failed task", options: { status: "failed" as const }, pinned: true },
-    { name: "stopped task", options: { status: "stopped" as const }, pinned: true },
-    { name: "live follow-up", options: { streaming: true }, pinned: true },
-    {
-      name: "different task with the same description",
-      options: { completionId: "other-task" },
-      pinned: true,
-    },
-    {
-      name: "reused task id, different completion",
-      options: { completionEventId: "new-completion" },
-      pinned: true,
-    },
-    {
-      name: "task.updated before the waking task.completed",
-      options: { completionAt: "2026-01-01T00:01:00.500Z" },
-      pinned: false,
-    },
-    { name: "different task type", options: { completionType: "local_agent" }, pinned: true },
-    { name: "different launching turn", options: { completionTurnId: "other-turn" }, pinned: true },
-    { name: "unrelated reply after a user request", options: { userBoundary: true }, pinned: true },
-    {
-      name: "missing completion provenance",
-      options: { userBoundary: true, omitWake: true },
-      pinned: true,
-    },
-  ])("keeps correct task visibility for $name", ({ options, pinned }) => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      timelineEntries: outlivingTaskEntries(options),
-      ...(options.streaming
-        ? {
-            isWorking: true,
-            activeTurnInProgress: true,
-            activeTurnId: TurnId.makeUnsafe("followup-turn"),
-          }
-        : {}),
-    });
-    const launched = messageRow(rows, "launched")!;
-    const task = launched.collapsedTurnItems?.find(
-      (item) => item.kind === "work" && item.entry.backgroundTask,
-    );
-    expect(task?.kind).toBe("work");
-    if (task?.kind !== "work") return;
-    expect(
-      isPinnedBackgroundTaskEntry(
-        task.entry,
-        launched.turnHeader?.endedAt ?? null,
-        task.backgroundTaskConsumed,
-      ),
-    ).toBe(pinned);
-    expect(messageRow(rows, "launched")?.message.text).toBe("Build launched");
-    expect(messageRow(rows, "report")?.message.text).toBe("App ready");
-  });
-
-  it.each(["failed", "stopped", "interrupted"] as const)(
-    "does not consume a successful task when its follow-up is %s",
-    (outcome) => {
-      const rows = deriveMessagesTimelineRows({
-        ...baseInput,
-        timelineEntries: outlivingTaskEntries(),
-        turnTimingByTurnId: new Map([
-          [
-            TurnId.makeUnsafe("followup-turn"),
-            {
-              startedAt: "2026-01-01T00:01:00Z",
-              completedAt: "2026-01-01T00:01:03Z",
-              interrupted: outcome === "interrupted",
-              failed: outcome === "failed",
-              stoppedByUser: outcome === "stopped",
-            },
-          ],
-        ]),
-      });
-      const launched = messageRow(rows, "launched")!;
-      const task = launched.collapsedTurnItems?.find(
-        (item) => item.kind === "work" && item.entry.backgroundTask,
-      );
-      expect(task?.kind).toBe("work");
-      if (task?.kind !== "work") return;
-      expect(
-        isPinnedBackgroundTaskEntry(
-          task.entry,
-          launched.turnHeader?.endedAt ?? null,
-          task.backgroundTaskConsumed,
-        ),
-      ).toBe(true);
-    },
-  );
-
-  it.each(["failed", "stopped", "interrupted"] as const)(
-    "keeps a task visible when a reused-turn follow-up has stale launch timing flagged %s",
-    (outcome) => {
-      const rows = deriveMessagesTimelineRows({
-        ...baseInput,
-        timelineEntries: outlivingTaskEntries({ reuseLaunchTurn: true }),
-        turnTimingByTurnId: new Map([
-          [
-            TurnId.makeUnsafe("launch-turn"),
-            {
-              startedAt: "2026-01-01T00:00:01Z",
-              completedAt: "2026-01-01T00:00:03Z",
-              failed: outcome === "failed",
-              stoppedByUser: outcome === "stopped",
-              interrupted: outcome === "interrupted",
-            },
-          ],
-        ]),
-      });
-      const launched = messageRow(rows, "launched")!;
-      const task = launched.collapsedTurnItems?.find(
-        (item) => item.kind === "work" && item.entry.backgroundTask,
-      );
-      expect(task?.kind).toBe("work");
-      if (task?.kind !== "work") return;
-      expect(
-        isPinnedBackgroundTaskEntry(
-          task.entry,
-          launched.turnHeader?.endedAt ?? null,
-          task.backgroundTaskConsumed,
-        ),
-      ).toBe(true);
-      expect(messageRow(rows, "report")?.message.text).toBe("App ready");
-    },
-  );
 
   it("times consecutive native task wakes from the first without accepting a stale turn end", () => {
     const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
@@ -1560,16 +1450,11 @@ describe("deriveMessagesTimelineRows", () => {
       ],
     });
     expect(
-      messageRow(rows, "launch")
-        ?.collapsedTurnItems?.filter((item) => item.kind === "work" && item.entry.backgroundTask)
-        .map((item) => item.kind === "work" && item.backgroundTaskConsumed),
-    ).toEqual([true, true]);
-    expect(
       rows.filter((row) => row.kind === "message" && row.message.role === "assistant"),
     ).toHaveLength(2);
   });
 
-  it("invalidates the launch row when its task is consumed without moving either final answer", () => {
+  it("keeps the launch row when its task's wake settles the follow-up", () => {
     const entries = outlivingTaskEntries({ streaming: true });
     const first = computeStableMessagesTimelineRows(
       deriveMessagesTimelineRows({
@@ -1591,9 +1476,7 @@ describe("deriveMessagesTimelineRows", () => {
     );
     const firstLaunch = messageRow(first.result, "launched")!;
     const secondLaunch = messageRow(second.result, "launched")!;
-    expect(secondLaunch).not.toBe(firstLaunch);
-    expect(secondLaunch.id).toBe(firstLaunch.id);
-    expect(secondLaunch.message).toBe(firstLaunch.message);
+    expect(secondLaunch).toBe(firstLaunch);
     expect(collapsedSignature(secondLaunch)).toEqual(["work:launch"]);
     expect(collapsedSignature(messageRow(second.result, "report")!)).toEqual([
       "work:task",
@@ -3253,9 +3136,7 @@ const chunkSignature = (items: ReadonlyArray<CollapsedTurnItem>): string[] =>
   chunkCollapsedTurnItems(items).map((chunk) =>
     chunk.kind === "tool-group"
       ? `group:${chunk.id}:${chunk.entries.map((entry) => entry.id).join("+")}`
-      : chunk.kind === "background-group"
-        ? `background:${chunk.entries.map((entry) => entry.id).join("+")}`
-        : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
+      : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
   );
 
 describe("chunkCollapsedTurnItems", () => {
@@ -3284,7 +3165,7 @@ describe("chunkCollapsedTurnItems", () => {
     ).toEqual(["group:w1:w1+w2", "item:work:err", "group:w3:w3+w4"]);
   });
 
-  it("folds three or more background task rows in a row into one group", () => {
+  it("folds background task launches into the surrounding tool run", () => {
     const background = (id: string, status: "running" | "finished" | "stopped") =>
       toolItem(id, {
         backgroundTask: {
@@ -3300,15 +3181,14 @@ describe("chunkCollapsedTurnItems", () => {
       });
     expect(
       chunkSignature([
+        toolItem("w1"),
         background("b1", "finished"),
-        background("b2", "finished"),
-        background("b3", "finished"),
-        background("b4", "stopped"),
+        background("b2", "stopped"),
         narrationItem("a1"),
-        background("b5", "running"),
-        background("b6", "running"),
+        background("b3", "running"),
+        toolItem("w2"),
       ]),
-    ).toEqual(["background:b1+b2+b3+b4", "item:narration:a1", "item:work:b5", "item:work:b6"]);
+    ).toEqual(["group:w1:w1+b1+b2", "item:narration:a1", "group:b3:b3+w2"]);
   });
 });
 

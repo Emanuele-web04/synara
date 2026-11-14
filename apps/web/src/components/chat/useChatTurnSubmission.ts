@@ -1,6 +1,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import { resolveComputerControlDefault } from "~/computerControlMode";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
 import {
   prepareComputerPermissionGuide,
@@ -409,7 +410,7 @@ export function useChatTurnSubmission({
         // command already froze its mode and generation and must not be inferred again.
         const mode = resolveComputerInvocationMode({
           messageText: promptForSend,
-          enableComputerControl: settings.computerControlEnabled,
+          enableComputerControl: resolveComputerControlDefault(settings.computerControlEnabled),
         });
         dispatchSettings = {
           ...dispatchSettings,
@@ -680,10 +681,7 @@ export function useChatTurnSubmission({
       // creating a worktree the turn would never use.
       const projectFolderIssue =
         (activeProject.additionalFolders?.length ?? 0) > 0
-          ? projectFoldersSessionIssue({
-              provider: selectedModelSelectionForSend.provider,
-              worktree: envModeForSend === "worktree",
-            })
+          ? projectFoldersSessionIssue({ provider: selectedModelSelectionForSend.provider })
           : null;
       if (projectFolderIssue !== null) {
         toastManager.add({ type: "error", title: projectFolderIssue });

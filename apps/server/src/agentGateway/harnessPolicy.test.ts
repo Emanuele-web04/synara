@@ -48,8 +48,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
     assert.include(policy, "synara_set_thread_pull_request");
-    assert.include(policy, "current thread's own deliverable");
-    assert.include(policy, "only reviews, references, or discusses");
+    assert.include(policy, "for this thread's work");
+    assert.include(policy, "links add up");
+    assert.include(policy, "only read, review, or mention");
     assert.include(policy, "use browser_* autonomously");
     assert.include(policy, "canonical, complete control surface");
     assert.include(policy, "never substitute Chrome");

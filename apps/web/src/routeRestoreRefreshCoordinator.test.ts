@@ -81,6 +81,7 @@ describe("route restore refresh coordinator", () => {
         repairState,
         applyShellSnapshot: (snapshot) => {
           hasThreads = snapshot.threads.length > 0;
+          return true;
         },
         hasThreads: () => hasThreads,
       }),
@@ -113,6 +114,7 @@ describe("route restore refresh coordinator", () => {
       applyShellSnapshot: (snapshot) => {
         appliedShellSnapshots.push(snapshot);
         hasThreads = snapshot.threads.length > 0;
+        return true;
       },
       hasThreads: () => hasThreads,
     });
@@ -123,6 +125,28 @@ describe("route restore refresh coordinator", () => {
     expect(repairState).not.toHaveBeenCalled();
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
     expect(appliedShellSnapshots).toHaveLength(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
+  });
+
+  it("continues recovery when the shell fence rejects an empty proof", async () => {
+    let hasThreads = false;
+    const getShellSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({ ...shellSnapshot([]), emptyThreadShellVerified: true })
+      .mockResolvedValueOnce(shellSnapshot(["thread-1"]));
+    const recovery = runEmptyRouteRestoreRefresh({
+      getShellSnapshot,
+      getSnapshot: vi.fn(),
+      repairState: vi.fn(),
+      applyShellSnapshot: (snapshot) => {
+        hasThreads = snapshot.threads.length > 0;
+        return hasThreads;
+      },
+      hasThreads: () => hasThreads,
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(recovery).resolves.toBe("restored");
+    expect(getShellSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("polls before repairing when projections stay empty during catch-up", async () => {
@@ -138,6 +162,7 @@ describe("route restore refresh coordinator", () => {
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
+        return true;
       },
       hasThreads: () => hasThreads,
     });
@@ -165,6 +190,7 @@ describe("route restore refresh coordinator", () => {
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
+        return true;
       },
       hasThreads: () => hasThreads,
     });
@@ -200,6 +226,7 @@ describe("route restore refresh coordinator", () => {
         repairState,
         applyShellSnapshot: (snapshot) => {
           hasThreads = snapshot.threads.length > 0;
+          return true;
         },
         hasThreads: () => hasThreads,
       }),
@@ -254,6 +281,7 @@ describe("route restore refresh coordinator", () => {
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
+        return true;
       },
       hasThreads: () => hasThreads,
     });

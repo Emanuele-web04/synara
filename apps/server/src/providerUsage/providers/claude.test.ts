@@ -67,6 +67,13 @@ function rateLimitedResponse(retryAfterSeconds?: number): Response {
   return new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
 }
 
+function cloudflareBlockResponse(): Response {
+  return new Response("<html><title>Attention Required! | Cloudflare</title></html>", {
+    status: 403,
+    headers: { "Content-Type": "text/html; charset=UTF-8", "cf-mitigated": "challenge" },
+  });
+}
+
 function stubOutboundFetch(
   fetchMock: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
 ): void {
@@ -582,6 +589,93 @@ describe("claudeUsageFetcher", () => {
     const duringCooldown = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
     expect(duringCooldown.status).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("claudeUsageFetcher Cloudflare edge blocks", () => {
+  it("keeps the last values without a CLI nudge or source fallthrough on a Cloudflare 403", async () => {
+    const { configDir } = makeClaudeConfigDir({
+      accessToken: "edge-blocked-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const { homeDir } = makeClaudeHome({
+      accessToken: "fallback-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+
+    let blocked = false;
+    const fetchMock = vi.fn(async () =>
+      blocked
+        ? cloudflareBlockResponse()
+        : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } }),
+    );
+    stubOutboundFetch(fetchMock);
+
+    const ctx = {
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: configDir },
+      platform: "linux" as const,
+      nowMs: NOW_MS,
+    };
+    expect((await claudeUsageFetcher.fetch(ctx)).status).toBe("ok");
+
+    blocked = true;
+    const snapshot = await claudeUsageFetcher.fetch(ctx);
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.stale).toBe(true);
+    expect(snapshot.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+    expect(snapshot.detail).toContain("HTTP 403");
+    expect(snapshot.detail).not.toContain("rate-limiting");
+    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Backs off briefly instead of re-hitting the blocked edge on every poll.
+    await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 61_000 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports a transient error, not needs-auth, when blocked before any successful fetch", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "cold-edge-blocked-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+    stubOutboundFetch(async () => cloudflareBlockResponse());
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.detail).toContain("HTTP 403");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("still nudges the CLI when Anthropic rejects the token with a JSON 403", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "json-403-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+    stubOutboundFetch(async () => jsonResponse({ error: { type: "permission_error" } }, 403));
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+    expect(runMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -3,9 +3,14 @@ import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, expect, it, vi } from "vitest";
 import { HostConnectionRegistry } from "./registry";
 import { AccountApiError } from "@synara/shared/account";
-import { backgroundRetryDelayMs, superviseHostConnections } from "./supervisor";
+import {
+  attentionRetryDelayMs,
+  backgroundRetryDelayMs,
+  superviseHostConnections,
+} from "./supervisor";
 import { RemoteHostTrustError } from "./failure";
 import { controllerProtocol, HostDialError } from "./dialer";
+import { HOST_SESSION_CLOSE_AUTH_FAILED } from "@synara/contracts";
 import type { HostConnectionsPort } from "./port";
 
 afterEach(() => {
@@ -85,6 +90,8 @@ it("bounds restoration to two dials and never resumes after stop during pending 
 
 it("waits for trust repair, then recovers from a transient failure even between supervisor ticks", async () => {
   vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   const registry = new HostConnectionRegistry();
   const host = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(host, "listening");
@@ -127,13 +134,16 @@ it("waits for trust repair, then recovers from a transient failure even between 
   };
   const stop = superviseHostConnections(port, registry);
   try {
-    await vi.advanceTimersByTimeAsync(60000);
+    await vi.advanceTimersByTimeAsync(59_000);
     expect(connect).toHaveBeenCalledTimes(1);
+    // Trust failures stay parked between slow retries instead of forever.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(2);
     desired = false;
     await vi.advanceTimersByTimeAsync(1000);
     desired = true;
     await vi.advanceTimersByTimeAsync(1000);
-    expect(connect).toHaveBeenCalledTimes(2);
+    expect(connect).toHaveBeenCalledTimes(3);
     failure = undefined;
     await port.connect({ hostId: "mini" });
     expect(registry.status("mini").state).toBe("idle");
@@ -142,7 +152,7 @@ it("waits for trust repair, then recovers from a transient failure even between 
     await expect(registry.probe("mini", controllerProtocol)).rejects.toBe(failure);
     failure = undefined;
     await vi.advanceTimersByTimeAsync(3000);
-    expect(connect).toHaveBeenCalledTimes(4);
+    expect(connect).toHaveBeenCalledTimes(5);
     await vi.waitFor(() => expect(registry.status("mini").state).toBe("idle"));
   } finally {
     stop();
@@ -170,6 +180,50 @@ it("keeps short retries for a brief outage and spaces them out for a long or ref
     2, 4, 8, 16, 30, 30, 60, 120, 240, 300, 300,
   ]);
   expect(seconds(new Error("wrapper", { cause: refused }), [1, 2, 3, 4, 9])).toEqual([
+    60, 120, 240, 300, 300,
+  ]);
+});
+
+it("retries a relationship a renderer parked in an attention state after one slow interval", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const registry = new HostConnectionRegistry();
+  registry.setConnector("mini", "Mini", async () => {
+    throw new HostDialError("Host closed the session", {
+      stage: "handshake",
+      closeCode: HOST_SESSION_CLOSE_AUTH_FAILED,
+    });
+  });
+  await expect(registry.probe("mini", controllerProtocol)).rejects.toBeInstanceOf(HostDialError);
+  expect(registry.status("mini").state).toBe("revoked");
+  const connect = vi.fn(async () => {
+    throw new HostDialError("Host is asleep", { stage: "unreachable" });
+  });
+  const port: HostConnectionsPort = {
+    connect,
+    disconnect: async () => {},
+    list: async () => ({
+      connections: registry.list(),
+      desiredHosts: [{ hostId: "mini", environmentId: "mini", label: "Mini" }],
+    }),
+  };
+  const stop = superviseHostConnections(port, registry);
+  try {
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(connect).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(1);
+    // The redial failed transiently, so the fast schedule takes over again.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(connect).toHaveBeenCalledTimes(2);
+  } finally {
+    stop();
+  }
+});
+
+it("retries attention states no less often than every five minutes", () => {
+  expect([1, 2, 3, 4, 9].map((count) => attentionRetryDelayMs(count) / 1_000)).toEqual([
     60, 120, 240, 300, 300,
   ]);
 });

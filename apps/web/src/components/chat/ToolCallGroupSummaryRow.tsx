@@ -13,6 +13,7 @@ import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
+  BackgroundTrayIcon,
   BotIcon,
   FileReadIcon,
   GlobeIcon,
@@ -52,6 +53,8 @@ function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
       return PencilIcon;
     case "agent":
       return BotIcon;
+    case "background":
+      return BackgroundTrayIcon;
     case "fetch":
       return GlobeIcon;
     case "mixed":
@@ -62,24 +65,17 @@ function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   }
 }
 
-// A group the tool summary does not describe (e.g. background tasks) passes
-// its own line and glyph instead.
-type GroupLine =
-  | { summary: ToolCallGroupSummary; label?: never; icon?: never }
-  | { summary?: never; label: ReactNode; icon: LucideIcon };
-
-export function ToolCallGroupSummaryRow(
-  props: GroupLine & {
-    // Selected status or call of a live run, shown instead of the summary.
-    liveEntry?: WorkLogEntry | null;
-    open: boolean;
-    onToggle: (open: boolean) => void;
-    fontSizePx: number;
-    renderChildren: () => ReactNode;
-  },
-) {
+export function ToolCallGroupSummaryRow(props: {
+  summary: ToolCallGroupSummary;
+  // Selected status or call of a live run, shown instead of the summary.
+  liveEntry?: WorkLogEntry | null;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  fontSizePx: number;
+  renderChildren: () => ReactNode;
+}) {
   const { t } = useTranslation();
-  const { liveEntry, open, onToggle, fontSizePx, renderChildren } = props;
+  const { summary, liveEntry, open, onToggle, fontSizePx, renderChildren } = props;
   const [keepChildrenMounted, setKeepChildrenMounted] = useState(open);
 
   useEffect(() => {
@@ -99,16 +95,11 @@ export function ToolCallGroupSummaryRow(
 
   // A live line wears its call's own icon; a settled group its kind's glyph.
   // A fetched site keeps its favicon.
-  const summary = props.summary ?? null;
-  const iconEntry = liveEntry ?? summary?.iconEntry ?? null;
-  const iconWebFetchUrl = iconEntry ? extractWebFetchUrl(iconEntry) : null;
+  const iconEntry = liveEntry ?? summary.iconEntry;
+  const iconWebFetchUrl = extractWebFetchUrl(iconEntry);
   const showFavicon =
-    iconWebFetchUrl !== null && (liveEntry != null || summary?.iconCategory === "fetch");
-  const Icon = liveEntry
-    ? workEntryLeftIcon(liveEntry)
-    : summary
-      ? summaryIcon(summary)
-      : props.icon!;
+    iconWebFetchUrl !== null && (liveEntry != null || summary.iconCategory === "fetch");
+  const Icon = liveEntry ? workEntryLeftIcon(liveEntry) : summaryIcon(summary);
   const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry, t) : null;
 
   return (
@@ -126,11 +117,11 @@ export function ToolCallGroupSummaryRow(
         <span
           className="flex size-4 shrink-0 items-center justify-center"
           aria-hidden
-          data-tool-group-icon={liveEntry ? undefined : summary?.iconCategory}
+          data-tool-group-icon={liveEntry ? undefined : summary.iconCategory}
         >
           {showFavicon && iconWebFetchUrl ? (
             <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
-          ) : Icon === McpIcon && iconEntry?.mcpServer ? (
+          ) : Icon === McpIcon && iconEntry.mcpServer ? (
             <McpServerIcon serverName={iconEntry.mcpServer} className="size-3.5" />
           ) : (
             renderWorkEntryIcon(Icon, "size-3.5")
@@ -139,8 +130,6 @@ export function ToolCallGroupSummaryRow(
         <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
           {liveEntry ? (
             (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry, t)))
-          ) : !summary ? (
-            props.label
           ) : (
             <>
               {summary.label}

@@ -14,6 +14,10 @@ import type {
   OrchestrationThreadShell,
 } from "@synara/contracts";
 import { splitsSurrogatePair, unicodeSafeEndOffset } from "@synara/shared/text";
+import {
+  resolveCurrentPullRequestLink,
+  visiblePullRequestLinks,
+} from "@synara/shared/threadPullRequestLinks";
 
 export type AgentThreadStatus =
   | "working"
@@ -389,6 +393,8 @@ export interface AgentThreadDetail {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly archived: boolean;
+  /** PRs linked to the thread (unlinked ones omitted); the current one is listed first. */
+  readonly pullRequests: ReadonlyArray<AgentThreadPullRequestSummary>;
   readonly lastError: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -398,6 +404,35 @@ export interface AgentThreadDetail {
   readonly effectiveMaxMessageChars: number;
   readonly nextCursor?: string;
   readonly messagePage?: AgentThreadSingleMessagePage;
+}
+
+export interface AgentThreadPullRequestSummary {
+  readonly url: string;
+  readonly number: number;
+  readonly title: string;
+  readonly state: "open" | "closed" | "merged";
+  readonly isDraft: boolean;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly source: string;
+}
+
+function summarizeThreadPullRequests(
+  thread: OrchestrationThread,
+): ReadonlyArray<AgentThreadPullRequestSummary> {
+  const current = resolveCurrentPullRequestLink(thread.pullRequests);
+  return visiblePullRequestLinks(thread.pullRequests)
+    .toSorted((left, right) => (left === current ? -1 : right === current ? 1 : 0))
+    .map((link) => ({
+      url: link.pullRequest.url,
+      number: link.pullRequest.number,
+      title: link.pullRequest.title,
+      state: link.pullRequest.state,
+      isDraft: link.pullRequest.isDraft ?? false,
+      headBranch: link.pullRequest.headBranch,
+      baseBranch: link.pullRequest.baseBranch,
+      source: link.source,
+    }));
 }
 
 export function summarizeThreadDetail(input: {
@@ -437,6 +472,7 @@ export function summarizeThreadDetail(input: {
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     archived: (thread.archivedAt ?? null) !== null,
+    pullRequests: summarizeThreadPullRequests(thread),
     lastError: thread.session?.lastError ?? null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,

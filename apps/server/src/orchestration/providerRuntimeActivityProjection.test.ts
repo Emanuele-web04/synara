@@ -168,11 +168,13 @@ it("persists terminal error identity and announced retry state in chat activitie
         state: "failed",
         errorMessage: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         errorCode: "server_overloaded",
+        httpStatus: 529,
       },
     }),
   )[0]!;
   expect(completion.payload).toMatchObject({
     errorCode: "server_overloaded",
+    httpStatus: 529,
     state: "failed",
     errorMessage: "Temporarily unavailable",
   });

@@ -4,6 +4,8 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationThread,
+  OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   ProjectKind,
   ThreadGoalAchievement,
 } from "@synara/contracts";
@@ -29,10 +31,18 @@ import {
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+import {
+  findPullRequestLink,
+  linkPullRequest,
+  pullRequestLinksEqual,
+  refreshPullRequestSnapshots,
+  resolveCurrentPullRequest,
+  syncDiscoveredPullRequest,
+  unlinkPullRequest,
+} from "@synara/shared/threadPullRequestLinks";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
-import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
@@ -72,6 +82,7 @@ import {
   requireApprovalNotResponded,
   requireProject,
   requireProjectAbsent,
+  requireValidProjectFolders,
   requireProjectHasNoThreads,
   requireProjectWorkspaceRootAvailable,
   requireSpace,
@@ -226,6 +237,61 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+/**
+ * One `thread.meta-updated` carrying the full PR link list and the current PR derived from it,
+ * or no event when nothing changed (background refreshes must not append no-op events).
+ */
+function pullRequestLinksEvent(input: {
+  readonly command: Pick<OrchestrationCommand, "commandId">;
+  readonly thread: OrchestrationThread;
+  readonly nextLinks: ReadonlyArray<OrchestrationThreadPullRequestLink>;
+  readonly occurredAt: string;
+}): ReadonlyArray<Omit<OrchestrationEvent, "sequence">> {
+  if (pullRequestLinksEqual(input.thread.pullRequests, input.nextLinks)) return [];
+  return [
+    {
+      ...withEventBase({
+        aggregateKind: "thread",
+        aggregateId: input.thread.id,
+        occurredAt: input.occurredAt,
+        commandId: input.command.commandId,
+      }),
+      type: "thread.meta-updated",
+      payload: {
+        threadId: input.thread.id,
+        pullRequests: [...input.nextLinks],
+        lastKnownPr: resolveCurrentPullRequest(input.nextLinks),
+        updatedAt: input.occurredAt,
+      },
+    },
+  ];
+}
+
+/**
+ * Clients built before PR links still send `thread.meta.update { lastKnownPr }`. A PR is an
+ * explicit user link; `null` used to clear the single slot, so it now clears only the
+ * branch-managed links and keeps explicit ones.
+ */
+function legacyPullRequestPatch(
+  thread: OrchestrationThread,
+  lastKnownPr: OrchestrationThreadPullRequest | null | undefined,
+  occurredAt: string,
+): {
+  readonly pullRequests?: OrchestrationThreadPullRequestLink[];
+  readonly lastKnownPr?: OrchestrationThreadPullRequest | null;
+} {
+  if (lastKnownPr === undefined) return {};
+  const pullRequests =
+    lastKnownPr === null
+      ? syncDiscoveredPullRequest(thread.pullRequests, null, occurredAt)
+      : linkPullRequest(thread.pullRequests, {
+          pullRequest: lastKnownPr,
+          source: "user",
+          linkedAt: occurredAt,
+        });
+  return { pullRequests, lastKnownPr: resolveCurrentPullRequest(pullRequests) };
 }
 
 function userMessageUpsertEvent(input: {
@@ -1082,24 +1148,12 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
       const additionalFolders = command.additionalFolders ?? [];
-      if (additionalFolders.length > 0) {
-        if (nextProjectKind !== "project") {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: "Only ordinary projects can have additional folders.",
-          });
-        }
-        const folderProblem = findProjectFolderProblem(
-          [command.workspaceRoot, ...additionalFolders],
-          { platform: process.platform },
-        );
-        if (folderProblem !== null) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: folderProblem,
-          });
-        }
-      }
+      yield* requireValidProjectFolders({
+        command,
+        kind: nextProjectKind,
+        workspaceRoot: command.workspaceRoot,
+        additionalFolders,
+      });
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -1241,7 +1295,8 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         command.workspaceRoot !== undefined ||
         command.defaultModelSelection !== undefined ||
         command.scripts !== undefined ||
-        command.isPinned !== undefined;
+        command.isPinned !== undefined ||
+        command.additionalFolders !== undefined;
       const isLegacyHomeChatContainer = isLegacyHomeChatContainerRow({
         projectTitle: existingProject.title,
         projectWorkspaceRoot: existingProject.workspaceRoot,
@@ -1269,21 +1324,19 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
       }
-      // Relocating the primary folder must keep the folder set distinct and un-nested.
+      // Relocating the primary folder, editing the extra ones, or changing the kind must
+      // leave a valid folder set.
       if (
-        command.workspaceRoot !== undefined &&
-        (existingProject.additionalFolders ?? []).length > 0
+        command.workspaceRoot !== undefined ||
+        command.additionalFolders !== undefined ||
+        command.kind !== undefined
       ) {
-        const folderProblem = findProjectFolderProblem(
-          [command.workspaceRoot, ...(existingProject.additionalFolders ?? [])],
-          { platform: process.platform },
-        );
-        if (folderProblem !== null) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: folderProblem,
-          });
-        }
+        yield* requireValidProjectFolders({
+          command,
+          kind: nextProjectKind,
+          workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
+          additionalFolders: command.additionalFolders ?? existingProject.additionalFolders ?? [],
+        });
       }
       if (effectiveSpaceId !== null) {
         // Assignability is an invariant of the resulting row, not only of commands that
@@ -1365,6 +1418,9 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
+          ...(command.additionalFolders !== undefined
+            ? { additionalFolders: command.additionalFolders }
+            : {}),
           updatedAt: occurredAt,
         },
       } satisfies Omit<Extract<OrchestrationEvent, { type: "project.meta-updated" }>, "sequence">;
@@ -1466,7 +1522,16 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
                 sidechatExpiredAt: null,
               }
             : {}),
-          lastKnownPr: command.lastKnownPr,
+          // A PR carried into a new thread comes from the PR checkout flow (or a draft that
+          // inherited it), so it is an explicit link that branch discovery must not drop.
+          lastKnownPr: command.lastKnownPr ?? null,
+          pullRequests: command.lastKnownPr
+            ? linkPullRequest([], {
+                pullRequest: command.lastKnownPr,
+                source: "checkout",
+                linkedAt: command.createdAt,
+              })
+            : [],
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1991,7 +2056,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
             : {}),
           ...(command.subagentRole !== undefined ? { subagentRole: command.subagentRole } : {}),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
-          ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
+          ...legacyPullRequestPatch(thread, command.lastKnownPr, occurredAt),
           ...(command.pinnedMessages !== undefined
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
@@ -2062,6 +2127,49 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           },
         },
       ];
+    }
+
+    case "thread.pull-request.link": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      // Command-created links may arrive after the user has already unlinked the PR.
+      if (
+        command.source === "created" &&
+        findPullRequestLink(thread.pullRequests, command.pullRequest.url)?.dismissedAt != null
+      ) {
+        return [];
+      }
+      const occurredAt = nowIso();
+      return pullRequestLinksEvent({
+        command,
+        thread,
+        occurredAt,
+        nextLinks: linkPullRequest(thread.pullRequests, {
+          pullRequest: command.pullRequest,
+          source: command.source ?? "user",
+          linkedAt: occurredAt,
+        }),
+      });
+    }
+
+    case "thread.pull-request.unlink": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = nowIso();
+      const nextLinks = unlinkPullRequest(thread.pullRequests, command.url, occurredAt);
+      if (nextLinks === null) return [];
+      return pullRequestLinksEvent({ command, thread, occurredAt, nextLinks });
+    }
+
+    case "thread.pull-request.sync": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = nowIso();
+      let nextLinks = [...(thread.pullRequests ?? [])];
+      if (command.discovered !== undefined) {
+        nextLinks = syncDiscoveredPullRequest(nextLinks, command.discovered, occurredAt);
+      }
+      if (command.snapshots !== undefined) {
+        nextLinks = refreshPullRequestSnapshots(nextLinks, command.snapshots);
+      }
+      return pullRequestLinksEvent({ command, thread, occurredAt, nextLinks });
     }
 
     case "thread.pinned-message.add": {
