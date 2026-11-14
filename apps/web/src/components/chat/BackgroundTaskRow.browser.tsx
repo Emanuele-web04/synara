@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
 
 import type { WorkLogBackgroundTask } from "../../workLog";
-import { BackgroundTaskRow, BackgroundTaskStopContext } from "./BackgroundTaskRow";
+import { BackgroundTaskRow } from "./BackgroundTaskRow";
 
 const task: WorkLogBackgroundTask = {
   taskId: "background-build",
@@ -27,18 +27,14 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("keeps the running state readable without adding visible text to a read-only row", async () => {
+// Live time and Stop belong to the Environment panel and the right-dock list;
+// the transcript row never ticks or offers controls.
+it("shows a running task as a static row without a clock or Stop", async () => {
   const screen = await render(<BackgroundTaskRow task={task} fontSizePx={13} />);
-  const status = screen.getByText("running", { exact: true }).element();
-  const style = getComputedStyle(status);
-
-  // Visually hidden text remains in the accessibility tree; the decorative
-  // spinner's aria-hidden container must not hide this label too.
-  expect(status.closest('[aria-hidden="true"], [hidden], [inert]')).toBeNull();
-  expect(style.display).not.toBe("none");
-  expect(style.visibility).toBe("visible");
-  expect(status.getBoundingClientRect().width).toBeLessThanOrEqual(1);
-  await expect.element(screen.getByText("12s", { exact: true })).toBeVisible();
+  const status = screen.getByText("running", { exact: true });
+  await expect.element(status).toBeVisible();
+  expect(status.element().getBoundingClientRect().width).toBeGreaterThan(1);
+  expect(screen.container.textContent).not.toContain("12s");
   expect(screen.container.querySelector("button")).toBeNull();
 });
 
@@ -47,33 +43,21 @@ it.each([
   ["failed", 1, "failed · exit 1"],
   ["stopped", null, "stopped"],
 ] as const)(
-  "keeps Stop reachable and shows the %s outcome in place",
+  "settles the same row in place with the %s outcome",
   async (outcome, exitCode, label) => {
-    const onStop = vi.fn();
-    const row = (current: WorkLogBackgroundTask) => (
-      <BackgroundTaskStopContext.Provider value={onStop}>
-        <BackgroundTaskRow task={current} fontSizePx={13} />
-      </BackgroundTaskStopContext.Provider>
-    );
-    const screen = await render(row(task));
-    const stop = screen.getByRole("button", { name: "Stop background task bun run build" });
-    await expect.element(stop).toBeVisible();
-    await stop.click();
-    expect(onStop).toHaveBeenCalledExactlyOnceWith(task.taskId);
+    const screen = await render(<BackgroundTaskRow task={task} fontSizePx={13} />);
+    const row = screen.container.querySelector("[data-background-task='background-build']");
 
     await screen.rerender(
-      row({
-        ...task,
-        status: outcome,
-        completedAt: "2026-10-10T00:00:20.000Z",
-        exitCode,
-      }),
+      <BackgroundTaskRow
+        task={{ ...task, status: outcome, completedAt: "2026-10-10T00:00:20.000Z", exitCode }}
+        fontSizePx={13}
+      />,
     );
-    const status = screen.getByText(label, { exact: true });
-    await expect.element(status).toBeVisible();
-    expect(status.element().getBoundingClientRect().width).toBeGreaterThan(1);
+    expect(screen.container.querySelector("[data-background-task='background-build']")).toBe(row);
+    await expect.element(screen.getByText(label, { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("20s", { exact: true })).toBeVisible();
     expect(screen.container.textContent).not.toContain("running");
     expect(screen.container.querySelector("button")).toBeNull();
-    await expect.element(screen.getByText("20s", { exact: true })).toBeVisible();
   },
 );

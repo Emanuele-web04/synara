@@ -11,10 +11,7 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
 
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { IconButton } from "~/components/ui/icon-button";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useNowMs } from "~/hooks/useNowMs";
@@ -25,6 +22,12 @@ import { cn } from "~/lib/utils";
 import { useRightDockStore } from "~/rightDockStore";
 
 import { formatClockDuration } from "../../session-logic";
+import {
+  DOCK_LIST_CLASS_NAME,
+  DOCK_LIST_SECONDARY_TEXT_CLASS_NAME as SECONDARY_TEXT_CLASS_NAME,
+  DockListCappedSection,
+  DockListHeading,
+} from "./DockList";
 import { ENVIRONMENT_ROW_ICON_CLASS_NAME, EnvironmentRow } from "./environment/EnvironmentRow";
 import {
   environmentSubagentElapsedMs,
@@ -42,7 +45,6 @@ import { useTranslation, t } from "~/i18n";
 // Done rows shown before "Show more"; active rows always render.
 const DONE_VISIBLE_LIMIT = 10;
 const SUMMARY_TOOLTIP_MAX_CHARS = 280;
-const SECONDARY_TEXT_CLASS_NAME = "text-[var(--color-text-foreground-secondary)]";
 
 function rowTooltip(item: EnvironmentSubagentRosterItem): string {
   const summary =
@@ -64,14 +66,6 @@ function finishedAgoLabel(
   const at = item.settledAt;
   if (!at) return null;
   return formatRelativeTimeAgo(at, nowMs, formatLocale, translate);
-}
-
-function ListHeading({ label, count }: { label: string; count: number }) {
-  return (
-    <p className={cn("px-2 pt-3 pb-1 text-ui-sm first:pt-0", SECONDARY_TEXT_CLASS_NAME)}>
-      {label} · {count}
-    </p>
-  );
 }
 
 function ActiveSubagentRow({
@@ -252,17 +246,10 @@ export function SubagentsList({
 }) {
   const { t } = useTranslation();
 
-  const [showAllDone, setShowAllDone] = useState(false);
   const { active, previous } = roster;
 
-  const hiddenDoneCount = showAllDone ? 0 : Math.max(0, previous.length - DONE_VISIBLE_LIMIT);
-  const visibleDone = previous.slice(0, DONE_VISIBLE_LIMIT);
-
   return (
-    <div
-      className="flex h-full min-h-0 w-full min-w-0 flex-col gap-0.5 overflow-y-auto px-3 py-4"
-      data-testid="subagents-dock-pane"
-    >
+    <div className={DOCK_LIST_CLASS_NAME} data-testid="subagents-dock-pane">
       {parent ? (
         <EnvironmentRow
           icon={<BackToParentIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
@@ -277,7 +264,7 @@ export function SubagentsList({
       ) : null}
       {active.length > 0 ? (
         <>
-          <ListHeading label={t("automation:detail_active")} count={active.length} />
+          <DockListHeading label={t("automation:detail_active")} count={active.length} />
           {active.map((item) => (
             <ActiveSubagentRow
               key={item.key}
@@ -290,34 +277,14 @@ export function SubagentsList({
           ))}
         </>
       ) : null}
-      {previous.length > 0 ? (
-        <>
-          <ListHeading label={t("git:detail_done")} count={previous.length} />
-          {visibleDone.map((item) => (
-            <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
-          ))}
-          <DisclosureRegion open={showAllDone}>
-            {previous.slice(DONE_VISIBLE_LIMIT).map((item) => (
-              <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
-            ))}
-          </DisclosureRegion>
-          {previous.length > DONE_VISIBLE_LIMIT ? (
-            <EnvironmentRow
-              compact
-              icon={<DisclosureChevron open={showAllDone} className="size-5 shrink-0" />}
-              label={
-                <span className={SECONDARY_TEXT_CLASS_NAME}>
-                  {hiddenDoneCount > 0
-                    ? t("chat:showMore", { value0: hiddenDoneCount })
-                    : t("workspace:timeline_showLess")}
-                </span>
-              }
-              aria-expanded={hiddenDoneCount === 0}
-              onClick={() => setShowAllDone((value) => !value)}
-            />
-          ) : null}
-        </>
-      ) : null}
+      <DockListCappedSection
+        label={t("git:detail_done")}
+        items={previous}
+        limit={DONE_VISIBLE_LIMIT}
+        renderItem={(item) => (
+          <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
+        )}
+      />
     </div>
   );
 }

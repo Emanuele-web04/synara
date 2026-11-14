@@ -844,6 +844,52 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
   return { tasks, noticesAnnouncingSubagents };
 }
 
+// Cheap pre-check: only a "Moved to background" notice or a backgrounded task
+// update can make a task a background task.
+function hasBackgroundTaskActivity(ordered: ReadonlyArray<OrchestrationThreadActivity>): boolean {
+  return ordered.some(
+    (activity) =>
+      (activity.kind === "runtime.warning" &&
+        asRecord(activity.payload)?.nativeEventType === "background_tasks_changed") ||
+      (activity.kind === "task.updated" && asRecord(activity.payload)?.isBackgrounded === true),
+  );
+}
+
+// Every background task of the thread, oldest first, with the command its
+// launching call ran. The Environment panel summary and the right-dock list
+// read this, so they need no transcript rows.
+export function deriveThreadBackgroundTasks(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): WorkLogBackgroundTask[] {
+  const ordered = orderedActivities(activities);
+  if (!hasBackgroundTaskActivity(ordered)) {
+    return [];
+  }
+  const { tasks } = deriveBackgroundTaskStates(ordered);
+  const launchToolUseIds = new Set<string>();
+  for (const task of tasks.values()) {
+    if (task.toolUseId) launchToolUseIds.add(task.toolUseId);
+  }
+  // The launching call's lifecycle updates repeat its input; the last one that
+  // names a command wins, as it does when the transcript merges them.
+  const commandByToolUseId = new Map<string, string>();
+  if (launchToolUseIds.size > 0) {
+    for (const activity of ordered) {
+      const payload = asRecord(activity.payload);
+      const toolCallId = extractToolCallId(payload);
+      if (!toolCallId || !launchToolUseIds.has(toolCallId)) continue;
+      const { command, rawCommand } = extractToolCommand(payload);
+      const launchCommand = rawCommand ?? command;
+      if (launchCommand) commandByToolUseId.set(toolCallId, launchCommand);
+    }
+  }
+  // The rest copy is the task's own new object, so it takes the command in place.
+  return [...tasks.values()].map(({ toolUseId, noticeActivityId: _noticeActivityId, ...task }) => {
+    task.command = (toolUseId ? commandByToolUseId.get(toolUseId) : undefined) ?? null;
+    return task;
+  });
+}
+
 // One row per background task, in place of the call that launched it (or of
 // its "Moved to background" notice when that call is not visible). The row's
 // status follows the task, so the transcript never stacks a launch notice,
@@ -853,14 +899,7 @@ function withBackgroundTaskRows<Entry extends WorkLogEntry>(
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
   translate: typeof t,
 ): ReadonlyArray<WorkLogEntry> {
-  if (
-    !ordered.some(
-      (activity) =>
-        (activity.kind === "runtime.warning" &&
-          asRecord(activity.payload)?.nativeEventType === "background_tasks_changed") ||
-        (activity.kind === "task.updated" && asRecord(activity.payload)?.isBackgrounded === true),
-    )
-  ) {
+  if (!hasBackgroundTaskActivity(ordered)) {
     return entries;
   }
   const { tasks, noticesAnnouncingSubagents } = deriveBackgroundTaskStates(ordered);

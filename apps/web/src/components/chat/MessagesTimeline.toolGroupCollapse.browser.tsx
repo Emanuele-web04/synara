@@ -144,7 +144,7 @@ describe("MessagesTimeline tool group collapse", () => {
     document.body.innerHTML = "";
   });
 
-  it("folds consumed background work, preserves both answers and reveals the command on demand", async () => {
+  it("folds background work with its turn, preserves both answers and reveals the command on demand", async () => {
     const startedAt = "2026-03-17T19:12:00.000Z";
     const completedAt = "2026-03-17T19:12:21.000Z";
     const entries = (settled: boolean): TimelineEntry[] => [
@@ -230,9 +230,10 @@ describe("MessagesTimeline tool group collapse", () => {
       container: createTimelineHost(),
     });
     try {
-      await expect
-        .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
-        .toBeVisible();
+      // No row stays pinned under the launching turn while the follow-up streams;
+      // live task state lives in the Environment panel.
+      await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      expect(isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs")).toBe(false);
       await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={entries(true)} settled />);
       await expect
         .element(screen.getByText("The build is running.", { exact: true }))
