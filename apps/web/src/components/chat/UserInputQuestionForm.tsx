@@ -142,12 +142,19 @@ export function UserInputQuestionForm({
       className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-1.5 pt-3 pb-1.5")}
       onKeyDown={keyboardShortcuts === "local" ? handleShortcut : undefined}
     >
-      <div className="flex items-start justify-between gap-3 px-2.5">
+      {/* Questions are provider-authored content, so the browser's first-strong
+          rule owns the direction of each row instead of the app's LTR surface. */}
+      <div className="flex items-start justify-between gap-3 px-2.5" dir="auto">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
           {activeQuestion.question}
         </p>
         {showNavigation ? (
-          <div className="flex shrink-0 items-center gap-0.5 pt-px text-muted-foreground/70">
+          // Navigation chrome keeps its own left-to-right order so the chevrons keep their
+          // meaning even when an RTL question mirrors the header row.
+          <div
+            dir="ltr"
+            className="flex shrink-0 items-center gap-0.5 pt-px text-muted-foreground/70"
+          >
             <button
               type="button"
               disabled={!canGoBack || isResponding}
@@ -213,7 +220,7 @@ export function UserInputQuestionForm({
         </div>
       ) : null}
       {showKeyHints || onCancel ? (
-        <div className="mt-1.5 flex min-h-7 items-center gap-3 pl-2.5">
+        <div className="mt-1.5 flex min-h-7 items-center gap-3 ps-2.5">
           {showKeyHints ? (
             <div
               aria-hidden="true"
@@ -239,7 +246,7 @@ export function UserInputQuestionForm({
               disabled={isResponding}
               onClick={handleCancel}
               className={cn(
-                "ml-auto rounded-md px-2 py-1 text-ui text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+                "ms-auto rounded-md px-2 py-1 text-ui text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
                 isResponding && "cursor-not-allowed opacity-50",
               )}
             >

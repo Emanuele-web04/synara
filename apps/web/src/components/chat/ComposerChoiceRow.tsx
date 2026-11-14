@@ -84,8 +84,11 @@ export function ComposerChoiceRow({
       disabled={disabled}
       aria-pressed={selectedProp === undefined ? undefined : selected}
       onClick={onSelect}
+      // Option labels and descriptions are provider content: let the first strong
+      // character decide whether the whole row (chip, label, badge) reads RTL.
+      dir="auto"
       className={cn(
-        "group flex w-full items-start gap-2.5 rounded-lg py-1.5 text-left transition-colors duration-150",
+        "group flex w-full items-start gap-2.5 rounded-lg py-1.5 text-start transition-colors duration-150",
         stacked ? "px-2.5" : "px-2",
         selected ? "bg-[var(--color-background-button-secondary)]" : ROW_TONE_CLASS_NAME[tone],
         disabled && "cursor-not-allowed opacity-50",
@@ -111,7 +114,7 @@ export function ComposerChoiceRow({
           <div className="min-w-0 flex-1 leading-snug">
             <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
             {showDescription ? (
-              <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
+              <span className="ms-1.5 text-ui text-muted-foreground/55">{description}</span>
             ) : null}
           </div>
         </>
