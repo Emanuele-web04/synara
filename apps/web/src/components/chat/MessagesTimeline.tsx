@@ -1652,61 +1652,59 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             </DisclosureRegion>
           </div>
         )}
-        {row.turnHeader &&
-          (hasCollapsedWork || showsHeaderWithoutWork) &&
-          !conversationOnly && (
-            <div className="mb-3">
-              {hasCollapsedWork ? (
-                <Collapsible
-                  className="group/collapsed-work"
-                  open={isCollapsedWorkExpanded}
-                  onOpenChange={(open) => {
-                    setCollapsedWorkExpanded(row.message.id, open);
-                  }}
-                >
-                  <TurnHeaderLine
-                    kind="settled"
-                    header={row.turnHeader}
-                    fontSize={chatTypographyStyle.fontSize}
-                    disclosure={{
-                      open: isCollapsedWorkExpanded,
-                      renderTrigger: (content) => (
-                        <CollapsibleTrigger
-                          // ChatView's click anchor preserves this trigger's screen position
-                          // while the disclosure height animates, so opening it should not tail-scroll.
-                          className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
-                        >
-                          {content}
-                        </CollapsibleTrigger>
-                      ),
-                    }}
-                  />
-                  <CollapsiblePanel>
-                    <div
-                      className={disclosureContentClassName(
-                        isCollapsedWorkExpanded,
-                        cn(WORK_ROW_STACK_CLASS_NAME, "mb-2.5"),
-                      )}
-                    >
-                      {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
-                        renderCollapsedTurnChunk(chunk, "collapsed-panel"),
-                      )}
-                    </div>
-                  </CollapsiblePanel>
-                  {/* The hairline closes "Worked for"; a resumed turn's line stands alone. */}
-                  {row.turnHeader.resumedBy?.length ? null : (
-                    <div className="h-px w-full bg-border" />
-                  )}
-                </Collapsible>
-              ) : showsHeaderWithoutWork ? (
+        {row.turnHeader && (hasCollapsedWork || showsHeaderWithoutWork) && !conversationOnly && (
+          <div className="mb-3">
+            {hasCollapsedWork ? (
+              <Collapsible
+                className="group/collapsed-work"
+                open={isCollapsedWorkExpanded}
+                onOpenChange={(open) => {
+                  setCollapsedWorkExpanded(row.message.id, open);
+                }}
+              >
                 <TurnHeaderLine
                   kind="settled"
                   header={row.turnHeader}
                   fontSize={chatTypographyStyle.fontSize}
+                  disclosure={{
+                    open: isCollapsedWorkExpanded,
+                    renderTrigger: (content) => (
+                      <CollapsibleTrigger
+                        // ChatView's click anchor preserves this trigger's screen position
+                        // while the disclosure height animates, so opening it should not tail-scroll.
+                        className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
+                      >
+                        {content}
+                      </CollapsibleTrigger>
+                    ),
+                  }}
                 />
-              ) : null}
-            </div>
-          )}
+                <CollapsiblePanel>
+                  <div
+                    className={disclosureContentClassName(
+                      isCollapsedWorkExpanded,
+                      cn(WORK_ROW_STACK_CLASS_NAME, "mb-2.5"),
+                    )}
+                  >
+                    {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
+                      renderCollapsedTurnChunk(chunk, "collapsed-panel"),
+                    )}
+                  </div>
+                </CollapsiblePanel>
+                {/* The hairline closes "Worked for"; a resumed turn's line stands alone. */}
+                {row.turnHeader.resumedBy?.length ? null : (
+                  <div className="h-px w-full bg-border" />
+                )}
+              </Collapsible>
+            ) : showsHeaderWithoutWork ? (
+              <TurnHeaderLine
+                kind="settled"
+                header={row.turnHeader}
+                fontSize={chatTypographyStyle.fontSize}
+              />
+            ) : null}
+          </div>
+        )}
       </>
     );
   };
