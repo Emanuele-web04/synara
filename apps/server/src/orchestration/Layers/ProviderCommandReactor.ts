@@ -38,6 +38,7 @@ import {
   ProviderTaskReconciliation,
   type ProviderReviewTarget,
   type ProviderStartOptions,
+  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderTurnStartResult,
   type OrchestrationSession,
@@ -156,6 +157,7 @@ import {
   ProviderService,
   type ProviderRuntimeSessionStopTarget,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -1110,6 +1112,7 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerDiscovery = yield* ProviderDiscoveryService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
   // Resolved at make time: fibers that run turn dispatch do not inherit the
@@ -1264,11 +1267,12 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Menu picks arrive as references; typed `/name` or `$name` tokens are matched here
-  // against the same shared catalog the composer menu lists, from the active provider's
-  // view so a name several providers share resolves to that provider's own copy.
+  // Menu picks arrive as exact references. Typed tokens use Codex's instance-aware
+  // catalog so its native skill paths take precedence over shared names.
   const resolveTurnSkills = Effect.fnUntraced(function* (input: {
     readonly provider: ProviderKind;
+    readonly threadId: ThreadId;
+    readonly instanceId: string | undefined;
     readonly cwd: string | undefined;
     readonly messageText: string;
     readonly attached: ReadonlyArray<ProviderSkillReference> | undefined;
@@ -1277,29 +1281,50 @@ const make = Effect.gen(function* () {
     if (!input.resolveTypedSkills || extractPromptSkillTokenNames(input.messageText).length === 0) {
       return input.attached;
     }
-    const catalog = yield* Effect.tryPromise(() =>
-      discoverSkillsCatalog({
-        cwd: input.cwd ?? null,
-        homeDir: serverConfig.homeDir,
-        synaraBaseDir: serverConfig.baseDir,
-        provider: input.provider,
-      }),
-    ).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("typed skill resolution skipped: skills catalog unavailable", {
+    let available: ReadonlyArray<ProviderSkillDescriptor>;
+    if (input.provider === "codex" && input.cwd !== undefined) {
+      available = yield* providerDiscovery
+        .listSkills({
           provider: input.provider,
-          error,
-        }).pipe(Effect.as([])),
-      ),
-    );
-    const disabledSkills = yield* serverSettings.getSettings.pipe(
-      Effect.map((settings) => settings.skills.disabled),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
-    );
+          threadId: input.threadId,
+          cwd: input.cwd,
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        })
+        .pipe(
+          Effect.map((result) => result.skills),
+          Effect.catch((error) =>
+            Effect.logWarning("typed Codex skill resolution skipped: skill discovery unavailable", {
+              threadId: input.threadId,
+              error,
+            }).pipe(Effect.as([])),
+          ),
+        );
+    } else {
+      const catalog = yield* Effect.tryPromise(() =>
+        discoverSkillsCatalog({
+          cwd: input.cwd ?? null,
+          homeDir: serverConfig.homeDir,
+          synaraBaseDir: serverConfig.baseDir,
+          provider: input.provider,
+        }),
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("typed skill resolution skipped: skills catalog unavailable", {
+            provider: input.provider,
+            error,
+          }).pipe(Effect.as([])),
+        ),
+      );
+      const disabledSkills = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.skills.disabled),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      );
+      available = filterDisabledSkills(catalog, disabledSkills);
+    }
     const resolved = resolvePromptSkillReferences({
       text: input.messageText,
       attached: input.attached,
-      available: filterDisabledSkills(catalog, disabledSkills),
+      available,
     });
     return resolved.length > 0 ? resolved : input.attached;
   });
@@ -3658,7 +3683,12 @@ const make = Effect.gen(function* () {
         providerThread.modelSelection.provider) as ProviderKind;
       const steerSkills = yield* resolveTurnSkills({
         provider: steerProvider,
-        cwd: yield* resolveProjectedThreadWorkspaceCwd(thread),
+        threadId: providerThread.id,
+        instanceId:
+          providerThread.session?.providerInstanceId ?? providerThread.modelSelection.instanceId,
+        cwd: yield* resolveProjectedThreadWorkspaceCwd(
+          steerProvider === "codex" ? providerThread : thread,
+        ),
         messageText: authoredMessageText,
         attached: input.skills,
         resolveTypedSkills,
@@ -4125,6 +4155,8 @@ const make = Effect.gen(function* () {
       activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
     const turnSkills = yield* resolveTurnSkills({
       provider: selectedProvider as ProviderKind,
+      threadId: activeSession.threadId,
+      instanceId: activeSession.providerInstanceId,
       cwd: providerWorkspaceCwd,
       messageText: authoredMessageText,
       attached: input.skills,

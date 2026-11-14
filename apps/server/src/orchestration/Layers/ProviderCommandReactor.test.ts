@@ -111,6 +111,7 @@ import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
+import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
@@ -570,6 +571,8 @@ describe("ProviderCommandReactor", () => {
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
+    readonly skillCatalogHomeDir?: string;
+    readonly listNativeSkills?: ProviderAdapterShape<ProviderAdapterError>["listSkills"];
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
@@ -666,6 +669,9 @@ describe("ProviderCommandReactor", () => {
           ? { model: sessionModelSelection.model }
           : {}),
         threadId,
+        ...(input.providerInstanceId !== undefined
+          ? { providerInstanceId: input.providerInstanceId }
+          : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
         createdAt: now,
@@ -1031,7 +1037,20 @@ describe("ProviderCommandReactor", () => {
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
-    const reactorLayer = makeProviderCommandReactorLive(input);
+    const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
+      Layer.provide(
+        Layer.succeed(ProviderAdapterRegistry, {
+          getByProvider: () =>
+            Effect.succeed({
+              listSkills: input?.listNativeSkills,
+            } as ProviderAdapterShape<ProviderAdapterError>),
+          listProviders: () => Effect.succeed([]),
+        }),
+      ),
+    );
+    const reactorLayer = makeProviderCommandReactorLive(input).pipe(
+      Layer.provide(providerDiscoveryLayer),
+    );
     const layer = Layer.mergeAll(reactorLayer, ProviderRuntimeIngestionLive).pipe(
       Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(projectAgentRepositoryLayer),
@@ -1080,7 +1099,13 @@ describe("ProviderCommandReactor", () => {
             : {}),
         }),
       ),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(
+        ServerConfig.layerTest(
+          process.cwd(),
+          baseDir,
+          input?.skillCatalogHomeDir ? { homeDir: input.skillCatalogHomeDir } : undefined,
+        ),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
       Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
@@ -14355,6 +14380,48 @@ describe("ProviderCommandReactor", () => {
       // Codex loads its own folder natively; the shared Claude skill travels inline.
       expect(turn.input).toContain("CLAUDE SKILL BODY");
       expect(turn.input).not.toContain("CODEX SKILL BODY");
+    });
+
+    it("sends the active Codex profile's copy of a typed skill before its default-home copy", async () => {
+      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-codex-skill-home-"));
+      createdSkillDirs.push(homeDir);
+      const customHome = path.join(homeDir, "work-codex");
+      const skillDir = path.join("skills", codexSkillName);
+      for (const codexHome of [path.join(homeDir, ".codex"), customHome]) {
+        fs.mkdirSync(path.join(codexHome, skillDir), { recursive: true });
+        fs.writeFileSync(
+          path.join(codexHome, skillDir, "SKILL.md"),
+          `---\nname: ${codexSkillName}\ndescription: test skill\n---\n`,
+        );
+      }
+      const turn = await sendTyped(
+        await createHarness({
+          threadModelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5" },
+          skillCatalogHomeDir: homeDir,
+          serverSettings: {
+            providerInstances: {
+              codex_work: { driver: "codex", enabled: true, config: { homePath: customHome } },
+            },
+          },
+          listNativeSkills: ({ homePath }) =>
+            Effect.succeed({
+              skills: homePath
+                ? [
+                    {
+                      name: codexSkillName,
+                      path: path.join(homePath, skillDir, "SKILL.md"),
+                      enabled: true,
+                    },
+                  ]
+                : [],
+            }),
+        }),
+        `Please use /${codexSkillName}`,
+      );
+      expect(turn.input).toContain(`Please use $${codexSkillName}`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: path.join(customHome, skillDir, "SKILL.md") },
+      ]);
     });
 
     it("ignores skill tokens in another agent's message", async () => {
