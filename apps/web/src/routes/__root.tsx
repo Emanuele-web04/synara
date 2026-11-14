@@ -1831,10 +1831,17 @@ function EventRouter() {
     };
 
     const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return false;
+      if (shouldApplyBootstrapShellSnapshot(snapshot)) {
+        return applyAuthoritativeShellSnapshot(snapshot);
       }
-      return applyAuthoritativeShellSnapshot(snapshot);
+      // A fresh empty-shell proof can settle route recovery without replacing hydrated state.
+      return (
+        !disposed &&
+        shellSnapshotSequence >= 0 &&
+        snapshot.snapshotSequence >= shellSnapshotSequence &&
+        snapshot.emptyThreadShellVerified === true &&
+        snapshot.threads.length === 0
+      );
     };
 
     // The live shell stream normally delivers the bootstrap snapshot. Only

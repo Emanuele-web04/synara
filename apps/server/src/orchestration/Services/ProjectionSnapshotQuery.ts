@@ -205,10 +205,9 @@ export interface ProjectionSnapshotQueryShape {
    * Returns only project rows plus thread shell summaries so clients can
    * bootstrap navigation state without hydrating every thread body.
    */
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationShellSnapshot,
-    ProjectionRepositoryError
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly verifyEmptyThreads?: boolean;
+  }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
    * Read the active project for an exact workspace root match.

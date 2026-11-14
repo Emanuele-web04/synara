@@ -122,15 +122,16 @@ function ChatThreadRouteContent() {
             setMissingThreadRecoveryState("pending");
           }
         }, 0);
-        void Promise.all([
-          refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
-          waitForEmptyRouteRestoreFallbackDelay(),
-        ]).finally(() => {
-          window.clearTimeout(pendingTimer);
-          if (mountedRef.current && missingThreadRecoveryRunRef.current === recoveryRun) {
-            setMissingThreadRecoveryState("done");
-          }
-        });
+        const fallbackDelay = waitForEmptyRouteRestoreFallbackDelay();
+        void refreshEmptyRouteRestoreSnapshot(readNativeApi())
+          .catch(() => "unknown" as const)
+          .then((result) => (result === "verified-empty" ? undefined : fallbackDelay))
+          .finally(() => {
+            window.clearTimeout(pendingTimer);
+            if (mountedRef.current && missingThreadRecoveryRunRef.current === recoveryRun) {
+              setMissingThreadRecoveryState("done");
+            }
+          });
         return;
       }
 

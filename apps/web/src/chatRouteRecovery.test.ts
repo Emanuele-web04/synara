@@ -12,15 +12,15 @@ afterEach(() => {
 });
 
 describe("refreshEmptyRouteRestoreSnapshot", () => {
-  it("returns false when the backend is unavailable", async () => {
-    await expect(refreshEmptyRouteRestoreSnapshot(undefined)).resolves.toBe(false);
+  it("returns unknown when the backend is unavailable", async () => {
+    await expect(refreshEmptyRouteRestoreSnapshot(undefined)).resolves.toBe("unknown");
   });
 
   it("delegates snapshot recovery to EventRouter's registered coordinator", async () => {
-    const refresh = vi.fn().mockResolvedValue(true);
+    const refresh = vi.fn().mockResolvedValue("restored");
     unregister = registerEmptyRouteRestoreRefresh(refresh);
 
-    await expect(refreshEmptyRouteRestoreSnapshot({} as NativeApi)).resolves.toBe(true);
+    await expect(refreshEmptyRouteRestoreSnapshot({} as NativeApi)).resolves.toBe("restored");
 
     expect(refresh).toHaveBeenCalledTimes(1);
   });
