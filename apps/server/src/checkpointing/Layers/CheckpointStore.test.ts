@@ -891,6 +891,43 @@ describe("CheckpointStoreLive history integration", () => {
     expect(git(["status", "--porcelain", "--", "src/feature.ts"])).toBe("");
   });
 
+  it.each(["reset", "checkout"] as const)(
+    "keeps the turn's committed edit when %s returns to it",
+    async (operation) => {
+      prepareDivergedBranches();
+      await capture(fromRef);
+
+      write("src/app.ts", "kept authored change\n");
+      git(["commit", "-am", "Kept turn work"]);
+      const kept = git(["rev-parse", "HEAD"]).trim();
+      write("src/app.ts", "discarded authored change\n");
+      git(["commit", "-am", "Discarded turn work"]);
+      git(operation === "reset" ? ["reset", "--hard", kept] : ["checkout", "--detach", kept]);
+      await capture(toRef);
+
+      expect(diffedPaths(await turnDiff())).toEqual(["src/app.ts"]);
+      expect(await undo()).toBe(true);
+      expect(readFileSync(join(cwd, "src/app.ts"), "utf8")).toBe("app v1\n");
+    },
+  );
+
+  it("keeps authored work after pulling divergent history with rebase", async () => {
+    prepareDivergedBranches();
+    git(["switch", "-c", "local", "main~1"]);
+    write("src/local.ts", "pre-existing local work\n");
+    commitExisting("Local commit");
+    await capture(fromRef);
+
+    git(["pull", "--rebase", ".", "main"]);
+    write("src/app.ts", "authored after pull\n");
+    await capture(toRef);
+
+    expect(diffedPaths(await turnDiff())).toEqual(["src/app.ts"]);
+    expect(await undo()).toBe(true);
+    expect(readFileSync(join(cwd, "src/app.ts"), "utf8")).toBe("app v1\n");
+    expect(readFileSync(join(cwd, ".github/CI.md"), "utf8")).toBe("ci\n");
+  });
+
   it("keeps a novel rebase resolution when Git preserves the old commit dates", async () => {
     prepareDivergedBranches();
     await capture(fromRef);

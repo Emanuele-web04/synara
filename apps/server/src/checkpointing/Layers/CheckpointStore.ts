@@ -541,17 +541,26 @@ const makeCheckpointStore = Effect.gen(function* () {
       let previous = entries[0]!.head;
       let rebasing = false;
       let integrationFound = false;
+      const authored = new Set<string>();
       const tips: IntegratedHistoryTip[] = [];
       for (const { head, action } of entries.slice(1)) {
         const parents = parentsByCommit.get(head);
+        const rebaseStep = /^(?:rebase|pull[^:]*) \((start|pick|continue|finish)\):/.exec(
+          action,
+        )?.[1];
         if (rebasing) {
-          if (action.startsWith("rebase (finish):") && head === previous) {
+          if (rebaseStep === "finish" && head === previous) {
             rebasing = false;
-          } else if (!/^rebase \((?:pick|continue)\):/.test(action) || parents?.[0] !== previous) {
+          } else if (
+            (rebaseStep !== "pick" && rebaseStep !== "continue") ||
+            parents?.[0] !== previous
+          ) {
             return null;
+          } else {
+            authored.add(head);
           }
-        } else if (action.startsWith("rebase (start): checkout ")) {
-          if (integrationFound) return null;
+        } else if (rebaseStep === "start") {
+          if (integrationFound || authored.has(head)) return null;
           integrationFound = true;
           rebasing = true;
           tips.push({ commit: head, kind: "incoming" });
@@ -560,18 +569,25 @@ const makeCheckpointStore = Effect.gen(function* () {
             /^(checkout: moving from |reset: moving to )/.test(action) ||
             /^(merge |pull[ :]).*: Fast-forward$/.test(action)
           ) {
-            if (integrationFound) return null;
-            integrationFound = true;
-            tips.push({ commit: head, kind: "direct" });
+            // Resetting or checking out an edit made in this range does not
+            // import it. A previous integration still has to explain its paths.
+            if (!authored.has(head) && head !== input.from.head) {
+              if (integrationFound) return null;
+              integrationFound = true;
+              tips.push({ commit: head, kind: "direct" });
+            }
           } else if (
             /^(commit(?: \(merge\))?:|cherry-pick: |revert: |merge |pull[ :])/.test(action)
           ) {
             if (!parents || parents[0] !== previous) return null;
-            if (parents.length > 1) {
-              if (integrationFound || parents.length > HISTORY_INTEGRATION_MAX_TIPS + 1)
+            authored.add(head);
+            const incomingParents = parents.slice(1).filter((commit) => !authored.has(commit));
+            if (incomingParents.length > 0) {
+              if (integrationFound || incomingParents.length > HISTORY_INTEGRATION_MAX_TIPS) {
                 return null;
+              }
               integrationFound = true;
-              for (const commit of parents.slice(1)) {
+              for (const commit of incomingParents) {
                 tips.push({ commit, kind: "incoming" });
               }
             }
