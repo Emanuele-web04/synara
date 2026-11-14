@@ -101,8 +101,17 @@ function makeGit(input: {
   readonly removals: string[];
   readonly snapshots?: string[];
   readonly dirtyPaths?: ReadonlySet<string>;
+  readonly reclaimed?: string[];
+  readonly reclaimFailures?: ReadonlySet<string>;
 }) {
   return {
+    reclaimGeneratedFiles: ({ cwd }: { cwd: string }) =>
+      input.reclaimFailures?.has(cwd)
+        ? Effect.fail(new Error(`reclaim failed for ${cwd}`))
+        : Effect.sync(() => {
+            input.reclaimed?.push(cwd);
+            return { removedPaths: [], protectedPaths: [] };
+          }),
     execute: ({ cwd }: { cwd: string }) =>
       Effect.succeed({
         code: 0,
@@ -446,6 +455,79 @@ describe("managed worktrees", () => {
 
     expect(removals).toEqual([]);
     expect(remaining).toHaveLength(2);
+  });
+
+  it("reclaims generated files only from retained archived worktrees", async () => {
+    const archivedCount = MANAGED_WORKTREE_RETENTION_COUNT + 1;
+    const { root, paths } = await makeManagedRoot(archivedCount + 1);
+    const activePath = paths[archivedCount]!;
+    const archivedPaths = paths.slice(0, archivedCount);
+    const removals: string[] = [];
+    const reclaimed: string[] = [];
+    const git = makeGit({ removals, reclaimed });
+    const threads = [
+      ...archivedPaths.map(
+        (worktreePath, index) =>
+          ({
+            id: `archived-${index}`,
+            worktreePath,
+            associatedWorktreePath: worktreePath,
+            archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+            deletedAt: null,
+          }) as unknown as OrchestrationThread,
+      ),
+      {
+        id: "active",
+        worktreePath: activePath,
+        associatedWorktreePath: activePath,
+        archivedAt: null,
+        deletedAt: null,
+      } as unknown as OrchestrationThread,
+    ];
+
+    const remaining = await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+      }),
+    );
+
+    expect(removals).toEqual([archivedPaths[0]]);
+    expect(reclaimed.toSorted()).toEqual(archivedPaths.slice(1).toSorted());
+    expect(reclaimed).not.toContain(activePath);
+    expect(remaining).toHaveLength(archivedCount);
+  });
+
+  it("keeps reclaiming the other keepers when one reclaim fails", async () => {
+    const { root, paths } = await makeManagedRoot(3);
+    const removals: string[] = [];
+    const reclaimed: string[] = [];
+    const git = makeGit({ removals, reclaimed, reclaimFailures: new Set([paths[1]!]) });
+    const threads = paths.map(
+      (worktreePath, index) =>
+        ({
+          id: `archived-${index}`,
+          worktreePath,
+          associatedWorktreePath: worktreePath,
+          archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+          deletedAt: null,
+        }) as unknown as OrchestrationThread,
+    );
+
+    const remaining = await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+      }),
+    );
+
+    expect(removals).toEqual([]);
+    expect(reclaimed.toSorted()).toEqual([paths[0], paths[2]].toSorted());
+    expect(remaining).toHaveLength(3);
   });
 
   it("classifies deleted candidates without touching active or unowned worktrees", () => {
