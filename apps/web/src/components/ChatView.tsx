@@ -3,6 +3,7 @@ import {
   parseComputerInvocation,
   resolveComputerInvocationMode,
 } from "@synara/shared/computerInvocation";
+import { resolveComputerControlDefault } from "../computerControlMode";
 import {
   MessageId,
   OrchestrationThreadActivity,
@@ -1556,7 +1557,7 @@ export default function ChatView({
   // explicit default; clearing the draft removes request activation.
   const computerControlMode = resolveComputerInvocationMode({
     messageText: prompt,
-    enableComputerControl: settings.computerControlEnabled,
+    enableComputerControl: resolveComputerControlDefault(settings.computerControlEnabled),
   });
   const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
