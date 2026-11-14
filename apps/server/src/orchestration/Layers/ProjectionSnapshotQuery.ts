@@ -2122,21 +2122,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM (
           SELECT
             thread_id,
-            message_id,
-            ROW_NUMBER() OVER (
-              PARTITION BY thread_id
-              ORDER BY
-                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
-                sequence DESC,
-                created_at DESC,
-                message_id DESC
-            ) AS message_rank
+            message_id
           FROM projection_thread_messages
           WHERE thread_id = ${threadId}
-        ) AS ranks
+          ORDER BY sequence DESC, created_at DESC, message_id DESC
+          LIMIT CASE
+            WHEN ${maxMessages} IS NULL THEN -1
+            ELSE MAX(0, CAST(${maxMessages} AS INTEGER))
+          END
+        ) AS tail
         JOIN projection_thread_messages USING (thread_id, message_id)
         WHERE thread_id = ${threadId}
-          AND (${maxMessages} IS NULL OR message_rank <= ${maxMessages})
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
@@ -4255,7 +4251,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sql<{ historyRevisionSequence: number }>`
             SELECT COALESCE(MAX(sequence), 0) AS "historyRevisionSequence"
             FROM orchestration_events
-            WHERE aggregate_kind = 'thread' AND stream_id = ${threadId}
+            -- The unary plus keeps SQLite off the per-stream index, which would walk every
+            -- event of the thread. It then seeks the (event_type, stream_id) index instead.
+            WHERE +aggregate_kind = 'thread' AND stream_id = ${threadId}
               AND event_type IN ('thread.reverted', 'thread.conversation-rolled-back')
               AND sequence <= COALESCE((
                 SELECT MIN(last_applied_sequence) FROM projection_state
