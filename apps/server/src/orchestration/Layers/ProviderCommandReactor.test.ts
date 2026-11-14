@@ -14424,6 +14424,58 @@ describe("ProviderCommandReactor", () => {
       ]);
     });
 
+    it.each(["homePath", "configDir"] as const)(
+      "uses the active Claude %s for typed skills and native slash commands",
+      async (configuredDir) => {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-claude-skill-home-"));
+        createdSkillDirs.push(homeDir);
+        const customHome = path.join(homeDir, "work-claude");
+        const customConfig =
+          configuredDir === "homePath" ? path.join(customHome, ".claude") : customHome;
+        const skillDir = path.join("skills", claudeSkillName);
+        const defaultConfig = path.join(homeDir, ".claude");
+        for (const [configDir, body] of [
+          [defaultConfig, "DEFAULT CLAUDE SKILL BODY"],
+          [customConfig, "CUSTOM CLAUDE SKILL BODY"],
+        ] as const) {
+          fs.mkdirSync(path.join(configDir, skillDir), { recursive: true });
+          fs.writeFileSync(
+            path.join(configDir, skillDir, "SKILL.md"),
+            `---\nname: ${claudeSkillName}\ndescription: test skill\n---\n${body}\n`,
+          );
+        }
+        const makeHarness = () =>
+          createHarness({
+            threadModelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-opus-4-6",
+            },
+            skillCatalogHomeDir: homeDir,
+            serverSettings: {
+              providerInstances: {
+                claude_work: {
+                  driver: "claudeAgent",
+                  enabled: true,
+                  config: { [configuredDir]: customHome },
+                },
+              },
+            },
+          });
+
+        const inline = await sendTyped(await makeHarness(), `Please use /${claudeSkillName}`);
+        expect(inline.input).toContain("CUSTOM CLAUDE SKILL BODY");
+        expect(inline.input).not.toContain("DEFAULT CLAUDE SKILL BODY");
+        const command = `/${claudeSkillName} review this`;
+        const native = await sendTyped(await makeHarness(), command);
+        expect(native.input?.startsWith(command)).toBe(true);
+        expect(native.input).not.toContain("<skill name=");
+        expect(native.skills).toEqual([
+          { name: claudeSkillName, path: path.join(customConfig, skillDir, "SKILL.md") },
+        ]);
+      },
+    );
+
     it("ignores skill tokens in another agent's message", async () => {
       writeSkills();
       const turn = await sendTyped(await claudeHarness(), `Please /${claudeSkillName}`, "agent");

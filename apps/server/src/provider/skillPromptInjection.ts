@@ -11,6 +11,7 @@ import * as nodePath from "node:path";
 
 import type { ProviderKind, ProviderSkillReference } from "@synara/contracts";
 
+import { pathIsWithin } from "./claudePluginSkills.ts";
 import { leadingSlashTokenName } from "./promptSkillReferences.ts";
 import { skillNameKey } from "./skillsCatalog.ts";
 
@@ -40,7 +41,11 @@ function pathSegments(path: string): Set<string> {
   );
 }
 
-export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: string): boolean {
+export function shouldInlineSkillForProvider(
+  provider: ProviderKind,
+  skillPath: string,
+  claudeConfigDir?: string,
+): boolean {
   const segments = pathSegments(skillPath);
   switch (provider) {
     case "antigravity":
@@ -55,9 +60,14 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // only Synara-owned paths need inlining.
       return segments.has(".synara");
     case "claudeAgent":
-      // Claude Code only loads skills from .claude/skills folders, and only when the
-      // prompt starts with `/name`: selectSkillsToInline covers the other positions.
-      return !segments.has(".claude");
+      // The active account can place its native skills and plugins under a
+      // custom config directory. Project skills still live in .claude.
+      return (
+        !segments.has(".claude") &&
+        (claudeConfigDir === undefined ||
+          (!pathIsWithin(nodePath.join(claudeConfigDir, "skills"), skillPath) &&
+            !pathIsWithin(nodePath.join(claudeConfigDir, "plugins", "cache"), skillPath)))
+      );
     case "devin":
       return !(
         [".agents", ".claude", ".codeium", ".cognition", ".devin", ".windsurf"].some((dir) =>
@@ -83,13 +93,15 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
 function claudeNativelyLoadedSkill(
   providerInput: string,
   skills: ReadonlyArray<ProviderSkillReference>,
+  claudeConfigDir?: string,
 ): ProviderSkillReference | undefined {
   const leadingName = leadingSlashTokenName(providerInput);
   if (leadingName === null) return undefined;
   const key = skillNameKey(leadingName);
   return skills.find(
     (skill) =>
-      skillNameKey(skill.name) === key && !shouldInlineSkillForProvider("claudeAgent", skill.path),
+      skillNameKey(skill.name) === key &&
+      !shouldInlineSkillForProvider("claudeAgent", skill.path, claudeConfigDir),
   );
 }
 
@@ -102,6 +114,7 @@ export function selectSkillsToInline(input: {
   readonly provider: ProviderKind;
   readonly skills: ReadonlyArray<ProviderSkillReference>;
   readonly providerInput?: string | undefined;
+  readonly claudeConfigDir?: string | undefined;
 }): ProviderSkillReference[] {
   if (input.provider !== "claudeAgent") {
     return input.skills.filter((skill) => shouldInlineSkillForProvider(input.provider, skill.path));
@@ -111,7 +124,7 @@ export function selectSkillsToInline(input: {
   const native =
     input.providerInput === undefined
       ? undefined
-      : claudeNativelyLoadedSkill(input.providerInput, input.skills);
+      : claudeNativelyLoadedSkill(input.providerInput, input.skills, input.claudeConfigDir);
   return input.skills.filter((skill) => skill !== native);
 }
 
