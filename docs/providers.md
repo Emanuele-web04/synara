@@ -638,6 +638,18 @@ locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
 Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
 provider settings only when the install lives somewhere else entirely.
 
+### Claude turn plan
+
+Claude Code no longer offers its own task-list tools (`TodoWrite`, `TaskCreate`, `TaskUpdate`) to
+models newer than Opus 4.7, Sonnet 4.6, and Haiku 4.5, so those sessions never reported a plan.
+Synara gives Claude sessions its own `synara_update_plan` tool instead, the same way Claude Desktop
+offers `update_plan`. Its schema is always loaded rather than deferred behind tool search, and its
+description tells the model when to keep a plan; Synara adds nothing to the system prompt. Each
+accepted call replaces the turn's task list, and a turn that ends normally checks off the steps
+still open. An interrupted or failed turn keeps them as they were. Only Claude sessions are offered
+the tool: providers with a native plan, such as Codex, keep their own. Older Claude models that
+still use the native task-list tools keep working as before.
+
 ### Claude Artifacts, `/design` and `/slides`
 
 Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
