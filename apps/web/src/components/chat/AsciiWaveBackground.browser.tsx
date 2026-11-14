@@ -1,5 +1,5 @@
 // Purpose: Browser checks for the landing ASCII field’s rendering and lifecycle.
-// Covers hidden owners, reduced motion, Retina allocation and complete resize frames.
+// Covers cadence, hidden owners, reduced motion, Retina allocation and resize frames.
 import "../../index.css";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -56,6 +56,24 @@ it("pauses canvas work in an invisible retained owner, resumes, and stops on unm
   draws.mockClear();
   await wait(150);
   expect(draws.mock.calls.length).toBe(0);
+});
+
+it("keeps the idle field moving and redraws faster after input", async () => {
+  const { canvas } = await mount(400, 300);
+  const ctx = canvas.getContext("2d")!;
+  const clears = vi.spyOn(ctx, "clearRect");
+  const frames = () => clears.mock.calls.length;
+
+  await wait(5100);
+  clears.mockClear();
+  await wait(1200);
+  const idleFrames = frames();
+  expect(idleFrames).toBeGreaterThan(0);
+
+  clears.mockClear();
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+  await wait(1200);
+  expect(frames()).toBeGreaterThan(idleFrames * 1.5);
 });
 
 it("keeps the reduced-motion field unchanged after a user-triggered ripple settles", async () => {
