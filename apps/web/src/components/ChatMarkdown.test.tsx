@@ -462,10 +462,10 @@ $$
   it("marks table columns by content and offers a copy button", async () => {
     const markup = await renderMarkdown(
       [
-        "| | Peak memory | Time |",
-        "|---|---|---|",
-        "| Reading the transcript for the prediction (largest seeded thread) | 290 MB | 3.1–4.9 s |",
-        "| Opening a chat | – | 0.7 s |",
+        "| | Peak memory | Time | Cost |",
+        "|---|---|---|---|",
+        "| Reading the transcript for the prediction (largest seeded thread) | 290 MB | 3.1–4.9 s | $12.50 |",
+        "| Opening a chat | – | 0.7 s | $123,456.789–$234,567.890 |",
       ].join("\n"),
     );
 
@@ -474,6 +474,8 @@ $$
     expect(markup).toContain('<th data-table-column="numeric">Time</th>');
     expect(markup).toContain('<td data-table-column="numeric">3.1–4.9\u00A0s</td>');
     expect(markup).toContain('<td data-table-cell="empty" data-table-column="numeric">–</td>');
+    expect(markup).toContain('<td data-table-column="numeric">$12.50</td>');
+    expect(markup).toContain('<td data-table-column="numeric">$123,456.789–$234,567.890</td>');
     expect(markup).toMatch(/<td data-table-column="text">Reading the transcript/);
   });
 

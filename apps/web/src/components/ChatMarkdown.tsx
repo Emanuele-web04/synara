@@ -383,8 +383,8 @@ function rehypeRestoreLiteralDollars() {
 }
 
 const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
-  // Before KaTeX, while math is still a code element the table layout leaves alone.
-  rehypeTableLayout,
+  // Classify literal dollars while leaving the math nodes and source offsets for KaTeX.
+  [rehypeTableLayout, restoreLiteralDollarPlaceholders],
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];

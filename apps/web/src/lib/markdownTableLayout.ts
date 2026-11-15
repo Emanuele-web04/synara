@@ -68,19 +68,24 @@ export function glueTableCellText(text: string): string {
 
 /**
  * The table's Markdown as written. A table inside a list or quote repeats the container's
- * indent or `>` on every row after the first; `column` (1-based, of the first row) drops it.
+ * indent or `>` on each row after the first. Quote spacing can vary between rows.
  */
 export function extractTableMarkdown(
   source: string,
   position: { readonly start: number; readonly end: number; readonly column: number },
 ): string {
   const prefixWidth = Math.max(0, position.column - 1);
+  const firstLineStart = source.lastIndexOf("\n", position.start - 1) + 1;
+  const quoteDepth = source.slice(firstLineStart, position.start).match(/>/g)?.length ?? 0;
+  const quotePrefix = quoteDepth > 0 ? new RegExp(`^(?:[ \t]*>[ \t]?){1,${quoteDepth}}`) : null;
   return source
     .slice(position.start, position.end)
     .split("\n")
     .map((line, index) => {
+      if (index === 0) return line;
+      if (quotePrefix) return line.replace(quotePrefix, "");
       const prefix = line.slice(0, prefixWidth);
-      return index > 0 && /^[\s>]*$/.test(prefix) ? line.slice(prefixWidth) : line;
+      return /^[ \t]*$/.test(prefix) ? line.slice(prefixWidth) : line;
     })
     .join("\n")
     .trim();
@@ -141,7 +146,7 @@ function tableRows(table: HastNode): HastNode[][] {
   return rows;
 }
 
-function layoutTable(table: HastNode): void {
+function layoutTable(table: HastNode, normalizeText?: (value: string) => string): void {
   const rows = tableRows(table);
   const columnCount = rows.reduce((count, row) => Math.max(count, row.length), 0);
   const columns = Array.from({ length: columnCount }, (): TableCellKind[] => []);
@@ -150,8 +155,9 @@ function layoutTable(table: HastNode): void {
   for (const row of rows) {
     row.forEach((cell, index) => {
       const { text, multiline } = readCell(cell, true);
-      const kind = multiline ? "text" : classifyTableCell(text);
-      const length = text.trim().length;
+      const displayText = normalizeText?.(text) ?? text;
+      const kind = multiline ? "text" : classifyTableCell(displayText);
+      const length = displayText.trim().length;
       if (cell.tagName === "th") {
         headers.push({ cell, index, length, kind });
         return;
@@ -185,10 +191,10 @@ function layoutTable(table: HastNode): void {
  * Marks every table's cells with `data-table-column`, empty cells with
  * `data-table-cell="empty"`, and headers wider than their values with `data-table-header="wrap"`.
  */
-export function rehypeTableLayout() {
+export function rehypeTableLayout(normalizeText?: (value: string) => string) {
   const visit = (node: HastNode): void => {
     if (node.type === "element" && node.tagName === "table") {
-      layoutTable(node);
+      layoutTable(node, normalizeText);
       return;
     }
     for (const child of node.children ?? []) visit(child);

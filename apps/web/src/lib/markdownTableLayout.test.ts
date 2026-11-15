@@ -88,9 +88,9 @@ describe("extractTableMarkdown", () => {
   });
 
   it("drops the quote or list indent repeated on later rows", () => {
-    const quoted = "> | a |\n> |---|\n> | 1 |";
+    const quoted = "> | a |\n>|---|\n> | 1 |\n>| 2 |";
     expect(extractTableMarkdown(quoted, { start: 2, end: quoted.length, column: 3 })).toBe(
-      "| a |\n|---|\n| 1 |",
+      "| a |\n|---|\n| 1 |\n| 2 |",
     );
     const listed = "- item\n\n  | a |\n  |---|\n  | 1 |";
     const start = listed.indexOf("| a");
