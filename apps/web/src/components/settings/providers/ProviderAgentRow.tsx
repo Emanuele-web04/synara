@@ -193,7 +193,7 @@ export function ProviderAgentRow(props: {
                 },
                 t,
               )}
-              {providerUpdateLabel ? (
+              {props.open && providerUpdateLabel ? (
                 <>
                   {" · "}
                   <span
