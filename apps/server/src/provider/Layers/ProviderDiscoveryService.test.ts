@@ -284,6 +284,36 @@ describe("ProviderDiscoveryService provider instances", () => {
     expect(captured).not.toHaveProperty("accountId");
   });
 
+  it("uses host Pi configuration for a legacy discovery request without an instance id", async () => {
+    const observed = vi.fn();
+    await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            observed(input);
+            return { models: [] };
+          }),
+      },
+      settings: { providerInstances: { pi: { driver: "pi", enabled: true } } },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        yield* discovery.listModels({
+          provider: "pi",
+          binaryPath: "/client/bin/pi",
+          agentDir: "/client/pi-profile",
+          environment: { PATH: "/client/bin" },
+        });
+      }),
+    });
+
+    expect(observed).toHaveBeenCalledOnce();
+    const input = observed.mock.calls[0]?.[0];
+    expect(input).toMatchObject({ provider: "pi", instanceId: "pi" });
+    expect(input).not.toHaveProperty("binaryPath");
+    expect(input).not.toHaveProperty("agentDir");
+    expect(input).not.toHaveProperty("environment");
+  });
+
   it("passes resolved Codex instance options into plugin discovery", async () => {
     let captured: Record<string, unknown> | undefined;
 
