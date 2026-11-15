@@ -37,12 +37,8 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      # Reads history: a blobless full clone (commits and trees, blobs on demand).
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Filter docs-only changes
         id: filter

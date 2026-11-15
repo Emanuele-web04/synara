@@ -68,7 +68,7 @@ test("history readers clone blobless; jobs that never read history stay shallow"
   // Measured: a blobless full clone took 9-12 s per hosted job against 6 s
   // shallow, and 10 s against 37 s for the full clone Migration Lineage used.
   const jobs = workflow.split(/\n(?=  [a-z_-]+:\n)/);
-  const historyReaders = ["changes", "migration_lineage"];
+  const historyReaders = ["migration_lineage"];
   let checked = 0;
   for (const job of jobs) {
     const name = job.trimStart().split(":")[0];
