@@ -2183,6 +2183,44 @@ const makeRetainedPiLayer = (source: ReturnType<typeof makeFakeCodexAdapter>) =>
     }),
   );
 
+it.effect("starts Pi using only the host provider's configured installation and profile", () => {
+  const pi = makeFakeCodexAdapter("pi");
+  const instanceId = asProviderInstanceId("pi_selected");
+  const settings = ServerSettingsService.layerTest({
+    providerInstances: {
+      [instanceId]: {
+        driver: "pi",
+        enabled: true,
+        config: { binaryPath: "/host/bin/pi" },
+      },
+    },
+  });
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService;
+    const threadId = asThreadId("pi-settings-owned-install");
+    yield* provider.startSession(threadId, {
+      provider: "pi",
+      providerInstanceId: instanceId,
+      threadId,
+      runtimeMode: "full-access",
+      providerOptions: {
+        pi: {
+          binaryPath: "/client/bin/pi",
+          agentDir: "/client/pi-profile",
+          environment: { PATH: "/client/bin" },
+        },
+      },
+    });
+    assert.deepEqual(pi.startSession.mock.calls[0]?.[0].providerOptions, {
+      pi: { binaryPath: "/host/bin/pi" },
+    });
+  }).pipe(
+    Effect.provide(
+      makeRegistrySwitchLayer("pi", pi.adapter, makeFakeCodexAdapter("droid").adapter, settings),
+    ),
+  );
+});
+
 it.effect("stops a retained pi context without a binding after a failed startup", () =>
   Effect.gen(function* () {
     const source = makeFakeCodexAdapter("pi");
