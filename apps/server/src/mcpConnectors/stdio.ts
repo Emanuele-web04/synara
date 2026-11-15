@@ -1,11 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpConnectorTransport } from "@synara/contracts";
 import { McpStdioTransport } from "../platform/mcpStdioTransport.ts";
 import { jsonRpcErrorResult, type McpConnectorProxyResult } from "./proxy.ts";
 import type { McpConnectorForwardRequest } from "./runtime.ts";
+import { lazyModule } from "../lazyModule.ts";
+
+// The MCP client and its schemas (with their validators, about 200 modules) are needed
+// only once a local MCP server is actually used, so they load on first use instead of
+// at every backend start.
+const loadMcpSdk = lazyModule(async () => {
+  const [client, types] = await Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/types.js"),
+  ]);
+  return {
+    Client: client.Client,
+    ResultSchema: types.ResultSchema,
+    JSONRPCMessageSchema: types.JSONRPCMessageSchema,
+  };
+});
 
 type StdioConfig = Extract<McpConnectorTransport, { transport: "stdio" }>;
 class StdioUnavailable extends Error {}
@@ -30,6 +44,7 @@ async function open(
   owned: Set<StdioConnection>,
   connectorId: string | null,
 ): Promise<StdioConnection> {
+  const { Client } = await loadMcpSdk();
   const client = new Client({ name: "Synara", version: "1.0.0" }, { capabilities: {} });
   const transport = new McpStdioTransport(config);
   const connection = { client, transport, connectorId };
@@ -91,6 +106,8 @@ export class StdioConnectorSessions {
     config: StdioConfig,
     request: McpConnectorForwardRequest,
   ): Promise<McpConnectorProxyResult> {
+    // Before any check, so every decision below sees the state as it is after the load.
+    const { JSONRPCMessageSchema, ResultSchema } = await loadMcpSdk();
     const owner = request.ownerToken;
     if (!owner || !this.ownerActive(owner) || this.disposed || this.retired.has(connectorId))
       return jsonRpcErrorResult(request.body, "The MCP session is unavailable.", 403);
