@@ -8,7 +8,11 @@ import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveAvailableProviderPreference } from "~/lib/providerAvailability";
+import {
+  findProviderStatus,
+  isProviderUsable,
+  resolveAvailableProviderPreference,
+} from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
@@ -233,6 +237,19 @@ export function useChatProviderModels({
         ? activeProject.defaultModelSelection
         : null
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
+  // A persisted selection pointing at a provider that can never be selected (CLI
+  // missing or unusable after statuses reconcile) would keep the bootstrap skeleton
+  // forever: the swap it waits on cannot land. Drop it so the picker renders the
+  // provider that was actually resolved.
+  const pickerPersistedModelSelection =
+    persistedComposerModelSelection !== null &&
+    persistedComposerModelSelection.provider !== selectedProvider &&
+    providerStatusesReconciled &&
+    !isProviderUsable(
+      findProviderStatus(localProviderStatuses, persistedComposerModelSelection.provider),
+    )
+      ? null
+      : persistedComposerModelSelection;
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
@@ -245,7 +262,7 @@ export function useChatProviderModels({
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
-    persistedModelSelection: persistedComposerModelSelection,
+    persistedModelSelection: pickerPersistedModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
     requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,
