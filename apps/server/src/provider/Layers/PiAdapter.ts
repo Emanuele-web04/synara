@@ -19,7 +19,6 @@ import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-co
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import { azureProvider } from "@earendil-works/pi-ai/providers/azure";
 import { isModelType } from "@earendil-works/pi-ai/utils/model-operations";
-import { resetApiProviders } from "@earendil-works/pi-ai/compat";
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -397,6 +396,13 @@ export function makePiBashProcessSupervisor(
 const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
   () => import("@earendil-works/pi-coding-agent"),
 );
+
+// Only an isolated Pi account resets the API registry, and this entrypoint pulls in
+// every provider API plus the schema library (about 850 modules, roughly 70 ms). Loading
+// it on first use keeps that out of every backend start. Pi's SDK imports the same
+// module, so the registry it resets is the one the SDK reads.
+const loadPiAiCompatModule: () => Promise<typeof import("@earendil-works/pi-ai/compat")> =
+  lazyModule(() => import("@earendil-works/pi-ai/compat"));
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
@@ -1994,25 +2000,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               ),
             },
       );
-    const preparePiDiscoveryMode = (
-      environment: Readonly<Record<string, string>> | undefined,
-      instanceId: string | undefined,
-    ) => {
-      const isolatedAccount =
-        environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
-      const reservation = reservePiExtensionMode(isolatedAccount);
-      if (isolatedAccount) {
-        resetApiProviders();
-      }
-      return reservation;
-    };
     const withPiDiscoveryReservation = async <A>(
       environment: Readonly<Record<string, string>> | undefined,
       instanceId: string | undefined,
       run: (noExtensions: boolean) => Promise<A>,
     ): Promise<A> => {
-      const reservation = preparePiDiscoveryMode(environment, instanceId);
+      const isolatedAccount =
+        environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+      const reservation = reservePiExtensionMode(isolatedAccount);
       try {
+        // Reset under the reservation and before discovery runs, as before.
+        if (isolatedAccount) {
+          (await loadPiAiCompatModule()).resetApiProviders();
+        }
         return await run(reservation.noExtensions);
       } finally {
         reservation.release();
@@ -3349,7 +3349,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }
         }
         if (isolatedAccount) {
-          resetApiProviders();
+          const piAiCompat = yield* Effect.tryPromise({
+            try: () => loadPiAiCompatModule(),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/start",
+                detail: toMessage(cause, "Failed to load Pi SDK."),
+                cause,
+              }),
+          });
+          piAiCompat.resetApiProviders();
         }
         const piSdk = yield* loadPiSdk("session/start");
         const processSupervisor = makePiBashProcessSupervisor({

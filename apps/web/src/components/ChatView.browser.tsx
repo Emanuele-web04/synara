@@ -2309,8 +2309,7 @@ async function waitForMountedChatReady(options: {
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
-    // Allow a cold browser fixture to finish mounting on CI.
-    { timeout: 45_000, interval: 16 },
+    { timeout: 20_000, interval: 16 },
   );
   await waitForLayout();
 }

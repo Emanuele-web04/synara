@@ -12,6 +12,24 @@ export interface FetchJsonResult {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+// Usage reads are plain promises that no request owns. One that was still in flight kept
+// a backend that was asked to quit alive until the provider answered, up to the deadline
+// above. Only GET reads are cancelled: a token refresh is a POST, and a refresh the
+// provider has already accepted must still be received and stored.
+let usageReadController = new AbortController();
+
+/** Server shutdown: cancels in-flight usage reads and refuses new ones. */
+export function stopProviderUsageReads(): void {
+  usageReadController.abort();
+}
+
+/** Server start: allows usage reads again in a process where an earlier server stopped them. */
+export function resumeProviderUsageReads(): void {
+  if (usageReadController.signal.aborted) {
+    usageReadController = new AbortController();
+  }
+}
+
 export async function fetchJson(input: {
   service: string;
   url: string;
@@ -30,6 +48,7 @@ export async function fetchJson(input: {
       : input.bodyFormat === "form"
         ? new URLSearchParams(input.body as Record<string, string>).toString()
         : JSON.stringify(input.body);
+  const method = input.method ?? "GET";
   const response = await outboundHttp.request({
     policy: {
       service: input.service,
@@ -47,8 +66,9 @@ export async function fetchJson(input: {
       ...(input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {}),
     },
     url: input.url,
-    method: input.method ?? "GET",
+    method,
     headers: input.headers,
+    ...(method === "GET" ? { signal: usageReadController.signal } : {}),
     ...(encodedBody === undefined ? {} : { body: encodedBody }),
   });
 
