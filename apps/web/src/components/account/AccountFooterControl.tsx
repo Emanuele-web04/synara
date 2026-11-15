@@ -5,7 +5,6 @@
 // Layer: Web account feature (sidebar footer).
 
 import { useNavigate } from "@tanstack/react-router";
-import { toastManager } from "~/components/ui/toast";
 import {
   Menu,
   MenuGroup,
@@ -27,9 +26,10 @@ import { openExternalLink } from "~/lib/linkChips";
 import { isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
 import { useTranslation } from "~/i18n";
-import { accountErrorMessage, accountInitial, profileShareUrl } from "~/lib/accountLogic";
+import { accountInitial, profileShareUrl } from "~/lib/accountLogic";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
 import { useAccountDialogStore } from "./accountDialogStore";
+import { signOutWithToast } from "./signOutWithToast";
 import { RemoteConnectionsCoachmark } from "../hosts/RemoteConnectionsAnnouncement";
 
 const DEFAULT_MENU_AVATAR_COLOR = PROFILE_AVATAR_COLORS[0] ?? "#22c55e";
@@ -60,18 +60,6 @@ function SignedInFooter() {
   // or null for the initials placeholder). Pre-onboarding there is no
   // profile yet, so the provider picture is the best available image.
   const avatarImage = profile ? (profile.avatarUrl ?? null) : (me.image ?? null);
-
-  const handleSignOut = async () => {
-    try {
-      await account.signOut.mutateAsync();
-    } catch (cause) {
-      toastManager.add({
-        type: "error",
-        title: "Could not sign out",
-        description: accountErrorMessage(cause, "Try again in a moment."),
-      });
-    }
-  };
 
   return (
     <Menu>
@@ -162,7 +150,7 @@ function SignedInFooter() {
         <MenuGroup>
           {/* Sign-out also unlinks this machine's host (ADR 0015): its key
               leaves the directory and other devices' sessions to it end. */}
-          <MenuItem variant="destructive" onClick={() => void handleSignOut()}>
+          <MenuItem variant="destructive" onClick={() => void signOutWithToast(account)}>
             <span>Sign out</span>
           </MenuItem>
         </MenuGroup>

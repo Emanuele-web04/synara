@@ -26,6 +26,7 @@ const POLAR_BINDINGS = [
 ] as const;
 const RUNTIME_CONFIG_KEY = "account-api-runtime-config-sha256";
 const RUNTIME_STOP_TIMEOUT_MS = 15_000;
+const INSTANCE_PATH = "/api/v1/instance";
 
 // Optional API features use the same secret names as the existing Bun service.
 type OptionalSecrets = Partial<
@@ -41,6 +42,7 @@ type OptionalSecrets = Partial<
     | "REMOTE_TEST_USER_IDS"
     | "REMOTE_TEST_ADDITIONAL_USER_IDS"
     | "REMOTE_BETA_ACCESS_ENABLED"
+    | "SYNARA_API_PERF"
     | "S3_ENDPOINT"
     | "S3_BUCKET"
     | "S3_ACCESS_KEY_ID"
@@ -64,6 +66,9 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
   override enableInternet = true;
   // Observe restarts without logging the runtime environment or its credentials.
   override onStart() {
+    // A (re)started process may describe itself differently; never serve its predecessor's answer.
+    this.instanceGeneration += 1;
+    this.instanceCache = undefined;
     console.info("[account-api] Container started");
   }
   override envVars = {
@@ -97,6 +102,8 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
           "CLOUDFLARE_TUNNEL_DOMAIN",
           "REMOTE_TEST_USER_IDS",
           "REMOTE_BETA_ACCESS_ENABLED",
+          // Opt-in request timings; unset keeps the API uninstrumented.
+          "SYNARA_API_PERF",
           "S3_ENDPOINT",
           "S3_BUCKET",
           "S3_ACCESS_KEY_ID",
@@ -127,19 +134,35 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
   };
 
   private runtimeConfiguration: Promise<void> | undefined;
+  private fingerprint: string | undefined;
+  /**
+   * `GET /api/v1/instance` is a pure function of the running process's
+   * configuration, and released desktops poll it every 15 s. Keep the last 200
+   * body the running process returned, tied to its configuration fingerprint,
+   * so those polls stop waking the container. `onStart` drops it.
+   */
+  private instanceCache:
+    | { fingerprint: string; body: ArrayBuffer; contentType: string }
+    | undefined;
+  private instanceGeneration = 0;
+
+  private runtimeFingerprint(): string {
+    this.fingerprint ??= createHash("sha256")
+      .update(
+        JSON.stringify(
+          Object.entries(this.envVars).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        ),
+      )
+      .digest("hex");
+    return this.fingerprint;
+  }
 
   private ensureRuntimeConfiguration(): Promise<void> {
     if (!this.runtimeConfiguration) {
       this.runtimeConfiguration = (async () => {
-        const fingerprint = createHash("sha256")
-          .update(
-            JSON.stringify(
-              Object.entries(this.envVars).sort(([left], [right]) =>
-                left < right ? -1 : left > right ? 1 : 0,
-              ),
-            ),
-          )
-          .digest("hex");
+        const fingerprint = this.runtimeFingerprint();
         const previous = await this.ctx.storage.get<string>(RUNTIME_CONFIG_KEY);
         if (previous === fingerprint) return;
 
@@ -179,21 +202,75 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    await this.ensureRuntimeConfiguration();
-    // A matching stored config does not prove a process survived sleep or a crash.
-    // Use the SDK's throwing readiness path before its fetch can expose startup errors.
-    if (!this.ctx.container?.running) {
-      try {
-        await this.startAndWaitForPorts();
-      } catch (error) {
-        // Do not reuse a historical readiness claim after a failed restart.
-        this.runtimeConfiguration = undefined;
-        await this.ctx.storage.delete(RUNTIME_CONFIG_KEY);
-        throw error;
+    try {
+      await this.ensureRuntimeConfiguration();
+      // A matching stored config does not prove a process survived sleep or a crash.
+      // Use the SDK's throwing readiness path before its fetch can expose startup errors.
+      if (!this.ctx.container?.running) {
+        try {
+          await this.startAndWaitForPorts();
+        } catch (error) {
+          // Do not reuse a historical readiness claim after a failed restart.
+          this.runtimeConfiguration = undefined;
+          await this.ctx.storage.delete(RUNTIME_CONFIG_KEY);
+          throw error;
+        }
       }
+    } catch (error) {
+      if (isRefreshRequest(request)) return refreshNotAttempted();
+      throw error;
     }
-    return super.fetch(request);
+    if (!isInstanceRequest(request)) return super.fetch(request);
+
+    const fingerprint = this.runtimeFingerprint();
+    const cached = this.instanceCache;
+    if (cached?.fingerprint === fingerprint) {
+      // Today every poll keeps the container awake; preserve that sleep behavior.
+      this.renewActivityTimeout();
+      return new Response(cached.body.slice(0), {
+        status: 200,
+        headers: { "Content-Type": cached.contentType, "Cache-Control": "no-store" },
+      });
+    }
+    const generation = this.instanceGeneration;
+    const response = await super.fetch(request);
+    const contentType = response.headers.get("content-type");
+    if (response.status !== 200 || !contentType?.toLowerCase().startsWith("application/json")) {
+      return response;
+    }
+    const body = await response.arrayBuffer();
+    // A restart while this request was in flight makes its answer stale.
+    if (generation === this.instanceGeneration && this.ctx.container?.running) {
+      this.instanceCache = { fingerprint, body: body.slice(0), contentType };
+    }
+    return new Response(body, response);
   }
+}
+
+function isInstanceRequest(request: Request): boolean {
+  return request.method === "GET" && new URL(request.url).pathname === INSTANCE_PATH;
+}
+
+function isRefreshRequest(request: Request): boolean {
+  return request.method === "POST" && new URL(request.url).pathname === "/api/v1/auth/refresh";
+}
+
+/**
+ * Up to here the API process has not seen the request, so its refresh token
+ * provably never reached the identity provider. Answer with the API's own
+ * pre-dispatch refusal, which released desktops treat as "keep the token and
+ * renew later"; the generic 503 below reads to them as an uncertain refresh.
+ * A failure after forwarding has an unknown outcome and never gets this answer.
+ */
+function refreshNotAttempted(): Response {
+  console.error("[account-api] Container unavailable");
+  return Response.json(
+    {
+      error: "refresh_not_attempted",
+      message: "Account service temporarily unavailable — the refresh was not attempted",
+    },
+    { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "5" } },
+  );
 }
 
 export default {

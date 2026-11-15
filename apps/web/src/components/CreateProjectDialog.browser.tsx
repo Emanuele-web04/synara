@@ -220,7 +220,7 @@ describe("CreateProjectDialog multi-folder projects", () => {
     await addFolder("/repos/shared");
 
     await expect.element(page.getByText("Primary", { exact: true })).toBeInTheDocument();
-    expect(document.body.textContent).toContain("run in Local mode with Codex or Claude");
+    expect(document.body.textContent).toContain("A worktree isolates only the primary folder");
 
     await page.getByRole("button", { name: "Create project" }).click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());

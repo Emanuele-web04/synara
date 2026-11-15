@@ -54,7 +54,7 @@ describe("draft thread creation", () => {
       threadId,
       projectId,
       thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -80,7 +80,7 @@ describe("draft thread creation", () => {
       interactionMode: "default",
       envMode: "local",
       workingDirectory: "/Users/test/Downloads",
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
       beforeDispatch: async (id) => {
         linked.push(id);
@@ -129,7 +129,7 @@ describe("draft thread creation", () => {
       threadId,
       projectId,
       thread: null,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -159,7 +159,7 @@ describe("draft thread creation", () => {
         runtimeMode: "approval-required",
         interactionMode: "default",
         envMode: "local",
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
         beforeDispatch: async () => {
           throw new Error("offline");
@@ -223,7 +223,7 @@ describe("draft thread creation", () => {
         runtimeMode: "approval-required",
         interactionMode: "default",
         envMode: "local",
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
         beforeDispatch: async (id) => {
           if (stage !== "link") return;

@@ -1,7 +1,8 @@
 // FILE: ThreadHoverCardContent.tsx
 // Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
 //          the title with a relative time on the header line, then project,
-//          source folder, the remote computer, git branch, worktree identity, pull request,
+//          source folder, the remote computer, git branch, worktree identity, child threads,
+//          pull request,
 //          and the chat's current model rows when available, plus an excerpt of any unsent draft.
 // Layer: Sidebar UI component
 // Exports: ThreadHoverCardContent
@@ -14,7 +15,7 @@ import type { MouseEvent, ReactNode } from "react";
 
 import { useThreadDraftPreviewText } from "~/composerDraftStore";
 import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
-import { GitBranchIcon, GlobeIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
+import { ChildThreadsIcon, GitBranchIcon, GlobeIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { providerModelsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
@@ -61,6 +62,8 @@ export type ThreadHoverCardContentProps = {
   status: ThreadStatusPill | null;
   /** Computer a remote chat runs on: the row's connection globe, repeated on the card. */
   hostName?: string | null;
+  /** Agent-created child threads, shown when the nesting setting is on. */
+  childThreadCount?: number;
 };
 
 const META_ROW_CLASS_NAME = `${SIDEBAR_HOVER_CARD_ROW_CLASS_NAME} text-foreground/80`;
@@ -141,6 +144,7 @@ export function ThreadHoverCardContent({
   modelCatalogQueryOptions,
   status,
   hostName = null,
+  childThreadCount = 0,
 }: ThreadHoverCardContentProps) {
   const { t } = useTranslation();
   const hasMeta =
@@ -151,7 +155,8 @@ export function ThreadHoverCardContent({
     Boolean(worktreeName) ||
     Boolean(pullRequest) ||
     Boolean(model) ||
-    Boolean(status);
+    Boolean(status) ||
+    childThreadCount > 0;
 
   return (
     <div
@@ -229,6 +234,11 @@ export function ThreadHoverCardContent({
           {worktreeName ? (
             <MetaRow icon={<WorktreeIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
               {worktreeName}
+            </MetaRow>
+          ) : null}
+          {childThreadCount > 0 ? (
+            <MetaRow icon={<ChildThreadsIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
+              {t("workspace:childThreadCount", { count: childThreadCount })}
             </MetaRow>
           ) : null}
           {pullRequest ? <PullRequestRow pr={pullRequest} onOpen={onOpenPullRequest} /> : null}

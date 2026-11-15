@@ -443,7 +443,7 @@ describe("workspaceSidebarSearch", () => {
       createChat: async () => {},
       openTerminal() {},
       browseFolders: async () => ({ parentPath: "/", entries: [] }),
-      createProject: async () => "",
+      createProject: async () => ({ projectId: remoteThread.projectId, path: "/" }),
       openProject: async () => "",
       recover() {},
     },

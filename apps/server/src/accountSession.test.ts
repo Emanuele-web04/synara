@@ -19,6 +19,8 @@ import {
   writeAccountCredentials,
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
+import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistry.ts";
+import { registerRemoteAccessGrantedWake } from "./hostConnectivitySignals.ts";
 import type { AccountBillingStatus } from "@synara/contracts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
@@ -85,6 +87,60 @@ describe("billing account scope", () => {
     ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
     expect((await readAccountFile(baseDir))?.userId).toBe("user_2");
   });
+
+  it("lifts a registration refusal when access becomes granted, not on every granted read", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const registerDevice = vi.fn(() =>
+      Promise.reject(
+        new AccountApiError({ code: "not_host_owner", status: 403, message: "Refused" }),
+      ),
+    );
+    const session = createAccountSession({
+      baseDir,
+      accountUrl: ACCOUNT_URL,
+      client: makeClient({
+        me: async () => meResponse(),
+        registerDevice,
+        startHostLink: accountServiceUnavailable,
+        billingStatus: async () => ({ ...billing, access: "granted" as const }),
+      }),
+    });
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledOnce();
+
+    await session.billingStatus();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+
+    // Still granted, still refused for another reason: the backoff holds.
+    await session.billingStatus();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["granted", 1],
+    ["none", 0],
+  ] as const)(
+    "lets a refused host retry only when a billing read says %s access",
+    async (access, wakes) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const wake = vi.fn();
+      registerRemoteAccessGrantedWake(wake);
+      try {
+        const client = makeClient({ billingStatus: async () => ({ ...billing, access }) });
+        await expect(
+          createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client }).billingStatus(),
+        ).resolves.toMatchObject({ access });
+        expect(wake).toHaveBeenCalledTimes(wakes);
+      } finally {
+        registerRemoteAccessGrantedWake(undefined);
+      }
+    },
+  );
 
   it("forwards only the interval and uses the stored account's credentials", async () => {
     const baseDir = makeBaseDir();
@@ -171,6 +227,10 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
   } as AccountClient;
+}
+
+function accountServiceUnavailable(): Promise<never> {
+  return Promise.reject(new Error("Account service unavailable"));
 }
 
 function meResponse(overrides: Partial<AccountMe> = {}): AccountMe {
@@ -409,6 +469,189 @@ describe("status", () => {
 
     await expect(session.status()).rejects.toThrow("ECONNREFUSED");
   });
+
+  it("logs once, without secrets, why status reports signed out after a renewed token is refused", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let rotation = 1;
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        me: () =>
+          Promise.reject(
+            new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" }),
+          ),
+        refreshAccessToken: async () => {
+          rotation += 1;
+          return {
+            accessToken: `access-${rotation}`,
+            refreshToken: `refresh-${rotation}`,
+            user: { id: "user_1", email: "ada@example.com" },
+          };
+        },
+      }),
+    );
+    try {
+      // A status poller asks repeatedly; the log says why once.
+      expect(await session.status()).toEqual({ state: "signed-out" });
+      expect(await session.status()).toEqual({ state: "signed-out" });
+      expect(warn).toHaveBeenCalledExactlyOnceWith("[account] session status_unauthorized", {
+        status: 401,
+        code: "unauthorized",
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/access-|refresh-|user_1|org_1|ada@/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("backs off a refused device registration and retries at once for another workspace", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const registerDevice = vi.fn(() =>
+        Promise.reject(
+          new AccountApiError({
+            code: "subscription_required",
+            status: 403,
+            message: "Remote access needs a subscription",
+          }),
+        ),
+      );
+      const session = sessionFor(
+        baseDir,
+        makeClient({
+          me: async (token) =>
+            meResponse(token === "access-2" ? { organization: { id: "org_2", name: "Team" } } : {}),
+          registerDevice,
+          startHostLink: accountServiceUnavailable,
+        }),
+      );
+
+      // Status reads keep reporting signed in, but stop re-posting the refusal.
+      for (let read = 0; read < 3; read++)
+        expect(await session.status()).toMatchObject({ state: "signed-in" });
+      expect(registerDevice).toHaveBeenCalledOnce();
+
+      // The first retry waits at most a minute; the next refusal doubles it.
+      vi.advanceTimersByTime(60_000);
+      await session.status();
+      await session.status();
+      expect(registerDevice).toHaveBeenCalledTimes(2);
+
+      // Another workspace is another registration: no waiting.
+      await writeAccountCredentials(
+        baseDir,
+        credentials({ userId: "user_1", organizationId: "org_2", accessToken: "access-2" }),
+      );
+      expect(await session.status()).toMatchObject({ state: "signed-in" });
+      expect(registerDevice).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retrying a registration that failed without a refusal", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const registerDevice = vi.fn(accountServiceUnavailable);
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        me: async () => meResponse(),
+        registerDevice,
+        startHostLink: accountServiceUnavailable,
+      }),
+    );
+    await session.status();
+    await session.status();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+  });
+
+  // The app reads the status every ten minutes; a transient failure must not wait for that.
+  it("retries a failed enrollment in the background, but not a refused one", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const enroll = async (registerDevice: () => Promise<never>) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+      const calls = vi.fn(registerDevice);
+      const session = createAccountSession({
+        baseDir,
+        accountUrl: ACCOUNT_URL,
+        client: makeClient({
+          me: async () => meResponse(),
+          registerDevice: calls,
+          startHostLink: () =>
+            Promise.reject(
+              new AccountApiError({ code: "not_host_owner", status: 403, message: "Refused" }),
+            ),
+        }),
+        enrollmentRetryBaseMs: 10,
+      });
+      await session.status();
+      expect(calls).toHaveBeenCalledOnce();
+      return { baseDir, calls };
+    };
+
+    const failed = await enroll(accountServiceUnavailable);
+    await vi.waitFor(() => expect(failed.calls.mock.calls.length).toBeGreaterThanOrEqual(2));
+    // Signing out ends the retries.
+    fs.rmSync(failed.baseDir, { recursive: true, force: true });
+
+    const refused = await enroll(() =>
+      Promise.reject(
+        new AccountApiError({ code: "subscription_required", status: 403, message: "Refused" }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(refused.calls).toHaveBeenCalledOnce();
+  });
+
+  // Renewal runs every few minutes; one that fails without a terminal refusal
+  // is an outage to retry, not a sign-out.
+  it.each([503, 401])("surfaces refresh errors with status %i", async (statusCode) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials(linkedHostFields));
+      const outage = new AccountApiError({
+        code: "internal_error",
+        status: statusCode,
+        message: "Account service temporarily unavailable",
+      });
+      const session = sessionFor(
+        baseDir,
+        makeClient({
+          me: () =>
+            Promise.reject(
+              new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" }),
+            ),
+          refreshAccessToken: () => Promise.reject(outage),
+        }),
+      );
+
+      const progress = { settled: false };
+      const status = session.status().finally(() => {
+        progress.settled = true;
+      });
+      status.catch(() => {});
+      // Skip the renewal's backoff sleeps, letting its real file I/O finish between them.
+      while (!progress.settled) {
+        const until = Date.now() + 5;
+        while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+        await vi.advanceTimersToNextTimerAsync();
+      }
+
+      await expect(status).rejects.toBe(outage);
+      expect(await readAccountFile(baseDir)).toEqual(credentials(linkedHostFields));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("OTP sign-in", () => {
@@ -510,6 +753,152 @@ describe("OTP sign-in", () => {
       accessToken: "access-1",
       refreshToken: "refresh-1",
     });
+  });
+
+  it("logs each sign-in step's duration once, without secrets", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        registerDevice: accountServiceUnavailable,
+        startHostLink: accountServiceUnavailable,
+      }),
+    );
+    try {
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      const detail = lines[0]![1] as Record<string, unknown>;
+      expect(Object.keys(detail).toSorted()).toEqual([
+        "code_exchange_ms",
+        "credentials_ms",
+        "device_registration_ms",
+        "final_me_ms",
+        "host_link_ms",
+        "instance_ms",
+        "outcome",
+        "path",
+        "returned_ms",
+        "workspace_probe_ms",
+        "workspace_refresh_ms",
+      ]);
+      expect(detail).toMatchObject({ path: "otp", outcome: "signed_in" });
+      for (const [key, value] of Object.entries(detail))
+        if (key.endsWith("_ms")) expect(value).toEqual(expect.any(Number));
+      expect(JSON.stringify(lines)).not.toMatch(
+        /654321|access-|refresh-|user_1|org_1|ada@|https?:/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs a failed sign-in's timing with the steps that ran", async () => {
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        authenticateOtp: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "invalid_verification_code",
+              status: 401,
+              message: "Wrong code",
+            }),
+          ),
+      }),
+    );
+    try {
+      await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow("Wrong code");
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      expect(Object.keys(lines[0]![1] as object)).toEqual([
+        "path",
+        "outcome",
+        "instance_ms",
+        "code_exchange_ms",
+        "returned_ms",
+      ]);
+      expect(lines[0]![1]).toMatchObject({ outcome: "failed" });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("answers before a stalled enrollment finishes; host reads and status wait for it", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let failRegistration!: (error: Error) => void;
+    const registerDevice = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          failRegistration = reject;
+        }),
+    );
+    const startHostLink = vi.fn(accountServiceUnavailable);
+    const listHosts = vi.fn(async () => ({ hosts: [] }));
+    const session = createAccountSession({
+      baseDir,
+      accountUrl: ACCOUNT_URL,
+      client: otpClient({
+        registerDevice,
+        startHostLink,
+        listHosts,
+        countOrganizationMembers: async () => 1,
+      }),
+      signInEnrollmentWaitMs: 20,
+    });
+    try {
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      await vi.waitFor(() => expect(registerDevice).toHaveBeenCalledOnce());
+      expect(startHostLink).not.toHaveBeenCalled();
+
+      const enrollment = session.enrollment();
+      const hosts = session.listHosts();
+      const status = session.status();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(listHosts).not.toHaveBeenCalled();
+
+      failRegistration(new Error("Account service unavailable"));
+      expect(await enrollment).toMatchObject({ host: null });
+      expect(await hosts).toEqual({ hosts: [] });
+      expect(await status).toMatchObject({ state: "signed-in" });
+      // The status read joined the sign-in's enrollment instead of linking twice.
+      expect(startHostLink).toHaveBeenCalledOnce();
+      expect(startHostLink.mock.invocationCallOrder[0]).toBeLessThan(
+        listHosts.mock.invocationCallOrder[0]!,
+      );
+
+      const lines = warn.mock.calls.filter(([line]) => line === "[account] session sign_in_timing");
+      expect(lines).toHaveLength(1);
+      const detail = lines[0]![1] as Record<string, number>;
+      expect(detail).toHaveProperty("host_link_ms");
+      expect(detail.returned_ms).toBeLessThan(detail.device_registration_ms!);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("nudges the usage reporter only after the sign-in has answered", async () => {
+    const nudge = vi.fn();
+    registerAccountUsageReporterNudge(nudge);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = sessionFor(makeBaseDir(), otpClient());
+      expect(await session.authenticateOtp(OTP_INPUT)).toMatchObject({ state: "signed-in" });
+      expect(nudge).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(nudge).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nudge).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      registerAccountUsageReporterNudge(undefined);
+    }
   });
 
   it("keeps remote enrollment inert while the remote qualification gate is closed", async () => {

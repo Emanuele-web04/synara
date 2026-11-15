@@ -358,7 +358,7 @@ describe("MessagesTimeline", () => {
         ]}
       />,
     );
-    expect(markup).not.toContain("<code");
+    expect(markup).toContain('data-command-literal="true"');
     expect(markup).toContain("missing-command --check");
     expect(markup).toContain("Failed · exit 127");
     expect(markup).not.toContain("missing-command: command not found");
@@ -875,7 +875,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log");
   });
 
-  it("renders Claude agent task output through the shared markdown renderer", async () => {
+  it("keeps a Claude agent task to one plain line without rendering its Markdown", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -910,9 +910,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("<h2>Complete File-Icon Rendering Map</h2>");
-    expect(markup).toContain("chat-markdown-codeblock");
-    expect(markup).not.toContain("```tsx");
+    expect(markup).toContain("Map file-icon logic in file-changes");
+    expect(markup).not.toContain("<h2>");
+    expect(markup).not.toContain("chat-markdown-codeblock");
   });
 
   it("renders a lone reasoning update as iconless transcript prose", async () => {
@@ -956,7 +956,7 @@ describe("MessagesTimeline", () => {
   it.each([
     {
       provider: "Codex",
-      expectedText: ">Running git status --short</span>",
+      expectedText: "git status --short</span>",
       activity: makeActivity({
         id: "codex-live-tool",
         createdAt: "2026-03-17T19:12:28.100Z",
@@ -1198,10 +1198,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The command shows verbatim (minus the shell wrapper) as plain row text,
-    // like any other tool call, and the search wears the magnifier.
+    // The command shows verbatim (minus the shell wrapper) instead of a guessed
+    // sentence, and the search wears the magnifier.
+    // One plain line: the command is part of the sentence, not a code chip.
     expect(markup).toContain(
-      `>Ran rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</span>`,
+      `Ran <span data-command-literal="true">rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</span>`,
     );
     expect(markup).not.toContain("<code");
     expect(markup).toContain("magnifying-glass.svg");

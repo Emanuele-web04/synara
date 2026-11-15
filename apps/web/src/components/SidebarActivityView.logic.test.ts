@@ -11,6 +11,13 @@ import {
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
   excludeActivityPriorityThreads,
+  expandActivityFamilyThreadIds,
+  groupActivityChildFamilies,
+  mostUrgentActivityPriorityTier,
+  resolveChildThreadsTier,
+  resolveChildThreadsTone,
+  splitActivityFamilyChildren,
+  type ActivityPriorityTier,
   findNextThreadNeedingAttention,
   groupActivityThreadsByProject,
   hasActivityNeedingAttention,
@@ -1153,5 +1160,109 @@ describe("findNextThreadNeedingAttention", () => {
     });
     const running = makeThread({ id: "running", hasLiveTailWork: true });
     expect(findNextThreadNeedingAttention([snoozed, archived, running], null, tier)).toBeNull();
+  });
+});
+
+describe("agent-created child families", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const child = (id: string, sourceId: string) => ({
+    ...makeThread({ id, latestTurn: completedTurn("2026-08-01T10:00:00.000Z") }),
+    creationSource: "synara_mcp" as const,
+    sourceThreadId: tid(sourceId),
+  });
+  const parent = makeThread({ id: "p", latestTurn: completedTurn("2026-08-01T10:00:00.000Z") });
+  const ids = (threads: readonly SidebarThreadSummary[]) => threads.map((thread) => thread.id);
+  const tiers =
+    (map: Record<string, ActivityPriorityTier | null>) => (thread: SidebarThreadSummary) =>
+      map[thread.id] ?? null;
+
+  it("folds descendants under their top-most creator, depth-first", () => {
+    const families = groupActivityChildFamilies([
+      child("c1", "p"),
+      parent,
+      child("g", "c1"),
+      child("c2", "p"),
+      makeThread({ id: "solo" }),
+    ]);
+    expect(ids(families.roots)).toEqual([tid("p"), tid("solo")]);
+    expect(ids(families.childrenByRootId.get(tid("p")) ?? [])).toEqual([
+      tid("c1"),
+      tid("g"),
+      tid("c2"),
+    ]);
+    expect(families.childrenByRootId.has(tid("solo"))).toBe(false);
+  });
+
+  it("keeps a detached (pinned) child on its own row with its children", () => {
+    const families = groupActivityChildFamilies(
+      [parent, child("c1", "p"), child("g", "c1")],
+      new Set([tid("c1")]),
+    );
+    expect(ids(families.roots)).toEqual([tid("p"), tid("c1")]);
+    expect(families.childrenByRootId.has(tid("p"))).toBe(false);
+    expect(ids(families.childrenByRootId.get(tid("c1")) ?? [])).toEqual([tid("g")]);
+  });
+
+  it("keeps a child top-level when its creator is not in the feed", () => {
+    const families = groupActivityChildFamilies([child("c1", "gone")]);
+    expect(ids(families.roots)).toEqual([tid("c1")]);
+    expect(families.childrenByRootId.size).toBe(0);
+  });
+
+  it("keeps snoozed chats out of active families", () => {
+    const snoozedUntil = "2026-08-02T09:00:00.000Z";
+    const snoozedChild = { ...child("snoozed-child", "p"), snoozedUntil };
+    const activeGrandchild = child("active-grandchild", "snoozed-child");
+    const families = groupActivityChildFamilies([parent, snoozedChild, activeGrandchild]);
+    const model = buildActivityViewModel({ threads: families.roots, pinnedThreadIdSet: new Set() });
+    expect(ids(model.snoozed)).toEqual([snoozedChild.id]);
+    expect(ids(model.active)).toEqual(expect.arrayContaining([parent.id, activeGrandchild.id]));
+    expect(families.childrenByRootId.size).toBe(0);
+  });
+
+  it("ranks tiers waiting, then unread, then working", () => {
+    expect(mostUrgentActivityPriorityTier(null, "working")).toBe("working");
+    expect(mostUrgentActivityPriorityTier("working", "unread")).toBe("unread");
+    expect(mostUrgentActivityPriorityTier("waiting", "unread")).toBe("waiting");
+    expect(mostUrgentActivityPriorityTier(null, null)).toBeNull();
+    const children = [child("a", "p"), child("b", "p"), child("c", "p")];
+    expect(resolveChildThreadsTier(children, tiers({ a: "working", b: "waiting" }))).toBe(
+      "waiting",
+    );
+    expect(resolveChildThreadsTier(children, tiers({}))).toBeNull();
+  });
+
+  it("tints the chip by the most urgent hidden child", () => {
+    expect(resolveChildThreadsTone("waiting")).toBe("waiting");
+    expect(resolveChildThreadsTone("unread")).toBe("active");
+    expect(resolveChildThreadsTone("working")).toBe("active");
+    expect(resolveChildThreadsTone(null)).toBe("quiet");
+  });
+
+  it("shows children with news and the open one, folding quiet ones into +N done", () => {
+    const children = [child("run", "p"), child("done", "p"), child("open", "p"), child("old", "p")];
+    const split = splitActivityFamilyChildren(children, {
+      resolveTier: tiers({ run: "working" }),
+      activeThreadId: tid("open"),
+      showQuiet: false,
+    });
+    expect(ids(split.visible)).toEqual([tid("run"), tid("open")]);
+    expect(split.quietCount).toBe(2);
+    const revealed = splitActivityFamilyChildren(children, {
+      resolveTier: tiers({ run: "working" }),
+      activeThreadId: null,
+      showQuiet: true,
+    });
+    expect(revealed.visible).toHaveLength(4);
+    expect(revealed.quietCount).toBe(0);
+  });
+
+  it("lists each root's visible children right after it for keyboard jumps", () => {
+    expect(
+      expandActivityFamilyThreadIds(
+        [tid("p"), tid("solo")],
+        new Map([[tid("p"), [tid("c1"), tid("c2")]]]),
+      ),
+    ).toEqual([tid("p"), tid("c1"), tid("c2"), tid("solo")]);
   });
 });

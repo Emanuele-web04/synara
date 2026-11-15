@@ -14,6 +14,7 @@ import {
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
+  PRODUCT_TURN_FAILURES,
 } from "@synara/contracts";
 
 import { HostUsageRelay } from "./hostUsageRelay";
@@ -539,6 +540,14 @@ export class ProductAnalytics {
       if (!isOneOf(REASONS, input.reason)) return null;
       fields.reason = input.reason;
     }
+    if (input.failure !== undefined) {
+      if (!isOneOf(PRODUCT_TURN_FAILURES, input.failure)) return null;
+      fields.failure = input.failure;
+    }
+    if (input.httpStatus !== undefined) {
+      if (!validInteger(input.httpStatus, 599) || input.httpStatus < 100) return null;
+      fields.httpStatus = input.httpStatus;
+    }
     if (input.command !== undefined) {
       if (!isProductAnalyticsCommand(input.command)) return null;
       fields.command = input.command;
@@ -576,6 +585,9 @@ export class ProductAnalytics {
       allowed.add("inputTokens");
       allowed.add("outputTokens");
       allowed.add("cachedInputTokens");
+      // Only a turn that ended badly has a failure category; the status needs one.
+      if (outcome === "failed" || outcome === "cancelled") allowed.add("failure");
+      if (fields.failure !== undefined) allowed.add("httpStatus");
     }
     if (event === "performance.startup") allowed.add("durationMs");
     if (event === "command.used") allowed.add("command");
@@ -783,6 +795,8 @@ export class ProductAnalytics {
       "mode",
       "provider",
       "reason",
+      "failure",
+      "httpStatus",
       "command",
       "durationMs",
       "inputTokens",

@@ -27,6 +27,7 @@ import {
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import {
@@ -93,6 +94,7 @@ export function KanbanProjectBoardView({
   const { t } = useTranslation();
 
   const { settings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -147,7 +149,7 @@ export function KanbanProjectBoardView({
       threadId: card.threadId,
       projectId: card.projectId,
       thread: card.thread,
-      defaultProvider: settings.defaultProvider,
+      newChatDefault,
       providerInstances,
     });
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
@@ -170,7 +172,7 @@ export function KanbanProjectBoardView({
     // non-dispatchable drops still fall back to opening the chat).
     const result = await dispatchKanbanDraftCardAsGoal({
       card,
-      defaultProvider: settings.defaultProvider,
+      newChatDefault,
       assistantDeliveryMode,
       providerOptions: getProviderStartOptions(settings, dispatchTarget.instanceId),
       providerInstances,

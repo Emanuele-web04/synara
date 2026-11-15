@@ -707,7 +707,8 @@ describe("deriveSubagentRunCard", () => {
 
     const nowMs = Date.parse(launchedAt) + 12_000;
     expect(describeSubagentRunHeader(model, nowMs)).toEqual({
-      title: "2 subagents",
+      title: "Created 2 subagents",
+      subject: null,
       nestedLabel: null,
       segments: [{ text: "1 running", tone: "running" }],
       durationLabel: "12s",
@@ -761,7 +762,8 @@ describe("deriveSubagentRunCard", () => {
       detail: { kind: "was-running", action: { label: "sleep 60" } },
     });
     expect(describeSubagentRunHeader(model, 0)).toEqual({
-      title: "3 subagents",
+      title: "Created 3 subagents",
+      subject: null,
       nestedLabel: null,
       segments: [
         { text: "1 done", tone: null },
@@ -794,9 +796,12 @@ describe("deriveSubagentRunCard", () => {
     expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: false }).word).toBe(
       "Interrupted",
     );
-    expect(describeSubagentRunHeader(model, 0).segments).toEqual([
-      { text: "1 interrupted", tone: null },
-    ]);
+    // A single launch names its subagent instead of counting it.
+    expect(describeSubagentRunHeader(model, 0)).toMatchObject({
+      title: "Created subagent",
+      subject: model.rows[0]!.item.primaryLabel,
+      segments: [{ text: "interrupted", tone: null }],
+    });
   });
 
   it("nests subagents under the subagent that launched them", () => {

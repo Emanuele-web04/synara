@@ -286,6 +286,17 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
         `${jobName} source verification requires unconditional pinned Bun and frozen, script-free dependencies.`,
       );
     }
+    // The startup smoke imports the server's supervised process teardown, so a
+    // filtered install must keep the server workspace beside @synara/scripts.
+    if (
+      args.includes("--filter") &&
+      !args.includes("'!@synara/marketing'") &&
+      !(args.includes("'@synara/scripts'") && args.includes("'@synara/cli'"))
+    ) {
+      throw new Error(
+        `${jobName} must install the scripts and server workspaces it verifies with.`,
+      );
+    }
   }
   const evaluates = (step: Step, context: Record<string, unknown>): boolean => {
     if (!step.if) throw new Error(`Missing conditional admission for ${step.name}.`);
@@ -473,19 +484,27 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
-  const prerequisites = ["preflight", "build_mac_icon", "build_portable", "prepare_cua"];
+  const prerequisites = [
+    "preflight",
+    "restore_mac_icon",
+    "build_mac_icon",
+    "build_portable",
+    "prepare_cua",
+  ];
   const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
   for (const name of prerequisites)
     if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
   for (const testGate of ["quality", "server_tests"])
     if (dependencies.includes(testGate))
       throw new Error(`Packaging unnecessarily waits for ${testGate}.`);
+  // Baseline: an exact icon catalog miss compiled on macOS 26.
   const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
     Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
   successful.preflight = {
     result: "success",
     outputs: { package_artifacts: "true", prepare_cua: "true", build_icon: "true" },
   };
+  successful.restore_mac_icon = { result: "success", outputs: { hit: "" } };
   if (!admits(successful, () => false)) throw new Error("Valid packaging is blocked.");
   if (admits(successful, () => true)) throw new Error("Cancelled release can package artifacts.");
   for (const name of prerequisites) {
@@ -494,6 +513,23 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
         throw new Error(`Packaging admitted ${name}=${result}.`);
     }
   }
+  // An exact hit publishes the catalog from Linux and skips the macOS compile.
+  // The catalog must come from exactly one verified source; a hit never
+  // excuses a failed restore, and a miss never excuses a missing compile.
+  const restored = {
+    ...successful,
+    restore_mac_icon: { result: "success", outputs: { hit: "true" } },
+    build_mac_icon: { result: "skipped" },
+  };
+  if (!admits(restored, () => false)) throw new Error("A verified icon catalog hit is blocked.");
+  for (const result of ["success", "failure", "cancelled", ""])
+    if (admits({ ...restored, build_mac_icon: { result } }, () => false))
+      throw new Error(`Packaging admitted an icon hit with build_mac_icon=${result}.`);
+  for (const result of ["failure", "cancelled", "skipped", ""])
+    if (
+      admits({ ...restored, restore_mac_icon: { result, outputs: { hit: "true" } } }, () => false)
+    )
+      throw new Error(`Packaging admitted an icon hit from restore_mac_icon=${result}.`);
   for (const platform of ["linux", "win"]) {
     const noMac = {
       ...successful,
@@ -505,11 +541,14 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
           prepare_cua: platform === "win" ? "false" : "true",
         },
       },
+      restore_mac_icon: { result: "skipped", outputs: {} },
       build_mac_icon: { result: "skipped" },
       prepare_cua: { result: platform === "win" ? "skipped" : "success" },
     };
     if (!admits(noMac, () => false))
       throw new Error(`${platform} packaging is blocked by an intentional skip.`);
+    if (admits({ ...noMac, preflight: successful.preflight }, () => false))
+      throw new Error("Packaging admitted a macOS release without its icon catalog.");
   }
   for (const gate of [
     "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
@@ -547,6 +586,23 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
     "Expected the Linux release to install the native driver's build dependencies.",
   );
+  // Cua preparation reads only its checkout; the paired benchmark alone archives
+  // an older baseline commit (scripts/benchmark-cua-build.ts) and needs history.
+  const prepareCheckout = (
+    parseYaml(workflow) as {
+      jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, string> }> }>;
+    }
+  ).jobs.prepare_cua!.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  const fetchDepth = new Function(
+    "needs",
+    `return ${String(prepareCheckout?.with?.["fetch-depth"]).replace(/^\$\{\{\s*|\s*\}\}$/g, "")};`,
+  );
+  for (const benchmark of ["true", "false", ""])
+    if (
+      fetchDepth({ preflight: { outputs: { benchmark_native: benchmark } } }) !==
+      (benchmark === "true" ? "0" : "1")
+    )
+      throw new Error("Cua benchmarks require full history; ordinary Cua preparation does not.");
   assertContains(
     workflow,
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
@@ -720,34 +776,94 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   );
   const iconJob = workflow.slice(
     workflow.indexOf("  build_mac_icon:\n"),
-    workflow.indexOf("  build:\n"),
+    workflow.indexOf("  prepare_cua:\n"),
   );
-  assertContains(
-    iconJob,
-    "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
-    "Expected the macOS icon job to receive the resolved desktop flavor.",
+  const restoreIconJob = workflow.slice(
+    workflow.indexOf("  restore_mac_icon:\n"),
+    workflow.indexOf("  build_mac_icon:\n"),
   );
-  const brandAssets = readFileSync(resolve(repoRoot, "scripts/lib/brand-assets.ts"), "utf8");
-  const betaComposerPath = /betaMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
-  const prodComposerPath = /productionMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
-  if (betaComposerPath === undefined || prodComposerPath === undefined) {
-    throw new Error("Expected brand-assets.ts to declare Icon Composer sources per flavor.");
+  // Both icon paths select the source through brand-assets.ts for the resolved
+  // flavor; scripts/lib/mac-icon-catalog.test.ts pins the selection and actool
+  // arguments, so the cached and compiled catalogs cannot drift apart.
+  for (const [job, command] of [
+    [iconJob, 'node scripts/mac-icon-catalog.ts compile --flavor "$DESKTOP_FLAVOR"'],
+    [restoreIconJob, 'node scripts/mac-icon-catalog.ts key --flavor "$DESKTOP_FLAVOR"'],
+    [restoreIconJob, 'node scripts/mac-icon-catalog.ts verify --flavor "$DESKTOP_FLAVOR"'],
+  ] as const) {
+    assertContains(job, command, "Expected the macOS icon catalog to use the resolved flavor.");
+    assertContains(
+      job,
+      "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
+      "Expected the macOS icon jobs to receive the resolved desktop flavor.",
+    );
   }
   assertContains(
-    iconJob,
-    `icon_source="${prodComposerPath}"`,
-    "Expected the macOS icon job to default to the production Icon Composer source.",
+    readFileSync(resolve(repoRoot, "scripts/lib/mac-icon-catalog.ts"), "utf8"),
+    "desktopIconAssetPaths(flavor).macIconComposer",
+    "Expected the icon catalog to compile the flavor's brand-assets.ts Icon Composer source.",
   );
+  // The Linux restore holds no signing secret and compiles nothing. Its only
+  // cross-run source is the trusted default-branch producer used for Cua.
   assertContains(
-    iconJob,
-    `icon_source="${betaComposerPath}"`,
-    "Expected the macOS icon job to compile the beta Icon Composer source for beta releases.",
+    restoreIconJob,
+    "    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read\n      actions: read\n",
+    "Expected the icon restore to run on Linux with read-only access.",
   );
+  assertNotContains(restoreIconJob, "secrets.", "The icon restore must not receive secrets.");
+  assertNotContains(restoreIconJob, " compile ", "The icon restore must never compile.");
   assertContains(
-    iconJob,
-    "--app-icon Synara",
-    "Expected every flavor's icon catalog to keep the Synara asset name.",
+    restoreIconJob,
+    "const { findCuaArtifact } = await import(`${process.env.GITHUB_WORKSPACE}/apps/desktop/scripts/find-cua-artifact.mjs`);",
+    "Expected the icon restore to accept only the trusted producer's artifacts.",
   );
+  type IconStep = { id?: string; if?: string; with?: Record<string, string> };
+  const iconJobs = (
+    parseYaml(workflow) as { jobs: Record<string, { if: string; steps: IconStep[] }> }
+  ).jobs;
+  const restoreSteps = iconJobs.restore_mac_icon!.steps;
+  // The icon-only validation stage must exercise the macOS 26 compile.
+  for (const id of ["cache", "persistent"]) {
+    const lookup = restoreSteps.find((step) => step.id === id);
+    const restores = new Function(
+      "needs",
+      "steps",
+      `return ${lookup?.if?.replace(/\.([a-z]+(?:-[a-z]+)+)/g, '["$1"]')};`,
+    );
+    for (const packageArtifacts of ["true", "false"])
+      if (
+        restores(
+          { preflight: { outputs: { package_artifacts: packageArtifacts } } },
+          { cache: { outputs: { "cache-hit": "" } } },
+        ) !==
+        (packageArtifacts === "true")
+      )
+        throw new Error("The icon validation stage must compile instead of restoring.");
+  }
+  const verifyStep = restoreSteps.find((step) => step.id === "verify");
+  const publishStep = restoreSteps.find((step) => step.with?.name === "mac-icon-catalog");
+  if (!verifyStep?.if || publishStep?.if !== "steps.verify.outputs.hit == 'true'")
+    throw new Error("The restored icon catalog must be published only after verification.");
+  // GitHub output names such as cache-hit become bracket access in JavaScript.
+  const verifyPredicate = verifyStep.if.replace(/\.([a-z]+(?:-[a-z]+)+)/g, '["$1"]');
+  for (const cacheHit of ["true", "false", ""])
+    for (const artifactId of ["", "42"]) {
+      const verifies = new Function("steps", `return ${verifyPredicate};`)({
+        cache: { outputs: { "cache-hit": cacheHit } },
+        persistent: { outputs: { "artifact-id": artifactId } },
+      });
+      if (verifies !== (cacheHit === "true" || artifactId !== ""))
+        throw new Error("Every restored icon catalog must be verified, and only those.");
+    }
+  const compiles = new Function("needs", `return ${iconJobs.build_mac_icon!.if};`);
+  for (const buildIcon of ["true", "false"])
+    for (const hit of ["true", ""])
+      if (
+        compiles({
+          preflight: { outputs: { build_icon: buildIcon } },
+          restore_mac_icon: { outputs: { hit } },
+        }) !== (buildIcon === "true" && hit !== "true")
+      )
+        throw new Error("macOS 26 must compile the icon catalog exactly on an exact-key miss.");
   const collectStep = packagingJob.slice(
     packagingJob.indexOf("  - name: Collect release assets"),
     packagingJob.indexOf("  - name: Verify and record artifact provenance"),

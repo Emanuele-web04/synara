@@ -11,6 +11,11 @@ describe("wsRequestClass", () => {
   it("keeps the per-connection budgets the server and client both enforce", () => {
     expect(WS_REQUEST_CLASS_LIMITS).toEqual({ control: 16, standard: 12, "expensive-read": 2 });
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.dispatchCommand)).toBe("control");
+    // Both halves of "Unblock thread" share the control budget.
+    expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers)).toBe(
+      "control",
+    );
+    expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery)).toBe("control");
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.replayEvents)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.statsGetUsageAnalytics)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.gitListBranches)).toBe("standard");

@@ -1,7 +1,7 @@
 // FILE: TimelineWorkEntryRow.tsx
 // Purpose: Renders transcript work/tool rows and their inline details.
 // Layer: Web chat presentation component
-// Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
+// Exports: TimelineWorkEntryRow, EditedFileRowContent
 
 import type { ModelSelection, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -275,6 +275,8 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
   if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
   if (workEntry.activityKind === "checkpoint.baseline.skipped") return CircleAlertIcon;
+  // Plain runtime notices share the tool-row look: a warning glyph, not italics.
+  if (isPlainRuntimeNoticeWorkEntry(workEntry)) return CircleAlertIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
   if (workEntry.monitorNotification)
@@ -391,32 +393,6 @@ function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
   );
 }
 
-// Render command, agent-task, file-change, and file-read rows at the tighter
-// compact density so every tool-call line shares one height regardless of whether
-// it carries a disclosure chevron.
-export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
-  if (isCodexActivityStatusWorkEntry(workEntry) || workEntry.monitorNotification) {
-    return true;
-  }
-  // Commands stay compact even when surfaced with a non-terminal icon (reads like
-  // `cat` wear the file icon, searches the magnifier).
-  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
-    return true;
-  }
-  const EntryIcon = workEntryIcon(workEntry);
-  return (
-    EntryIcon === TerminalIcon ||
-    EntryIcon === HammerIcon ||
-    EntryIcon === AgentTaskIcon ||
-    EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon ||
-    // File-read and search rows (e.g. `Read …`) have no disclosure chevron; keep
-    // them at the same compact height as command rows.
-    EntryIcon === FileReadIcon ||
-    EntryIcon === SearchIcon
-  );
-}
-
 function capitalizePhrase(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -479,7 +455,7 @@ function combineWorkEntryDisplayText(
 // status rows keep their own wording.
 function commandRowDisplay(
   workEntry: TimelineWorkEntry,
-): { heading: string; object: string } | null {
+): { heading: string; object: string; literal: boolean } | null {
   const command = workEntry.rawCommand ?? workEntry.command;
   if (
     (workEntry.tone !== "tool" && workEntry.toolStatus !== "failed") ||
@@ -498,11 +474,12 @@ function commandRowDisplay(
     return {
       heading: running ? "chat:reading" : "chat:detail_read",
       object: readTargets.join(", "),
+      literal: false,
     };
   }
   const literal = deriveLiteralCommand(command);
   return literal
-    ? { heading: running ? "chat:runStatus_running" : "chat:ran", object: literal }
+    ? { heading: running ? "chat:runStatus_running" : "chat:ran", object: literal, literal: true }
     : null;
 }
 
@@ -510,10 +487,26 @@ export interface WorkEntryDisplayParts {
   heading: string;
   preview: string | null;
   displayText: string;
+  // Verbatim command shown in mono after the heading, for shell command rows.
+  commandLiteral: string | null;
+}
+
+// Renders a row sentence: plain text, or the heading plus the command chip.
+export function renderWorkEntrySentence(parts: WorkEntryDisplayParts): ReactNode {
+  if (parts.commandLiteral === null) {
+    return parts.displayText;
+  }
+  // The command reads as part of the row's sentence, in the row's own type:
+  // no code chip, so a tool call stays one plain line.
+  return (
+    <>
+      {parts.heading} <span data-command-literal="true">{parts.commandLiteral}</span>
+    </>
+  );
 }
 
 // One sentence per row, live or settled: the tool's own verb plus what it acted
-// on ("Read calc.py", "Ran ls"), as plain text. Lifecycle state is never spelled out here —
+// on ("Read calc.py", "Ran `ls`"). Lifecycle state is never spelled out here —
 // the verb already carries the tense and `liveActivityMetaText` covers the rest.
 // Shared with the live tool-group line, which wears its newest call's sentence.
 export function workEntryDisplayParts(
@@ -527,6 +520,7 @@ export function workEntryDisplayParts(
       heading,
       preview: commandDisplay.object,
       displayText: `${heading} ${commandDisplay.object}`,
+      commandLiteral: commandDisplay.literal ? commandDisplay.object : null,
     };
   }
   const webFetchUrl = extractWebFetchUrl(workEntry);
@@ -550,7 +544,7 @@ export function workEntryDisplayParts(
         preview
       ? preview
       : combineWorkEntryDisplayText(heading, preview, translate);
-  return { heading, preview, displayText };
+  return { heading, preview, displayText, commandLiteral: null };
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
@@ -702,14 +696,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
               ? "mcp"
               : undefined;
   const displayParts = workEntryDisplayParts(workEntry, t);
-  const { heading, preview, displayText } = displayParts;
-  const showInlineAgentTaskPreview =
-    workEntry.itemType === "collab_agent_tool_call" &&
-    Boolean(preview) &&
-    normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
+  const { displayText } = displayParts;
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText =
-    rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
+  const hoverText = rawCommand ?? webFetchUrl ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
@@ -792,7 +781,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
 
   // A turn's subagents fold into one entry that renders as the subagent card.
   if (workEntry.subagentRun) {
-    return <SubagentRunCard workEntry={workEntry} />;
+    return <SubagentRunCard workEntry={workEntry} fontSizePx={textFontSizePx} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.
@@ -940,7 +929,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              {!isCodexStatusRow && !isPlainRuntimeNoticeRow ? (
+              {!isCodexStatusRow ? (
                 <span
                   className={cn(
                     "flex shrink-0 items-center justify-center",
@@ -962,66 +951,34 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                   )}
                 </span>
               ) : null}
-              <div
-                className={cn(
-                  "min-w-0 overflow-hidden",
-                  // Single-line tool labels size to their content so the disclosure
-                  // chevron can sit right after the name; the multi-line markdown
-                  // preview still needs the full row width.
-                  showInlineAgentTaskPreview && "flex-1",
-                )}
-              >
-                {showInlineAgentTaskPreview ? (
-                  <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
-                    <p
-                      className={cn("truncate font-medium leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}
-                      style={{ fontSize: `${rowFontSizePx}px` }}
-                    >
-                      <span data-work-entry-display-text="true">{heading}</span>
-                      {liveActivityMetaText ? (
-                        <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
-                      ) : null}
-                    </p>
-                    <ChatMarkdown
-                      text={preview ?? ""}
-                      cwd={markdownCwd}
-                      threadId={threadId}
-                      isStreaming={false}
-                      className="leading-relaxed"
-                      style={{
-                        color: MUTED_LABEL_TEXT_COLOR,
-                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
-                        lineHeight: compact ? "18px" : "19px",
-                      }}
-                      onImageExpand={onImageExpand}
-                    />
-                  </div>
-                ) : (
-                  <p
-                    className={cn(
-                      "truncate",
-                      compact ? "leading-5" : "leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit, and
-                      // brighten the whole row to foreground on hover/focus instead of a fill.
-                      WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                      isPlainRuntimeNoticeRow && "italic",
-                    )}
-                    data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
-                    data-codex-status-row={isCodexStatusRow ? "true" : undefined}
-                    style={{ fontSize: `${rowFontSizePx}px` }}
-                  >
-                    <span data-work-entry-display-text="true">{displayParts.displayText}</span>
-                    {liveActivityMetaText ? (
-                      <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
-                    ) : null}
-                    {failureMetaText ? (
-                      <span className="text-destructive" data-tool-failure-meta="true">
-                        {" "}
-                        · {failureMetaText}
-                      </span>
-                    ) : null}
-                  </p>
-                )}
+              {/* Every tool call is one plain line, sized to its content so the
+                  disclosure chevron sits right after it. */}
+              <div className="min-w-0 overflow-hidden">
+                <p
+                  className={cn(
+                    "truncate",
+                    compact ? "leading-5" : "leading-6",
+                    // Match the leading icon's tone so the row reads as one muted unit, and
+                    // brighten the whole row to foreground on hover/focus instead of a fill.
+                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                  )}
+                  data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
+                  data-codex-status-row={isCodexStatusRow ? "true" : undefined}
+                  style={{ fontSize: `${rowFontSizePx}px` }}
+                >
+                  <span data-work-entry-display-text="true">
+                    {renderWorkEntrySentence(displayParts)}
+                  </span>
+                  {liveActivityMetaText ? (
+                    <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                  ) : null}
+                  {failureMetaText ? (
+                    <span className="text-destructive" data-tool-failure-meta="true">
+                      {" "}
+                      · {failureMetaText}
+                    </span>
+                  ) : null}
+                </p>
               </div>
             </>
           );

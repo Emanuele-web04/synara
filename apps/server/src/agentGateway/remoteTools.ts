@@ -41,6 +41,7 @@ const REMOTE_TOOLS = new Set([
   "synara_interrupt_thread",
   "synara_set_thread_title",
   "synara_set_thread_pull_request",
+  "synara_unlink_thread_pull_request",
   "synara_set_thread_archived",
   "synara_set_thread_goal",
 ]);

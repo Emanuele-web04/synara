@@ -111,6 +111,7 @@ import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
+import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
@@ -162,6 +163,7 @@ import {
   hasBoundProviderSession,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
+  PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
   resolvePreTurnBaselineTimeoutMs,
 } from "./ProviderCommandReactor.ts";
 import * as groupsBetaGate from "../../projectAgent/groupsBetaGate.ts";
@@ -210,6 +212,20 @@ const asApprovalRequestId = (value: string): ApprovalRequestId =>
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+function expiredCacheObservation(): ClaudeCacheObservation {
+  return {
+    nativeSessionId: "native-claude-session-1",
+    lifecycleGeneration: "generation-1",
+    model: "claude-opus-4-6",
+    observedAt: new Date().toISOString(),
+    contextTokens: 120_000,
+    lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
+    ttlSeconds: 3_600,
+    state: "likely-expired",
+    source: "request-usage",
+  };
+}
 
 describe("legacy provider blocker recovery", () => {
   it("rejects a startup failure only when process cleanup was confirmed", () => {
@@ -555,6 +571,8 @@ describe("ProviderCommandReactor", () => {
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
+    readonly skillCatalogHomeDir?: string;
+    readonly listNativeSkills?: ProviderAdapterShape<ProviderAdapterError>["listSkills"];
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
@@ -651,6 +669,9 @@ describe("ProviderCommandReactor", () => {
           ? { model: sessionModelSelection.model }
           : {}),
         threadId,
+        ...(input.providerInstanceId !== undefined
+          ? { providerInstanceId: input.providerInstanceId }
+          : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
         createdAt: now,
@@ -804,6 +825,9 @@ describe("ProviderCommandReactor", () => {
     const hasLiveRuntimeTasks = vi.fn<NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>>(
       () => Effect.succeed(false),
     );
+    const getSessionAdditionalDirectories = vi.fn<
+      NonNullable<ProviderServiceShape["getSessionAdditionalDirectories"]>
+    >(() => Effect.succeed(undefined));
     const steerSubagent = vi.fn<ProviderServiceShape["steerSubagent"]>(() => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -949,6 +973,7 @@ describe("ProviderCommandReactor", () => {
       stopTask,
       backgroundTask,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       steerSubagent,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -1016,7 +1041,20 @@ describe("ProviderCommandReactor", () => {
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
-    const reactorLayer = makeProviderCommandReactorLive(input);
+    const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
+      Layer.provide(
+        Layer.succeed(ProviderAdapterRegistry, {
+          getByProvider: () =>
+            Effect.succeed({
+              listSkills: input?.listNativeSkills,
+            } as ProviderAdapterShape<ProviderAdapterError>),
+          listProviders: () => Effect.succeed([]),
+        }),
+      ),
+    );
+    const reactorLayer = makeProviderCommandReactorLive(input).pipe(
+      Layer.provide(providerDiscoveryLayer),
+    );
     const layer = Layer.mergeAll(reactorLayer, ProviderRuntimeIngestionLive).pipe(
       Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(projectAgentRepositoryLayer),
@@ -1060,26 +1098,18 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(
         ServerSettingsService.layerTest({
           ...input?.serverSettings,
-          // The resume review is off by default. Harnesses that feed cache
-          // observations exercise it, so they turn it on unless a test sets it.
-          ...(input?.getClaudeCacheObservation &&
-          input.serverSettings?.providers?.claudeAgent?.confirmColdCacheResume === undefined
-            ? {
-                providers: {
-                  ...input.serverSettings?.providers,
-                  claudeAgent: {
-                    ...input.serverSettings?.providers?.claudeAgent,
-                    confirmColdCacheResume: true,
-                  },
-                },
-              }
-            : {}),
           ...(input?.gitWritingModelSelection
             ? { textGenerationModelSelection: input.gitWritingModelSelection }
             : {}),
         }),
       ),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(
+        ServerConfig.layerTest(
+          process.cwd(),
+          baseDir,
+          input?.skillCatalogHomeDir ? { homeDir: input.skillCatalogHomeDir } : undefined,
+        ),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
       Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
@@ -1266,6 +1296,7 @@ describe("ProviderCommandReactor", () => {
       stopTask,
       backgroundTask,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       steerSubagent,
       respondToRequest,
       respondToUserInput,
@@ -2385,22 +2416,11 @@ describe("ProviderCommandReactor", () => {
       ).toEqual([]);
     });
 
-    it("clears an ordinary-task wait when Claude cold-cache preflight holds the continuation", async () => {
+    it("resumes an ordinary task without asking when the Claude context is cold", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
         Effect.succeed(bindingKey),
       );
-      const observation: ClaudeCacheObservation = {
-        nativeSessionId: "usage-limit-cold-session",
-        lifecycleGeneration: "generation-cold",
-        model: "claude-opus-4-6",
-        observedAt: new Date().toISOString(),
-        contextTokens: 120_000,
-        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
-        ttlSeconds: 3_600,
-        state: "likely-expired",
-        source: "request-usage",
-      };
-      const getClaudeCacheObservation = vi.fn(() => Effect.succeed(observation));
+      const getClaudeCacheObservation = vi.fn(() => Effect.sync(expiredCacheObservation));
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         getClaudeCacheObservation,
@@ -2408,12 +2428,17 @@ describe("ProviderCommandReactor", () => {
       });
       const wait = await seedLimitWait(harness);
       await requestResume(harness, wait.id);
-      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
       await harness.drain();
-      expect(getClaudeCacheObservation).toHaveBeenCalled();
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect((await readHarnessThread(harness))?.goal?.trim() ?? "").toBe("");
-      expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+      expect(getClaudeCacheObservation).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const resumed = await readHarnessThread(harness);
+      expect(resumed?.claudeCacheReview ?? null).toBeNull();
+      expect(resumed?.goal?.trim() ?? "").toBe("");
+      expect(resumed?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "resuming",
+        resumedTurnId: "turn-1",
+      });
     });
 
     it("clears Resuming when provider startup is definitively rejected", async () => {
@@ -2969,7 +2994,7 @@ describe("ProviderCommandReactor", () => {
       ).not.toContain("<project_folders>");
     });
 
-    it("refuses a worktree chat instead of isolating only the primary folder", async () => {
+    it("runs a worktree chat in its worktree and keeps the extra folders live", async () => {
       const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -2978,18 +3003,131 @@ describe("ProviderCommandReactor", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           envMode: "worktree",
           branch: "synara/multi-folder",
-          worktreePath: "/tmp/provider-project/.worktrees/multi-folder",
+          worktreePath: "/tmp/provider-worktrees/multi-folder",
         }),
       );
       await dispatchTurn(harness, "worktree");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
-      expect(harness.startSession).not.toHaveBeenCalled();
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect((await readHarnessThread(harness))?.session?.lastError).toContain(
-        "Worktree mode supports only single-folder projects.",
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        cwd: "/tmp/provider-worktrees/multi-folder",
+        additionalDirectories: ["/tmp/provider-api"],
+      });
+      const sentInput = (harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string }).input;
+      expect(sentInput).toContain(
+        [
+          "- multi-folder: /tmp/provider-worktrees/multi-folder (primary, worktree of /tmp/provider-project)",
+          "- provider-api: /tmp/provider-api",
+          "Edit the primary folder only inside its worktree path above, never in the original checkout. The other folders are not isolated: edits there apply directly.",
+        ].join("\n"),
       );
     });
+
+    it("restarts the live session with the edited folders on the next turn", async () => {
+      const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
+      await dispatchTurn(harness, "before-edit");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      harness.startSession.mockClear();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("multi-folder-edit-folders"),
+          projectId: asProjectId("project-1"),
+          additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+        }),
+      );
+      await harness.drain();
+      // Editing the folders never restarts an idle session on its own.
+      expect(harness.startSession).not.toHaveBeenCalled();
+
+      await dispatchTurn(harness, "after-edit");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+      const restartInput = harness.startSession.mock.calls[0]?.[1] as {
+        readonly additionalDirectories?: ReadonlyArray<string>;
+        readonly resumeCursor?: unknown;
+      };
+      expect(restartInput.additionalDirectories).toEqual([
+        "/tmp/provider-api",
+        "/tmp/provider-docs",
+      ]);
+      expect(restartInput.resumeCursor).toBeDefined();
+      expect((harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string }).input).toContain(
+        "- provider-docs: /tmp/provider-docs",
+      );
+      expect(harness.stopSession).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { persisted: ["/tmp/provider-api"], restarts: true },
+      { persisted: ["/tmp/provider-api", "/tmp/provider-docs"], restarts: false },
+    ])(
+      "compares a recovered session against its persisted folder grants (restarts: $restarts)",
+      async ({ persisted, restarts }) => {
+        const modelSelection: ModelSelection = {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+        };
+        const harness = await createHarness({
+          threadModelSelection: modelSelection,
+          projectAdditionalFolders: ["/tmp/provider-api"],
+        });
+        const threadId = ThreadId.makeUnsafe("thread-1");
+        const now = new Date().toISOString();
+        // Started outside the reactor, like a runtime prewarmed after a server restart.
+        const recovered = await Effect.runPromise(
+          harness.startSession(threadId, {
+            threadId,
+            provider: "claudeAgent",
+            modelSelection,
+            runtimeMode: "approval-required",
+            cwd: "/tmp/provider-project",
+            additionalDirectories: persisted,
+          }),
+        );
+        harness.getSessionAdditionalDirectories.mockImplementation(() => Effect.succeed(persisted));
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("seed-recovered-session"),
+            threadId,
+            createdAt: now,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "claudeAgent",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: now,
+            },
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("multi-folder-edit-recovered"),
+            projectId: asProjectId("project-1"),
+            additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+          }),
+        );
+        await dispatchTurn(harness, "recovered");
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+        expect(harness.getSessionAdditionalDirectories).toHaveBeenCalledWith(threadId);
+        if (restarts) {
+          expect(harness.startSession).toHaveBeenCalledTimes(2);
+          expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+            additionalDirectories: ["/tmp/provider-api", "/tmp/provider-docs"],
+            resumeCursor: recovered.resumeCursor,
+          });
+        } else {
+          expect(harness.startSession).toHaveBeenCalledTimes(1);
+        }
+        expect(harness.stopSession).not.toHaveBeenCalled();
+      },
+    );
 
     it("refuses a provider that cannot be granted the extra folders", async () => {
       const harness = await createHarness({
@@ -3534,20 +3672,6 @@ describe("ProviderCommandReactor", () => {
   });
 
   describe("Claude cache review", () => {
-    function expiredCacheObservation(): ClaudeCacheObservation {
-      return {
-        nativeSessionId: "native-claude-session-1",
-        lifecycleGeneration: "generation-1",
-        model: "claude-opus-4-6",
-        observedAt: new Date().toISOString(),
-        contextTokens: 120_000,
-        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
-        ttlSeconds: 3_600,
-        state: "likely-expired",
-        source: "request-usage",
-      };
-    }
-
     async function createCacheHarness(
       observation: () => ClaudeCacheObservation | undefined = expiredCacheObservation,
       startReactor = true,
@@ -7287,7 +7411,7 @@ describe("ProviderCommandReactor", () => {
       },
     );
 
-    it("sends without holding when the review is off, the default like Claude Code", async () => {
+    it("sends without holding when the user turns the review off", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         getClaudeCacheObservation: () => Effect.sync(expiredCacheObservation),
@@ -7326,70 +7450,7 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
     });
 
-    it("does not restore a goal session stopped during cache observation", async () => {
-      let readingObservation = false;
-      let releaseObservation!: () => void;
-      const observationGate = new Promise<void>((resolve) => {
-        releaseObservation = resolve;
-      });
-      const harness = await createHarness({
-        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
-        getClaudeCacheObservation: () => {
-          readingObservation = true;
-          return Effect.promise(() => observationGate).pipe(Effect.as(expiredCacheObservation()));
-        },
-      });
-      const threadId = ThreadId.makeUnsafe("thread-1");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-cache-goal-before-stop"),
-          threadId,
-          goal: "Complete remaining work",
-          goalStartBehavior: "defer",
-        }),
-      );
-      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.goal.continue",
-          commandId: CommandId.makeUnsafe("cmd-cache-goal-racing-stop"),
-          threadId,
-          goalStartedAt: goalStartedAt!,
-          trigger: "turn-completed",
-          createdAt: new Date().toISOString(),
-        }),
-      );
-      let cancellationSequence = 0;
-      try {
-        await waitFor(() => readingObservation);
-        cancellationSequence = (
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.session.stop",
-              commandId: CommandId.makeUnsafe("cmd-cache-goal-stop"),
-              threadId,
-              createdAt: new Date().toISOString(),
-            }),
-          )
-        ).sequence;
-      } finally {
-        releaseObservation();
-      }
-      await harness.drain();
-      const laterEvents = await Effect.runPromise(
-        Stream.runCollect(harness.engine.readEvents(cancellationSequence)),
-      );
-      expect(
-        Array.from(laterEvents).filter(
-          (event) =>
-            event.type === "thread.session-set" && event.payload.session.status === "ready",
-        ),
-      ).toEqual([]);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-    });
-
-    it("pauses a goal continuation before sending a large expired-cache request", async () => {
+    it("continues an active goal without asking when the Claude context is cold", async () => {
       const harness = await createCacheHarness();
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -7413,10 +7474,10 @@ describe("ProviderCommandReactor", () => {
           createdAt: new Date().toISOString(),
         }),
       );
-      await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
       await harness.drain();
 
-      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((await readHarnessThread(harness))?.goalPausedAt ?? null).toBeNull();
       expect((await readHarnessThread(harness))?.claudeCacheReview == null).toBe(true);
     });
   });
@@ -9252,9 +9313,10 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("REL-01B gate: quarantines an expired external claim without replaying it", async () => {
-    const harness = await createHarness({ startReactor: false });
-    const now = new Date().toISOString();
+  async function seedRunningTurnInterrupt(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    now: string,
+  ) {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -9286,9 +9348,20 @@ describe("ProviderCommandReactor", () => {
         Effect.map((chunk) => Array.from(chunk)),
       ),
     );
-    const interruptRequested = events.find(
-      (event) => event.type === "thread.turn-interrupt-requested",
-    )!;
+    return {
+      events,
+      interruptRequested: events.find((event) => event.type === "thread.turn-interrupt-requested")!,
+    };
+  }
+
+  // The previous server process died with this interrupt in flight. The
+  // runtime it targeted died with it, so the interrupt is neither replayed nor
+  // allowed to block the thread; restart reconciliation settles the turn.
+  it("REL-01B gate: settles an interrupt left in flight by an earlier process without replay or quarantine", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const { events, interruptRequested } = await seedRunningTurnInterrupt(harness, now);
     await Effect.runPromise(
       harness.deliveryRepository.claim({
         consumerName: "provider-command-reactor.v1",
@@ -9310,13 +9383,161 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
-      state: "uncertain",
+      state: "succeeded",
       attemptCount: 1,
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
     });
+    const audits = await Effect.runPromise(harness.sql<{
+      outcome: string;
+      reconciled_by: string;
+      previous_state: string;
+    }>`
+      SELECT outcome, reconciled_by, previous_state FROM provider_delivery_reconciliations
+      WHERE event_sequence = ${interruptRequested.sequence}
+    `);
+    expect(audits).toEqual([
+      {
+        outcome: "abandon",
+        reconciled_by: "system:provider-command-reactor",
+        previous_state: "uncertain",
+      },
+    ]);
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers).toEqual([]);
     const consumerState = await Effect.runPromise(
       harness.deliveryRepository.getConsumerState("provider-command-reactor.v1"),
     );
     expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
+
+    // Boot settles the turn the dead runtime left running, and the next
+    // message reaches the provider.
+    await harness.runtime.runPromise(
+      reconcileRestartStuckTurns.pipe(Effect.provide(ProviderSessionRuntimeRepositoryLive)),
+    );
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "interrupted",
+      activeTurnId: null,
+      lastError: null,
+    });
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "after-expired-interrupt",
+      text: "Continue after the restart",
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Continue after the restart",
+    });
+  });
+
+  it("REL-01B gate: quarantines an interrupt whose claim expired in this process", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const { interruptRequested } = await seedRunningTurnInterrupt(harness, now);
+    // The first claim the starting reactor makes (thread.created, earlier in
+    // the same lane) names its process. Stage the interrupt's claim under that
+    // process with a lease that has already run out.
+    const repository = harness.deliveryRepository as {
+      claim: typeof harness.deliveryRepository.claim;
+    };
+    const claim = repository.claim;
+    let stagedOwner: string | undefined;
+    repository.claim = (input) => {
+      if (stagedOwner !== undefined || input.eventSequence === interruptRequested.sequence)
+        return claim(input);
+      stagedOwner = `${input.claimOwner.slice(0, input.claimOwner.lastIndexOf(":"))}:${interruptRequested.sequence}`;
+      return claim({
+        consumerName: input.consumerName,
+        eventSequence: interruptRequested.sequence,
+        threadId: "thread-1",
+        claimOwner: stagedOwner,
+        claimedAt: "2020-01-01T00:00:00.000Z",
+        claimExpiresAt: "2020-01-01T00:01:00.000Z",
+      }).pipe(Effect.andThen(claim(input)));
+    };
+
+    await harness.startReactor();
+
+    expect(stagedOwner).toMatch(/^provider-command-reactor:/);
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: interruptRequested.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "uncertain",
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+    });
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers.map((blocker) => blocker.eventSequence)).toEqual([interruptRequested.sequence]);
+  });
+
+  it("REL-01B gate: quarantines an expired external turn-start claim without replaying it", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "expired-external-start",
+      text: "Sent before the crash",
+      createdAt: new Date().toISOString(),
+    });
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const turnStartRequested = events.find(
+      (event) => event.type === "thread.turn-start-requested",
+    )!;
+    await Effect.runPromise(
+      harness.deliveryRepository.claim({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: turnStartRequested.sequence,
+        threadId: "thread-1",
+        claimOwner: "crashed-provider-command-process",
+        claimedAt: "2020-01-01T00:00:00.000Z",
+        claimExpiresAt: "2020-01-01T00:01:00.000Z",
+      }),
+    );
+
+    await harness.startReactor();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: turnStartRequested.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "uncertain",
+      attemptCount: 1,
+      lastError: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+    });
+    const blockers = await Effect.runPromise(
+      harness.deliveryRepository.listBlockingDeliveries({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+        limit: 10,
+      }),
+    );
+    expect(blockers.map((blocker) => blocker.eventSequence)).toEqual([turnStartRequested.sequence]);
   });
 
   it("accepts a new message after a failed Codex startup without reconciliation", async () => {
@@ -10743,6 +10964,172 @@ describe("ProviderCommandReactor", () => {
         note: expect.stringContaining("without replay"),
       });
   });
+
+  // Threads quarantined by an older build stay blocked across every boot
+  // unless startup recovery reconciles the expired-interrupt blocker.
+  it.each([
+    { scenario: "expired interrupt", sessionStatus: "error", recovered: true },
+    { scenario: "expired interrupt", sessionStatus: "interrupted", recovered: true },
+    { scenario: "expired turn start", sessionStatus: "error", recovered: false },
+    { scenario: "interrupt with another error", sessionStatus: "error", recovered: false },
+  ] as const)(
+    "reconciles only an expired interrupt claim blocker at startup: $scenario ($sessionStatus session)",
+    async ({ scenario, sessionStatus, recovered }) => {
+      const harness = await createHarness({ startReactor: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = "2026-11-10T08:00:00.000Z";
+      const failedAt = "2026-11-10T08:00:31.000Z";
+      const lastError =
+        scenario === "interrupt with another error"
+          ? "Provider process tree did not prove exit."
+          : PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL;
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch(
+          scenario === "expired turn start"
+            ? {
+                type: "thread.turn.start",
+                commandId: CommandId.makeUnsafe("expired-start"),
+                threadId,
+                message: {
+                  messageId: asMessageId("expired-start"),
+                  role: "user",
+                  text: "Do not replay",
+                  attachments: [],
+                },
+                runtimeMode: "approval-required",
+                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                createdAt,
+              }
+            : {
+                type: "thread.turn.interrupt",
+                commandId: CommandId.makeUnsafe("user-interrupt"),
+                threadId,
+                turnId: asTurnId("old-turn"),
+                createdAt,
+              },
+        ),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.claim({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          threadId,
+          claimOwner: "old-process",
+          claimedAt: createdAt,
+          claimExpiresAt: createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.deliveryRepository.markTerminalFailure({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+          expectedClaimOwner: "old-process",
+          state: "uncertain",
+          error: lastError,
+          updatedAt: failedAt,
+        }),
+      );
+      // A message the quarantine skipped, and the block banner it left.
+      const skippedAt = "2026-11-10T08:01:00.000Z";
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("skipped-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("skipped"),
+            role: "user",
+            text: "Skipped while blocked",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: skippedAt,
+        }),
+      );
+      const sessionError = formatProviderDeliveryBlockDetail(lastError);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("visible-delivery-error"),
+          threadId,
+          session: {
+            threadId,
+            status: sessionStatus,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: sessionError,
+            updatedAt: skippedAt,
+          },
+          createdAt: skippedAt,
+        }),
+      );
+      for (const event of await Effect.runPromise(
+        Stream.runCollect(harness.engine.readEvents(0)),
+      )) {
+        await Effect.runPromise(
+          harness.deliveryRepository.advanceCursor({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: event.sequence,
+            updatedAt: skippedAt,
+          }),
+        );
+      }
+
+      await harness.startReactor();
+      await harness.drain();
+
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+        }),
+      );
+      expect(Option.getOrThrow(delivery).state).toBe(recovered ? "succeeded" : "uncertain");
+      const thread = await readHarnessThread(harness);
+      expect(thread?.session).toMatchObject(
+        recovered
+          ? { status: sessionStatus === "error" ? "stopped" : sessionStatus, lastError: null }
+          : { status: sessionStatus, lastError: sessionError },
+      );
+      expect(
+        thread?.activities.some(
+          (activity) => activity.summary === "Previous messages were not sent",
+        ),
+      ).toBe(recovered);
+      const audits = await Effect.runPromise(harness.sql<{
+        outcome: string;
+        reconciled_by: string;
+        note: string;
+      }>`
+        SELECT outcome, reconciled_by, note FROM provider_delivery_reconciliations
+        WHERE event_sequence = ${requested.sequence}
+      `);
+      expect(audits).toEqual(
+        recovered
+          ? [
+              {
+                outcome: "abandon",
+                reconciled_by: "system:provider-command-reactor",
+                note: expect.stringContaining("without replay"),
+              },
+            ]
+          : [],
+      );
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+
+      // A healed thread takes new messages; a still-blocked one skips them.
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "after-startup-recovery",
+        text: "Next message",
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(recovered ? 1 : 0);
+    },
+  );
 
   // The quarantine alone does not reach the UI: "Unblock thread" only renders
   // for the provider-delivery block contract, which used to be written lazily
@@ -14013,6 +14400,240 @@ describe("ProviderCommandReactor", () => {
     expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
       threadId: ThreadId.makeUnsafe("thread-1"),
       numTurns: 1,
+    });
+  });
+
+  describe("typed skills", () => {
+    // The harness session runs in /tmp/provider-project, whose project skill folders
+    // the shared catalog scans. Unique names keep real user skills out of the way.
+    const projectRoot = "/tmp/provider-project";
+    const suffix = Math.random().toString(36).slice(2, 10);
+    const claudeSkillName = `synara-test-claude-${suffix}`;
+    const codexSkillName = `synara-test-codex-${suffix}`;
+    const createdSkillDirs: string[] = [];
+
+    function writeProjectSkill(root: ".claude" | ".codex", name: string, body: string): string {
+      const dir = path.join(projectRoot, root, "skills", name);
+      fs.mkdirSync(dir, { recursive: true });
+      createdSkillDirs.push(dir);
+      const skillPath = path.join(dir, "SKILL.md");
+      fs.writeFileSync(skillPath, `---\nname: ${name}\ndescription: test skill\n---\n${body}\n`);
+      return skillPath;
+    }
+
+    function writeSkills() {
+      return {
+        claudePath: writeProjectSkill(".claude", claudeSkillName, "CLAUDE SKILL BODY"),
+        codexPath: writeProjectSkill(".codex", codexSkillName, "CODEX SKILL BODY"),
+      };
+    }
+
+    afterEach(() => {
+      for (const dir of createdSkillDirs.splice(0))
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    async function sendTyped(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      text: string,
+      dispatchOrigin?: "user" | "agent",
+    ) {
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `typed-skill-${Math.random().toString(36).slice(2)}`,
+        text,
+        createdAt: new Date().toISOString(),
+        ...(dispatchOrigin ? { dispatchOrigin } : {}),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      return harness.sendTurn.mock.calls[0]![0];
+    }
+
+    const claudeHarness = () =>
+      createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      });
+
+    it("gives Claude the instructions of a skill typed mid-sentence", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`Please run /${claudeSkillName} on this`);
+      expect(turn.input).toContain(`<skill name="${claudeSkillName}"`);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
+    it("lets Claude Code load a .claude skill that starts the message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`/${claudeSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).not.toContain("<skill name=");
+    });
+
+    it("inlines a leading Claude skill followed by a colon as a mention", async () => {
+      const { claudePath } = writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${claudeSkillName}: fix the bugs`);
+      expect(turn.input?.startsWith(`$${claudeSkillName}: fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.skills).toEqual([{ name: claudeSkillName, path: claudePath }]);
+    });
+
+    it("hands Claude a leading skill shared from Codex as a mention with its instructions", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `/${codexSkillName} fix the bugs`);
+      expect(turn.input?.startsWith(`$${codexSkillName} fix the bugs`)).toBe(true);
+      expect(turn.input).toContain("CODEX SKILL BODY");
+    });
+
+    it("sends typed skills to Codex as $mentions with skill references", async () => {
+      const { claudePath, codexPath } = writeSkills();
+      const turn = await sendTyped(
+        await createHarness(),
+        `Use /${codexSkillName} and /${claudeSkillName} now`,
+      );
+      expect(turn.input).toContain(`Use $${codexSkillName} and $${claudeSkillName} now`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: codexPath },
+        { name: claudeSkillName, path: claudePath },
+      ]);
+      // Codex loads its own folder natively; the shared Claude skill travels inline.
+      expect(turn.input).toContain("CLAUDE SKILL BODY");
+      expect(turn.input).not.toContain("CODEX SKILL BODY");
+    });
+
+    it("sends the active Codex profile's copy of a typed skill before its default-home copy", async () => {
+      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-codex-skill-home-"));
+      createdSkillDirs.push(homeDir);
+      const customHome = path.join(homeDir, "work-codex");
+      const skillDir = path.join("skills", codexSkillName);
+      for (const codexHome of [path.join(homeDir, ".codex"), customHome]) {
+        fs.mkdirSync(path.join(codexHome, skillDir), { recursive: true });
+        fs.writeFileSync(
+          path.join(codexHome, skillDir, "SKILL.md"),
+          `---\nname: ${codexSkillName}\ndescription: test skill\n---\n`,
+        );
+      }
+      const turn = await sendTyped(
+        await createHarness({
+          threadModelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5" },
+          skillCatalogHomeDir: homeDir,
+          serverSettings: {
+            providerInstances: {
+              codex_work: { driver: "codex", enabled: true, config: { homePath: customHome } },
+            },
+          },
+          listNativeSkills: ({ homePath }) =>
+            Effect.succeed({
+              skills: homePath
+                ? [
+                    {
+                      name: codexSkillName,
+                      path: path.join(homePath, skillDir, "SKILL.md"),
+                      enabled: true,
+                    },
+                  ]
+                : [],
+            }),
+        }),
+        `Please use /${codexSkillName}`,
+      );
+      expect(turn.input).toContain(`Please use $${codexSkillName}`);
+      expect(turn.skills).toEqual([
+        { name: codexSkillName, path: path.join(customHome, skillDir, "SKILL.md") },
+      ]);
+    });
+
+    it.each(["homePath", "configDir"] as const)(
+      "uses the active Claude %s for typed skills and native slash commands",
+      async (configuredDir) => {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-claude-skill-home-"));
+        createdSkillDirs.push(homeDir);
+        const customHome = path.join(homeDir, "work-claude");
+        const customConfig =
+          configuredDir === "homePath" ? path.join(customHome, ".claude") : customHome;
+        const skillDir = path.join("skills", claudeSkillName);
+        const defaultConfig = path.join(homeDir, ".claude");
+        for (const [configDir, body] of [
+          [defaultConfig, "DEFAULT CLAUDE SKILL BODY"],
+          [customConfig, "CUSTOM CLAUDE SKILL BODY"],
+        ] as const) {
+          fs.mkdirSync(path.join(configDir, skillDir), { recursive: true });
+          fs.writeFileSync(
+            path.join(configDir, skillDir, "SKILL.md"),
+            `---\nname: ${claudeSkillName}\ndescription: test skill\n---\n${body}\n`,
+          );
+        }
+        const makeHarness = () =>
+          createHarness({
+            threadModelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-opus-4-6",
+            },
+            skillCatalogHomeDir: homeDir,
+            serverSettings: {
+              providerInstances: {
+                claude_work: {
+                  driver: "claudeAgent",
+                  enabled: true,
+                  config: { [configuredDir]: customHome },
+                },
+              },
+            },
+          });
+
+        const inline = await sendTyped(await makeHarness(), `Please use /${claudeSkillName}`);
+        expect(inline.input).toContain("CUSTOM CLAUDE SKILL BODY");
+        expect(inline.input).not.toContain("DEFAULT CLAUDE SKILL BODY");
+        const command = `/${claudeSkillName} review this`;
+        const native = await sendTyped(await makeHarness(), command);
+        expect(native.input?.startsWith(command)).toBe(true);
+        expect(native.input).not.toContain("<skill name=");
+        expect(native.skills).toEqual([
+          { name: claudeSkillName, path: path.join(customConfig, skillDir, "SKILL.md") },
+        ]);
+      },
+    );
+
+    it("keeps typed and explicitly attached OMP skills on their existing paths", async () => {
+      const { claudePath } = writeSkills();
+      const skill = { name: claudeSkillName, path: claudePath };
+      const text = `Please use $${claudeSkillName}`;
+      const makeHarness = () =>
+        createHarness({ threadModelSelection: { provider: "omp", model: "model-a" } });
+
+      const typed = await sendTyped(await makeHarness(), text);
+      expect(typed.input).toBe(text);
+      expect(typed.skills).toBeUndefined();
+
+      const attachedHarness = await makeHarness();
+      await Effect.runPromise(
+        attachedHarness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-omp-explicit-skill"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId("omp-explicit-skill"),
+            role: "user",
+            text,
+            attachments: [],
+            skills: [skill],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(() => attachedHarness.sendTurn.mock.calls.length === 1);
+      const attached = attachedHarness.sendTurn.mock.calls[0]![0];
+      expect(attached.skills).toEqual([skill]);
+      expect(attached.input).toContain("CLAUDE SKILL BODY");
+    });
+
+    it("ignores skill tokens in another agent's message", async () => {
+      writeSkills();
+      const turn = await sendTyped(await claudeHarness(), `Please /${claudeSkillName}`, "agent");
+      expect(turn.skills).toBeUndefined();
+      expect(turn.input).not.toContain("<skill name=");
     });
   });
 

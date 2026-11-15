@@ -7,6 +7,8 @@ import type { ReactNode } from "react";
 import { collectLeaves } from "../../splitView.logic";
 import { useSplitViewStore } from "../../splitViewStore";
 import { useRightDockStore } from "../../rightDockStore";
+import { useStore } from "../../store";
+import type { ThreadShell } from "../../types";
 import { toastManager } from "../ui/toast";
 import {
   runningSubagentRosterItem,
@@ -112,7 +114,7 @@ it.each(["Stop subagent Scout", "Run Scout in background"])(
   },
 );
 
-it("opens the subagent dock in a split pane, keeps its destination in that pane, and closes it", async () => {
+it("opens a subagent from the split dock beside its parent, never in the parent's pane", async () => {
   await page.viewport(1800, 1000);
   const split = useSplitViewStore.getState().createFromDrop({
     sourceThreadId: parent,
@@ -121,9 +123,20 @@ it("opens the subagent dock in a split pane, keeps its destination in that pane,
     direction: "horizontal",
     side: "second",
   });
-  const sourcePane = collectLeaves(useSplitViewStore.getState().splitViewsById[split]!.root).find(
-    (leaf) => leaf.threadId === parent,
-  )!;
+  const panes = collectLeaves(useSplitViewStore.getState().splitViewsById[split]!.root);
+  const sourcePane = panes.find((leaf) => leaf.threadId === parent)!;
+  const besidePane = panes.find((leaf) => leaf.threadId === other)!;
+  const previousShells = useStore.getState().threadShellById ?? {};
+  useStore.setState({
+    threadShellById: {
+      ...previousShells,
+      [child.threadId]: {
+        id: child.threadId,
+        projectId: ProjectId.makeUnsafe("project"),
+        parentThreadId: parent,
+      } as unknown as ThreadShell,
+    },
+  });
   useRightDockStore.getState().openPane(parent, { kind: "subagents" });
   const screen = await render(<SplitChatSurface splitViewId={split} routeThreadId={parent} />);
   try {
@@ -131,26 +144,32 @@ it("opens the subagent dock in a split pane, keeps its destination in that pane,
       .element(page.getByRole("button", { name: "Open subagent Scout (Running)" }))
       .toBeVisible();
     await page.getByRole("button", { name: "Open subagent Scout (Running)" }).click();
+    // The parent keeps its pane (and the list beside it); the pane next to it shows the child.
     await expect
-      .poll(
-        () =>
-          collectLeaves(useSplitViewStore.getState().splitViewsById[split]!.root).find(
-            (leaf) => leaf.id === sourcePane.id,
-          )?.threadId,
+      .poll(() =>
+        collectLeaves(useSplitViewStore.getState().splitViewsById[split]!.root).map((leaf) => [
+          leaf.id,
+          leaf.threadId,
+        ]),
       )
-      .toBe(child.threadId);
+      .toEqual([
+        [sourcePane.id, parent],
+        [besidePane.id, child.threadId],
+      ]);
     expect(state.navigate.mock.calls.at(-1)?.[0]).toMatchObject({
       params: { threadId: child.threadId },
     });
-    await page.getByRole("button", { name: "Hide subagents", exact: true }).click();
+    // The subagent takes the list's place on the right, so the parent keeps its width.
     await expect
       .poll(
         () => page.getByRole("button", { name: "Open subagent Scout (Running)" }).elements().length,
       )
       .toBe(0);
+    expect(useRightDockStore.getState().dockStateByThreadId[parent]?.open).toBe(false);
   } finally {
     await screen.unmount();
     useSplitViewStore.getState().removeSplitView(split);
+    useStore.setState({ threadShellById: previousShells });
   }
 });
 

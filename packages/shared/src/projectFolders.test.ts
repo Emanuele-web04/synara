@@ -82,22 +82,36 @@ describe("buildProjectFoldersPreamble", () => {
       ].join("\n"),
     );
   });
+
+  it("points a worktree chat at the worktree and warns the other folders are live", () => {
+    expect(
+      buildProjectFoldersPreamble({
+        primaryFolder: "/worktrees/web-feature",
+        additionalFolders: ["/repos/api"],
+        worktreeOf: "/repos/web",
+      }),
+    ).toBe(
+      [
+        "<project_folders>",
+        "This project spans several folders. You can read and edit all of them:",
+        "- web-feature: /worktrees/web-feature (primary, worktree of /repos/web)",
+        "- api: /repos/api",
+        "Edit the primary folder only inside its worktree path above, never in the original checkout. The other folders are not isolated: edits there apply directly.",
+        "Use absolute paths for files outside the primary folder.",
+        "</project_folders>",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("projectFoldersSessionIssue", () => {
-  it("allows local Codex and Claude chats", () => {
-    expect(projectFoldersSessionIssue({ provider: "codex", worktree: false })).toBeNull();
-    expect(projectFoldersSessionIssue({ provider: "claudeAgent", worktree: false })).toBeNull();
-  });
-
-  it("refuses worktree chats", () => {
-    expect(projectFoldersSessionIssue({ provider: "codex", worktree: true })).toContain(
-      "Use Local mode",
-    );
+  it("allows Codex and Claude chats, including worktree chats", () => {
+    expect(projectFoldersSessionIssue({ provider: "codex" })).toBeNull();
+    expect(projectFoldersSessionIssue({ provider: "claudeAgent" })).toBeNull();
   });
 
   it("refuses providers that cannot be granted the extra folders", () => {
-    expect(projectFoldersSessionIssue({ provider: "opencode", worktree: false })).toBe(
+    expect(projectFoldersSessionIssue({ provider: "opencode" })).toBe(
       "OpenCode cannot access a project's additional folders. Use Codex or Claude for this multi-folder project.",
     );
   });

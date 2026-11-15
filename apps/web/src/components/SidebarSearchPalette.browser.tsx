@@ -139,10 +139,12 @@ it("searches settings and opens the matching section and row", async () => {
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 
-it("opens panel-only settings without inventing an anchor", async () => {
+it("opens Keyboard shortcuts from the old keybindings search term without an anchor", async () => {
   const { onOpenSettings } = await renderPalette();
   await page.getByPlaceholder("Search chats or run a command").fill("keybindings");
-  await page.getByRole("option", { name: "Keybindings Keybindings", exact: true }).click();
+  await page
+    .getByRole("option", { name: "Keyboard shortcuts Keyboard shortcuts", exact: true })
+    .click();
   expect(onOpenSettings).toHaveBeenCalledWith("shortcuts", undefined);
 });
 

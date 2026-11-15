@@ -3492,6 +3492,10 @@ diffs-container {
 .chat-markdown img[data-expandable-image] {
   cursor: zoom-in;
 }
+/* Images sharing a paragraph with prose get their own line (remarkImageRows). */
+.chat-markdown .chat-markdown-image-row {
+  display: block;
+}
 .pull-request-prose p,
 .pull-request-prose ul,
 .pull-request-prose ol,

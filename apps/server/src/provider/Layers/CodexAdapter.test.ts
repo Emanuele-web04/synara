@@ -2236,6 +2236,38 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("names a Codex Cloudflare 403 page an edge block and keeps its HTTP status", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-edge-blocked"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "turn/completed",
+        payload: {
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "unexpected status 403 Forbidden: Attention Required! | Cloudflare",
+              codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 403 } },
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+      const event = yield* Fiber.join(eventFiber);
+      assert.equal(event._tag, "Some");
+      if (event._tag === "Some" && event.value.type === "turn.completed") {
+        assert.equal(event.value.payload.errorCode, "edge_blocked");
+        assert.equal(event.value.payload.httpStatus, 403);
+      }
+    }),
+  );
+
   it.effect("preserves same-turn Codex quota across child lifecycle and retries", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

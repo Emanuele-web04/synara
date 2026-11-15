@@ -3405,6 +3405,30 @@ describe("WsTransport", () => {
     await expect(negotiation).resolves.toBeNull();
   });
 
+  it("rejects a deadline-free request when disposed while waiting for desktop readiness", async () => {
+    const whenBackendReady = vi.fn(() => new Promise<void>(() => {}));
+    Object.assign(window, {
+      desktopBridge: { whenBackendReady, getWsUrl: () => "ws://127.0.0.1:53036" },
+    });
+    const transport = new WsTransport();
+    const pending = transport.request(
+      ORCHESTRATION_WS_METHODS.subscribeShell,
+      {},
+      {
+        timeoutMs: null,
+      },
+    );
+    const rejected = vi.fn();
+    void pending.catch(rejected);
+
+    await transport.dispose();
+
+    await vi.waitFor(() => expect(rejected).toHaveBeenCalledWith(new Error("Transport disposed")));
+    expect(whenBackendReady).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(0);
+  });
+
   it("does not create a bootstrap socket when disposed during negotiation", async () => {
     // dispose() captures a null runtime and returns while the HTTP request is
     // still pending; the transport must not build one afterwards.

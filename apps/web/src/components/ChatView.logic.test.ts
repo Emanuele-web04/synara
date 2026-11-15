@@ -1,6 +1,5 @@
 import {
   CheckpointRef,
-  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ThreadId,
@@ -60,7 +59,6 @@ import {
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
   resolveBlockedComposerSendReason,
-  resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveComposerStripWorkLogEntries,
@@ -3004,53 +3002,6 @@ describe("thread detail hydration", () => {
         detailSyncState: "failed",
       }),
     ).toBe("failed");
-  });
-});
-
-describe("resolveDraftFallbackModelSelection", () => {
-  it("prefers an explicit project default over the settings default provider", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: { provider: "codex", model: "gpt-5.5" },
-        settingsDefaultProvider: "devin",
-      }),
-    ).toEqual({ provider: "codex", model: "gpt-5.5" });
-  });
-
-  it("uses the settings default provider when the project has no default", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: null,
-        settingsDefaultProvider: "devin",
-      }),
-    ).toEqual({ provider: "devin", model: "adaptive" });
-  });
-
-  it("falls back to codex when the settings default is pi and no project default exists", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: null,
-        settingsDefaultProvider: "pi",
-      }),
-    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
-  });
-
-  it("uses the project default provider when the settings default is omp", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: { provider: "claudeAgent", model: "claude-sonnet-5" },
-        settingsDefaultProvider: "omp",
-      }),
-    ).toEqual({ provider: "claudeAgent", model: "claude-sonnet-5" });
-  });
-
-  it("falls back to codex when the settings default is omp and no project default exists", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: null,
-        settingsDefaultProvider: "omp",
-      }),
-    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 });
 

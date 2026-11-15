@@ -12,6 +12,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   PendingClaudeCacheReview,
   ThreadNotes,
   ThreadGoal,
@@ -81,6 +82,9 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
+  // Omission or null preserves the stored links on upsert; null on read means the row predates
+  // links or holds links this build cannot decode (readers fall back to `lastKnownPr`).
+  pullRequests: Schema.optional(Schema.NullOr(Schema.Array(OrchestrationThreadPullRequestLink))),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
   // Omission preserves an existing review during legacy whole-row upserts;

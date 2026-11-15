@@ -126,7 +126,7 @@ export async function listUserOrganizations(
 async function provisionPersonalOrg(
   deps: OrgProvisioningDeps,
   userId: string,
-  email: string,
+  email: string | (() => Promise<string>),
   clock: () => number,
 ): Promise<OrganizationRef[]> {
   // Read again on the way in, not just before entering the single-flight: it
@@ -135,7 +135,8 @@ async function provisionPersonalOrg(
   const existing = await readMemberships(deps, userId, clock);
   if (existing.length > 0) return existing;
 
-  const organization = await deps.createOrganization(personalOrgName(email));
+  const currentEmail = typeof email === "string" ? email : await email();
+  const organization = await deps.createOrganization(personalOrgName(currentEmail));
   try {
     await deps.createOrganizationMembership(organization.orgId, userId);
   } catch (error) {
@@ -168,7 +169,7 @@ async function provisionPersonalOrg(
 export async function ensurePersonalOrg(
   deps: OrgProvisioningDeps,
   userId: string,
-  email: string,
+  email: string | (() => Promise<string>),
   options?: {
     /**
      * Skip the cached membership list and ask the provider now. For

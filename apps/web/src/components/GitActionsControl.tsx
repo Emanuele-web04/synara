@@ -371,37 +371,6 @@ export default function GitActionsControl({
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
-  const persistThreadPr = useCallback(
-    async (pr: {
-      number: number;
-      title: string;
-      url: string;
-      baseBranch: string;
-      headBranch: string;
-      state: "open" | "closed" | "merged";
-      isDraft?: boolean;
-      mergeability?: "mergeable" | "conflicting" | "unknown";
-      additions?: number | null;
-      deletions?: number | null;
-      changedFiles?: number | null;
-    }) => {
-      if (!activeThreadId) {
-        return;
-      }
-      const api = readNativeApi();
-      if (!api) {
-        return;
-      }
-      await api.orchestration.dispatchCommand({
-        type: "thread.meta.update",
-        commandId: newCommandId(),
-        threadId: activeThreadId,
-        lastKnownPr: pr,
-      });
-    },
-    [activeThreadId],
-  );
-
   const isRunStackedActionRunning =
     useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd) }) > 0;
   const isPullRunning = useIsMutating({ mutationKey: gitMutationKeys.pull(gitCwd) }) > 0;
@@ -826,6 +795,7 @@ export default function GitActionsControl({
         ...(prBody ? { prBody } : {}),
         ...(prDraft ? { prDraft } : {}),
         ...(allowDirtyWorkingTree ? { allowDirtyWorkingTree } : {}),
+        ...(activeThreadId ? { threadId: activeThreadId } : {}),
       });
 
       try {
@@ -834,29 +804,6 @@ export default function GitActionsControl({
           activeGitActionProgressRef.current = null;
         }
         const resultToast = summarizeGitResult(result);
-        const persistedPr =
-          result.pr.status === "created" || result.pr.status === "opened_existing"
-            ? result.pr.number &&
-              result.pr.title &&
-              result.pr.url &&
-              result.pr.baseBranch &&
-              result.pr.headBranch
-              ? {
-                  number: result.pr.number,
-                  title: result.pr.title,
-                  url: result.pr.url,
-                  baseBranch: result.pr.baseBranch,
-                  headBranch: result.pr.headBranch,
-                  state: "open" as const,
-                }
-              : null
-            : actionStatus?.pr?.state === "open"
-              ? actionStatus.pr
-              : null;
-        if (persistedPr) {
-          void persistThreadPr(persistedPr).catch(() => undefined);
-        }
-
         const existingOpenPrUrl =
           actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;
         const prUrl = result.pr.url ?? existingOpenPrUrl;
@@ -978,7 +925,6 @@ export default function GitActionsControl({
       hasOriginRemote,
       isDefaultBranch,
       openCreatePrDialog,
-      persistThreadPr,
       runImmediateGitActionMutation,
       threadToastData,
       t,

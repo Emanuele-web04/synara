@@ -1,5 +1,5 @@
 import { accountStateDirectory } from "../accountAuth";
-import { createAccountClient } from "@synara/shared/account";
+import { createServerAccountClient } from "../accountHttp";
 import { mintHostProof, readHostIdentity } from "../hostIdentity";
 import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
@@ -119,7 +119,7 @@ export function makeRemoteAccessManagement(
         request.operation === "pair")
     )
       throw new WsRpcError({ message: "Device registration recovery is in progress." });
-    const client = createAccountClient({ baseUrl: account.accountUrl });
+    const client = createServerAccountClient(account.accountUrl);
     const hostProof = async () => {
       const identity = await readHostIdentity(options.config.hostIdentityPath);
       if (!identity || !account.hostId || account.hostKeyGeneration === undefined)

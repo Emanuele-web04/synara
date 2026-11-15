@@ -104,6 +104,13 @@ export function providerStatusInstanceKey(
   return status.instanceId ?? status.provider;
 }
 
+/** Statuses keyed by the account (provider instance) they describe. */
+export function providerStatusesByInstance(
+  statuses: readonly ServerProviderStatus[],
+): Map<string, ServerProviderStatus> {
+  return new Map(statuses.map((status) => [providerStatusInstanceKey(status), status]));
+}
+
 // Advisory warnings the health layer marks available (Pi bundled SDK, Cursor
 // model-discovery warnings, unconfirmed custom binaries) stay sendable; only
 // unavailable or unauthenticated statuses block sends.

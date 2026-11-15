@@ -5,7 +5,7 @@
 // Layer: Settings UI components
 // Exports: UsageSettingsPanel
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { SegmentedPicker } from "../SegmentedPicker";
 import { BillingSettingsPanel, SYNARA_PLAN_SECTION_ID } from "./BillingSettingsPanel";
@@ -21,9 +21,12 @@ type UsageTab = "overview" | "analytics" | "billing";
 export function UsageSettingsPanel({
   billingEnabled,
   target,
+  overviewExtra,
 }: {
   billingEnabled: boolean;
   target: string | null;
+  /** Settings that react to limits (warnings, auto-resume), shown under Overview. */
+  overviewExtra?: ReactNode;
 }) {
   const [tab, setTab] = useState<UsageTab>(() =>
     billingEnabled && target === SYNARA_PLAN_SECTION_ID ? "billing" : "overview",
@@ -47,7 +50,10 @@ export function UsageSettingsPanel({
         ) : tab === "billing" && billingEnabled ? (
           <BillingSettingsPanel />
         ) : (
-          <ProviderUsageSettingsPanel />
+          <div className="space-y-6">
+            <ProviderUsageSettingsPanel />
+            {overviewExtra}
+          </div>
         )}
       </div>
     </div>

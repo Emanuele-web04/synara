@@ -167,7 +167,7 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserEvaluationFailed:
     "Browser evaluation failed before a confirmed result was available. Inspect the current page and isolate the failing operation in a focused call; do not repeat unchanged calls. This error does not establish that input or sign-in buttons are blocked.",
   BrowserScriptApiUnavailable:
-    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Use global snapshot(), not page.snapshot(). Wait with locator.waitFor or page.waitForURL, not bare waitForTimeout. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
+    "The script used an unavailable browser API/global. Use page.getByRole(...), page.getByLabel(...), page.url(), and page.evaluate(() => ...) for document/window access. Use global snapshot(), not page.snapshot(). Wait with locator.waitFor, page.waitForURL, page.waitForFunction or page.waitForTimeout(ms); setTimeout and bare waitForTimeout are unavailable. Earlier actions may have completed; inspect their result before correcting the script. This is not a password-access error.",
   BrowserEvaluationResultTooLarge: "The browser evaluation result exceeds the safe response limit.",
   BrowserSnapshotTooLarge: "The browser snapshot exceeds the safe response limit.",
   BrowserScreenshotTooLarge: "The browser screenshot exceeds the safe response limit.",
@@ -208,6 +208,39 @@ const getFixedBrowserErrorInvariant = (
 ): BrowserFixedAutomationErrorInvariant | undefined =>
   BrowserFixedAutomationErrorInvariants[code as BrowserFixedAutomationErrorCode];
 
+/** Codes whose host may attach a sanitized `cause` describing the script failure. */
+export const BrowserAutomationErrorCauseCodes: ReadonlySet<BrowserErrorCode> = new Set([
+  "BrowserEvaluationFailed",
+  "BrowserScriptApiUnavailable",
+]);
+
+export const BROWSER_AUTOMATION_ERROR_CAUSE_MESSAGE_MAX_BYTES = 320;
+
+/**
+ * Host-classified detail for a failed browser script. Built only from fixed
+ * templates and allowlisted error shapes, never from page-controlled text.
+ */
+export const BrowserAutomationErrorCause = Schema.Struct({
+  name: Schema.optional(
+    Schema.Literals([
+      "Error",
+      "TypeError",
+      "RangeError",
+      "ReferenceError",
+      "SyntaxError",
+      "EvalError",
+      "URIError",
+      "TimeoutError",
+    ]),
+  ),
+  api: Schema.optional(
+    BoundedUtf8String(64, 1).check(Schema.isPattern(/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/)),
+  ),
+  message: BoundedUtf8String(BROWSER_AUTOMATION_ERROR_CAUSE_MESSAGE_MAX_BYTES, 1),
+});
+
+export type BrowserAutomationErrorCause = typeof BrowserAutomationErrorCause.Type;
+
 const BrowserAutomationErrorFields = Schema.Struct({
   code: BrowserErrorCode,
   message: BoundedUtf8String(512, 1),
@@ -216,6 +249,7 @@ const BrowserAutomationErrorFields = Schema.Struct({
   operationId: Schema.optional(BrowserOperationId),
   tabId: Schema.optional(BrowserTabId),
   effectMayHaveCommitted: Schema.Boolean,
+  cause: Schema.optional(BrowserAutomationErrorCause),
 });
 
 export const BrowserAutomationError = BrowserAutomationErrorFields.check(
@@ -223,6 +257,7 @@ export const BrowserAutomationError = BrowserAutomationErrorFields.check(
     const fixedInvariant = getFixedBrowserErrorInvariant(error.code);
     return (
       error.message === BrowserAutomationErrorMessages[error.code] &&
+      (error.cause === undefined || BrowserAutomationErrorCauseCodes.has(error.code)) &&
       (fixedInvariant === undefined ||
         (error.retryable === fixedInvariant.retryable &&
           error.phase === fixedInvariant.phase &&
@@ -259,6 +294,8 @@ type BrowserContextualAutomationErrorInput = BrowserAutomationErrorCorrelation &
   readonly retryable: boolean;
   readonly phase: BrowserAutomationErrorPhase;
   readonly effectMayHaveCommitted: boolean;
+  /** Accepted only for BrowserAutomationErrorCauseCodes. */
+  readonly cause?: BrowserAutomationErrorCause;
 };
 
 export type BrowserAutomationErrorInput =

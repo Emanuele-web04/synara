@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -307,6 +307,32 @@ export function sweepOrphanedCuaDrivers(): void {
   } catch {
     return;
   }
+  reapOrphanedCuaDrivers(listing);
+}
+
+/**
+ * The same sweep without blocking the event loop on the full process listing, which
+ * takes tens of milliseconds on a busy Mac. Safe to run after a new host has started:
+ * a daemon whose host is alive and a runtime directory younger than the stale age are
+ * both left alone.
+ */
+export function sweepOrphanedCuaDriversInBackground(): Promise<void> {
+  if (process.platform === "win32") return Promise.resolve();
+  return new Promise((resolve) => {
+    execFile("ps", ["-axo", "pid,args"], { encoding: "utf8" }, (error, listing) => {
+      if (!error) {
+        try {
+          reapOrphanedCuaDrivers(listing);
+        } catch (sweepError) {
+          log(`orphaned driver sweep failed: ${String(sweepError)}`);
+        }
+      }
+      resolve();
+    });
+  });
+}
+
+function reapOrphanedCuaDrivers(listing: string): void {
   const liveSocketDirs = new Set<string>();
   for (const line of listing.split("\n")) {
     if (!/cua-driver\s+serve\s+--embedded/.test(line)) continue;

@@ -78,11 +78,29 @@ export const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
  */
 export const WORKOS_GRANT_TIMEOUT_MS = 45_000;
 
-// WorkOS returns the same rotated pair for a replay within 30 seconds.
-// https://workos.com/docs/authkit/session-resilience
+// WorkOS returns the same rotated pair for a replay within 30 seconds, and
+// answers short-lived refresh contention with a 429 to back off from briefly.
+// Every attempt of one refresh fits inside this budget, so a replay always
+// lands in that grace. https://workos.com/docs/authkit/session-resilience
 const REFRESH_REPLAY_BUDGET_MS = 25_000;
-const REFRESH_FIRST_ATTEMPT_MS = 10_000;
-const REFRESH_RETRY_DELAY_MS = 250;
+/** One attempt's deadline, so a hung first attempt still leaves room to replay. */
+const REFRESH_ATTEMPT_MS = 10_000;
+/**
+ * Backoff between attempts: 250ms doubling to 4s, ±20% jitter. The cap keeps a
+ * provider that stays down or rate limited to about eight calls per refresh.
+ */
+const REFRESH_RETRY_BASE_MS = 250;
+const REFRESH_RETRY_MAX_MS = 4_000;
+/** A replay with less time than this left could not get an answer back. */
+const REFRESH_MIN_ATTEMPT_MS = 500;
+
+/** Provider timeouts (504), interrupted responses (502), contention (429) and faults are retryable. */
+function isRetryableRefreshFailure(error: unknown): boolean {
+  return (
+    error instanceof IdentityProviderError &&
+    (error.status === 408 || error.status === 429 || (error.status >= 500 && error.status < 600))
+  );
+}
 
 function isAbortTimeout(error: unknown): boolean {
   return (
@@ -757,19 +775,24 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       };
       const budget = Math.min(grantTimeoutMs, REFRESH_REPLAY_BUDGET_MS);
       const deadline = performance.now() + budget;
-      try {
-        return await exchangeRefreshToken(request, Math.min(budget, REFRESH_FIRST_ATTEMPT_MS));
-      } catch (error) {
-        const retryable =
-          error instanceof IdentityProviderError &&
-          (error.status === 408 ||
-            error.status === 429 ||
-            (error.status >= 500 && error.status < 600));
-        if (!retryable || deadline - performance.now() <= REFRESH_RETRY_DELAY_MS) throw error;
-        await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_RETRY_DELAY_MS));
-        const remaining = Math.floor(deadline - performance.now());
-        if (remaining <= 0) throw error;
-        return exchangeRefreshToken(request, remaining);
+      let attemptMs = Math.min(budget, REFRESH_ATTEMPT_MS);
+      // Replays carry the exact same request. Each retry waits longer and
+      // stops once the budget cannot fit another attempt; the last provider
+      // failure is what the route maps to its answer.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await exchangeRefreshToken(request, attemptMs);
+        } catch (error) {
+          if (!isRetryableRefreshFailure(error)) throw error;
+          const delay =
+            Math.min(REFRESH_RETRY_MAX_MS, REFRESH_RETRY_BASE_MS * 2 ** (attempt - 1)) *
+            (0.8 + 0.4 * Math.random());
+          if (deadline - performance.now() - delay < REFRESH_MIN_ATTEMPT_MS) throw error;
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+          const remaining = Math.floor(deadline - performance.now());
+          if (remaining <= 0) throw error;
+          attemptMs = Math.min(remaining, REFRESH_ATTEMPT_MS);
+        }
       }
     },
 
@@ -870,7 +893,11 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       const memberships = await ensurePersonalOrg(
         { listUserOrganizationMemberships, createOrganization, createOrganizationMembership },
         session.userId,
-        email,
+        // Cached identity is sufficient to read existing memberships. A new
+        // workspace needs a live user check before it can be created.
+        options?.freshMembership
+          ? email
+          : async () => (await verifier.getUser(session.userId)).email,
         options?.freshMembership ? { fresh: true } : undefined,
       );
       if (!session.orgId) {

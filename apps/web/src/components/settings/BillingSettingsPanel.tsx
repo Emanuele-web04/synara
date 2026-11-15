@@ -12,6 +12,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useAccount } from "~/hooks/useAccount";
 import { getFormatLocale, t } from "~/i18n";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBillingFlag";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
 import {
   formatBillingPrice,
@@ -80,19 +81,20 @@ export function useOpenSynaraPlan() {
 }
 
 /**
- * The profile's only nod to billing: a quiet "Free plan" / "Alto" link to the plan
- * in Usage & limits. Hidden until the plan is known, so it never flashes a guess.
+ * The signed-in account's Synara plan for Settings › Profile. Null until the plan is
+ * known — and in builds without billing, where it is never asked for — so the profile
+ * never flashes a guess.
  */
-export function SynaraPlanLink() {
+export function useSynaraPlan(): { readonly granted: boolean; readonly open: () => void } | null {
   const { status } = useAccount();
-  const query = useQuery(accountBillingQueryOptions(status));
-  const openPlan = useOpenSynaraPlan();
-  if (status?.state !== "signed-in" || !query.data?.available) return null;
-  return (
-    <Button variant="ghost" size="sm" onClick={openPlan}>
-      {query.data.access === "granted" ? t("settings:altoProPlan") : "Free plan"}
-    </Button>
-  );
+  const signedIn = status?.state === "signed-in";
+  const query = useQuery({
+    ...accountBillingQueryOptions(status),
+    enabled: ACCOUNT_BILLING_ENABLED && signedIn,
+  });
+  const open = useOpenSynaraPlan();
+  if (!ACCOUNT_BILLING_ENABLED || !signedIn || query.data?.available !== true) return null;
+  return { granted: query.data.access === "granted", open };
 }
 
 export function BillingSettingsPanel() {

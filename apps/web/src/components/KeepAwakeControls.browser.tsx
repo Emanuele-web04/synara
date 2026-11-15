@@ -18,14 +18,49 @@ vi.mock("../wsNativeApi", async (original) => ({
   },
 }));
 
+import type { DesktopKeepAwakeState } from "@synara/contracts";
+import { useDesktopKeepAwake } from "../hooks/useDesktopKeepAwake";
 import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
-import { KeepAwakeSettingsSection } from "./KeepAwakeControls";
+import { KeepAwakeSettingsSection, RemoteAccessKeepAwakeRow } from "./KeepAwakeControls";
+
+const desktopKeepAwake = {
+  state: { enabled: false, active: false, onBattery: false } as DesktopKeepAwakeState,
+  getState: vi.fn(async () => desktopKeepAwake.state),
+  setEnabled: vi.fn(async (enabled: boolean) => {
+    desktopKeepAwake.state = { ...desktopKeepAwake.state, enabled, active: enabled };
+    return desktopKeepAwake.state;
+  }),
+  setRemoteAccessAllowed: vi.fn(async () => desktopKeepAwake.state),
+};
+
+/** General › Power: the agent keep-awake plus the desktop's remote-access keep-awake. */
+function PowerHarness() {
+  const state = useKeepAwakeState();
+  const remote = useDesktopKeepAwake();
+  const [mode, setMode] = useState<KeepAwakeMode>("off");
+  return (
+    <KeepAwakeSettingsSection
+      title="settings:general_power"
+      state={state}
+      mode={mode}
+      defaultMode="off"
+      onSelectMode={setMode}
+      extraRows={remote.state ? <RemoteAccessKeepAwakeRow keepAwake={remote} /> : null}
+    />
+  );
+}
 
 function ControlsHarness() {
   const state = useKeepAwakeState();
   const [mode, setMode] = useState<KeepAwakeMode>("off");
   return (
-    <KeepAwakeSettingsSection state={state} mode={mode} defaultMode="off" onSelectMode={setMode} />
+    <KeepAwakeSettingsSection
+      title="settings:general_power"
+      state={state}
+      mode={mode}
+      defaultMode="off"
+      onSelectMode={setMode}
+    />
   );
 }
 
@@ -89,5 +124,52 @@ describe("Keep Awake controls", () => {
     await expect.element(page.getByRole("radio", { name: "On", exact: true })).toBeChecked();
     await page.getByRole("radio", { name: "Agent", exact: true }).click();
     await expect.element(page.getByRole("radio", { name: "Agent", exact: true })).toBeChecked();
+  });
+
+  describe("remote-access keep awake under General › Power", () => {
+    beforeEach(() => {
+      desktopKeepAwake.state = { enabled: false, active: false, onBattery: false };
+      desktopKeepAwake.setEnabled.mockClear();
+      (window as { desktopBridge?: unknown }).desktopBridge = { keepAwake: desktopKeepAwake };
+    });
+    afterEach(() => {
+      delete (window as { desktopBridge?: unknown }).desktopBridge;
+    });
+
+    it("sits in the same Power card as the agent keep awake", async () => {
+      await render(<PowerHarness />);
+      push("off");
+      await expect.element(page.getByText("Power", { exact: true })).toBeVisible();
+      await expect.element(page.getByRole("radio", { name: "Agent", exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("switch", { name: "Stay awake for remote access" }))
+        .toBeVisible();
+    });
+
+    it("persists through the desktop bridge", async () => {
+      await render(<PowerHarness />);
+      const toggle = page.getByRole("switch", { name: "Stay awake for remote access" });
+      await expect.element(toggle).not.toBeChecked();
+      await toggle.click();
+      await vi.waitFor(() => expect(desktopKeepAwake.setEnabled).toHaveBeenCalledWith(true));
+      await expect.element(toggle).toBeChecked();
+    });
+
+    it("keeps the Power card when only the desktop keep awake exists", async () => {
+      await render(<PowerHarness />);
+      push("off", false, false);
+      await expect
+        .element(page.getByRole("switch", { name: "Stay awake for remote access" }))
+        .toBeVisible();
+      expect(page.getByRole("radio", { name: "Agent", exact: true }).elements()).toHaveLength(0);
+    });
+
+    it("hides the row without a desktop bridge", async () => {
+      delete (window as { desktopBridge?: unknown }).desktopBridge;
+      await render(<PowerHarness />);
+      push("off");
+      await expect.element(page.getByRole("radio", { name: "Agent", exact: true })).toBeVisible();
+      expect(page.getByRole("switch", { name: /remote access/ }).elements()).toHaveLength(0);
+    });
   });
 });

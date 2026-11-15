@@ -334,24 +334,35 @@ describe("ComposerModelPicker", () => {
     }
   });
 
-  it("opens on starred presets and restores model + traits in one click", async () => {
-    const onProviderModelChange = vi.fn();
-    const screen = await mountPicker({ onProviderModelChange }, { reasoningEffort: "medium" }, [
-      { provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null },
-    ]);
-    try {
-      await expect
-        .element(page.getByRole("tab", { name: "Starred" }))
-        .toHaveAttribute("aria-selected", "true");
-      await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
-        modelOptions: { reasoningEffort: "low", fastMode: true },
-        instanceId: "codex",
-      });
-    } finally {
-      await screen.unmount();
-    }
-  });
+  it.each(["menu", "slider"] as const)(
+    "restores a starred preset and keeps the picker open only in slider mode (%s)",
+    async (effortControl) => {
+      const onProviderModelChange = vi.fn();
+      const screen = await mountPicker(
+        { effortControl, onProviderModelChange },
+        { reasoningEffort: "medium" },
+        [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null }],
+      );
+      try {
+        const starred = page.getByRole("tab", { name: "Starred" });
+        await expect.element(starred).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
+        expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
+          modelOptions: { reasoningEffort: "low", fastMode: true },
+          instanceId: "codex",
+        });
+        if (effortControl === "slider") {
+          await expect
+            .element(page.getByRole("slider", { name: "Reasoning effort" }))
+            .toBeVisible();
+        } else {
+          await expect.element(starred).not.toBeInTheDocument();
+        }
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 
   it("shows the star on every starred model of the provider tab, whatever its traits", async () => {
     const screen = await mountPicker({}, { reasoningEffort: "medium" }, [
@@ -750,6 +761,76 @@ describe("ComposerModelPicker with several accounts", () => {
       const openTab = strip.querySelector('[aria-selected="true"]')!;
       await vi.waitFor(() => expect(isInView(openTab)).toBe(true));
       expect(strip.scrollLeft).toBeGreaterThan(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("loads the starred Pi account on open and makes its dynamic preset selectable", async () => {
+    const piModel = "pi:example" as ModelSlug;
+    const otherPiModel = "pi:another" as ModelSlug;
+    const piInstanceId = "pi_work";
+    const onRefreshModels = vi.fn().mockResolvedValue(undefined);
+    const onProviderModelChange = vi.fn();
+    const props: HarnessProps = {
+      onRefreshModels,
+      onProviderModelChange,
+      providers: [
+        readyProvider("codex"),
+        readyProvider("claudeAgent"),
+        readyProvider("pi"),
+        { ...readyProvider("pi"), instanceId: piInstanceId },
+      ],
+      providerInstances: [
+        CODEX_ACCOUNTS[0]!,
+        { instanceId: "pi", provider: "pi", label: "Pi", enabled: true, isDefault: true },
+        {
+          instanceId: piInstanceId,
+          provider: "pi",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+    };
+    localStorage.setItem(
+      STARRED_MODELS_STORAGE_KEY,
+      JSON.stringify(
+        [piModel, otherPiModel].map((model) => ({
+          provider: "pi",
+          instanceId: piInstanceId,
+          model,
+          effort: null,
+          fastMode: null,
+          thinking: null,
+        })),
+      ),
+    );
+    const screen = await render(<Harness {...props} />);
+    try {
+      expect(onRefreshModels).not.toHaveBeenCalled();
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await expect
+        .element(page.getByRole("tab", { name: "Starred" }))
+        .toHaveAttribute("aria-selected", "true");
+      await vi.waitFor(() =>
+        expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("pi", piInstanceId, "if-stale"),
+      );
+      await screen.rerender(
+        <Harness
+          {...props}
+          modelOptionsByProviderInstance={{
+            [piInstanceId]: [{ slug: piModel, name: "Example Pi" }],
+          }}
+        />,
+      );
+      await page.getByRole("menuitem", { name: /Example Pi/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith(
+        "pi",
+        piModel,
+        expect.objectContaining({ instanceId: piInstanceId }),
+      );
+      expect(onRefreshModels).toHaveBeenCalledTimes(1);
     } finally {
       await screen.unmount();
     }

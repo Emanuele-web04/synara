@@ -769,9 +769,17 @@ test("production MCP controls one persistent Electron page across visibility cha
         "return await page.snapshot({interactive:true});",
         'return Array.from(document.querySelectorAll("button"));',
         "await waitForTimeout(400);",
+        "await new Promise((resolve) => setTimeout(resolve, 400));",
       ]) {
         await expect(run(code)).rejects.toThrow("BrowserScriptApiUnavailable");
       }
+      await expect(
+        run("await new Promise((resolve) => setTimeout(resolve, 400));"),
+      ).rejects.toThrow("setTimeout is unavailable in browser_run");
+      const waitTimeout = await run(
+        'await page.getByText("Never rendered",{exact:true}).waitFor({timeout:300}); return true;',
+      ).catch((error: unknown) => error);
+      expect(String(waitTimeout)).toContain("locator.waitFor: Timeout 300ms exceeded.");
       expect(
         (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
       ).toBe("Sign Up selected");

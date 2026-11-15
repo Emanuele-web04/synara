@@ -66,6 +66,8 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
   const pending = new Map<string, Promise<HostConnection>>();
   const revisions = new Map<string, number>();
   const writes = new Map<string, Promise<void>>();
+  // The host row connect() just read; the dial it starts uses it instead of reading the list again.
+  const listedForDial = new Map<string, AccountHost>();
   const setDesired = (hostId: string, desired: boolean) => {
     const previous = writes.get(hostId) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(() => deps.setDesired(hostId, desired));
@@ -118,9 +120,13 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
       hostId,
       host.name,
       async (client, signal) => {
-        const fresh = (await deps.accountSession.listHosts()).hosts.find(
-          (candidate) => candidate.id === hostId,
-        );
+        const listed = listedForDial.get(hostId);
+        listedForDial.delete(hostId);
+        const fresh =
+          listed ??
+          (await deps.accountSession.listHosts()).hosts.find(
+            (candidate) => candidate.id === hostId,
+          );
         if (!fresh?.linked || fresh.environmentId !== host.environmentId)
           throw new RemoteHostTrustError("Remote host identity changed");
         const currentAnchor = await deps.readTrust(fresh);
@@ -164,11 +170,14 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
         requestGrant: async () => (await deps.accountSession.requestGrant({ hostId })).grant,
       });
     });
+    listedForDial.set(hostId, host);
     try {
       await deps.registry.probe(hostId, controllerProtocol);
       checkCurrent();
     } catch (error) {
       throw new Error(describeDialFailure(error), { cause: error });
+    } finally {
+      listedForDial.delete(hostId);
     }
     const connection = deps.registry.get(hostId);
     if (!connection) throw new Error("Remote connection closed during startup");

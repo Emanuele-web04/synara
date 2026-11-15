@@ -26,6 +26,8 @@ version, release notes and lockfile are final.
     Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
     job then downloads it and runs the startup smoke on `macos-15-intel`:
     under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
+    That job installs only `@synara/scripts` and `@synara/cli`, the workspaces
+    the smoke imports.
   - Linux `x64` AppImage
   - Linux `arm64` AppImage on `ubuntu-24.04-arm`. It runs on a native arm64 host
     because `node-pty` and the patched Cua driver compile for the host, and the
@@ -98,10 +100,12 @@ Backup validation and interrupted-migration recovery apply to both paths.
 - macOS metadata note:
   - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
   - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
-  - The DMG release path asks electron-builder for the DMG only. After notarization,
-    the finalizer creates the updater ZIP once with `ditto` and writes its
-    `latest-mac.yml` hash/size for each architecture; there is no preliminary ZIP
-    or ZIP blockmap to generate and discard.
+  - The DMG release path asks electron-builder for the DMG only. The app is
+    notarized and stapled before the DMG is built. While Apple notarizes the
+    DMG, the finalizer creates the updater ZIP once from that app with `ditto`
+    and writes its `latest-mac.yml` hash/size for each architecture; there is no
+    preliminary ZIP or ZIP blockmap to generate and discard. Both must succeed
+    before any artifact leaves the stage.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - Finalization verifies Electron framework symlinks, extracts the ZIP and
     validates the extracted app signature before accepting the updater artifact.
@@ -206,7 +210,8 @@ The [first paired attempt](release-build-optimization.md#sdk-only-follow-up-atte
 failed before reaching the candidate and does not establish an SDK build speedup.
 
 `native` verifies the pinned Cua artifact/source path only; `icon` compiles the
-macOS catalog only; `js` builds and records portable outputs only. These stages
+macOS catalog only, on macOS 26 and never from the cache; `js` builds and records
+portable outputs only. These stages
 do not qualify an installer or provider runtime. Publication rejects any scope
 other than `platform=all, stage=artifact` and still requires every desktop gate.
 Server tarball preparation starts after exact-source preflight and portable
@@ -220,11 +225,14 @@ baseline, signed Intel CI comparison, local measurements, remaining validation,
 and timing interpretation.
 
 `.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
-relevant changes to `main` and daily, with a default-branch guard. Each successful
+relevant changes to `main` and daily, with a default-branch guard, for every
+release Cua leg (macOS arm64 and x64, Linux x64 and arm64). Each successful
 producer also retains the verified unsigned directory as a workflow artifact for
 30 days, outside the Actions cache quota. Daily preparation detects runner image,
-SDK and library drift even when source files are unchanged. To warm new inputs
-before a release, dispatch it on the default branch:
+SDK and library drift even when source files are unchanged. The same workflow
+compiles the macOS icon catalog for each Icon Composer source; see
+[macOS release toolchains](#macos-release-toolchains). To warm new inputs before
+a release, dispatch it on the default branch:
 
 ```bash
 gh workflow run cua-release-cache.yml --ref main
@@ -253,7 +261,9 @@ the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
 separate staged copy, preserving cached bytes.
 
 Release native preparation starts after exact-source preflight alongside quality
-checks, portable JavaScript and icon compilation. The packaging jobs download
+checks, portable JavaScript and the icon catalog restore. Cua preparation fetches
+only the release commit, except for the paired benchmark, which needs history.
+Packaging also fetches only the release commit. The packaging jobs download
 only their platform's prepared artifact from the same run, recompute the build
 environment key, and repeat executable/provenance verification. Missing artifacts
 or runner drift fail instead of falling back to unrelated binaries. These temporary
@@ -330,13 +340,32 @@ startup checks do not establish runtime behavior on macOS 13.
 Remote .35 pins cloudflared 2026.10.3 with hashes of the downloaded assets (macOS tarballs, not extracted Mach-O files). The vendor macOS executable declares macOS 15, as the previous pin did. The app's macOS 13 declaration does not qualify the Remote connector on macOS 13–14. Inspect the bundled helper separately; after nested signing its bytes differ from the vendor binary, so retain both download provenance and the final signed artifact proof. Never lower deployment metadata or disable certificate verification to bypass an incompatible helper.
 
 Both native macOS release runners use macOS 15. Native helpers and the pinned
-Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
-job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
-from the same release checkout and passes it through a required workflow artifact.
-`SYNARA_MAC_ICON_CATALOG` points packaging at that catalog; a missing file fails
-the build. This avoids Apple's AssetRuntime framework crash on macOS 15 without
-changing the native SDK. Local builds without that variable compile icons with
-the selected Xcode on the local host.
+Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. The
+architecture-independent Icon Composer catalog compiles on macOS 26 with Xcode
+26.3, which avoids Apple's AssetRuntime framework crash on macOS 15 without
+changing the native SDK. `scripts/mac-icon-catalog.ts` owns the source selection,
+`actool` arguments and Xcode pin for every compile.
+
+The default-branch producer in `cua-release-cache.yml` compiles the catalog for
+the production source (Stable and Remote) and the Beta source on every run. It
+keeps each under an exact key over the source files, `actool` arguments, runner
+label, Xcode version and the key/compile code, in the Actions cache and as a
+30-day artifact. The key cannot see the macOS 26 image patch level, because the
+release computes it on Linux; the producer recompiles each day instead of
+trusting an old hit. In a release, `restore_mac_icon` restores that exact key on
+Ubuntu from the cache or the trusted producer's artifact, checks the key, source,
+recorded Xcode, catalog format and digest, and publishes it as this run's
+`mac-icon-catalog`. A corrupt hit fails the release instead of being replaced:
+delete that cache entry and the retained artifact with the same key, rerun the
+producer, then rerun the failed jobs. Only on a miss does `build_mac_icon`
+compile from the release checkout on `macos-26`. Packaging accepts exactly one
+of the two. To warm a changed icon before a tag, dispatch the producer on
+`main`.
+
+Packaging still downloads only this run's `mac-icon-catalog` artifact.
+`SYNARA_MAC_ICON_CATALOG` points packaging at it; a missing file fails the build.
+Local builds without that variable compile icons with the selected Xcode on the
+local host.
 
 An older `actool` can exit successfully without creating `Assets.car`; that is a
 packaging failure, not permission to silently omit the Liquid Glass icon.

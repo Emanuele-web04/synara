@@ -11,6 +11,7 @@ import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
 
+import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
@@ -38,6 +39,7 @@ import {
   ProviderTaskReconciliation,
   type ProviderReviewTarget,
   type ProviderStartOptions,
+  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderTurnStartResult,
   type OrchestrationSession,
@@ -111,7 +113,24 @@ import {
 } from "../../provider/Errors.ts";
 import { PersistenceDecodeError, PersistenceSqlError } from "../../persistence/Errors.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
-import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
+import {
+  buildInlineSkillInstructions,
+  formatInlineSkillInstructions,
+  loadInlineSkillBlocks,
+  selectSkillsToInline,
+  shouldInlineSkillForProvider,
+} from "../../provider/skillPromptInjection.ts";
+import {
+  extractPromptSkillTokenNames,
+  leadingPromptSkillTokenName,
+  leadingSlashTokenName,
+  resolvePromptSkillReferences,
+} from "../../provider/promptSkillReferences.ts";
+import {
+  discoverSkillsCatalog,
+  filterDisabledSkills,
+  skillNameKey,
+} from "../../provider/skillsCatalog.ts";
 import {
   PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
   withProviderDebugModePrompt,
@@ -139,6 +158,8 @@ import {
   ProviderService,
   type ProviderRuntimeSessionStopTarget,
 } from "../../provider/Services/ProviderService.ts";
+import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
+import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -366,6 +387,29 @@ export function isSafeLegacyProviderBlocker(lastError: string | null): boolean {
   return normalized.includes("stdin closed before the frame was written");
 }
 
+/** Recorded on an external provider command whose claim expired before it settled. */
+export const PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL =
+  "External provider command claim expired without a durable acceptance result; execution was not replayed.";
+
+const EXPIRED_INTERRUPT_CLAIM_NOTE =
+  "Interrupt left in flight by an earlier server process; the runtime it targeted ended with that process. Settled without replay.";
+
+/**
+ * An interrupt left in flight by an earlier server process. The runtime binding
+ * it targeted ended with that process, so neither it nor its outcome can apply
+ * to anything running now; restart turn reconciliation settles the turn it
+ * left running. Other commands with this detail stay ambiguous and blocked.
+ */
+export function isExpiredInterruptClaimBlocker(
+  blocker: Pick<ProviderBlockingDeliveryEvidence, "eventType" | "state" | "lastError">,
+): boolean {
+  return (
+    blocker.eventType === "thread.turn-interrupt-requested" &&
+    blocker.state === "uncertain" &&
+    blocker.lastError === PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL
+  );
+}
+
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -424,12 +468,33 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 // Codex app-server still expects `$skill` text next to the structured skill item.
+// Claude Code runs a leading `/name` as its own command. Only a `.claude` skill
+// written as a clean command stays one; any other leading skill (shared from another
+// provider's folder, or glued to punctuation) becomes a `$name` mention next to its
+// inlined instructions instead of failing as an unknown command.
 export function normalizeSkillMentionTextForProvider(input: {
   readonly provider: ProviderKind;
   readonly messageText: string;
-  readonly skills?: ReadonlyArray<ProviderSkillReference>;
+  readonly skills?: ReadonlyArray<ProviderSkillReference> | undefined;
+  readonly claudeConfigDir?: string | undefined;
 }): string {
-  if (input.provider !== "codex" || !input.skills || input.skills.length === 0) {
+  if (!input.skills || input.skills.length === 0) {
+    return input.messageText;
+  }
+  if (input.provider === "claudeAgent") {
+    const leadingName = leadingPromptSkillTokenName(input.messageText);
+    if (leadingName === null) return input.messageText;
+    const leadingKey = skillNameKey(leadingName);
+    const leadingSkill = input.skills.find((skill) => skillNameKey(skill.name) === leadingKey);
+    if (leadingSkill === undefined) return input.messageText;
+    const claudeLoadsItself =
+      !shouldInlineSkillForProvider("claudeAgent", leadingSkill.path, input.claudeConfigDir) &&
+      leadingSlashTokenName(input.messageText) === leadingName;
+    return claudeLoadsItself
+      ? input.messageText
+      : input.messageText.replace(/^(\s*)\//, (_match, whitespace: string) => `${whitespace}$`);
+  }
+  if (input.provider !== "codex") {
     return input.messageText;
   }
 
@@ -1050,6 +1115,7 @@ const make = Effect.gen(function* () {
   const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerDiscovery = yield* ProviderDiscoveryService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
   // Resolved at make time: fibers that run turn dispatch do not inherit the
@@ -1165,6 +1231,9 @@ const make = Effect.gen(function* () {
   // was actually spawned with so a changed value restarts the runtime instead
   // of silently reusing a session provisioned under the old approval set.
   const threadSessionAutoApproveSynaraTools = new Map<string, boolean>();
+  // The extra project folders each live session was granted. Editing a project's folders
+  // restarts the session (keeping its resume cursor) so the provider sees the new set.
+  const threadSessionAdditionalDirectories = new Map<string, ReadonlyArray<string>>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -1202,6 +1271,100 @@ const make = Effect.gen(function* () {
       thread,
       projects: [project],
     });
+  });
+
+  // Match the home/config directory of the Claude process that owns the turn.
+  const resolveClaudeSkillConfigDir = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    instanceId: string | undefined,
+  ) {
+    let providerOptions = threadProviderOptions.get(threadId);
+    if (!threadProviderOptions.has(threadId)) {
+      const settings = yield* serverSettings.getSettings;
+      const instance = resolveProviderInstance(settings, { provider: "claudeAgent", instanceId });
+      providerOptions = mergeProviderStartOptions(
+        providerStartOptionsFromServerSettings(settings),
+        instance ? providerStartOptionsFromInstance(instance) : undefined,
+      );
+    }
+    const claude = providerOptions?.claudeAgent;
+    const env = buildClaudeInstanceProcessEnv(claude?.homePath, claude?.environment, {
+      homeDir: serverConfig.homeDir,
+      isolationRootDir: serverConfig.stateDir,
+      ...(instanceId !== undefined ? { providerInstanceId: instanceId } : {}),
+    });
+    return resolve(
+      env.CLAUDE_CONFIG_DIR?.trim() || resolve(env.HOME ?? serverConfig.homeDir, ".claude"),
+    );
+  });
+
+  // Menu picks arrive as exact references. Typed tokens use Codex's instance-aware
+  // catalog so its native skill paths take precedence over shared names.
+  const resolveTurnSkills = Effect.fnUntraced(function* (input: {
+    readonly provider: ProviderKind;
+    readonly threadId: ThreadId;
+    readonly instanceId: string | undefined;
+    readonly cwd: string | undefined;
+    readonly claudeConfigDir?: string | undefined;
+    readonly messageText: string;
+    readonly attached: ReadonlyArray<ProviderSkillReference> | undefined;
+    readonly resolveTypedSkills: boolean;
+  }): Effect.fn.Return<ReadonlyArray<ProviderSkillReference> | undefined> {
+    // Automatic discovery needs the active profile's native catalog. Other
+    // providers still get their exact references from explicit menu selections.
+    if (
+      !input.resolveTypedSkills ||
+      (input.provider !== "codex" && input.provider !== "claudeAgent")
+    ) {
+      return input.attached;
+    }
+    let available: ReadonlyArray<ProviderSkillDescriptor>;
+    if (input.provider === "codex" && input.cwd !== undefined) {
+      available = yield* providerDiscovery
+        .listSkills({
+          provider: input.provider,
+          threadId: input.threadId,
+          cwd: input.cwd,
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        })
+        .pipe(
+          Effect.map((result) => result.skills),
+          Effect.catch((error) =>
+            Effect.logWarning("typed Codex skill resolution skipped: skill discovery unavailable", {
+              threadId: input.threadId,
+              error,
+            }).pipe(Effect.as([])),
+          ),
+        );
+    } else {
+      const catalog = yield* Effect.tryPromise(() =>
+        discoverSkillsCatalog({
+          cwd: input.cwd ?? null,
+          homeDir: serverConfig.homeDir,
+          synaraBaseDir: serverConfig.baseDir,
+          provider: input.provider,
+          claudeConfigDir: input.claudeConfigDir,
+        }),
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("typed skill resolution skipped: skills catalog unavailable", {
+            provider: input.provider,
+            error,
+          }).pipe(Effect.as([])),
+        ),
+      );
+      const disabledSkills = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.skills.disabled),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      );
+      available = filterDisabledSkills(catalog, disabledSkills);
+    }
+    const resolved = resolvePromptSkillReferences({
+      text: input.messageText,
+      attached: input.attached,
+      available,
+    });
+    return resolved.length > 0 ? resolved : input.attached;
   });
   const editResendTurnStartKeys = new Set<string>();
   const quarantinedThreads = new Set<string>();
@@ -2264,6 +2427,7 @@ const make = Effect.gen(function* () {
       threadProviderOptions.delete(threadId);
       threadSessionModelSelections.delete(threadId);
       threadSessionComputerControl.delete(threadId);
+      threadSessionAdditionalDirectories.delete(threadId);
       const editResendPrefix = `${threadId}:`;
       for (const key of editResendTurnStartKeys) {
         if (key.startsWith(editResendPrefix)) {
@@ -2649,8 +2813,9 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
-    // Multi-folder projects grant their extra folders natively; refuse the chats that
-    // could not honor them rather than silently dropping folders.
+    // Multi-folder projects grant their extra folders natively; refuse the providers that
+    // could not honor them rather than silently dropping folders. Worktree chats isolate
+    // only the primary folder; the extra folders stay live.
     const workspaceProject = yield* projectionSnapshotQuery
       .getProjectShellById(thread.projectId)
       .pipe(
@@ -2665,10 +2830,7 @@ const make = Effect.gen(function* () {
       );
     const additionalDirectories = Option.getOrUndefined(workspaceProject)?.additionalFolders ?? [];
     if (additionalDirectories.length > 0) {
-      const folderIssue = projectFoldersSessionIssue({
-        provider: preferredProvider,
-        worktree: workspaceState !== "local",
-      });
+      const folderIssue = projectFoldersSessionIssue({ provider: preferredProvider });
       if (folderIssue !== null) {
         return yield* new ProviderAdapterValidationError({
           provider: preferredProvider,
@@ -2781,6 +2943,28 @@ const make = Effect.gen(function* () {
     const workspaceChanged =
       activeSessionBeforeEnsure !== undefined &&
       providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
+    // A runtime this process recovered or prewarmed is not in the cache, so read the grants
+    // it was launched with from its persisted binding before deciding it can be reused.
+    const previousAdditionalDirectories =
+      threadSessionAdditionalDirectories.get(threadId) ??
+      (activeSessionBeforeEnsure !== undefined && providerService.getSessionAdditionalDirectories
+        ? yield* providerService.getSessionAdditionalDirectories(threadId).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("provider command reactor could not read session folder grants", {
+                threadId,
+                cause,
+              }),
+            ),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined);
+    if (previousAdditionalDirectories !== undefined) {
+      threadSessionAdditionalDirectories.set(threadId, previousAdditionalDirectories);
+    }
+    const additionalDirectoriesChanged =
+      activeSessionBeforeEnsure !== undefined &&
+      previousAdditionalDirectories !== undefined &&
+      !isDeepStrictEqual(previousAdditionalDirectories, additionalDirectories);
     // Starting another provider stops this runtime. Only Hand off may end its
     // background tasks that way, after the user agrees to stop them.
     const replacesOtherProviderRuntime =
@@ -2789,7 +2973,7 @@ const make = Effect.gen(function* () {
     // Background tasks may share the old process. Never kill them merely to
     // apply a project relocation, including when metadata cleared the projection.
     if (
-      (workspaceChanged || replacesOtherProviderRuntime) &&
+      (workspaceChanged || additionalDirectoriesChanged || replacesOtherProviderRuntime) &&
       providerService.hasLiveRuntimeTasks &&
       (yield* providerService.hasLiveRuntimeTasks({ threadId }))
     ) {
@@ -2798,7 +2982,9 @@ const make = Effect.gen(function* () {
         operation: "thread.turn.start",
         issue: replacesOtherProviderRuntime
           ? "Finish or stop this thread's background tasks before switching providers."
-          : "Finish or stop this thread's background tasks before resuming in the new project path.",
+          : workspaceChanged
+            ? "Finish or stop this thread's background tasks before resuming in the new project path."
+            : "Finish or stop this thread's background tasks before using the project's updated folders.",
       });
     }
     const reusableSession =
@@ -2874,6 +3060,7 @@ const make = Effect.gen(function* () {
         !runtimeModeChanged &&
         !providerChanged &&
         !workspaceChanged &&
+        !additionalDirectoriesChanged &&
         !providerInstanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -2907,6 +3094,7 @@ const make = Effect.gen(function* () {
         !runtimeModeChanged &&
         !providerChanged &&
         !workspaceChanged &&
+        !additionalDirectoriesChanged &&
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -2959,6 +3147,7 @@ const make = Effect.gen(function* () {
         runtimeModeChanged,
         providerChanged,
         workspaceChanged,
+        additionalDirectoriesChanged,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
@@ -2976,7 +3165,10 @@ const make = Effect.gen(function* () {
       // keeps its history in the new session's first turn.
       const restartedOutcome = yield* startProviderSessionWithOutcome(
         resumeCursor,
-        (workspaceChanged || providerChanged || shouldRestartForModelChange) &&
+        (workspaceChanged ||
+          additionalDirectoriesChanged ||
+          providerChanged ||
+          shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
       ).pipe(
         // The live-turn check above sees only turns. The adapter also refuses
@@ -3015,6 +3207,7 @@ const make = Effect.gen(function* () {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
       threadSessionModelSelections.set(threadId, desiredModelSelection);
+      threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
       if (options?.enableComputerControl !== undefined) {
         threadSessionComputerControl.set(threadId, options.enableComputerControl);
       }
@@ -3102,6 +3295,7 @@ const make = Effect.gen(function* () {
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
+        threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
         threadSessionComputerControl.set(threadId, forkComputerControl);
         threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
         setThreadProviderOptions(threadId, resolvedProviderOptions);
@@ -3205,6 +3399,7 @@ const make = Effect.gen(function* () {
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
+    threadSessionAdditionalDirectories.set(threadId, additionalDirectories);
     threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
     if (options?.enableComputerControl !== undefined) {
       threadSessionComputerControl.set(threadId, options.enableComputerControl);
@@ -3407,7 +3602,7 @@ const make = Effect.gen(function* () {
     readonly completionEventSequence?: number;
     readonly messageId: string;
     readonly messageText: string;
-    readonly dispatchOrigin?: "user" | "automation" | "agent";
+    readonly dispatchOrigin: "user" | "automation" | "agent";
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
@@ -3487,11 +3682,20 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.catch(() => Effect.succeed("")));
     // A multi-folder project lists its folders as ambient context too, so every input
     // budget below already reserves room for it.
+    // A worktree chat edits the primary folder in its worktree, so point the model there.
     const threadProject = yield* resolveThreadWorkspaceProject(thread);
+    const threadWorktreePath =
+      resolveThreadWorkspaceState({
+        envMode: thread.envMode,
+        worktreePath: thread.worktreePath,
+      }) === "worktree-ready"
+        ? thread.worktreePath
+        : null;
     const projectFoldersPreamble = threadProject
       ? buildProjectFoldersPreamble({
-          primaryFolder: threadProject.workspaceRoot,
+          primaryFolder: threadWorktreePath ?? threadProject.workspaceRoot,
           additionalFolders: threadProject.additionalFolders ?? [],
+          worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
         })
       : null;
     const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
@@ -3501,14 +3705,19 @@ const make = Effect.gen(function* () {
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const computerInvocation =
-      input.dispatchOrigin === undefined || input.dispatchOrigin === "user"
-        ? parseComputerInvocation(input.messageText)
-        : null;
+      input.dispatchOrigin === "user" ? parseComputerInvocation(input.messageText) : null;
     // Synara owns this command. Keep it in durable user text for provenance,
     // but do not ask the provider to interpret a native slash command.
     const authoredMessageText = computerInvocation
       ? computerInvocation.prompt || "Use Synara Computer for this task."
       : input.messageText;
+    // Typed skill tokens count only in words a person or automation wrote, not in
+    // another agent's message or a generated goal continuation.
+    const resolveTypedSkills =
+      input.dispatchOrigin !== "agent" &&
+      input.turnKind !== "goal-continuation" &&
+      extractPromptSkillTokenNames(authoredMessageText).length > 0;
+    const hasSkills = resolveTypedSkills || (input.skills?.length ?? 0) > 0;
     // The project packet is ambient context, not user words: it prefixes the
     // assembled provider input rather than joining `<latest_user_message>`.
     const projectContextPrefix = projectContext.trim().length > 0 ? `${projectContext}\n\n` : "";
@@ -3554,12 +3763,32 @@ const make = Effect.gen(function* () {
       // text-only subagent steering channel.
       const steerProvider = (providerThread.session?.providerName ??
         providerThread.modelSelection.provider) as ProviderKind;
+      const steerInstanceId =
+        providerThread.session?.providerInstanceId ?? providerThread.modelSelection.instanceId;
+      const steerClaudeConfigDir =
+        steerProvider === "claudeAgent" && hasSkills
+          ? yield* resolveClaudeSkillConfigDir(providerThread.id, steerInstanceId)
+          : undefined;
+      const steerSkills = yield* resolveTurnSkills({
+        provider: steerProvider,
+        threadId: providerThread.id,
+        instanceId: steerInstanceId,
+        claudeConfigDir: steerClaudeConfigDir,
+        cwd: yield* resolveProjectedThreadWorkspaceCwd(
+          steerProvider === "codex" ? providerThread : thread,
+        ),
+        messageText: authoredMessageText,
+        attached: input.skills,
+        resolveTypedSkills,
+      });
+      // No `providerInput`: a subagent steer is never a native slash command, so
+      // Claude gets every referenced skill inline.
       const steerSkillInlineText =
-        input.skills !== undefined && input.skills.length > 0
+        steerSkills !== undefined && steerSkills.length > 0
           ? yield* Effect.tryPromise(() =>
               buildInlineSkillInstructions({
                 provider: steerProvider,
-                skills: input.skills ?? [],
+                skills: steerSkills,
                 maxChars: Math.max(
                   0,
                   PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
@@ -3590,7 +3819,8 @@ const make = Effect.gen(function* () {
             input.attachments,
             PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
           ),
-          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          skills: steerSkills,
+          claudeConfigDir: steerClaudeConfigDir,
         }),
       });
       if (
@@ -3620,7 +3850,7 @@ const make = Effect.gen(function* () {
         ...(normalizedSteerAttachments.length > 0
           ? { attachments: normalizedSteerAttachments }
           : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(steerSkills !== undefined ? { skills: steerSkills } : {}),
         ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       });
       return;
@@ -3719,12 +3949,14 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      // Mirrors Claude Code: the review is off unless the person turns it on, as
-      // embedded Claude Code never asks. When on, only a person is asked before
+      // The review is on unless the person turns it off; embedded Claude Code
+      // alone never asks. When on, only a person is asked before
       // resuming a long-idle, large conversation, never for /compact (the choice
       // the prompt recommends); agents and automations proceed as the SDK would.
+      const cacheReviewSource = input.cacheReviewSource;
       const reviewsColdCache =
-        (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+        cacheReviewSource !== undefined &&
+        input.dispatchOrigin === "user" &&
         (yield* serverSettings.getSettings.pipe(
           Effect.map((settings) => settings.providers.claudeAgent.confirmColdCacheResume),
           Effect.catch(() => Effect.succeed(false)),
@@ -3749,6 +3981,7 @@ const make = Effect.gen(function* () {
       );
       const assessment = assessClaudeCache(observation, Date.now());
       if (
+        cacheReviewSource &&
         observation &&
         assessment.requiresConfirmation &&
         !/^\/compact(?:\s|$)/.test(input.messageText.trim()) &&
@@ -3768,44 +4001,23 @@ const make = Effect.gen(function* () {
             updatedAt: createdAt,
           },
         };
-        if (input.cacheReviewSource) {
-          yield* setClaudeCacheReview(
-            input.threadId,
-            {
-              reviewId: `claude-cache:${input.cacheReviewSource.eventId}:${crypto.randomUUID()}`,
-              messageId: MessageId.makeUnsafe(input.messageId),
-              sourceEventSequence: input.cacheReviewSource.sequence,
-              assessment: { ...observation, state: assessment.state },
-              requestedAt: input.cacheReviewSource.payload.createdAt,
-              ...(input.cacheReviewSource.payload.sourceProposedPlan
-                ? { sourceProposedPlan: input.cacheReviewSource.payload.sourceProposedPlan }
-                : {}),
-              status: "pending",
-              createdAt,
-            },
-            pendingReview?.reviewId ?? null,
-            hold,
-          );
-        } else {
-          // Autonomous iterations have no user message to release. Pause the
-          // goal instead of silently spending a cold, large-context request.
-          yield* pauseActiveThreadGoal({
-            threadId: input.threadId,
-            expectedGoalStartedAt: thread.goalStartedAt ?? null,
-          });
-          yield* appendProviderFailureActivity({
-            threadId: input.threadId,
-            kind: "provider.turn.start.failed",
-            summary: thread.goal?.trim()
-              ? "Goal paused for Claude cache review"
-              : "Task paused for Claude cache review",
-            detail:
-              "Claude's large context is likely no longer cached. Send a message to review continuing.",
-            turnId: null,
-            createdAt: new Date().toISOString(),
-          });
-          yield* setClaudeCacheReview(input.threadId, null, null, hold);
-        }
+        yield* setClaudeCacheReview(
+          input.threadId,
+          {
+            reviewId: `claude-cache:${cacheReviewSource.eventId}:${crypto.randomUUID()}`,
+            messageId: MessageId.makeUnsafe(input.messageId),
+            sourceEventSequence: cacheReviewSource.sequence,
+            assessment: { ...observation, state: assessment.state },
+            requestedAt: cacheReviewSource.payload.createdAt,
+            ...(cacheReviewSource.payload.sourceProposedPlan
+              ? { sourceProposedPlan: cacheReviewSource.payload.sourceProposedPlan }
+              : {}),
+            status: "pending",
+            createdAt,
+          },
+          pendingReview?.reviewId ?? null,
+          hold,
+        );
         return;
       }
     }
@@ -4028,35 +4240,46 @@ const make = Effect.gen(function* () {
           ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
           : boundaryMessageText
       }`;
-    const providerInputWithMentionContext = withProviderThreadStatePrompts({
-      interactionMode: input.interactionMode,
-      goal: activeThreadGoal(thread),
-      text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
+    const providerWorkspaceCwd =
+      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+    const claudeConfigDir =
+      selectedProvider === "claudeAgent" && hasSkills
+        ? yield* resolveClaudeSkillConfigDir(
+            activeSession.threadId,
+            activeSession.providerInstanceId,
+          )
+        : undefined;
+    const turnSkills = yield* resolveTurnSkills({
+      provider: selectedProvider as ProviderKind,
+      threadId: activeSession.threadId,
+      instanceId: activeSession.providerInstanceId,
+      claudeConfigDir,
+      cwd: providerWorkspaceCwd,
+      messageText: authoredMessageText,
+      attached: input.skills,
+      resolveTypedSkills,
     });
-    // Portable skills fallback: providers that cannot load the referenced skill
-    // file natively get the skill instructions inlined into the prompt.
-    const skillInlineText =
-      input.skills !== undefined && input.skills.length > 0
+    // Portable skills fallback: skills the provider cannot load natively travel
+    // inline. Each file is read once here; which ones go inline depends on the
+    // final prompt, and the stale-resume retry below can wrap it differently.
+    const inlineSkillBlocks: ReadonlyMap<string, string> =
+      turnSkills !== undefined && turnSkills.length > 0
         ? yield* Effect.tryPromise(() =>
-            buildInlineSkillInstructions({
-              provider: selectedProvider as ProviderKind,
-              skills: input.skills ?? [],
-              maxChars: Math.max(
-                0,
-                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
-                  providerInputWithMentionContext.length -
-                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
-              ),
-            }),
+            loadInlineSkillBlocks(
+              selectSkillsToInline({
+                provider: selectedProvider as ProviderKind,
+                skills: turnSkills,
+              }),
+            ),
           ).pipe(
             Effect.catch((error) =>
               Effect.logWarning("failed to inline portable skill instructions", {
                 threadId: input.threadId,
                 error,
-              }).pipe(Effect.as("")),
+              }).pipe(Effect.as(new Map<string, string>())),
             ),
           )
-        : "";
+        : new Map<string, string>();
     const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
       // Native control commands must remain the first token in every mode.
       if (
@@ -4066,6 +4289,31 @@ const make = Effect.gen(function* () {
         return input.messageText.trim();
       }
       const withMentionContext = `${composeProviderInput(bootstrap)}${mentionContextSuffix}`;
+      const promptWithoutSkills = withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: withMentionContext,
+      });
+      const skillInlineText =
+        turnSkills !== undefined && turnSkills.length > 0
+          ? formatInlineSkillInstructions({
+              skills: selectSkillsToInline({
+                provider: selectedProvider as ProviderKind,
+                skills: turnSkills,
+                claudeConfigDir,
+                // A steer may join a running turn, where Claude's own `/name`
+                // loading is not guaranteed, so it gets every skill inline.
+                ...(input.dispatchMode === "steer" ? {} : { providerInput: promptWithoutSkills }),
+              }),
+              blocks: inlineSkillBlocks,
+              maxChars: Math.max(
+                0,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                  promptWithoutSkills.length -
+                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+              ),
+            })
+          : "";
       const withSkills = skillInlineText
         ? `${withMentionContext}\n\n${skillInlineText}`
         : withMentionContext;
@@ -4080,7 +4328,8 @@ const make = Effect.gen(function* () {
               input.attachments,
               PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerPromptOverheadChars,
             ),
-            ...(input.skills !== undefined ? { skills: input.skills } : {}),
+            skills: turnSkills,
+            claudeConfigDir,
           }),
         }),
       );
@@ -4114,13 +4363,11 @@ const make = Effect.gen(function* () {
     const providerTurnInput = {
       threadId: input.threadId,
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-      ...(input.skills !== undefined ? { skills: input.skills } : {}),
+      ...(turnSkills !== undefined ? { skills: turnSkills } : {}),
       ...(providerMentions !== undefined ? { mentions: providerMentions } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
-    const providerWorkspaceCwd =
-      activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
     // Baseline capture may time out, but provider execution must never bypass
     // an Undo that still owns this checkout. Keep the activation wait outside
     // the baseline deadline and release it after provider admission/cleanup.
@@ -6575,6 +6822,7 @@ const make = Effect.gen(function* () {
       messageId: MessageId.makeUnsafe(`usage-limit:${recovery.id}`),
       messageText:
         "Continue the remaining task after the provider usage limit. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
+      dispatchOrigin: "automation",
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       dispatchMode: "queue",
@@ -6718,6 +6966,7 @@ const make = Effect.gen(function* () {
           sourceEventSequence: event.sequence,
           messageId: MessageId.makeUnsafe(`goal-continuation:${event.eventId}`),
           messageText: buildGoalContinuationInput(),
+          dispatchOrigin: "automation",
           runtimeMode: thread.runtimeMode,
           interactionMode: thread.interactionMode,
           dispatchMode: "queue",
@@ -9467,6 +9716,58 @@ const make = Effect.gen(function* () {
       return true;
     });
 
+    // An earlier server process died with this interrupt in flight. The runtime
+    // binding it targeted ended with that process, and replaying it could stop
+    // a turn started since, so it is neither replayed nor allowed to quarantine
+    // the thread. Restart turn reconciliation settles a turn the dead runtime
+    // left running. The terminal record plus an abandon reconciliation keep the
+    // audit trail; a crash between the two writes leaves exactly the blocker
+    // that startup recovery reconciles the same way.
+    const settleExpiredForeignInterruptClaim = Effect.fnUntraced(function* (input: {
+      readonly event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>;
+      readonly expiredOwner: string;
+    }) {
+      const { event } = input;
+      const settledAt = new Date().toISOString();
+      const marked = yield* deliveryRepository.markTerminalFailure({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+        expectedClaimOwner: input.expiredOwner,
+        state: "uncertain",
+        error: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
+        updatedAt: settledAt,
+      });
+      if (!marked) {
+        return yield* Effect.die(
+          new Error(
+            `Provider command delivery ${event.sequence} lost terminal settlement ownership`,
+          ),
+        );
+      }
+      const reconciled = yield* deliveryRepository.reconcile({
+        reconciliationId: crypto.randomUUID(),
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+        threadId: event.payload.threadId,
+        expectedState: "uncertain",
+        outcome: "abandon",
+        reconciledBy: "system:provider-command-reactor",
+        note: EXPIRED_INTERRUPT_CLAIM_NOTE,
+        reconciledAt: settledAt,
+      });
+      yield* Effect.logWarning(
+        Option.isSome(reconciled)
+          ? "provider interrupt claimed by an earlier server process expired; settled without replay"
+          : "provider interrupt claimed by an earlier server process expired; its blocker is left for startup recovery",
+        {
+          eventSequence: event.sequence,
+          threadId: event.payload.threadId,
+          expiredOwner: input.expiredOwner,
+        },
+      );
+      yield* requireCursorAdvance(event);
+    });
+
     const processClaimedProviderIntent = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       const threadId = event.payload.threadId;
       const handoff = readProviderHandoff(event);
@@ -9578,13 +9879,19 @@ const make = Effect.gen(function* () {
               }
             }
           }
+          if (
+            event.type === "thread.turn-interrupt-requested" &&
+            !expiredOwner.startsWith(`${processOwner}:`)
+          ) {
+            yield* settleExpiredForeignInterruptClaim({ event, expiredOwner });
+            return;
+          }
           if (!isReplaySafeClaimedProviderIntent(event)) {
             yield* settleTerminalFailure({
               event,
               claimOwner: expiredOwner,
               state: "uncertain",
-              detail:
-                "External provider command claim expired without a durable acceptance result; execution was not replayed.",
+              detail: PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL,
             });
             return;
           }
@@ -10242,8 +10549,9 @@ const make = Effect.gen(function* () {
         );
     });
 
-    // Recover only proven pre-write failures or quit interrupts whose provider
-    // had already stopped. Exit-unproven failures remain quarantined.
+    // Recover only proven pre-write failures, quit interrupts whose provider
+    // had already stopped, and interrupts whose claim expired with an earlier
+    // process. Exit-unproven failures remain quarantined.
     // Skipped prompts are not replayed at startup; instead, surface a durable
     // activity asking the user to resend them.
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
@@ -10266,7 +10574,14 @@ const make = Effect.gen(function* () {
           )
             continue;
           const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
-          if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) {
+          // Every claim in a blocker found at startup belonged to an earlier
+          // process, so an expired interrupt claim targeted a dead binding.
+          const expiredInterrupt = !settledQuit && isExpiredInterruptClaimBlocker(blocker);
+          if (
+            !settledQuit &&
+            !expiredInterrupt &&
+            !isSafeLegacyProviderBlocker(blocker.lastError)
+          ) {
             // A surviving blocker keeps the thread quarantined across the
             // restart; without this the "Unblock thread" contract only appears
             // after another message is skipped. Surface it once per thread.
@@ -10296,13 +10611,19 @@ const make = Effect.gen(function* () {
             reconciledBy: "system:provider-command-reactor",
             note: settledQuit
               ? "Intentional quit interrupt: provider stop was recorded before shutdown rejected its diagnostic; settled without replay."
-              : "Recorded failure proves the provider never executed this command; settled at startup.",
+              : expiredInterrupt
+                ? EXPIRED_INTERRUPT_CLAIM_NOTE
+                : "Recorded failure proves the provider never executed this command; settled at startup.",
             reconciledAt: new Date().toISOString(),
           });
           if (Option.isNone(reconciled)) continue;
 
           quarantinedThreads.delete(blocker.threadId);
-          if (settledQuit) {
+          if (settledQuit || expiredInterrupt) {
+            // Clear the block banner this blocker put on the session, and only
+            // that one: an expired interrupt's banner can sit on a session in
+            // any status, so leave the status alone unless it is the error the
+            // block set.
             const remaining = yield* deliveryRepository.firstBlockingDeliveryForThread({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
               threadId: blocker.threadId,
@@ -10310,7 +10631,8 @@ const make = Effect.gen(function* () {
             const session = (yield* resolveThreadShell(blocker.threadId))?.session;
             if (
               Option.isNone(remaining) &&
-              session?.status === "error" &&
+              session != null &&
+              (session.status === "error" || expiredInterrupt) &&
               session.activeTurnId === null &&
               blocker.lastError !== null &&
               session.lastError === formatProviderDeliveryBlockDetail(blocker.lastError)
@@ -10319,7 +10641,12 @@ const make = Effect.gen(function* () {
               yield* setThreadSession({
                 threadId: blocker.threadId,
                 expectedSession: session,
-                session: { ...session, status: "stopped", lastError: null, updatedAt: createdAt },
+                session: {
+                  ...session,
+                  status: session.status === "error" ? "stopped" : session.status,
+                  lastError: null,
+                  updatedAt: createdAt,
+                },
                 createdAt,
               });
             }

@@ -411,6 +411,8 @@ const TurnCompletedPayload = Schema.Struct({
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
+  // HTTP status of the provider request that failed the turn, when the provider reports it.
+  httpStatus: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

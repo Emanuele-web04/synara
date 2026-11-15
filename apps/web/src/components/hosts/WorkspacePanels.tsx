@@ -39,7 +39,7 @@ import {
 } from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
-import { useAppSettings } from "../../appSettings";
+import { resolveNewChatDefault, useAppSettings } from "../../appSettings";
 import { ensureNativeApi } from "../../nativeApi";
 import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
@@ -83,6 +83,7 @@ import {
   type WorkspaceSession,
 } from "../../lib/hosts/workspaceSessions";
 import { recoverBeforeLocalEscape } from "../../lib/hosts/executionSwitch";
+import { reconnectWorkspaceComputer } from "../../lib/hosts/workspaceReconnect";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
 import { isGroupContainerProject } from "../../lib/groupProjects";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
@@ -222,6 +223,7 @@ function WorkspacePanel({
           sessions: readWorkspaceSessions,
           subscribe: subscribeWorkspaceSessions,
           newChat: newLocalChat,
+          reconnect: reconnectWorkspaceComputer,
           createProject: () => window.dispatchEvent(new Event(OPEN_CREATE_PROJECT_EVENT)),
           prepareAutomation: prepareWorkspaceAutomation,
           navigate: (path) => {
@@ -368,10 +370,11 @@ export function WorkspacePanels() {
     ...connectionsQueryOptions(),
     enabled: controller && account.data?.state === "signed-in",
   });
+  // A successful poll can advance frame retries even when React Query reuses the payload.
   useEffect(() => {
     if (controller && account.data && connections.data)
       restoreConnectedWorkspaces(connections.data, account.data);
-  }, [controller, account.data, connections.data]);
+  }, [controller, account.data, connections.data, connections.dataUpdatedAt]);
   const { handleNewChat } = useHandleNewChat();
   const localChatRef = useRef(handleNewChat);
   localChatRef.current = handleNewChat;
@@ -388,7 +391,11 @@ export function WorkspacePanels() {
     const environmentId = session.host.executionScope.environmentId;
     return (
       <WorkspacePanel
-        key={JSON.stringify([session.host.hostId, session.host.executionScope])}
+        key={JSON.stringify([
+          session.host.hostId,
+          session.host.executionScope,
+          session.frameGeneration ?? 0,
+        ])}
         session={session}
         newLocalChat={newLocalChat}
         active={selected?.environmentId === environmentId}
@@ -622,7 +629,7 @@ export function WorkspaceFrameNavigation() {
             api,
             ...input,
             spaceId: null,
-            defaultProvider: settingsRef.current.defaultProvider,
+            newChatDefault: resolveNewChatDefault(settingsRef.current),
             loadSnapshot: () => api.orchestration.getShellSnapshot(),
           });
           if (result.snapshot) useStore.getState().syncServerShellSnapshot(result.snapshot);
@@ -635,7 +642,7 @@ export function WorkspaceFrameNavigation() {
             throw new Error(
               "The project was added, but its chat could not be opened. Reopen it from the sidebar.",
             );
-          return `/${id}`;
+          return { projectId: result.projectId, path: `/${id}` };
         }),
       newChat: async (projectId) => {
         if (!projectId) {

@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import OS from "node:os";
 import path from "node:path";
+import { exponentialBackoffMs, jitterMs } from "./backoff";
 import { reportReliabilityIssue } from "./reliability";
 
 import {
@@ -25,7 +26,7 @@ import {
 import {
   AccountApiError,
   ACCOUNT_URL_ENV_NAME,
-  createAccountClient,
+  GRANT_REQUEST_TIMEOUT_MS,
   OrganizationRequiredError,
   resolveConfiguredAccountUrl,
   type AccountClient,
@@ -33,6 +34,7 @@ import {
 import { Effect, Path } from "effect";
 
 import { withCredentialFileLock } from "./accountCredentialLock";
+import { createServerAccountClient } from "./accountHttp";
 import { createFileStringExclusively, writeFileStringAtomically } from "./atomicWrite";
 import { deriveServerPaths } from "./config";
 import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
@@ -43,6 +45,7 @@ import {
   mintHostProof,
   readHostIdentity,
 } from "./hostIdentity";
+import { decodeJwtClaims } from "./jwtClaims";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { resolveTailscaleEndpoint } from "./tailscaleEndpoint";
 import serverPackageJson from "../package.json" with { type: "json" };
@@ -88,7 +91,11 @@ export interface StoredAccountFile {
   readonly userId?: string;
   readonly accessToken?: string;
   readonly refreshToken?: string;
-  /** Durable intent: a crash or lost reply must never replay a single-use token. */
+  /**
+   * Legacy: released versions wrote this before every refresh and refused to
+   * renew while it matched the stored token. It is still parsed so their files
+   * load, but nothing writes or reads it any more; the next rotation drops it.
+   */
   readonly refreshPendingTokenHash?: string | undefined;
   /** The active account row for this shell's device signing key. */
   readonly deviceId?: string;
@@ -462,7 +469,7 @@ export interface AccountFlowOptions {
 }
 
 function clientFor(accountUrl: string, injected: AccountClient | undefined): AccountClient {
-  return injected ?? createAccountClient({ baseUrl: accountUrl });
+  return injected ?? createServerAccountClient(accountUrl);
 }
 
 /**
@@ -506,6 +513,76 @@ function isUnauthorized(error: unknown): boolean {
 /** The refresh endpoint reserves this pair for WorkOS's terminal invalid_grant. */
 function isGrantRejected(error: unknown): boolean {
   return error instanceof AccountApiError && error.status === 401 && error.code === "unauthorized";
+}
+
+/**
+ * Why this machine dropped, stopped trusting, or could not renew its stored
+ * session — or how long each step of a sign-in took.
+ */
+export type AccountSessionLogReason =
+  /** The refresh endpoint's terminal `401 unauthorized`; the session was cleared. */
+  | "refresh_rejected"
+  /** The account answered `organization_required`; the session was cleared. */
+  | "workspace_refused"
+  /** An account, workspace or user fence refused the stored session. */
+  | "identity_fence"
+  /** `/me` still answered 401 after renewal; status reports signed out. */
+  | "status_unauthorized"
+  /** A renewal series ended without a new pair; the session is kept. */
+  | "refresh_failed"
+  /** One sign-in's per-step durations (step names and milliseconds only). */
+  | "sign_in_timing";
+
+type AccountSessionLogDetail = Readonly<Record<string, string | number | boolean>>;
+
+const SESSION_LOG_REPEAT_MS = 10 * 60_000;
+/** When each distinct line was last written, per credential directory (monotonic). */
+const sessionLogWrittenAt = new Map<string, number>();
+
+/**
+ * One server log line for each way this machine's account session is lost, so
+ * a report of an unexpected sign-out says which path fired. `detail` must stay
+ * non-secret: HTTP statuses, account error codes, field names, counts and
+ * durations — never tokens, emails, user or organization ids, or response
+ * bodies. The same line for the same credential directory is written at most
+ * once per {@link SESSION_LOG_REPEAT_MS}, so pollers cannot flood the log.
+ */
+export function logAccountSession(
+  baseDir: string,
+  reason: AccountSessionLogReason,
+  detail: AccountSessionLogDetail = {},
+): void {
+  const key = `${baseDir}\0${reason}\0${JSON.stringify(detail)}`;
+  const now = performance.now();
+  const written = sessionLogWrittenAt.get(key);
+  if (written !== undefined && now - written < SESSION_LOG_REPEAT_MS) return;
+  for (const [writtenKey, at] of sessionLogWrittenAt)
+    if (now - at >= SESSION_LOG_REPEAT_MS) sessionLogWrittenAt.delete(writtenKey);
+  sessionLogWrittenAt.set(key, now);
+  console.warn(`[account] session ${reason}`, detail);
+}
+
+/** The non-secret shape of a failed account call: status and code, or the error class. */
+function failureDetail(error: unknown): AccountSessionLogDetail {
+  if (error instanceof AccountApiError) return { status: error.status, code: error.code };
+  return { failure: error instanceof Error ? error.name : typeof error };
+}
+
+const IDENTITY_FIELDS = ["accountUrl", "organizationId", "userId", "hostId"] as const;
+type IdentityFields = Readonly<
+  Partial<Record<(typeof IDENTITY_FIELDS)[number], string | undefined>>
+>;
+
+/** Logs which identity fence refused the session, naming the first differing field. */
+function identityFenceRefused(
+  baseDir: string,
+  fence: string,
+  current: IdentityFields,
+  expected: IdentityFields,
+): WorkspaceAccessChangedError {
+  const field = IDENTITY_FIELDS.find((name) => current[name] !== expected[name]) ?? "none";
+  logAccountSession(baseDir, "identity_fence", { fence, field });
+  return new WorkspaceAccessChangedError();
 }
 
 export interface WithFreshAccessTokenOptions {
@@ -612,26 +689,87 @@ function generateHostIdentityForLink(
 async function clearStoredSessionIfCurrent(
   baseDir: string,
   consumedRefreshToken: string,
-): Promise<void> {
-  await withLockedAccountFile(baseDir, async () => {
+): Promise<boolean> {
+  return withLockedAccountFile(baseDir, async () => {
     const current = await readAccountFile(baseDir);
-    if (!current || current.refreshToken !== consumedRefreshToken) return;
+    if (!current || current.refreshToken !== consumedRefreshToken) return false;
     await writeAccountCredentials(baseDir, withoutSession(current));
+    return true;
   });
 }
 
 /** What renewing the session produced: a usable token, or a dead session. */
 type SessionRenewal =
-  | { kind: "renewed"; accessToken: string; userId: string | undefined }
+  | { kind: "renewed"; accessToken: string; refreshToken: string; userId: string | undefined }
   | { kind: "expired" };
 
-export class SessionRefreshUncertainError extends SessionExpiredError {
-  constructor() {
-    super();
-    this.name = "SessionRefreshUncertainError";
-    this.message =
-      "The previous account renewal has an uncertain outcome. Please sign in again to recover safely.";
-  }
+/**
+ * Presenting the same refresh token again is how a failed renewal recovers.
+ * WorkOS answers a replay inside its 30-second grace with the pair it already
+ * rotated to, a token whose exchange never reached it is simply still valid,
+ * and a replay after the grace is a terminal `invalid_grant` — no worse than
+ * the sign-in an abandoned token would force anyway.
+ * https://workos.com/docs/authkit/session-resilience
+ *
+ * A renewal therefore makes up to {@link RENEWAL_ATTEMPTS} attempts, spaced
+ * 1s, 2s, 4s (jittered), and starts a retry only while it fits inside
+ * {@link RENEWAL_RETRY_WINDOW_MS} of the first one: the series runs under the
+ * credential-file lock, so it must stay short for everyone queued behind it.
+ */
+const RENEWAL_ATTEMPTS = 4;
+const RENEWAL_RETRY_BASE_MS = 1_000;
+const RENEWAL_RETRY_MAX_MS = 4_000;
+// This limits replay dispatch. An in-flight replay still gets its own deadline.
+const RENEWAL_RETRY_WINDOW_MS = 28_000;
+
+/**
+ * After a series fails, later renewals of the same token wait before trying
+ * again: 5s, doubling per failed series up to a minute, jittered. Without it
+ * every poller that finds the token expired would run its own series against
+ * an account service that is down. When the service was unreachable, the
+ * first caller it answers again may run one series before the wait is over.
+ */
+const RENEWAL_COOLDOWN_BASE_MS = 5_000;
+const RENEWAL_COOLDOWN_MAX_MS = 60_000;
+
+type RenewalCooldown = {
+  readonly tokenHash: string;
+  readonly failedSeries: number;
+  readonly until: number;
+  readonly error: unknown;
+  /** The failure's logged shape, so an unchanged outage is not logged on every series. */
+  readonly signature: string;
+  /** The series failed without an answer from the account service itself. */
+  readonly serviceUnreachable: boolean;
+  /** This cooldown's one early series was already spent. */
+  readonly probed: boolean;
+};
+
+/** Per credential directory: the last failed renewal series of one refresh token (monotonic clock). */
+const renewalCooldowns = new Map<string, RenewalCooldown>();
+
+/** A failure that says the account service could not be reached, not that it refused. */
+function isAccountServiceUnreachable(error: unknown): boolean {
+  return !(error instanceof AccountApiError) || error.status === 408 || error.status === 503;
+}
+
+/**
+ * How a failed refresh call bears on the stored session. Only the endpoint's
+ * `401 unauthorized` (WorkOS `invalid_grant`) ends it. A transport error,
+ * timeout (408), rate answer (429) or server fault (5xx) proves nothing about
+ * the token, so it is retried; `refresh_not_attempted` proves the token never
+ * left the account API, so it waits for the next renewal. Any other answer is
+ * a refusal this caller cannot fix by retrying, but it does not end the
+ * session either.
+ */
+function classifyRefreshFailure(
+  error: unknown,
+): "rejected" | "transient" | "not-attempted" | "refused" {
+  if (!(error instanceof AccountApiError)) return "transient";
+  if (isGrantRejected(error)) return "rejected";
+  if (error.status === 429 && error.code === "refresh_not_attempted") return "not-attempted";
+  if (error.status === 408 || error.status === 429 || error.status >= 500) return "transient";
+  return "refused";
 }
 
 /**
@@ -645,17 +783,20 @@ export class SessionRefreshUncertainError extends SessionExpiredError {
  * second redemption would be refused and, without this check, would clear
  * the winner's perfectly valid session).
  *
- * The rotated pair is persisted while still inside the lock and *before* the
- * caller retries. A durable pending marker covers a crash between redemption
- * and response persistence; that uncertain outcome requires sign-in instead
- * of another redemption. The write merges into the
- * re-read file, not the caller's snapshot, so host fields stored concurrently
- * survive.
+ * A failure that is not a terminal refusal keeps the stored pair and reaches
+ * the caller as itself — never as an expired session — after the bounded
+ * retries above. A crash or lost reply mid-exchange is recovered the same
+ * way: the next renewal presents the same token. The rotated pair is
+ * persisted while still inside the lock and *before* the caller retries, and
+ * the write merges into the re-read file, not the caller's snapshot, so host
+ * fields stored concurrently survive.
  */
 async function renewSession(
   baseDir: string,
   client: AccountClient,
   consumed: AccountCredentials,
+  /** The cooldown already in force when this caller got an answer from the service. */
+  answeredDuring: RenewalCooldown | undefined,
 ): Promise<SessionRenewal> {
   return withLockedAccountFile(baseDir, async (): Promise<SessionRenewal> => {
     const current = await readAccountFile(baseDir);
@@ -670,67 +811,141 @@ async function renewSession(
       (current.userId !== consumed.userId &&
         (consumed.userId !== undefined || current.refreshToken !== consumed.refreshToken))
     )
-      throw new WorkspaceAccessChangedError();
+      throw identityFenceRefused(
+        baseDir,
+        "renewal_stored_account",
+        {
+          accountUrl: current.accountUrl,
+          organizationId: current.organizationId,
+          userId: current.userId,
+        },
+        {
+          accountUrl: consumed.accountUrl,
+          organizationId: consumed.organizationId,
+          userId: consumed.userId,
+        },
+      );
     // Someone else rotated first — their stored pair is the live one.
     if (current.refreshToken !== consumed.refreshToken) {
       return current.accessToken
-        ? { kind: "renewed", accessToken: current.accessToken, userId: current.userId }
+        ? {
+            kind: "renewed",
+            accessToken: current.accessToken,
+            refreshToken: current.refreshToken,
+            userId: current.userId,
+          }
         : { kind: "expired" };
     }
 
-    const tokenHash = createHash("sha256").update(current.refreshToken).digest("hex");
-    if (current.refreshPendingTokenHash === tokenHash) throw new SessionRefreshUncertainError();
-    // Fsync intent before sending. After a crash or an ambiguous response, we
-    // cannot assume the previous exchange is safe to repeat.
-    await writeAccountCredentials(baseDir, { ...current, refreshPendingTokenHash: tokenHash });
+    const { refreshToken, organizationId } = current;
+    const tokenHash = createHash("sha256").update(refreshToken).digest("hex");
+    const cooldown = renewalCooldowns.get(baseDir);
+    const previous = cooldown?.tokenHash === tokenHash ? cooldown : undefined;
+    const coolingDown = previous !== undefined && performance.now() < previous.until;
+    // A cooldown that began because the service was unreachable ends early,
+    // once, for a caller the service has just answered: the outage may be
+    // over, and failing that caller with the old error would outlast it.
+    const probing =
+      coolingDown && previous === answeredDuring && previous.serviceUnreachable && !previous.probed;
+    if (coolingDown && !probing) throw previous.error;
+
+    const startedAt = performance.now();
     let refreshed;
-    try {
-      refreshed = await client.refreshAccessToken({
-        refreshToken: current.refreshToken,
-        organizationId: current.organizationId,
-      });
-    } catch (refreshError) {
-      // This response is generated by the account API before it calls WorkOS.
-      // Keep the pair available for the next operation without replaying here.
-      if (
-        refreshError instanceof AccountApiError &&
-        refreshError.status === 429 &&
-        refreshError.code === "refresh_not_attempted"
-      ) {
-        reportReliabilityIssue("account.refresh_rate_limited");
-        await writeAccountCredentials(baseDir, current);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        refreshed = await client.refreshAccessToken({ refreshToken, organizationId });
+        break;
+      } catch (refreshError) {
+        const failure = classifyRefreshFailure(refreshError);
+        if (failure === "rejected") {
+          renewalCooldowns.delete(baseDir);
+          reportReliabilityIssue("account.refresh_rejected");
+          // `attempt` above 1 means the refusal answered a replay after a transient failure.
+          logAccountSession(baseDir, "refresh_rejected", {
+            ...failureDetail(refreshError),
+            attempt,
+            failedSeriesBefore: previous?.failedSeries ?? 0,
+            legacyPendingMarker: current.refreshPendingTokenHash !== undefined,
+          });
+          await writeAccountCredentials(baseDir, withoutSession(current));
+          return { kind: "expired" };
+        }
+        const delay = jitterMs(
+          exponentialBackoffMs(attempt, RENEWAL_RETRY_BASE_MS, RENEWAL_RETRY_MAX_MS),
+        );
+        if (
+          failure === "transient" &&
+          attempt < RENEWAL_ATTEMPTS &&
+          performance.now() - startedAt + delay <= RENEWAL_RETRY_WINDOW_MS
+        ) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+          if (performance.now() - startedAt <= RENEWAL_RETRY_WINDOW_MS) continue;
+        }
+        reportReliabilityIssue(
+          failure === "not-attempted"
+            ? "account.refresh_rate_limited"
+            : "account.refresh_uncertain",
+        );
+        const failedSeries = (previous?.failedSeries ?? 0) + 1;
+        const cooldownMs = jitterMs(
+          exponentialBackoffMs(failedSeries, RENEWAL_COOLDOWN_BASE_MS, RENEWAL_COOLDOWN_MAX_MS),
+        );
+        const detail = { ...failureDetail(refreshError), outcome: failure };
+        const signature = JSON.stringify(detail);
+        renewalCooldowns.set(baseDir, {
+          tokenHash,
+          failedSeries,
+          until: performance.now() + cooldownMs,
+          error: refreshError,
+          signature,
+          serviceUnreachable: isAccountServiceUnreachable(refreshError),
+          probed: probing,
+        });
+        // A long outage logs its 1st, 2nd, 4th, 8th… series, and any series
+        // that fails differently from the one before.
+        if ((failedSeries & (failedSeries - 1)) === 0 || previous?.signature !== signature)
+          logAccountSession(baseDir, "refresh_failed", {
+            ...detail,
+            attempts: attempt,
+            failedSeries,
+            retryInMs: Math.round(cooldownMs),
+            legacyPendingMarker: current.refreshPendingTokenHash !== undefined,
+          });
         throw refreshError;
       }
-      // Preserve the durable intent on any ambiguous outcome. A later caller
-      // may still use the access token but cannot spend this refresh token again.
-      if (!isGrantRejected(refreshError)) {
-        reportReliabilityIssue("account.refresh_uncertain");
-        throw refreshError;
-      }
-      reportReliabilityIssue("account.refresh_rejected");
-      await writeAccountCredentials(baseDir, withoutSession(current));
-      return { kind: "expired" };
     }
+    renewalCooldowns.delete(baseDir);
 
     if (current.userId !== undefined && refreshed.user.id !== current.userId)
-      throw new WorkspaceAccessChangedError();
+      throw identityFenceRefused(
+        baseDir,
+        "renewal_refreshed_user",
+        { userId: refreshed.user.id },
+        { userId: current.userId },
+      );
+    const { refreshPendingTokenHash: _legacyPendingMarker, ...stored } = current;
     await writeAccountCredentials(baseDir, {
-      ...current,
+      ...stored,
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
-      refreshPendingTokenHash: undefined,
       // Backfills files written before userId existed; on current files this
       // rewrites the same id.
       userId: refreshed.user.id,
     });
-    return { kind: "renewed", accessToken: refreshed.accessToken, userId: refreshed.user.id };
+    return {
+      kind: "renewed",
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      userId: refreshed.user.id,
+    };
   });
 }
 
 /**
  * Runs `fn` with the stored access token, renewing it once if the account
- * rejects it. WorkOS access tokens live about five minutes, so any CLI command
- * run more than a few minutes after `synara auth` needs this.
+ * rejects it, or before sending it once this process has seen it outlive its
+ * own lifetime. WorkOS access tokens live about five minutes, so any CLI
+ * command run more than a few minutes after `synara auth` needs this.
  *
  * Credentials are re-read per call rather than captured by the caller: a
  * rotation performed for one call must be visible to the next one, and the
@@ -739,9 +954,16 @@ async function renewSession(
  * {@link renewSession} — so concurrent expired-token operations cannot
  * double-spend the single-use refresh token or clobber each other's writes.
  *
- * Renewal is driven purely by a rejected call, not by reading `exp` off the
- * JWT first. The deliberate trade is one wasted round trip per expiry against
- * having to parse and trust token internals here.
+ * The early renewal trusts no wall clock: it compares the token's own lifetime
+ * (`exp - iat`) with how long this process has held it on its monotonic clock.
+ * A token first seen after a restart, a token without those claims, or a clock
+ * that runs ahead therefore falls back to the rejected-call path, so it never
+ * renews more often than a 401 would have.
+ *
+ * Only a terminal refusal of the refresh token signs the session out. Any
+ * other renewal failure — including an early renewal attempted while this
+ * machine is offline — rejects with that failure and leaves the stored pair
+ * for the next call to renew.
  */
 export async function withFreshAccessToken<A>(
   options: WithFreshAccessTokenOptions,
@@ -750,7 +972,7 @@ export async function withFreshAccessToken<A>(
   const { baseDir, client } = options;
   const credentials = options.credentials ?? (await readAccountCredentials(baseDir));
   if (!credentials) throw new SessionExpiredError();
-  const assertIdentity = (current: StoredAccountFile) => {
+  const assertIdentity = (current: StoredAccountFile, fence: string) => {
     const expected = options.expectedIdentity;
     if (
       expected &&
@@ -759,36 +981,83 @@ export async function withFreshAccessToken<A>(
         current.organizationId !== expected.organizationId ||
         current.hostId !== expected.hostId)
     )
-      throw new WorkspaceAccessChangedError();
+      throw identityFenceRefused(baseDir, fence, current, expected);
   };
-  assertIdentity(credentials);
-  try {
-    return await fn(credentials.accessToken);
-  } catch (error) {
-    // The workspace, not the token, is what the account rejected. Renewing
-    // would mint another token for the same dead organization, so the retry
-    // is skipped and the session dropped in favour of a fresh sign-in.
-    if (error instanceof OrganizationRequiredError) {
-      await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
+  assertIdentity(credentials, "expected_identity_before_send");
+  const send = async (accessToken: string, refreshToken: string): Promise<A> => {
+    try {
+      return await fn(accessToken);
+    } catch (error) {
+      if (!(error instanceof OrganizationRequiredError)) throw error;
+      const cleared = await clearStoredSessionIfCurrent(baseDir, refreshToken);
+      logAccountSession(baseDir, "workspace_refused", {
+        cleared,
+        organizations: error.organizations.length,
+      });
       throw new WorkspaceAccessChangedError();
     }
-    if (!isUnauthorized(error)) throw error;
-
-    const renewal = await renewSession(baseDir, client, credentials);
-    if (renewal.kind === "expired") throw new SessionExpiredError();
-    const current = await readAccountCredentials(baseDir);
-    if (!current) throw new SessionExpiredError();
-    // Renewal's verified user includes the permitted legacy backfill. Host metadata
-    // may change independently; explicit background identity fences still apply below.
-    if (
-      current.accountUrl !== credentials.accountUrl ||
-      current.organizationId !== credentials.organizationId ||
-      current.userId !== renewal.userId
-    )
-      throw new WorkspaceAccessChangedError();
-    assertIdentity(current);
-    return await fn(renewal.accessToken);
+  };
+  let answeredDuring: RenewalCooldown | undefined;
+  // A token held for its whole lifetime would only come back 401; renew before sending it.
+  if (!accessTokenOutlived(baseDir, credentials.accessToken)) {
+    try {
+      return await send(credentials.accessToken, credentials.refreshToken);
+    } catch (error) {
+      if (!isUnauthorized(error)) throw error;
+      answeredDuring = renewalCooldowns.get(baseDir);
+    }
   }
+
+  const renewal = await renewSession(baseDir, client, credentials, answeredDuring);
+  if (renewal.kind === "expired") throw new SessionExpiredError();
+  const current = await readAccountCredentials(baseDir);
+  if (!current) throw new SessionExpiredError();
+  // Renewal's verified user includes the permitted legacy backfill. Host metadata
+  // may change independently; explicit background identity fences still apply below.
+  if (
+    current.accountUrl !== credentials.accountUrl ||
+    current.organizationId !== credentials.organizationId ||
+    current.userId !== renewal.userId
+  )
+    throw identityFenceRefused(
+      baseDir,
+      "after_renewal",
+      {
+        accountUrl: current.accountUrl,
+        organizationId: current.organizationId,
+        userId: current.userId,
+      },
+      {
+        accountUrl: credentials.accountUrl,
+        organizationId: credentials.organizationId,
+        userId: renewal.userId,
+      },
+    );
+  assertIdentity(current, "expected_identity_after_renewal");
+  accessTokenOutlived(baseDir, renewal.accessToken);
+  return send(renewal.accessToken, renewal.refreshToken);
+}
+
+/** When this process first held each credential directory's current access token (monotonic). */
+const accessTokenFirstSeen = new Map<string, { readonly tokenHash: string; readonly at: number }>();
+
+/**
+ * Whether this process has held the token at least its own lifetime. First
+ * sight comes after issuance, so a true answer means the account API would
+ * already refuse it; the claims only avoid a doomed request, never authorize.
+ */
+function accessTokenOutlived(baseDir: string, accessToken: string): boolean {
+  const claims = decodeJwtClaims(accessToken);
+  const exp = claims?.exp;
+  const iat = claims?.iat;
+  if (typeof exp !== "number" || typeof iat !== "number" || !(exp > iat)) return false;
+  const tokenHash = createHash("sha256").update(accessToken).digest("hex");
+  const seen = accessTokenFirstSeen.get(baseDir);
+  if (seen?.tokenHash !== tokenHash) {
+    accessTokenFirstSeen.set(baseDir, { tokenHash, at: performance.now() });
+    return false;
+  }
+  return performance.now() - seen.at >= (exp - iat) * 1_000;
 }
 
 /**
@@ -1183,6 +1452,11 @@ export interface ScopeTokenToWorkspaceOptions {
   ) => Promise<OrganizationSummary>;
   /** Told which workspace was chosen, once, after the scoped token is minted. */
   readonly onOrganizationChosen?: (organization: OrganizationSummary) => void;
+  /** Times each request this makes, for the sign-in step log. */
+  readonly measure?: <A>(
+    step: "workspace_probe" | "workspace_refresh",
+    run: () => Promise<A>,
+  ) => Promise<A>;
 }
 
 /**
@@ -1200,10 +1474,11 @@ export async function scopeTokenToWorkspace(
   options: ScopeTokenToWorkspaceOptions,
 ): Promise<ScopedSessionTokens> {
   const { client, chooseOrganization, onOrganizationChosen } = options;
+  const measure = options.measure ?? (<A>(_step: string, run: () => Promise<A>) => run());
 
   let organizations: readonly OrganizationSummary[];
   try {
-    const me = await client.me(token.accessToken);
+    const me = await measure("workspace_probe", () => client.me(token.accessToken));
     return {
       accessToken: token.accessToken,
       refreshToken: token.refreshToken,
@@ -1219,10 +1494,13 @@ export async function scopeTokenToWorkspace(
   // Redeeming the refresh token here spends it, so the rotated pair this
   // returns is the only usable one — the caller must persist it, not the
   // pair it started with.
-  const refreshed = await client.refreshAccessToken({
-    refreshToken: token.refreshToken,
-    organizationId: organization.id,
-  });
+  const refreshed = await measure("workspace_refresh", () =>
+    client.refreshAccessToken({
+      refreshToken: token.refreshToken,
+      organizationId: organization.id,
+      timeoutMs: GRANT_REQUEST_TIMEOUT_MS,
+    }),
+  );
 
   onOrganizationChosen?.(organization);
   return {

@@ -2,7 +2,13 @@ import { useTranslation } from "~/i18n";
 import { ProviderInteractionMode } from "@synara/contracts";
 import { type ReactNode } from "react";
 import { GoTasklist } from "react-icons/go";
-import { BugIcon, ChevronDownIcon, ComposerSendArrowIcon, LayoutSidebarIcon } from "~/lib/icons";
+import {
+  BugIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ComposerSendArrowIcon,
+  LayoutSidebarIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { derivePendingUserInputProgress } from "../../pendingUserInput";
 import type { SessionPhase } from "../../types";
@@ -62,6 +68,30 @@ interface ChatComposerFooterProps {
     onInterrupt: () => void;
     onImplementInNewThread: () => void;
   };
+}
+
+/** Busy glyph inside the round send button. */
+function SendButtonSpinner() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 14 14"
+      fill="none"
+      className="animate-spin"
+      aria-hidden="true"
+    >
+      <circle
+        cx="7"
+        cy="7"
+        r="5.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeDasharray="20 12"
+      />
+    </svg>
+  );
 }
 
 export function ChatComposerFooter({
@@ -187,23 +217,58 @@ export function ChatComposerFooter({
           />
         ) : null}
         {pendingInput?.progress ? (
-          <Button
-            type="submit"
-            size="sm"
-            className="rounded-full px-4"
-            disabled={
-              pendingInput.responding ||
-              (pendingInput.progress.isLastQuestion
-                ? !pendingInput.answersComplete
-                : !pendingInput.progress.canAdvance)
-            }
-          >
-            {pendingInput.responding
-              ? t("chat:submitting2")
-              : pendingInput.progress.isLastQuestion
-                ? t("chat:submitAnswers")
-                : t("chat:composerPendingUserInputPanel_nextQuestion")}
-          </Button>
+          row ? (
+            // The single-row composer keeps its round send button; the question card above
+            // spells out what Enter does.
+            <Button
+              type="submit"
+              variant="prominent"
+              size="icon-xs"
+              className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
+              disabled={
+                pendingInput.responding ||
+                (pendingInput.progress.isLastQuestion
+                  ? !pendingInput.answersComplete
+                  : !pendingInput.progress.canAdvance)
+              }
+              aria-label={
+                pendingInput.responding
+                  ? t("chat:submitting2")
+                  : pendingInput.progress.isLastQuestion
+                    ? t("chat:submitAnswers")
+                    : t("chat:composerPendingUserInputPanel_nextQuestion")
+              }
+            >
+              {pendingInput.responding ? (
+                <SendButtonSpinner />
+              ) : pendingInput.progress.isLastQuestion ? (
+                <ComposerSendArrowIcon
+                  aria-hidden="true"
+                  className="size-5 shrink-0 translate-y-px"
+                />
+              ) : (
+                <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0" />
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="sm"
+              className="rounded-full px-4"
+              disabled={
+                pendingInput.responding ||
+                (pendingInput.progress.isLastQuestion
+                  ? !pendingInput.answersComplete
+                  : !pendingInput.progress.canAdvance)
+              }
+            >
+              {pendingInput.responding
+                ? t("chat:submitting2")
+                : pendingInput.progress.isLastQuestion
+                  ? t("chat:submitAnswers")
+                  : t("chat:composerPendingUserInputPanel_nextQuestion")}
+            </Button>
+          )
         ) : submission.phase === "running" ||
           submission.connecting ||
           submission.recoveryStopAvailable ||
@@ -370,24 +435,7 @@ export function ChatComposerFooter({
                 }
               >
                 {submission.connecting || submission.busy || submission.preparingImages ? (
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                    className="animate-spin"
-                    aria-hidden="true"
-                  >
-                    <circle
-                      cx="7"
-                      cy="7"
-                      r="5.5"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeDasharray="20 12"
-                    />
-                  </svg>
+                  <SendButtonSpinner />
                 ) : (
                   <ComposerSendArrowIcon
                     aria-hidden="true"

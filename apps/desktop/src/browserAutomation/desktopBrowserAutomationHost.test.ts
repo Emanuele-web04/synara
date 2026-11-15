@@ -323,8 +323,20 @@ describe("DesktopBrowserAutomationHost", () => {
       name: "browser_run" as const,
       arguments: { code: "return null" },
     };
+    const withheld = await host.executeTool(request).catch((error: unknown) => error);
+    expect(withheld).toMatchObject({
+      browserError: {
+        code: "BrowserEvaluationFailed",
+        cause: { message: expect.stringContaining("failed outside the script") },
+      },
+    });
+    expect(JSON.stringify(withheld)).not.toContain("private-password");
+    vi.mocked(runBetterwright).mockRejectedValueOnce(new Error("Browser target is unavailable."));
     await expect(host.executeTool(request)).rejects.toMatchObject({
-      browserError: { code: "BrowserEvaluationFailed" },
+      browserError: {
+        code: "BrowserEvaluationFailed",
+        cause: { message: "Browser target is unavailable." },
+      },
     });
     vi.mocked(runBetterwright).mockResolvedValueOnce("x".repeat(262_145));
     await expect(

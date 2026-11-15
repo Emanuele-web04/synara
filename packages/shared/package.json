@@ -12,6 +12,10 @@
       "types": "./src/hostUsage.ts",
       "import": "./src/hostUsage.ts"
     },
+    "./backgroundTasks": {
+      "types": "./src/backgroundTasks.ts",
+      "import": "./src/backgroundTasks.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
@@ -95,6 +99,10 @@
     "./githubRepository": {
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
+    },
+    "./threadPullRequestLinks": {
+      "types": "./src/threadPullRequestLinks.ts",
+      "import": "./src/threadPullRequestLinks.ts"
     },
     "./logging": {
       "types": "./src/logging.ts",

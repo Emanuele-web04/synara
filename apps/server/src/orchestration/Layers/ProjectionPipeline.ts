@@ -7,6 +7,7 @@ import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { pullRequestLinksFromEventPayload } from "@synara/shared/threadPullRequestLinks";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -617,6 +618,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
             sidechatExpiredAt: event.payload.sidechatExpiredAt,
             lastKnownPr: event.payload.lastKnownPr ?? null,
+            pullRequests:
+              pullRequestLinksFromEventPayload(event.payload, event.payload.createdAt) ?? [],
             latestTurnId: null,
             handoff: event.payload.handoff,
             pinnedMessages: null,
@@ -651,6 +654,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               })
             : Option.none();
           const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
+          const pullRequests = pullRequestLinksFromEventPayload(
+            event.payload,
+            event.payload.updatedAt,
+          );
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined
@@ -751,6 +758,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.lastKnownPr !== undefined
                 ? { lastKnownPr: event.payload.lastKnownPr }
                 : {}),
+              ...(pullRequests !== undefined ? { pullRequests } : {}),
               ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
               ...(event.payload.pinnedMessages !== undefined
                 ? { pinnedMessages: event.payload.pinnedMessages }

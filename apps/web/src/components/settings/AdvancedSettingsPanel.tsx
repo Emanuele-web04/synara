@@ -1,7 +1,9 @@
 // FILE: AdvancedSettingsPanel.tsx
-// Purpose: Own advanced settings state and workflows for auth, keybindings, and recovery.
+// Purpose: Own advanced settings state and workflows for auth and recovery, plus the
+//          keybindings-file, app-tour, and About rows that other settings pages show.
 // Layer: Settings UI components
-// Exports: AdvancedSettingsPanel
+// Exports: AdvancedSettingsPanel, KeybindingsFileSettingsSection, AppTourSettingsRow,
+//          AboutSettingsSection
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -25,40 +27,19 @@ import { useSettingsRestoreSignal } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 import { useTranslation } from "~/i18n";
 
-export function AdvancedSettingsPanel(props: {
-  active: boolean;
-  onOpenReleaseHistory: () => void;
-  resetEpoch: number;
-}) {
+/** The persisted `keybindings.json`, opened in the preferred editor. Shown on Keyboard shortcuts. */
+export function KeybindingsFileSettingsSection(props: { resetEpoch: number }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-
   const configQuery = useQuery(serverConfigQueryOptions());
-  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  // Keep these subscriptions inside the only panel that uses recovery eligibility.
-  const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
-  const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
-  const projectCount = useStore((store) => store.projects.length);
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
-
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
-  const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
 
   useSettingsRestoreSignal(props.resetEpoch, () => {
-    setShowRecoveryTools(false);
     setOpenKeybindingsError(null);
   });
 
   const keybindingsConfigPath = configQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = configQuery.data?.availableEditors;
-  const shouldOfferRecoveryTools = useMemo(() => {
-    if (!threadsHydrated || projectCount === 0) return false;
-    return threadShells.length === 0 || allThreadsMessageless;
-  }, [allThreadsMessageless, projectCount, threadShells.length, threadsHydrated]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -81,6 +62,120 @@ export function AdvancedSettingsPanel(props: {
         setIsOpeningKeybindings(false);
       });
   }, [availableEditors, keybindingsConfigPath, t]);
+
+  return (
+    <SettingsSection title="settings:shortcuts_keybindingsFile">
+      <SettingsRow
+        id="setting-keybindings"
+        title="common:advanced_keybindings"
+        description="settings:openThePersistedKeybindingsJsonFileToEditAdvanced"
+        status={
+          <>
+            <span className="block break-all font-mono text-ui-sm text-foreground">
+              {keybindingsConfigPath ?? t("settings:advanced_resolvingKeybindingsPath")}
+            </span>
+            {openKeybindingsError ? (
+              <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
+            ) : (
+              <span className="mt-1 block">{t("settings:advanced_opensInEditor")}</span>
+            )}
+          </>
+        }
+        control={
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={!keybindingsConfigPath || isOpeningKeybindings}
+            onClick={openKeybindingsFile}
+          >
+            {isOpeningKeybindings
+              ? t("settings:advanced_opening")
+              : t("settings:advanced_openFile")}
+          </Button>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
+/** Replays the feature tour. Shown under General › Getting started. */
+export function AppTourSettingsRow() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  return (
+    <SettingsRow
+      id="setting-app-tour"
+      title="settings:appTour"
+      description="settings:appTourDescription"
+      control={
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            // The tour points at the workspace's sidebar and rail, so leave Settings
+            // first; the chat sidebar is not mounted here.
+            void navigate({ to: "/" }).then(() => useFeatureTourStore.getState().open());
+          }}
+        >
+          {t("settings:replayAppTour")}
+        </Button>
+      }
+    />
+  );
+}
+
+/** Version and release history. Shown on the About page. */
+export function AboutSettingsSection(props: { onOpenReleaseHistory: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection title="settings:advanced_about">
+      <SettingsRow
+        id="setting-version"
+        title="settings:advanced_version"
+        description="settings:advanced_versionDescription"
+        control={
+          <code className="text-ui leading-snug font-medium text-muted-foreground">
+            {APP_VERSION}
+          </code>
+        }
+      />
+      <SettingsRow
+        id="setting-release-history"
+        title="common:advanced_releaseHistory"
+        description="settings:advanced_releaseHistoryDescription"
+        control={
+          <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
+            {t("settings:advanced_viewReleaseHistory")}
+          </Button>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
+export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: number }) {
+  const { t } = useTranslation();
+
+  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  // Keep these subscriptions inside the only panel that uses recovery eligibility.
+  const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
+  const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
+  const projectCount = useStore((store) => store.projects.length);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
+
+  const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showRecoveryTools, setShowRecoveryTools] = useState(false);
+
+  useSettingsRestoreSignal(props.resetEpoch, () => {
+    setShowRecoveryTools(false);
+  });
+
+  const shouldOfferRecoveryTools = useMemo(() => {
+    if (!threadsHydrated || projectCount === 0) return false;
+    return threadShells.length === 0 || allThreadsMessageless;
+  }, [allThreadsMessageless, projectCount, threadShells.length, threadsHydrated]);
 
   const repairLocalState = useCallback(async () => {
     if (isRepairingLocalState) return;
@@ -164,36 +259,6 @@ export function AdvancedSettingsPanel(props: {
 
       <SettingsSection title="settings:advanced_developerTools">
         <SettingsRow
-          id="setting-keybindings"
-          title="common:advanced_keybindings"
-          description="settings:openThePersistedKeybindingsJsonFileToEditAdvanced"
-          status={
-            <>
-              <span className="block break-all font-mono text-ui-sm text-foreground">
-                {keybindingsConfigPath ?? t("settings:advanced_resolvingKeybindingsPath")}
-              </span>
-              {openKeybindingsError ? (
-                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-              ) : (
-                <span className="mt-1 block">{t("settings:advanced_opensInEditor")}</span>
-              )}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!keybindingsConfigPath || isOpeningKeybindings}
-              onClick={openKeybindingsFile}
-            >
-              {isOpeningKeybindings
-                ? t("settings:advanced_opening")
-                : t("settings:advanced_openFile")}
-            </Button>
-          }
-        />
-
-        <SettingsRow
           id="setting-recovery-tools"
           title="settings:advanced_recoveryTools"
           description="settings:advanced_recoveryToolsDescription"
@@ -243,47 +308,6 @@ export function AdvancedSettingsPanel(props: {
             </div>
           ) : null}
         </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="settings:advanced_about">
-        <SettingsRow
-          id="setting-version"
-          title="settings:advanced_version"
-          description="settings:advanced_versionDescription"
-          control={
-            <code className="text-ui leading-snug font-medium text-muted-foreground">
-              {APP_VERSION}
-            </code>
-          }
-        />
-        <SettingsRow
-          id="setting-app-tour"
-          title="settings:appTour"
-          description="settings:appTourDescription"
-          control={
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                // The tour points at the workspace's sidebar and rail, so leave Settings
-                // first; the chat sidebar is not mounted here.
-                void navigate({ to: "/" }).then(() => useFeatureTourStore.getState().open());
-              }}
-            >
-              {t("settings:replayAppTour")}
-            </Button>
-          }
-        />
-        <SettingsRow
-          id="setting-release-history"
-          title="common:advanced_releaseHistory"
-          description="settings:advanced_releaseHistoryDescription"
-          control={
-            <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
-              {t("settings:advanced_viewReleaseHistory")}
-            </Button>
-          }
-        />
       </SettingsSection>
     </div>
   );

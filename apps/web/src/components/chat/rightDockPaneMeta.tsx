@@ -9,6 +9,7 @@ import { t } from "~/i18n";
 import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
 import {
+  BackgroundTrayIcon,
   BotIcon,
   DeviceMobileIcon,
   DiffIcon,
@@ -49,6 +50,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
   subagents: { label: "Subagents", Icon: BotIcon },
+  backgroundTasks: { label: "Background tasks", Icon: BackgroundTrayIcon },
 };
 
 const RIGHT_DOCK_PANE_LABEL_KEYS: Record<RightDockPaneKind, string> = {
@@ -62,6 +64,7 @@ const RIGHT_DOCK_PANE_LABEL_KEYS: Record<RightDockPaneKind, string> = {
   git: "chat:git",
   pullRequest: "git:general_environmentPullRequest",
   subagents: "chat:subagents",
+  backgroundTasks: "chat:backgroundTasks",
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale

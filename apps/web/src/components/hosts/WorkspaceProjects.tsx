@@ -8,7 +8,6 @@ import {
 import { useLocation } from "@tanstack/react-router";
 import type { useSortable } from "@dnd-kit/sortable";
 import { ThreadId } from "@synara/contracts";
-import type { SidebarThreadSortOrder } from "../../appSettings";
 import { CentralIcon } from "../../lib/central-icons";
 import {
   ArchiveIcon,
@@ -23,7 +22,7 @@ import { createClientPointMenuAnchor } from "../../lib/clientPointMenuAnchor";
 import { pinActionLabel } from "../../lib/pin";
 import { DEFAULT_PROJECT_ICON, projectColorValue } from "../../lib/projectAppearance";
 import {
-  deriveWorkspaceProjectThreadRows,
+  type deriveWorkspaceProjectThreadRows,
   workspaceThreadKey,
   type WorkspaceProjectEntry,
   type WorkspaceThreadEntry,
@@ -97,8 +96,10 @@ function WorkspaceRowMenu({
   menu,
   onClose,
   items,
+  children,
 }: {
   menu: WorkspaceMenuState | null;
+  children?: ReactNode;
   onClose: () => void;
   items: readonly { label: string; icon: LucideIcon; onClick: () => void; separator?: boolean }[];
 }) {
@@ -108,6 +109,7 @@ function WorkspaceRowMenu({
   return (
     <Menu
       open
+      keepOpenOnSubmenuInteraction={Boolean(children)}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
@@ -135,6 +137,7 @@ function WorkspaceRowMenu({
             </MenuItem>
           </span>
         ))}
+        {children}
       </ComposerPickerMenuPopup>
     </Menu>
   );
@@ -484,34 +487,30 @@ export function WorkspaceProjectItem({
   entry,
   expanded,
   onToggle,
-  threadSortOrder,
+  threadRows,
+  spaceMenu,
   dragHandleProps,
   manualSorting: manualSortingProp,
-  extraPages: extraPagesProp,
-  onExtraPagesChange,
+  onExtraPagesChange: setExtraPages,
   threadJumpLabels,
   renderThreadHoverCard,
 }: {
   entry: WorkspaceProjectEntry;
   expanded: boolean;
   onToggle: () => void;
-  threadSortOrder: SidebarThreadSortOrder;
+  threadRows: ReturnType<typeof deriveWorkspaceProjectThreadRows>;
+  spaceMenu?: ReactNode;
   dragHandleProps?: SortableProjectHandleProps | null;
   manualSorting?: boolean;
-  extraPages?: number;
-  onExtraPagesChange?: (pages: number) => void;
+  onExtraPagesChange: (pages: number) => void;
   threadJumpLabels?: ReadonlyMap<string, string>;
   renderThreadHoverCard?: (
     entry: WorkspaceThreadEntry,
   ) => ((anchorId: string) => ReactNode) | undefined;
 }) {
   const manualSorting = manualSortingProp ?? false;
-  const [localExtraPages, setLocalExtraPages] = useState(0);
-  const extraPages = extraPagesProp ?? localExtraPages;
-  const setExtraPages = onExtraPagesChange ?? setLocalExtraPages;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
   const [renameSession, setRenameSession] = useState<WorkspaceSession | null>(null);
-  const href = useLocation({ select: (location) => location.href });
   const { project, session } = entry;
   if (!session) return null;
   const hostName = session.host.hostName;
@@ -520,15 +519,7 @@ export function WorkspaceProjectItem({
   const status = expanded
     ? null
     : resolveProjectStatusIndicator(entry.threads.map((thread) => thread.status));
-  const activeThreadId = entry.threads.find((thread) =>
-    selectedThreadPath(href, session, thread.id),
-  )?.id;
-  const { visibleEntries, paging, canShowMore } = deriveWorkspaceProjectThreadRows({
-    entry,
-    sortOrder: threadSortOrder,
-    activeThreadId,
-    extraPages,
-  });
+  const { visibleEntries, paging, canShowMore } = threadRows;
   const startChat = () => {
     const navigation = readAvailableWorkspaceNavigation(session);
     if (!online || !navigation) return;
@@ -699,7 +690,9 @@ export function WorkspaceProjectItem({
             },
           },
         ]}
-      />
+      >
+        {spaceMenu}
+      </WorkspaceRowMenu>
       <RenameDialog
         open={renameSession !== null}
         title="Rename project"

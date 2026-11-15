@@ -2,7 +2,6 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
-  type ProviderKind,
   ThreadId,
 } from "@synara/contracts";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -10,6 +9,7 @@ import type { RefObject } from "react";
 import { useCallback } from "react";
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import type { NewChatDefault } from "../../appSettings";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../../composerDraftStore";
 import { ensureHomeChatProject } from "../../lib/chatProjects";
 import {
@@ -72,7 +72,7 @@ interface ChatWorkspaceSelectionInput {
   hasNativeUserMessages: boolean;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   scheduleComposerFocus: () => void;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
 }
 
 export function useChatWorkspaceSelection({
@@ -87,7 +87,7 @@ export function useChatWorkspaceSelection({
   hasNativeUserMessages,
   composerEditorRef,
   scheduleComposerFocus,
-  defaultProvider,
+  newChatDefault,
 }: ChatWorkspaceSelectionInput) {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
@@ -369,7 +369,7 @@ export function useChatWorkspaceSelection({
         api,
         workspaceRoot,
         createIfMissing: false,
-        defaultProvider: defaultProvider,
+        newChatDefault,
         loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
       });
       if (creationResult.snapshot) {
@@ -387,7 +387,7 @@ export function useChatWorkspaceSelection({
       handleSelectProjectForEmptyDraft,
       isLocalDraftThread,
       moveEmptyDraftToLocalProject,
-      defaultProvider,
+      newChatDefault,
       syncServerShellSnapshot,
     ],
   );

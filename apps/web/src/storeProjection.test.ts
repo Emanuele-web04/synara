@@ -116,6 +116,97 @@ describe("store projection", () => {
     ).toEqual(["New reply after rollback"]);
   });
 
+  it("drops background work derived from detail when that detail is evicted", () => {
+    const backgrounded = applyOrchestrationEvents(
+      makeState(
+        makeThread({
+          session: {
+            provider: "claudeAgent",
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-10-11T10:00:00.000Z",
+            updatedAt: "2026-10-11T10:00:00.000Z",
+          },
+        }),
+      ),
+      [
+        makeDomainEvent("thread.activity-appended", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          activity: makeActivity({
+            id: "moved-to-background",
+            kind: "runtime.warning",
+            sequence: 1,
+            payload: {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "task-bg" }] },
+            },
+          }),
+        }),
+      ],
+    );
+    expect(backgrounded.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(1);
+
+    const evicted = evictThreadDetailFromClientState(backgrounded, ThreadId.makeUnsafe("thread-1"));
+
+    expect(evicted.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(0);
+  });
+
+  it("trusts the server's background task count over frozen local detail", () => {
+    const session = {
+      provider: "claudeAgent" as const,
+      status: "ready" as const,
+      orchestrationStatus: "ready" as const,
+      createdAt: "2026-10-11T10:00:00.000Z",
+      updatedAt: "2026-10-11T10:00:00.000Z",
+    };
+    // Local detail stopped at "Moved to background": its lease dropped before
+    // the task's end arrived.
+    const frozen = applyOrchestrationEvents(makeState(makeThread({ session })), [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: makeActivity({
+          id: "moved-to-background",
+          kind: "runtime.warning",
+          sequence: 1,
+          payload: {
+            nativeEventType: "background_tasks_changed",
+            data: { tasks: [{ task_id: "task-bg" }] },
+          },
+        }),
+      }),
+    ]);
+    expect(frozen.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(1);
+
+    const shell = makeShellSnapshot(
+      makeReadModelThread({
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-10-11T10:01:00.000Z",
+        },
+      }),
+    ).threads[0]!;
+    const settled = applyShellEvent(frozen, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: { ...shell, pendingBackgroundTaskCount: 0 },
+    });
+
+    expect(settled.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(0);
+    // A later detail sync, which carries no count, keeps the server's value.
+    const resynced = syncServerReadModel(
+      settled,
+      makeReadModel(makeReadModelThread({ session: shell.session })),
+    );
+    expect(getThreadFromState(resynced, ThreadId.makeUnsafe("thread-1"))).toMatchObject({
+      pendingBackgroundTaskCount: 0,
+    });
+  });
+
   it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
     const thread = makeReadModelThread({ isProjectImport: true });
     let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));

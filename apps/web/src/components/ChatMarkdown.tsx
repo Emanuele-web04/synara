@@ -24,6 +24,7 @@ import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import { remarkGithubAlerts, type GithubAlertKind } from "../lib/remarkGithubAlerts";
 import { remarkHtmlBreaks } from "../lib/remarkHtmlBreaks";
+import { MARKDOWN_IMAGE_ROW_CLASS_NAME, remarkImageRows } from "../lib/remarkImageRows";
 import React, {
   Children,
   createContext,
@@ -315,6 +316,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   [remarkMath, { singleDollarTextMath: true }],
   remarkGithubAlerts,
   remarkHtmlBreaks,
+  remarkImageRows,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
@@ -466,6 +468,7 @@ const AUTHORED_HTML_SCHEMA = {
       ...(defaultSchema.attributes?.blockquote ?? []),
       ["dataGithubAlert", "note", "tip", "important", "warning", "caution"],
     ],
+    span: [...(defaultSchema.attributes?.span ?? []), ["className", MARKDOWN_IMAGE_ROW_CLASS_NAME]],
   },
   protocols: {
     ...defaultSchema.protocols,

@@ -341,6 +341,117 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("projects PR links and replays legacy lastKnownPr events as a single legacy link", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-11-13T10:00:00.000Z";
+      const threadId = ThreadId.makeUnsafe("thread-pr-links");
+      const pullRequest = (number: number) => ({
+        number,
+        title: `PR ${number}`,
+        url: `https://github.com/acme/app/pull/${number}`,
+        baseBranch: "main",
+        headBranch: `feat/${number}`,
+        state: "open" as const,
+      });
+      const base = (id: string) => ({
+        eventId: EventId.makeUnsafe(id),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe(`cmd-${id}`),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe(`cmd-${id}`),
+        metadata: {},
+      });
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-pr-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-pr"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-pr-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-pr-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-pr"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-pr",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        ...base("evt-pr-thread"),
+        type: "thread.created",
+        payload: {
+          threadId,
+          projectId: ProjectId.makeUnsafe("project-pr"),
+          title: "Thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      // Written before links existed: only the single lastKnownPr slot.
+      yield* eventStore.append({
+        ...base("evt-pr-legacy"),
+        type: "thread.meta-updated",
+        payload: { threadId, lastKnownPr: pullRequest(1), updatedAt: "2026-11-13T10:01:00.000Z" },
+      });
+
+      yield* projectionPipeline.bootstrap;
+      const readLinks = () =>
+        sql<{ readonly pullRequestsJson: string | null; readonly lastKnownPrJson: string | null }>`
+          SELECT
+            pull_requests_json AS "pullRequestsJson",
+            last_known_pr_json AS "lastKnownPrJson"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `.pipe(Effect.map((rows) => rows[0]!));
+
+      const legacy = yield* readLinks();
+      assert.deepEqual(JSON.parse(legacy.pullRequestsJson ?? "null"), [
+        { pullRequest: pullRequest(1), source: "legacy", linkedAt: "2026-11-13T10:01:00.000Z" },
+      ]);
+
+      const links = [
+        { pullRequest: pullRequest(2), source: "agent", linkedAt: "2026-11-13T10:02:00.000Z" },
+        { pullRequest: pullRequest(3), source: "created", linkedAt: "2026-11-13T10:03:00.000Z" },
+      ] as const;
+      yield* eventStore.append({
+        ...base("evt-pr-links"),
+        type: "thread.meta-updated",
+        payload: {
+          threadId,
+          pullRequests: links,
+          lastKnownPr: pullRequest(3),
+          updatedAt: "2026-11-13T10:03:00.000Z",
+        },
+      });
+      // A later event that does not touch PRs must keep the stored links.
+      yield* eventStore.append({
+        ...base("evt-pr-title"),
+        type: "thread.meta-updated",
+        payload: { threadId, title: "Renamed", updatedAt: "2026-11-13T10:04:00.000Z" },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const linked = yield* readLinks();
+      assert.deepEqual(JSON.parse(linked.pullRequestsJson ?? "null"), links);
+      assert.deepEqual(JSON.parse(linked.lastKnownPrJson ?? "null"), pullRequest(3));
+    }),
+  );
+
   it.effect("persists turn-start thread settings into projection rows", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

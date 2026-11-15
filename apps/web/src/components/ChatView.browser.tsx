@@ -24,7 +24,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   OrchestrationProposedPlanId,
   type OrchestrationReadModel,
-  type ProjectId,
+  ProjectId,
   type ProjectAgentOverview,
   type ServerConfig,
   type ServerSettingsPatch,
@@ -109,7 +109,7 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
-import { makeDomainEvent } from "../storeTestFixtures";
+import { makeActivity, makeDomainEvent } from "../storeTestFixtures";
 import {
   acknowledgeStartupAnnouncementsForTest,
   createBrowserTestServerConfig,
@@ -120,12 +120,14 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { appHistory } from "../appNavigation";
 import { readExecutionContext } from "../lib/hosts/executionContext";
 import {
   addWorkspaceSession,
   removeWorkspaceSession,
   updateWorkspaceSession,
 } from "../lib/hosts/workspaceSessions";
+import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "./hosts/RemoteConnectionsAnnouncement";
 import { WorkspacePanels } from "./hosts/WorkspacePanels";
 
 vi.mock("../lib/hosts/executionContext", { spy: true });
@@ -2769,8 +2771,16 @@ describe("ChatView transcript geometry (full app)", () => {
         nextFixture.projectAgentSummariesPending = true;
       };
       const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot, configureFixture });
-      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
-      await first.cleanup();
+      try {
+        await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+      } finally {
+        await first.cleanup();
+      }
+
+      // Reopening starts a fresh connection while the server still owns the failed turn.
+      resetRetainedThreadDetailSubscriptionsForTests();
+      await resetWsNativeApiForTest();
+      wsRequests.length = 0;
       const reopened = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot,
@@ -3451,6 +3461,87 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("stops a background task from the embedded side chat after its turn settles", async () => {
+    const sidechatId = ThreadId.makeUnsafe("sidechat-background-task");
+    const turnId = TurnId.makeUnsafe("sidechat-background-turn");
+    const taskId = "sidechat-task";
+    const reply = createAssistantMessage({
+      id: MessageId.makeUnsafe("sidechat-background-reply"),
+      text: "The build continues in the background.",
+      offsetSeconds: 3,
+    });
+    const base = addThreadToSnapshot(
+      createSnapshotWithInlineToolOverflow({ active: false }),
+      sidechatId,
+    );
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: base.threads.map((thread) =>
+        thread.id === sidechatId
+          ? {
+              ...thread,
+              sidechatSourceThreadId: THREAD_ID,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: NOW_ISO,
+                startedAt: NOW_ISO,
+                completedAt: reply.updatedAt,
+                assistantMessageId: reply.id,
+              },
+              messages: [
+                {
+                  ...createUserMessage({
+                    id: MessageId.makeUnsafe("sidechat-background-user"),
+                    text: "Build in the background",
+                    offsetSeconds: 0,
+                  }),
+                  turnId,
+                },
+                { ...reply, turnId, completedAt: reply.updatedAt },
+              ],
+              activities: [
+                makeActivity({
+                  kind: "runtime.warning",
+                  tone: "info",
+                  createdAt: isoAt(2),
+                  turnId,
+                  summary: "Moved to background",
+                  payload: {
+                    nativeEventType: "background_tasks_changed",
+                    data: {
+                      tasks: [
+                        { task_id: taskId, task_type: "local_bash", description: "Build app" },
+                      ],
+                    },
+                  },
+                }),
+              ],
+            }
+          : thread,
+      ),
+    };
+    useRightDockStore.getState().openPane(THREAD_ID, { kind: "sidechat", threadId: sidechatId });
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const transcriptReply = page.getByText(reply.text, { exact: true });
+      await expect.element(transcriptReply).toBeVisible();
+      const sidechat = page.elementLocator(
+        transcriptReply.element().closest("[data-dock-pane-id]")!,
+      );
+      await sidechat.getByRole("button", { name: /^Worked for/ }).click();
+      await expect.element(sidechat.getByText("Build app", { exact: true })).toBeVisible();
+      await sidechat.getByRole("button", { name: "Stop background task Build app" }).click();
+      await expect
+        .poll(() => wsRequests.map(readDispatchedCommand))
+        .toContainEqual(
+          expect.objectContaining({ type: "thread.task.stop", threadId: sidechatId, taskId }),
+        );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each([
     { kind: "forked", repository: "acme/widgets", opens: "the host chat dock" },
     { kind: "forked", repository: "other/repo", opens: "the external browser" },
@@ -3588,7 +3679,8 @@ describe("ChatView transcript geometry (full app)", () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(document.querySelector("[data-feature-tour]")).toBeNull();
       await page.getByTestId("composer-editor").click();
-      await remounted.router.navigate({ to: "/settings", search: { section: "advanced" } });
+      // The app tour lives under Settings › General › Getting started.
+      await remounted.router.navigate({ to: "/settings", search: { section: "general" } });
       await page.getByRole("button", { name: "Replay tour" }).click();
       await expect
         .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
@@ -4523,6 +4615,147 @@ describe("ChatView transcript geometry (full app)", () => {
       });
     } finally {
       await mounted.cleanup();
+      useSpacesUiStore.getState().setActiveSpaceId(null);
+      useRailShellStore.getState().closeSpacesProject();
+      useRailShellStore.getState().selectPanelItem("home");
+    }
+  });
+
+  it("keeps a remote project in the rail Space where it was created", async () => {
+    localStorage.setItem(
+      REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
+      JSON.stringify({ acknowledged: true }),
+    );
+    const destinationSpaceId = SpaceId.makeUnsafe("remote-destination");
+    const hostId = "remote-project-owner";
+    const projectId = ProjectId.makeUnsafe("remote-created-project");
+    const projectName = "Remote created project";
+    const workspaceRoot = "/remote/created-project";
+    const controller = {
+      environmentId: "remote-project-controller",
+      label: "This computer",
+      channel: "dev",
+      capabilities: { remoteConnections: true },
+    } as ExecutionEnvironmentDescriptor;
+    vi.mocked(readExecutionContext).mockReturnValue({
+      controller,
+      execution: controller,
+      remote: null,
+    });
+    vi.mocked(WorkspacePanels).mockReturnValue(null);
+    const navigate = vi.spyOn(appHistory, "push").mockImplementation(() => {});
+    onTestFinished(() => {
+      navigate.mockRestore();
+      vi.mocked(readExecutionContext).mockRestore();
+      vi.mocked(WorkspacePanels).mockRestore();
+    });
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("remote-project-space"),
+      targetText: "Remote project",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        spaces: [
+          {
+            id: destinationSpaceId,
+            name: "Remote destination",
+            icon: "bag",
+            sortOrder: 0,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            deletedAt: null,
+          },
+        ],
+      },
+    });
+    const projects = [
+      {
+        id: projectId,
+        kind: "project" as const,
+        name: projectName,
+        cwd: workspaceRoot,
+        appearance: null,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        isPinned: false,
+        section: "projects" as const,
+      },
+    ];
+    const createProject = vi.fn(async () => {
+      updateWorkspaceSession(hostId, {
+        summary: {
+          state: "open",
+          path: "/remote-draft",
+          activeProjectId: projectId,
+          projects,
+          threads: [],
+        },
+      });
+      return { projectId, path: "/remote-draft" };
+    });
+    try {
+      addWorkspaceSession({
+        hostId,
+        hostName: "Remote test computer",
+        wsPath: "/ws/remote/project-owner",
+        executionScope: {
+          environmentId: hostId,
+          accountAuthority: "https://account.example",
+          userId: "alice",
+          organizationId: "org",
+          channel: "dev",
+        },
+      });
+      updateWorkspaceSession(hostId, {
+        navigation: {
+          createProject,
+          navigate: vi.fn(),
+          newChat: vi.fn(),
+          createChat: vi.fn(),
+          openTerminal: vi.fn(),
+          browseFolders: vi.fn(),
+          openProject: vi.fn(),
+          recover: vi.fn(),
+        },
+        summary: { state: "open", path: "/", projects: [], threads: [] },
+      });
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Spaces", exact: true })
+        .click();
+      const header = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>(".group\\/project-header")).find(
+            (element) => element.textContent?.includes("Remote destination"),
+          ) ?? null,
+        "Remote destination Space header missing",
+      );
+      header.querySelector<HTMLButtonElement>('button[aria-label="Add project"]')!.click();
+      await page.getByRole("button", { name: "Project computer: This computer" }).click();
+      await page.getByRole("menuitem", { name: /Remote test computer/ }).click();
+      await page.getByLabelText("Project folder path").fill(workspaceRoot);
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+      await vi.waitFor(() =>
+        expect(createProject).toHaveBeenCalledWith(expect.objectContaining({ workspaceRoot })),
+      );
+      await vi.waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith(
+          "/remote?environment=remote-project-owner&path=%2Fremote-draft",
+        ),
+      );
+
+      // Closing the fresh remote draft must not hide an explicitly assigned empty project.
+      updateWorkspaceSession(hostId, {
+        summary: { state: "open", path: "/", projects, threads: [] },
+      });
+      await vi.waitFor(() => expect(header.parentElement?.textContent).toContain(projectName), {
+        timeout: 2_000,
+      });
+    } finally {
+      await mounted.cleanup();
+      removeWorkspaceSession(hostId);
       useSpacesUiStore.getState().setActiveSpaceId(null);
       useRailShellStore.getState().closeSpacesProject();
       useRailShellStore.getState().selectPanelItem("home");
@@ -6096,6 +6329,36 @@ describe("ChatView transcript geometry (full app)", () => {
           const titleRight = title!.getBoundingClientRect().right;
           const actionsLeft = overflowButton!.getBoundingClientRect().left;
           expect(titleRight).toBeLessThanOrEqual(actionsLeft + 1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("names the project ahead of the chat title when open-thread tabs are off", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showOpenThreadTabs: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-crumb-target" as MessageId,
+        targetText: "project crumb",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          const title = document.querySelector<HTMLElement>(`header h2[title='${THREAD_TITLE}']`);
+          expect(title, "Unable to find the chat header title.").toBeTruthy();
+          const projectCrumb = title!
+            .closest("header")!
+            .querySelector<HTMLElement>("[title='Project']");
+          expect(projectCrumb?.textContent).toBe("Project");
+          expect(
+            projectCrumb!.compareDocumentPosition(title!) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -12923,7 +13186,7 @@ describe("ChatView transcript geometry (full app)", () => {
           threadId: THREAD_ID,
           projectId: PROJECT_ID,
           thread: null,
-          defaultProvider: "codex",
+          newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
           assistantDeliveryMode: "buffered",
         });
       try {

@@ -53,18 +53,19 @@ vi.mock("~/store", () => ({
 }));
 
 import { useFeatureTourStore } from "~/featureTour/store";
-import { AdvancedSettingsPanel } from "./AdvancedSettingsPanel";
+import {
+  AboutSettingsSection,
+  AdvancedSettingsPanel,
+  AppTourSettingsRow,
+} from "./AdvancedSettingsPanel";
 
 describe("AdvancedSettingsPanel", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("owns recovery eligibility, shared disclosure motion, and the release-history handoff", async () => {
-    const onOpenReleaseHistory = vi.fn();
-    await render(
-      <AdvancedSettingsPanel active onOpenReleaseHistory={onOpenReleaseHistory} resetEpoch={0} />,
-    );
+  it("owns recovery eligibility and shared disclosure motion", async () => {
+    await render(<AdvancedSettingsPanel active resetEpoch={0} />);
 
     const repairButton = page.getByRole("button", { name: "Repair state" });
     expect((repairButton.element() as HTMLButtonElement).disabled).toBe(false);
@@ -79,13 +80,22 @@ describe("AdvancedSettingsPanel", () => {
       expect(disclosureButton.element().getAttribute("aria-expanded")).toBe("true"),
     );
 
+    // Version, release history, and the app tour now live on About and General.
+    expect(page.getByRole("button", { name: "View release history" }).elements()).toHaveLength(0);
+    expect(page.getByRole("button", { name: "Replay tour" }).elements()).toHaveLength(0);
+  });
+
+  it("hands release history off from the About section", async () => {
+    const onOpenReleaseHistory = vi.fn();
+    await render(<AboutSettingsSection onOpenReleaseHistory={onOpenReleaseHistory} />);
+
     await page.getByRole("button", { name: "View release history" }).click();
     expect(onOpenReleaseHistory).toHaveBeenCalledOnce();
   });
 
   it("replays the app tour from the workspace, where its controls are on screen", async () => {
     useFeatureTourStore.getState().close();
-    await render(<AdvancedSettingsPanel active onOpenReleaseHistory={vi.fn()} resetEpoch={0} />);
+    await render(<AppTourSettingsRow />);
 
     await page.getByRole("button", { name: "Replay tour" }).click();
 

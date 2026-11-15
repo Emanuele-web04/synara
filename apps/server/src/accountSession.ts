@@ -65,7 +65,6 @@ import type {
 } from "@synara/contracts";
 import {
   AccountApiError,
-  createAccountClient,
   DEFAULT_ACCOUNT_URL,
   resolveAccountUrl,
   type AccountClient,
@@ -75,6 +74,7 @@ import {
   accountApiIssuer,
   accountStateDirectory,
   ensureLocalAccountHostLinked,
+  logAccountSession,
   readAccountCredentials,
   readAccountFile,
   deleteAccountCredentials,
@@ -102,7 +102,12 @@ import {
   startSsoCallbackListener,
   type SsoCallbackListener,
 } from "./accountSsoCallback";
+import { createServerAccountClient } from "./accountHttp";
+import { createSignInTiming, type SignInTiming } from "./accountSignInTiming";
 import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
+import { isAccountRefusal } from "./accountRefusal";
+import { exponentialBackoffMs, jitterMs } from "./backoff";
+import { noteRemoteAccessGranted, nudgeHostAuthorization } from "./hostConnectivitySignals";
 import { Effect, Path as EffectPath } from "effect";
 import { deriveServerPaths } from "./config";
 import { HostSecretsCoordinator } from "./hostSecrets/coordinator";
@@ -135,6 +140,43 @@ const MAX_TRACKED_SSO_ATTEMPTS = 4;
  * hand.
  */
 const SSO_CALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * How long a sign-in or a status read waits for device registration and host
+ * linking before answering; they finish in the background after that.
+ * Enrollment is two or three account requests (`POST /devices`, host link
+ * start and complete), measured at 100-250 ms each and under 900 ms at p95, so
+ * it normally ends well inside this and the answer is exactly as before. A
+ * stalled request (15 s client timeout each) no longer holds the answer past
+ * this.
+ */
+const ENROLLMENT_WAIT_MS = 5_000;
+
+/**
+ * A registration or host link that failed without a refusal is retried here,
+ * not only on the next status read: the app reads the status every ten
+ * minutes when nothing else prompts it. The first retry waits 30 s, each
+ * further failure doubles that, up to those same ten minutes.
+ */
+const ENROLLMENT_RETRY_BASE_MS = 30_000;
+const ENROLLMENT_RETRY_MAX_MS = 10 * 60_000;
+
+/**
+ * How long after a sign-in answers the usage reporter is nudged. Its first
+ * flush runs synchronous SQLite over the whole local history (hundreds of
+ * milliseconds on a large database), so it waits until the sign-in result and
+ * the app's follow-up reads are out; the reporter's own debounce is the same.
+ */
+const SIGN_IN_USAGE_NUDGE_DELAY_MS = 5_000;
+
+/**
+ * After the account refuses this shell's device registration (a 403), status
+ * reads stop re-posting it: the first retry waits a minute, each further
+ * refusal doubles that, up to an hour. A change of account, workspace or
+ * device, a new sign-in, or remote access being granted retries at once.
+ */
+const REFUSED_REGISTRATION_RETRY_BASE_MS = 60_000;
+const REFUSED_REGISTRATION_RETRY_MAX_MS = 60 * 60_000;
 
 /**
  * What a slow provider surfaces when nothing was persisted. Deliberately not
@@ -176,6 +218,10 @@ export interface AccountSessionOptions {
   readonly hostname?: string;
   readonly appVersion?: string;
   readonly devUrl?: URL;
+  /** Overrides {@link ENROLLMENT_WAIT_MS}; tests only. */
+  readonly signInEnrollmentWaitMs?: number;
+  /** Overrides {@link ENROLLMENT_RETRY_BASE_MS}; tests only. */
+  readonly enrollmentRetryBaseMs?: number;
 }
 
 export interface AccountSession {
@@ -292,6 +338,24 @@ function isSignedOut(error: unknown): boolean {
   return error instanceof SessionExpiredError || error instanceof WorkspaceAccessChangedError;
 }
 
+/** Resolves when `promise` settles or after `ms`, whichever is first. Never rejects. */
+async function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise.then(
+        () => {},
+        () => {},
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createAccountSession(
   options: AccountSessionOptions,
 ): AccountSession & HostsAccountSession {
@@ -306,6 +370,27 @@ export function createAccountSession(
     | undefined;
   let hostSecretsCoordinator:
     | { readonly sessionKey: string; readonly value: HostSecretsCoordinator }
+    | undefined;
+  /**
+   * The enrollment running now, joined by status reads for the same user. A
+   * sign-in or status read may answer before it finishes, so host, device and
+   * enrollment reads wait for it and never report the pre-enrollment state the
+   * app could otherwise cache.
+   */
+  let enrollmentInFlight: { readonly userId: string; readonly promise: Promise<void> } | undefined;
+  /** The pending retry of an enrollment that failed without a refusal. */
+  let enrollmentRetry:
+    | {
+        readonly userId: string;
+        readonly failures: number;
+        readonly timer: ReturnType<typeof setTimeout>;
+      }
+    | undefined;
+  /** Whether the last billing read reported access; a refusal is lifted only when that changes. */
+  let billingAccessGranted: boolean | undefined;
+  /** The last refused device registration, for the status-read backoff. */
+  let registrationRefusal:
+    | { readonly identity: string; readonly refusals: number; readonly retryAt: number }
     | undefined;
 
   /**
@@ -349,7 +434,7 @@ export function createAccountSession(
   }
 
   function clientFor(accountUrl: string): AccountClient {
-    return options.client ?? createAccountClient({ baseUrl: accountUrl });
+    return options.client ?? createServerAccountClient(accountUrl);
   }
 
   /**
@@ -568,29 +653,132 @@ export function createAccountSession(
     }
   }
 
-  /** Enrollment is additive to sign-in: local use survives an account outage. */
-  async function ensureDesktopEnrollment(knownUserId: string): Promise<void> {
-    if (remoteConnectionsUnavailableReason()) return;
+  /**
+   * Enrollment is additive to sign-in: local use survives an account outage.
+   * One runs at a time: a status read joins the running one for the same
+   * user, and anything else waits for it before starting, so a sign-in
+   * finishing in the background never races a status read into two host links.
+   */
+  function ensureDesktopEnrollment(knownUserId: string, timing?: SignInTiming): Promise<void> {
+    const running = enrollmentInFlight;
+    if (running && running.userId === knownUserId && !timing) return running.promise;
+    const promise = (running?.promise ?? Promise.resolve())
+      .then(() => enrollDesktop(knownUserId, timing))
+      .then((retry) => scheduleEnrollmentRetry(knownUserId, retry));
+    const entry = { userId: knownUserId, promise };
+    enrollmentInFlight = entry;
+    void promise.finally(() => {
+      if (enrollmentInFlight === entry) enrollmentInFlight = undefined;
+    });
+    return promise;
+  }
+
+  /** Arms, re-arms or clears the background retry after an enrollment attempt. */
+  function scheduleEnrollmentRetry(userId: string, retry: boolean): void {
+    const previous = enrollmentRetry;
+    if (previous) clearTimeout(previous.timer);
+    enrollmentRetry = undefined;
+    if (!retry) return;
+    const failures = (previous?.userId === userId ? previous.failures : 0) + 1;
+    const timer = setTimeout(
+      () => {
+        void readAccountCredentials(credentialDir)
+          .catch(() => undefined)
+          .then((stored) => {
+            // Signed out, or another account since: its own sign-in enrolls it.
+            if (stored?.userId === userId) return ensureDesktopEnrollment(userId);
+            if (enrollmentRetry?.timer === timer) enrollmentRetry = undefined;
+          });
+      },
+      jitterMs(
+        exponentialBackoffMs(
+          failures,
+          options.enrollmentRetryBaseMs ?? ENROLLMENT_RETRY_BASE_MS,
+          ENROLLMENT_RETRY_MAX_MS,
+        ),
+      ),
+    );
+    timer.unref?.();
+    enrollmentRetry = { userId, failures, timer };
+  }
+
+  /**
+   * Enrollment's device registration, skipped while a refusal for the same
+   * account, workspace and device is backing off. Explicit uses of the device
+   * (dialing, grants) call `ensureShellDevice` directly and never wait on this.
+   */
+  async function registerShellDeviceUnlessRefused(knownUserId: string): Promise<void> {
+    const stored = await readAccountCredentials(credentialDir);
+    if (!stored) return;
+    const identity = JSON.stringify([
+      stored.accountUrl,
+      stored.organizationId,
+      knownUserId,
+      stored.deviceId ?? null,
+      stored.deviceJkt ?? null,
+    ]);
+    const refused = registrationRefusal?.identity === identity ? registrationRefusal : undefined;
+    if (refused && performance.now() < refused.retryAt) return;
     try {
       await ensureShellDevice(knownUserId);
-    } catch {
+      registrationRefusal = undefined;
+    } catch (error) {
+      if (isAccountRefusal(error)) {
+        const refusals = (refused?.refusals ?? 0) + 1;
+        registrationRefusal = {
+          identity,
+          refusals,
+          retryAt:
+            performance.now() +
+            jitterMs(
+              exponentialBackoffMs(
+                refusals,
+                REFUSED_REGISTRATION_RETRY_BASE_MS,
+                REFUSED_REGISTRATION_RETRY_MAX_MS,
+              ),
+              { towards: "shorter" },
+            ),
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Never rejects: both halves retry on a later status read. Resolves true
+   * when a half failed without a refusal, which the background retry picks up.
+   */
+  async function enrollDesktop(knownUserId: string, timing?: SignInTiming): Promise<boolean> {
+    if (remoteConnectionsUnavailableReason()) return false;
+    const measure: SignInTiming["measure"] = timing
+      ? (step, run) => timing.measure(step, run)
+      : (_step, run) => run();
+    let retry = false;
+    try {
+      await measure("device_registration", () => registerShellDeviceUnlessRefused(knownUserId));
+    } catch (error) {
       // A later status read retries; the durable user session remains valid.
+      retry = !isAccountRefusal(error);
     }
     try {
       const stored = await readAccountCredentials(credentialDir);
-      if (!stored) return;
-      await ensureLocalAccountHostLinked({
-        accountUrl: stored.accountUrl,
-        baseDir,
-        client: clientFor(stored.accountUrl),
-        ...(options.devUrl ? { devUrl: options.devUrl } : {}),
-        ...(options.platform ? { platform: options.platform } : {}),
-        ...(options.hostname ? { hostname: options.hostname } : {}),
-        ...(options.appVersion ? { appVersion: options.appVersion } : {}),
-      });
-    } catch {
+      if (!stored) return false;
+      await measure("host_link", () =>
+        ensureLocalAccountHostLinked({
+          accountUrl: stored.accountUrl,
+          baseDir,
+          client: clientFor(stored.accountUrl),
+          ...(options.devUrl ? { devUrl: options.devUrl } : {}),
+          ...(options.platform ? { platform: options.platform } : {}),
+          ...(options.hostname ? { hostname: options.hostname } : {}),
+          ...(options.appVersion ? { appVersion: options.appVersion } : {}),
+        }),
+      );
+    } catch (error) {
       // Host linking has the same retry-on-status semantics as registration.
+      retry ||= !isAccountRefusal(error);
     }
+    return retry;
   }
 
   async function signedInStatus(me: AccountMe): Promise<AccountStatus> {
@@ -616,6 +804,8 @@ export function createAccountSession(
       accountUrl: string;
       client: AccountClient;
       instance: InstanceInfo;
+      /** Records each step's duration for the sign-in log line. */
+      timing: SignInTiming;
       /**
        * Called the moment the scoped pair is durably on disk — the point after
        * which the sign-in can no longer be lost. The device path uses it to
@@ -626,70 +816,93 @@ export function createAccountSession(
       onPersisted?: () => void;
     },
   ): Promise<AccountStatus> {
-    const { accountUrl, client, instance } = context;
+    const { accountUrl, client, instance, timing } = context;
 
     // V1 is personal-org-only and this flow has no picker, so more than one
     // workspace FAILS CLOSED — see selectOrganization.
     const scoped = await scopeTokenToWorkspace(token, {
       client,
       chooseOrganization: selectOrganization,
+      measure: (step, run) => timing.measure(step, run),
     });
 
     // Expiry may remove the workspace, but it retains the host's owner.
     // Recover only that owner's link; another member of the same workspace
     // must enroll a fresh host identity instead of inheriting its authority.
-    await withLockedAccountFile(credentialDir, async () => {
-      const previous = await readAccountFile(credentialDir);
-      const sameAccountAndWorkspace =
-        previous?.accountUrl === accountUrl &&
-        previous.hostOwnerUserId === scoped.userId &&
-        (previous.organizationId === scoped.organizationId ||
-          (previous?.organizationId === undefined && previous?.hostId !== undefined));
-      await writeAccountCredentials(credentialDir, {
-        accountUrl,
-        workosClientId: instance.clientId,
-        workosApiUrl: instance.workosApiUrl,
-        organizationId: scoped.organizationId,
-        userId: scoped.userId,
-        accessToken: scoped.accessToken,
-        refreshToken: scoped.refreshToken,
-        ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
-        ...(sameAccountAndWorkspace && previous?.hostOwnerUserId
-          ? { hostOwnerUserId: previous.hostOwnerUserId }
-          : {}),
-        ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
-          ? { hostKeyGeneration: previous.hostKeyGeneration }
-          : {}),
-        ...(sameAccountAndWorkspace && previous?.discoverabilityAcknowledgedByHostId
-          ? {
-              discoverabilityAcknowledgedByHostId: previous.discoverabilityAcknowledgedByHostId,
-            }
-          : {}),
-      });
-      if (previous && !sameAccountAndWorkspace) {
-        const { hostIdentityPath } = await Effect.runPromise(
-          deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
-        );
-        await deleteHostIdentity(hostIdentityPath);
-      }
-    });
+    await timing.measure("credentials", () =>
+      withLockedAccountFile(credentialDir, async () => {
+        const previous = await readAccountFile(credentialDir);
+        const sameAccountAndWorkspace =
+          previous?.accountUrl === accountUrl &&
+          previous.hostOwnerUserId === scoped.userId &&
+          (previous.organizationId === scoped.organizationId ||
+            (previous?.organizationId === undefined && previous?.hostId !== undefined));
+        await writeAccountCredentials(credentialDir, {
+          accountUrl,
+          workosClientId: instance.clientId,
+          workosApiUrl: instance.workosApiUrl,
+          organizationId: scoped.organizationId,
+          userId: scoped.userId,
+          accessToken: scoped.accessToken,
+          refreshToken: scoped.refreshToken,
+          ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
+          ...(sameAccountAndWorkspace && previous?.hostOwnerUserId
+            ? { hostOwnerUserId: previous.hostOwnerUserId }
+            : {}),
+          ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
+            ? { hostKeyGeneration: previous.hostKeyGeneration }
+            : {}),
+          ...(sameAccountAndWorkspace && previous?.discoverabilityAcknowledgedByHostId
+            ? {
+                discoverabilityAcknowledgedByHostId: previous.discoverabilityAcknowledgedByHostId,
+              }
+            : {}),
+        });
+        if (previous && !sameAccountAndWorkspace) {
+          const { hostIdentityPath } = await Effect.runPromise(
+            deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
+          );
+          await deleteHostIdentity(hostIdentityPath);
+        }
+      }),
+    );
 
     // The durable checkpoint: the scoped pair is on disk, so everything after
     // this line — the status `/me` below included — can fail without losing
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
+    // A new sign-in retries a refused registration at once.
+    registrationRefusal = undefined;
+    billingAccessGranted = undefined;
 
-    await ensureDesktopEnrollment(scoped.userId);
+    // Enrollment and the final `/me` are independent once the pair is on
+    // disk, so they run together. Enrollment gets a bounded wait and then
+    // finishes in the background; its failures were always swallowed and
+    // retried on the next status read.
+    const enrollment = ensureDesktopEnrollment(scoped.userId, timing);
+    timing.waitFor(enrollment);
 
-    // A fresh session means the machine's EXISTING local history can sync:
-    // the reporter's first flush has no watermark and backfills everything.
-    nudgeAccountUsageReporter();
+    try {
+      // Not redundant on the common path: scoping's probe `/me` ran against the
+      // org-less token and was refused, so this is the first `/me` the scoped
+      // token answers (and it runs through withSession's renewal). Only the
+      // pre-scoped self-hoster path pays a second call.
+      const [me] = await Promise.all([
+        timing.measure("final_me", () => withSession((accessToken, c) => c.me(accessToken))),
+        settleWithin(enrollment, options.signInEnrollmentWaitMs ?? ENROLLMENT_WAIT_MS),
+      ]);
+      return await signedInStatus(me);
+    } finally {
+      // A fresh session means the machine's EXISTING local history can sync:
+      // the reporter's first flush has no watermark and backfills everything.
+      // Deferred so its synchronous SQLite cannot delay this sign-in's answer.
+      setTimeout(nudgeAccountUsageReporter, SIGN_IN_USAGE_NUDGE_DELAY_MS).unref?.();
+    }
+  }
 
-    // Not redundant on the common path: scoping's probe `/me` ran against the
-    // org-less token and was refused, so this is the first `/me` the scoped
-    // token answers (and it runs through withSession's renewal). Only the
-    // pre-scoped self-hoster path pays a second call.
-    return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
+  /** Waits for an enrollment still running in the background, if there is one. */
+  async function afterEnrollment(): Promise<void> {
+    await enrollmentInFlight?.promise;
   }
 
   /** The `status()` body, callable from inside the session's own methods. */
@@ -707,26 +920,49 @@ export function createAccountSession(
         // acquire an identity from the exact token that produced this response.
         await withLockedAccountFile(credentialDir, async () => {
           const current = await readAccountCredentials(credentialDir);
-          if (
-            !current ||
-            current.accountUrl !== credentials.accountUrl ||
-            current.organizationId !== verified.organization.id ||
-            (current.userId ? current.userId !== verified.id : current.accessToken !== token)
-          )
+          const changed = !current
+            ? "session"
+            : current.accountUrl !== credentials.accountUrl
+              ? "accountUrl"
+              : current.organizationId !== verified.organization.id
+                ? "organizationId"
+                : current.userId
+                  ? current.userId !== verified.id && "userId"
+                  : current.accessToken !== token && "accessToken";
+          if (!current || changed) {
+            logAccountSession(credentialDir, "identity_fence", {
+              fence: "status_verified_identity",
+              field: changed || "session",
+            });
             throw new SessionExpiredError();
+          }
           if (!current.userId)
             await writeAccountCredentials(credentialDir, { ...current, userId: verified.id });
         });
         return verified;
       });
-      await ensureDesktopEnrollment(me.id);
+      // Bounded like a sign-in: a stalled enrollment finishes in the background.
+      await settleWithin(
+        ensureDesktopEnrollment(me.id),
+        options.signInEnrollmentWaitMs ?? ENROLLMENT_WAIT_MS,
+      );
       return await signedInStatus(me);
     } catch (error) {
       if (isSignedOut(error)) return SIGNED_OUT;
       // A rejected token that survived the refresh attempt is a dead session
       // too — but an unreachable account is not, and reporting it as signed
       // out would make a network blip look like being logged out.
-      if (error instanceof AccountApiError && error.status === 401) return SIGNED_OUT;
+      if (
+        error instanceof AccountApiError &&
+        error.status === 401 &&
+        error.code === "unauthorized"
+      ) {
+        logAccountSession(credentialDir, "status_unauthorized", {
+          status: error.status,
+          code: error.code,
+        });
+        return SIGNED_OUT;
+      }
       throw error;
     }
   }
@@ -812,7 +1048,8 @@ export function createAccountSession(
      * and a reconnecting client recovers the result from `status()`.
      */
     completeSso(input) {
-      return signInWithRecovery(async () => {
+      const timing = createSignInTiming(credentialDir, "sso");
+      const result = signInWithRecovery(async () => {
         const pending = pendingSsoAttempts.get(input.ssoId);
         if (!pending) {
           throw new Error("This sign-in attempt has expired. Start a new one.");
@@ -821,19 +1058,18 @@ export function createAccountSession(
         const accountUrl = configuredUrl;
         const client = clientFor(accountUrl);
         // Instance before anything can consume the code, as on every path.
-        const instance = await client.instance();
+        const instance = await timing.measure("instance", () => client.instance());
 
         // Resumable: a previous attempt may have exchanged the single-use
         // code and failed before persistence; the cached pair makes a retry
         // of this RPC recover the sign-in instead of stranding a spent code.
         let token = pending.redeemedToken;
         if (!token) {
-          const code = await pending.listener.waitForCode();
+          const code = await timing.measure("browser", () => pending.listener.waitForCode());
           try {
-            token = await client.exchangeAuthorizeCode({
-              code,
-              codeVerifier: pending.codeVerifier,
-            });
+            token = await timing.measure("code_exchange", () =>
+              client.exchangeAuthorizeCode({ code, codeVerifier: pending.codeVerifier }),
+            );
           } catch (error) {
             // A classified terminal refusal means the code is dead and the
             // attempt can never complete — drop it and its listener now.
@@ -850,6 +1086,7 @@ export function createAccountSession(
           accountUrl,
           client,
           instance,
+          timing,
           // Retired at the durable checkpoint, exactly like the device entry.
           // Retired only once the scoped pair is durably on disk: deleting
           // earlier would turn a failure between exchange and persistence
@@ -860,6 +1097,7 @@ export function createAccountSession(
           },
         });
       });
+      return timing.settle(result);
     },
 
     /**
@@ -892,17 +1130,19 @@ export function createAccountSession(
      * retry. What is persisted is the resulting token pair, exactly as for SSO.
      */
     authenticateOtp(input) {
-      return signInWithRecovery(async () => {
+      const timing = createSignInTiming(credentialDir, "otp");
+      const result = signInWithRecovery(async () => {
         const accountUrl = configuredUrl;
         const client = clientFor(accountUrl);
         // Sequenced, not raced: the instance metadata is non-secret and does
         // not depend on the grant, so it is fetched BEFORE the code is spent.
         // In a Promise.all an /instance failure would discard a successful
         // redemption — the user's single-use code, gone with nothing stored.
-        const instance = await client.instance();
-        const token = await client.authenticateOtp(input);
-        return establishSession(token, { accountUrl, client, instance });
+        const instance = await timing.measure("instance", () => client.instance());
+        const token = await timing.measure("code_exchange", () => client.authenticateOtp(input));
+        return establishSession(token, { accountUrl, client, instance, timing });
       });
+      return timing.settle(result);
     },
 
     /**
@@ -970,8 +1210,18 @@ export function createAccountSession(
       return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
     },
 
-    billingStatus() {
-      return withBillingSession((token, client) => client.billingStatus(token));
+    async billingStatus() {
+      const status = await withBillingSession((token, client) => client.billingStatus(token));
+      // A host refused for lack of access may retry its own authorization now.
+      const granted = status.access === "granted";
+      if (granted) {
+        // Access that was just granted lifts a refusal; an unchanged grant
+        // must not reset the backoff on every billing read.
+        if (billingAccessGranted !== true) registrationRefusal = undefined;
+        noteRemoteAccessGranted();
+      }
+      billingAccessGranted = granted;
+      return status;
     },
     billingCheckout(input) {
       return withBillingSession((token, client) => client.billingCheckout(token, input));
@@ -980,7 +1230,8 @@ export function createAccountSession(
       return withBillingSession((token, client) => client.billingPortal(token));
     },
 
-    listHosts() {
+    async listHosts() {
+      await afterEnrollment();
       return withSession((token, client) => client.listHosts(token));
     },
 
@@ -1010,7 +1261,8 @@ export function createAccountSession(
       return withSession((token, client) => client.deleteHost(token, input.hostId));
     },
 
-    listDevices() {
+    async listDevices() {
+      await afterEnrollment();
       return withSession((token, client) => client.listDevices(token));
     },
 
@@ -1022,12 +1274,15 @@ export function createAccountSession(
 
     async revokeDevice(input) {
       await withSession((token, client) => client.revokeDevice(token, input.deviceId));
+      // An idle host would otherwise apply and confirm this on its slow poll.
+      nudgeHostAuthorization();
       await withLockedAccountFile(credentialDir, async () => {
         const stored = await readAccountFile(credentialDir);
         if (!stored || stored.deviceId !== input.deviceId) return;
         const { deviceId: _deviceId, deviceJkt: _deviceJkt, ...remaining } = stored;
         await writeAccountCredentials(credentialDir, remaining);
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
       });
     },
 
@@ -1043,6 +1298,7 @@ export function createAccountSession(
     },
 
     async enrollment() {
+      await afterEnrollment();
       const stored = await readAccountFile(credentialDir);
       const { hosts, organizationMemberCount } = await withSession(async (token, client) => {
         const [listed, memberCount] = await Promise.all([
@@ -1105,6 +1361,7 @@ export function createAccountSession(
 
     async recoverDeviceRegistration({ expectedAccount, revokedJkt }) {
       deviceRegistrationAttempt = undefined;
+      registrationRefusal = undefined;
       hostSecretsCoordinator = undefined;
       try {
         return await recoverAccountDeviceRegistration(
@@ -1113,6 +1370,7 @@ export function createAccountSession(
         );
       } finally {
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
         hostSecretsCoordinator = undefined;
       }
     },
@@ -1152,6 +1410,7 @@ export function createAccountSession(
         );
         await deleteHostIdentity(hostIdentityPath);
         deviceRegistrationAttempt = undefined;
+        registrationRefusal = undefined;
         hostSecretsCoordinator = undefined;
       });
     },
@@ -1164,6 +1423,7 @@ export function createAccountSession(
         stdout: () => {},
       });
       deviceRegistrationAttempt = undefined;
+      registrationRefusal = undefined;
       hostSecretsCoordinator = undefined;
     },
 

@@ -6,7 +6,10 @@
 import type { NativeApi } from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
-import { requestEmptyRouteRestoreRefresh } from "./routeRestoreRefreshCoordinator";
+import {
+  requestEmptyRouteRestoreRefresh,
+  type EmptyRouteRestoreRefreshResult,
+} from "./routeRestoreRefreshCoordinator";
 
 export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
   return new Promise((resolve) => {
@@ -18,9 +21,9 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
 // recovery path instead of applying backend snapshots directly to the store.
 export async function refreshEmptyRouteRestoreSnapshot(
   api: NativeApi | undefined,
-): Promise<boolean> {
+): Promise<EmptyRouteRestoreRefreshResult> {
   if (!api) {
-    return false;
+    return "unknown";
   }
 
   return await requestEmptyRouteRestoreRefresh();
