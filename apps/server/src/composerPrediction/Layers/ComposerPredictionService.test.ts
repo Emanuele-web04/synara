@@ -7,7 +7,7 @@ import {
   type OrchestrationMessage,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +20,10 @@ import {
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ComposerPredictionService } from "../Services/ComposerPredictionService.ts";
-import { ComposerPredictionServiceLive } from "./ComposerPredictionService.ts";
+import {
+  COMPOSER_PREDICTION_START_DELAY,
+  makeComposerPredictionServiceLive,
+} from "./ComposerPredictionService.ts";
 
 vi.mock("../../betaFeatureGate.ts", () => ({ isServerBetaFeatureEnabled: vi.fn(() => true) }));
 
@@ -77,7 +80,13 @@ const CLAUDE_CHAT = {
   model: "claude-opus-4-8",
 } as ModelSelection;
 
-function makeHarness(options: { readonly modelSelection?: ModelSelection } = {}) {
+function makeHarness(
+  options: {
+    readonly modelSelection?: ModelSelection;
+    /** The production delay where a test is about it; none elsewhere, so timings stay exact. */
+    readonly startDelay?: Duration.Input;
+  } = {},
+) {
   const state = {
     thread: makeThread(options.modelSelection ?? CLAUDE_CHAT) as OrchestrationThreadShell,
   };
@@ -101,7 +110,9 @@ function makeHarness(options: { readonly modelSelection?: ModelSelection } = {})
   const generateComposerPrediction = vi.fn<TextGenerationShape["generateComposerPrediction"]>(() =>
     Effect.succeed({ suggestion: "Fix the fixture and rerun that test." }),
   );
-  const layer = ComposerPredictionServiceLive.pipe(
+  const layer = makeComposerPredictionServiceLive({
+    startDelay: options.startDelay ?? Duration.zero,
+  }).pipe(
     Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
     Layer.provide(
       Layer.succeed(TextGeneration, {
@@ -114,10 +125,18 @@ function makeHarness(options: { readonly modelSelection?: ModelSelection } = {})
   const run = <A, E>(
     effect: Effect.Effect<A, E, ComposerPredictionService | TestClock.TestClock | Scope.Scope>,
   ) => Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.scoped));
-  const generate = Effect.flatMap(ComposerPredictionService.asEffect(), (service) =>
-    service.generate(INPUT),
-  );
-  return { state, generateComposerPrediction, run, generate };
+  const generateFor = (expectedTurnId: TurnId) =>
+    Effect.flatMap(ComposerPredictionService.asEffect(), (service) =>
+      service.generate({ ...INPUT, expectedTurnId }),
+    );
+  const generate = generateFor(TURN_ID);
+  /** Moves the chat on to a new settled turn and asks for that turn's prediction. */
+  const generateForNextTurn = (turnId: string) => {
+    const next = TurnId.makeUnsafe(turnId);
+    state.thread = makeThread(state.thread.modelSelection, next);
+    return generateFor(next);
+  };
+  return { state, generateComposerPrediction, run, generate, generateFor, generateForNextTurn };
 }
 
 describe("ComposerPredictionServiceLive", () => {
@@ -267,7 +286,7 @@ describe("ComposerPredictionServiceLive", () => {
         harness.generateComposerPrediction
           .mockReturnValueOnce(Effect.never)
           .mockReturnValueOnce(Effect.succeed({ suggestion: "From the second attempt" }));
-        const fiber = yield* Effect.forkChild(harness.generate);
+        const fiber = yield* Effect.forkChild(harness.generateForNextTurn("turn-3"));
         yield* TestClock.adjust("6 seconds");
         return yield* Fiber.join(fiber);
       }),
@@ -289,7 +308,7 @@ describe("ComposerPredictionServiceLive", () => {
         yield* TestClock.adjust("9 seconds");
         const firstResult = yield* Fiber.join(first);
         harness.generateComposerPrediction.mockReturnValueOnce(Effect.never);
-        const second = yield* Effect.forkChild(harness.generate);
+        const second = yield* Effect.forkChild(harness.generateForNextTurn("turn-3"));
         yield* TestClock.adjust("20 seconds");
         return [firstResult, yield* Fiber.join(second)];
       }),
@@ -391,5 +410,83 @@ describe("ComposerPredictionServiceLive", () => {
     );
     expect(Exit.isFailure(exit)).toBe(true);
     expect(interrupted).toBe(true);
+  });
+
+  it("starts no provider CLI for a request abandoned within the start delay", async () => {
+    const harness = makeHarness({ startDelay: COMPOSER_PREDICTION_START_DELAY });
+
+    const exit = await harness.run(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust(
+          Duration.millis(Duration.toMillis(COMPOSER_PREDICTION_START_DELAY) - 1),
+        );
+        yield* Fiber.interrupt(fiber);
+        yield* TestClock.adjust(COMPOSER_PREDICTION_START_DELAY);
+        return yield* Fiber.await(fiber);
+      }),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(harness.generateComposerPrediction).not.toHaveBeenCalled();
+  });
+
+  it("generates once the start delay has passed", async () => {
+    const harness = makeHarness({ startDelay: COMPOSER_PREDICTION_START_DELAY });
+
+    const result = await harness.run(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust(
+          Duration.millis(Duration.toMillis(COMPOSER_PREDICTION_START_DELAY) - 1),
+        );
+        expect(harness.generateComposerPrediction).not.toHaveBeenCalled();
+        yield* TestClock.adjust("1 millis");
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result).toEqual({ suggestion: "Fix the fixture and rerun that test." });
+    expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a turn's answer again without a second generation, a null one too", async () => {
+    const harness = makeHarness();
+
+    const answered = await harness.run(
+      Effect.gen(function* () {
+        const first = yield* harness.generate;
+        harness.generateComposerPrediction.mockReturnValue(Effect.succeed({ suggestion: null }));
+        const again = yield* harness.generate;
+        const declined = yield* harness.generateForNextTurn("turn-3");
+        const declinedAgain = yield* harness.generateFor(TurnId.makeUnsafe("turn-3"));
+        return [first, again, declined, declinedAgain];
+      }),
+    );
+
+    expect(answered).toEqual([
+      { suggestion: "Fix the fixture and rerun that test." },
+      { suggestion: "Fix the fixture and rerun that test." },
+      { suggestion: null },
+      { suggestion: null },
+    ]);
+    expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks again after a failed generation instead of reusing it", async () => {
+    const harness = makeHarness();
+    harness.generateComposerPrediction.mockReturnValueOnce(
+      Effect.fail(
+        new TextGenerationError({ operation: "generateComposerPrediction", detail: "bad output" }),
+      ),
+    );
+
+    const results = await harness.run(Effect.all([harness.generate, harness.generate]));
+
+    expect(results).toEqual([
+      { suggestion: null },
+      { suggestion: "Fix the fixture and rerun that test." },
+    ]);
+    expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
   });
 });

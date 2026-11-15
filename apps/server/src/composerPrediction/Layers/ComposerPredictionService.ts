@@ -30,6 +30,18 @@ import {
 /** A prediction that takes longer than this is no longer worth showing. */
 export const COMPOSER_PREDICTION_TIMEOUT = Duration.seconds(20);
 
+/**
+ * How long a request waits before it reads the transcript and starts the provider CLI
+ * (about 0.3 to 0.4 GB and 0.7 to 3 CPU seconds per run). A chat the user only passes
+ * through, or starts typing in, cancels the request inside this window, so no process
+ * starts; one that stays open gets its suggestion this much later, after the work that
+ * opening the chat or settling the turn does.
+ */
+export const COMPOSER_PREDICTION_START_DELAY = Duration.seconds(1);
+
+/** Answers kept so another window or device asking for the same turn starts no second CLI. */
+const ANSWER_CACHE_LIMIT = 64;
+
 /** Completed generation times kept per route to decide when a second attempt is worth it. */
 const RECENT_DURATION_SAMPLES = 5;
 
@@ -39,7 +51,7 @@ interface SharedPrediction {
   waiters: number;
 }
 
-const make = Effect.gen(function* () {
+const make = Effect.fnUntraced(function* (options: { readonly startDelay: Duration.Input }) {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const serverSettings = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
@@ -47,6 +59,16 @@ const make = Effect.gen(function* () {
   const pending = new Map<string, SharedPrediction>();
   // Keyed by provider instance and model: how long this route's generations usually take.
   const recentDurationsMs = new Map<string, ReadonlyArray<number>>();
+  // Keyed by thread, turn and route, oldest first: the model's answer, including "none".
+  const answers = new Map<string, string | null>();
+  const rememberAnswer = (key: string, suggestion: string | null) => {
+    answers.delete(key);
+    answers.set(key, suggestion);
+    for (const oldest of answers.keys()) {
+      if (answers.size <= ANSWER_CACHE_LIMIT) break;
+      answers.delete(oldest);
+    }
+  };
 
   const readThread = (threadId: ThreadId) =>
     snapshotQuery.getThreadShellById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -63,6 +85,17 @@ const make = Effect.gen(function* () {
         settings: yield* serverSettings.getSettings,
       });
       if (!routing) return null;
+      const routeKey = JSON.stringify([
+        routing.modelSelection.instanceId ?? routing.modelSelection.provider,
+        routing.modelSelection.model,
+      ]);
+      const answerKey = JSON.stringify([threadId, expectedTurnId, routeKey]);
+      if (answers.has(answerKey)) return answers.get(answerKey) ?? null;
+
+      yield* Effect.sleep(options.startDelay);
+      if (!isComposerPredictionTurnCurrent(yield* readThread(threadId), expectedTurnId)) {
+        return null;
+      }
 
       const context = yield* snapshotQuery.getThreadMentionContextById(threadId, {
         messageLimit: COMPOSER_PREDICTION_CONTEXT_BUDGET.messageLimit,
@@ -79,10 +112,6 @@ const make = Effect.gen(function* () {
       const cwd = Option.isSome(project)
         ? resolveThreadWorkspaceCwd({ thread, projects: [project.value] })
         : undefined;
-      const routeKey = JSON.stringify([
-        routing.modelSelection.instanceId ?? routing.modelSelection.provider,
-        routing.modelSelection.model,
-      ]);
       const attempt = Effect.gen(function* () {
         const startedAt = yield* Clock.currentTimeMillis;
         const result = yield* textGeneration.generateComposerPrediction({
@@ -129,6 +158,7 @@ const make = Effect.gen(function* () {
       if (!isComposerPredictionTurnCurrent(yield* readThread(threadId), expectedTurnId)) {
         return null;
       }
+      rememberAnswer(answerKey, generated.value.suggestion);
       return generated.value.suggestion;
     }).pipe(
       Effect.catchCause((cause) => {
@@ -160,11 +190,13 @@ const make = Effect.gen(function* () {
           };
           pending.set(key, created);
           created.fiber = yield* generateOnce(threadId, expectedTurnId).pipe(
-            Effect.onExit((exit) => Deferred.done(created.result, exit)),
-            Effect.ensuring(
+            // Leave the map before waking the waiters, so a request that arrives once this
+            // one is answered starts afresh (or reads the remembered answer) instead of
+            // joining a finished generation.
+            Effect.onExit((exit) =>
               Effect.sync(() => {
                 if (pending.get(key) === created) pending.delete(key);
-              }),
+              }).pipe(Effect.andThen(Deferred.done(created.result, exit))),
             ),
             Effect.asVoid,
             Effect.forkIn(layerScope),
@@ -204,4 +236,12 @@ const make = Effect.gen(function* () {
   return { generate } satisfies ComposerPredictionServiceShape;
 });
 
-export const ComposerPredictionServiceLive = Layer.effect(ComposerPredictionService, make);
+export const makeComposerPredictionServiceLive = (
+  options: { readonly startDelay?: Duration.Input } = {},
+) =>
+  Layer.effect(
+    ComposerPredictionService,
+    make({ startDelay: options.startDelay ?? COMPOSER_PREDICTION_START_DELAY }),
+  );
+
+export const ComposerPredictionServiceLive = makeComposerPredictionServiceLive();
