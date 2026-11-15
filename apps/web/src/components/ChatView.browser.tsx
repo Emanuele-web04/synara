@@ -2309,8 +2309,7 @@ async function waitForMountedChatReady(options: {
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },
-    // Allow a cold browser fixture to finish mounting on CI.
-    { timeout: 45_000, interval: 16 },
+    { timeout: 20_000, interval: 16 },
   );
   await waitForLayout();
 }
@@ -2328,8 +2327,6 @@ async function mountChatView(options: {
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
-  const host = createFullscreenTestHost();
-
   const initialEntry = options.initialEntry ?? `/${THREAD_ID}`;
 
   const router = getRouter(
@@ -2337,7 +2334,13 @@ async function mountChatView(options: {
       initialEntries: [initialEntry],
     }),
   );
+  // Warm Vite's lazy route modules before timing the chat mount and hydration.
+  await Promise.all([
+    router.loadRouteChunk(router.routesById["/_chat"]),
+    router.loadRouteChunk(router.routesById["/_chat/$threadId"]),
+  ]);
 
+  const host = createFullscreenTestHost();
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />

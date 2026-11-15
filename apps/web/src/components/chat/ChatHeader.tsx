@@ -685,7 +685,9 @@ export function ChatHeader({
                 {projectCrumb ? (
                   <>
                     <span
-                      className="flex min-w-0 max-w-[40%] items-center gap-1.5 text-muted-foreground"
+                      // ps-px leaves room for the logo's 1px outer ring, which the header's
+                      // overflow-hidden row would otherwise clip on the left edge.
+                      className="flex min-w-0 max-w-[40%] items-center gap-1.5 ps-px text-muted-foreground"
                       title={projectCrumb.name}
                     >
                       <ProjectSidebarIcon

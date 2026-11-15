@@ -25,7 +25,6 @@ import {
 import { isProviderKind } from "../providerOrdering";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
 import {
-  findProviderStatus,
   findUsableProviderStatus,
   providerStatusInstanceKey,
   resolveAvailableProviderPreference,
@@ -437,11 +436,11 @@ export function prefetchDroidModelsForNewThread(
 }
 
 /**
- * Warm every visible provider for the next new thread: the selected provider
- * first, hidden/disabled/confirmed-uninstalled providers skipped, Droid only on
- * explicit intent. Provider availability mirrors the model picker on main
- * (#652): the picker lists only `status.available` providers, so warming a
- * provider that is confirmed absent would only produce failing spawns.
+ * Warm the provider the next new thread starts with, Droid only on explicit
+ * intent. The composer discovers only that provider; the picker loads another
+ * provider when its tab is opened. Warming every installed provider started
+ * their CLIs and one `opencode serve` per project folder for a thread that uses
+ * one. The provider choice mirrors ChatView's availability preference (#652).
  */
 export function prefetchModelsForNewThread(
   queryClient: QueryClient,
@@ -469,10 +468,11 @@ export function prefetchModelsForNewThread(
     envMode?: DraftThreadEnvMode | null;
     includeDroid?: boolean;
     /**
-     * Warm only the provider the new thread would start with. Use it where the
-     * user has not asked for a new thread yet; the picker loads the others.
+     * True where the user has not asked for a new thread yet (hover, focus, a
+     * changed target). A lookup started only this way is cancelled once a later
+     * warm no longer wants it; one joined by an explicit create keeps running.
      */
-    selectedProviderOnly?: boolean;
+    passive?: boolean;
   },
 ): void {
   const instanceSettings = {
@@ -549,71 +549,28 @@ export function prefetchModelsForNewThread(
     projectCwd: input.projectCwd,
     serverCwd: input.serverCwd,
   });
-  const hiddenProviderSet = new Set(input.hiddenProviders ?? []);
-  const statusesReconciled = input.statusesReconciled === true;
-  const providerStatuses = input.providerStatuses ?? EMPTY_PROVIDER_STATUSES;
-  const isProviderWarmable = (provider: ProviderKind): boolean => {
-    // Mirrors useProviderModelCatalog.shouldDiscoverProvider exactly:
-    // the enabled flag short-circuits even the selected provider, then the
-    // selected provider always wins, then hidden providers are skipped.
-    if (input.serverSettings?.providers[provider]?.enabled === false) {
-      return false;
-    }
-    // ChatView's useProviderModelCatalog always discovers the selected provider
-    // (even hidden/unavailable — the picker preserves it as protected), so the
-    // warm must too, or mount re-runs discovery with the loading state this
-    // prefetch exists to remove.
-    if (provider === selectedProvider) {
-      return true;
-    }
-    if (hiddenProviderSet.has(provider)) {
-      return false;
-    }
-    // The picker only lists installed providers once statuses are reconciled.
-    // A confirmed-unavailable provider would only produce a failing spawn, so
-    // skip it; unresolved statuses stay warmable (safe default).
-    if (statusesReconciled) {
-      const status = findProviderStatus(
-        providerStatuses,
-        provider,
-        provider === selectedProvider ? selectedProviderInstanceId : provider,
-      );
-      if (status !== null && status.available === false) {
-        return false;
-      }
-    }
-    return true;
-  };
+  // useProviderModelCatalog's enabled flag short-circuits even the selected
+  // provider; otherwise it always discovers the selected provider, hidden or
+  // unavailable, so the warm must too or mount shows the loading state again.
+  const selectedProviderWarmable =
+    input.serverSettings?.providers[selectedProvider]?.enabled !== false;
   const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(
-    (provider) =>
-      isProviderWarmable(provider) &&
-      (input.selectedProviderOnly !== true || provider === selectedProvider),
+    (provider) => provider === selectedProvider && selectedProviderWarmable,
   );
-  const orderedProviders =
-    selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
-      ? providers
-      : [selectedProvider, ...providers.filter((provider) => provider !== selectedProvider)];
   const shouldWarmSelectedDroid =
-    input.includeDroid === true && selectedProvider === "droid" && isProviderWarmable("droid");
-  const desiredModelQueryKeys = orderedProviders.map(
+    input.includeDroid === true && selectedProvider === "droid" && selectedProviderWarmable;
+  const desiredModelQueryKeys = [
+    ...providers,
+    ...(shouldWarmSelectedDroid ? (["droid"] as const) : []),
+  ].map(
     (provider) =>
       providerModelsPrefetchQueryOptions({
         provider,
-        instanceId: provider === selectedProvider ? selectedProviderInstanceId : provider,
-        settings: input.settings,
-        cwd,
-      }).queryKey,
-  );
-  if (shouldWarmSelectedDroid) {
-    desiredModelQueryKeys.push(
-      providerModelsPrefetchQueryOptions({
-        provider: "droid",
         instanceId: selectedProviderInstanceId,
         settings: input.settings,
         cwd,
       }).queryKey,
-    );
-  }
+  );
   const selectedModelQueryKey = desiredModelQueryKeys.find(
     (queryKey) => queryKey[2] === selectedProvider,
   );
@@ -621,7 +578,7 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  const passive = input.selectedProviderOnly === true;
+  const passive = input.passive === true;
   const isDesired = (queryKey: readonly unknown[]) =>
     desiredModelQueryKeys.some(
       (desired) =>
@@ -653,7 +610,7 @@ export function prefetchModelsForNewThread(
   prefetchProviderModelsForNewThread(queryClient, {
     settings: input.settings,
     cwd,
-    providers: orderedProviders,
+    providers,
     foregroundProvider: selectedProvider,
     foregroundInstanceId: selectedProviderInstanceId,
     passive,

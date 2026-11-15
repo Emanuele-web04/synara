@@ -1715,21 +1715,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        // Only the live tail hugs "Thinking"; every other text and tool block
-        // keeps ~10-12px so mid-turn text never crowds the rows around it.
-        row.kind === "working" ||
-          (row.kind === "message" &&
-            row.message.role === "assistant" &&
-            row.assistantTurnInProgress &&
-            row.id === tailContentRowId)
+        // The live tail keeps one 14px work-row step above "Thinking" (pb-3 plus the
+        // assistant body's 2px bottom padding), the same rhythm tool rows keep.
+        row.kind === "working"
           ? "pb-1"
-          : row.kind === "work" || row.kind === "message-segment"
-            ? "pb-3.5"
-            : row.kind === "working-header" ||
-                (row.kind === "message" && row.message.role === "assistant") ||
-                row.kind === "inline-visual"
-              ? "pb-2"
-              : "pb-4",
+          : row.kind === "message" &&
+              row.message.role === "assistant" &&
+              row.assistantTurnInProgress &&
+              row.id === tailContentRowId
+            ? "pb-3"
+            : row.kind === "work" || row.kind === "message-segment"
+              ? "pb-3.5"
+              : row.kind === "working-header" ||
+                  (row.kind === "message" && row.message.role === "assistant") ||
+                  row.kind === "inline-visual"
+                ? "pb-2"
+                : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
         (row.kind === "message" || row.kind === "message-segment") &&
           row.message.id === highlightedMessageId
@@ -3070,7 +3071,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         <div
           ref={syncAnimationsToTimelineOrigin}
           className={cn(
-            "shimmer-group flex w-fit items-center gap-1.5 pt-0.5 font-system-ui",
+            // The 24px tool row shape (py-0.5 + leading-5), so it stacks like one.
+            "shimmer-group flex w-fit items-center gap-1.5 py-0.5 leading-5 font-system-ui",
             MUTED_LABEL_TEXT_CLASS_NAME,
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
