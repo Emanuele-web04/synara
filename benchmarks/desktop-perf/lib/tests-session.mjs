@@ -235,6 +235,11 @@ async function measureOpen(session, threadId) {
   const result = await pending;
   const route = await session.evaluate("location.href");
   if (!route.includes(threadId)) return { failed: `route did not change to ${threadId}` };
+  // The probe gives up after 20 s. A transcript that never rendered must fail the
+  // sample, not leave a missing timing that the summary would silently skip.
+  if (result.firstRowMs === null) {
+    return { failed: `the transcript of ${threadId} did not render within 20 s` };
+  }
   return result;
 }
 
@@ -354,6 +359,7 @@ export async function measureSwitching({ build, home }) {
     await openThreadFromSidebar(session, SWITCH_PLAN.scroll);
     await sleep(2500);
     record.scroll = await measureScroll(session, app);
+    if (record.scroll.failed) throw new Error(`invalid sample: ${record.scroll.failed}`);
     requireFrontmost(app, "after scrolling");
     await sleep(3000);
     record.memoryAfterScroll = memorySnapshot(app);
