@@ -37,6 +37,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # Reads history: a blobless full clone (commits and trees, blobs on demand).
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -77,9 +78,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -119,9 +117,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       # The single saver for the shared full Linux node_modules key: every other
       # full lane restores only, so a miss is archived once instead of per lane.
@@ -168,9 +163,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -212,9 +204,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -249,9 +238,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -363,9 +349,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -430,6 +413,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      # Reads history: a blobless full clone (commits and trees, blobs on demand).
       - name: Checkout
         uses: actions/checkout@v6
         with:
