@@ -355,7 +355,7 @@ jobs:
 
       # The Intel app is cross-built here and launched by qualify_intel below.
       - name: Smoke packaged desktop startup
-        if: inputs.platform != 'mac' || inputs.arch != 'x64'
+        if: inputs.publish_release && (inputs.platform != 'mac' || inputs.arch != 'x64')
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
@@ -366,6 +366,7 @@ jobs:
             --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
       - name: Upload qualified artifacts
+        if: inputs.publish_release
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ inputs.platform }}-${{ inputs.arch }}

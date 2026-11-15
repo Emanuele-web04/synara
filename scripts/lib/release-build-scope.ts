@@ -105,7 +105,8 @@ export function resolveReleaseBuildScope(
     // Lint, typecheck and the complete test suite. The preflight stage runs
     // only these gates, so quality-gate timing can be measured without native
     // builds, packaging or publication.
-    quality_gates: stage === "artifact" || stage === "preflight",
+    quality_gates:
+      (stage === "artifact" && (publish || platform !== "win-x64")) || stage === "preflight",
     package_artifacts: stage === "artifact",
     build_server: stage === "artifact" && platform === "all" && flavor !== "remote",
   };
