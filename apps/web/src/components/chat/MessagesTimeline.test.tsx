@@ -1001,7 +1001,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-timeline-row-kind="work"');
     expect(markup).toContain('data-work-entry-display-text="true"');
-    expect(markup).toContain('data-live-activity-meta="true"');
+    // A running tool call carries no timing tail; it reads like any tool call.
+    expect(markup).not.toContain('data-live-activity-meta="true"');
     expect(markup).toContain(">Thinking<");
     expect(markup).toContain(expectedText);
   });

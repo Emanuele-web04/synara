@@ -315,17 +315,11 @@ describe("MessagesTimeline tool details", () => {
     const screen = await render(<LiveActivityTimeline />, { container: host });
 
     try {
-      expect(document.body.textContent ?? "").toContain("Running bun install");
-      expect(document.body.textContent ?? "").toContain("Active");
-      expect(document.body.textContent ?? "").toContain("2m 14s elapsed");
-      expect(document.body.textContent ?? "").toContain("42%");
-      expect(document.body.textContent ?? "").not.toContain("Resolving packages");
+      // A running call reads like any tool call; timing waits in the details.
       const displayText = document.querySelector("[data-work-entry-display-text='true']");
-      const activityMeta = document.querySelector("[data-live-activity-meta='true']");
-      expect(displayText?.closest("p")).toBe(activityMeta?.closest("p"));
-      expect(displayText?.closest("p")?.textContent ?? "").toContain(
-        "Running bun install · Active",
-      );
+      expect(displayText?.closest("p")?.textContent ?? "").toBe("Running bun install");
+      expect(document.querySelector("[data-live-activity-meta='true']")).toBeNull();
+      expect(document.body.textContent ?? "").not.toContain("Resolving packages");
 
       const trigger = document.querySelector<HTMLButtonElement>(
         '[data-tool-detail-trigger="true"]',
@@ -336,6 +330,7 @@ describe("MessagesTimeline tool details", () => {
       await expect.poll(() => document.body.textContent ?? "").toContain("Resolving packages");
       expect(document.body.textContent ?? "").toContain("Activity");
       expect(document.body.textContent ?? "").toContain("Running tool");
+      expect(document.body.textContent ?? "").toMatch(/Elapsed\s*2m 1\ds/);
       expect(document.body.textContent ?? "").toContain("42%");
       for (const time of document.querySelectorAll<HTMLTimeElement>("time[datetime]")) {
         expect(time.textContent).toBe(formatTimestamp(time.dateTime, "24-hour"));
