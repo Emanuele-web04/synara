@@ -64,7 +64,7 @@ import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { McpConnectorProposalCard } from "../settings/McpConnectorProposalCard";
 import { MCP_CONNECTORS_ON } from "~/betaFeatures";
 import { BackgroundTaskRow } from "./BackgroundTaskRow";
-import { getChatTranscriptTextStyle, INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { getChatTranscriptTextStyle } from "./chatTypography";
 import { SubagentRunCard } from "./SubagentRunCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
@@ -479,7 +479,7 @@ function combineWorkEntryDisplayText(
 // status rows keep their own wording.
 function commandRowDisplay(
   workEntry: TimelineWorkEntry,
-): { heading: string; object: string; literal: boolean } | null {
+): { heading: string; object: string } | null {
   const command = workEntry.rawCommand ?? workEntry.command;
   if (
     (workEntry.tone !== "tool" && workEntry.toolStatus !== "failed") ||
@@ -498,12 +498,11 @@ function commandRowDisplay(
     return {
       heading: running ? "chat:reading" : "chat:detail_read",
       object: readTargets.join(", "),
-      literal: false,
     };
   }
   const literal = deriveLiteralCommand(command);
   return literal
-    ? { heading: running ? "chat:runStatus_running" : "chat:ran", object: literal, literal: true }
+    ? { heading: running ? "chat:runStatus_running" : "chat:ran", object: literal }
     : null;
 }
 
@@ -511,27 +510,10 @@ export interface WorkEntryDisplayParts {
   heading: string;
   preview: string | null;
   displayText: string;
-  // Verbatim command shown in mono after the heading, for shell command rows.
-  commandLiteral: string | null;
-}
-
-// Renders a row sentence: plain text, or the heading plus the command chip.
-export function renderWorkEntrySentence(parts: WorkEntryDisplayParts): ReactNode {
-  if (parts.commandLiteral === null) {
-    return parts.displayText;
-  }
-  return (
-    <>
-      {parts.heading}{" "}
-      <code className={INLINE_COMMAND_CHIP_CLASS_NAME} data-command-literal="true">
-        {parts.commandLiteral}
-      </code>
-    </>
-  );
 }
 
 // One sentence per row, live or settled: the tool's own verb plus what it acted
-// on ("Read calc.py", "Ran `ls`"). Lifecycle state is never spelled out here —
+// on ("Read calc.py", "Ran ls"), as plain text. Lifecycle state is never spelled out here —
 // the verb already carries the tense and `liveActivityMetaText` covers the rest.
 // Shared with the live tool-group line, which wears its newest call's sentence.
 export function workEntryDisplayParts(
@@ -545,7 +527,6 @@ export function workEntryDisplayParts(
       heading,
       preview: commandDisplay.object,
       displayText: `${heading} ${commandDisplay.object}`,
-      commandLiteral: commandDisplay.literal ? commandDisplay.object : null,
     };
   }
   const webFetchUrl = extractWebFetchUrl(workEntry);
@@ -569,7 +550,7 @@ export function workEntryDisplayParts(
         preview
       ? preview
       : combineWorkEntryDisplayText(heading, preview, translate);
-  return { heading, preview, displayText, commandLiteral: null };
+  return { heading, preview, displayText };
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
@@ -1029,9 +1010,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                     data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
-                    <span data-work-entry-display-text="true">
-                      {renderWorkEntrySentence(displayParts)}
-                    </span>
+                    <span data-work-entry-display-text="true">{displayParts.displayText}</span>
                     {liveActivityMetaText ? (
                       <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
                     ) : null}

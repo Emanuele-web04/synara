@@ -57,7 +57,7 @@ describe("interface translation", () => {
     });
     try {
       expect(hook.result.current.heading).toBe("Ran");
-      expect(hook.result.current.commandLiteral).toBe("echo Settings");
+      expect(hook.result.current.displayText).toBe("Ran echo Settings");
     } finally {
       await hook.unmount();
     }

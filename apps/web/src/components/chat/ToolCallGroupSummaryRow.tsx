@@ -32,7 +32,6 @@ import type { WorkLogEntry } from "../../session-logic";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
   renderWorkEntryIcon,
-  renderWorkEntrySentence,
   workEntryDisplayParts,
   workEntryLeftIcon,
 } from "./TimelineWorkEntryRow";
@@ -138,7 +137,7 @@ export function ToolCallGroupSummaryRow(
         </span>
         <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
           {liveEntry ? (
-            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry, t)))
+            (liveMultiFileLabel ?? workEntryDisplayParts(liveEntry, t).displayText)
           ) : !summary ? (
             props.label
           ) : (
