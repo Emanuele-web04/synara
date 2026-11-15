@@ -3,6 +3,7 @@ import tls from "node:tls";
 import { Duplex, Writable } from "node:stream";
 import WebSocket, { createWebSocketStream, WebSocketServer } from "ws";
 import { MAX_RELAY_RESPONSE_BYTES } from "../relaySocket";
+import { reportReliabilityIssue } from "../reliability";
 import {
   remoteTlsAnchor,
   remoteTlsServerName,
@@ -72,6 +73,11 @@ export interface RemoteTlsServerOptions {
     path: string,
     context: RemoteIngressContext,
   ) => void | Promise<void>;
+  /**
+   * Decides before the inner upgrade completes, so it may wait (for a fresh
+   * authorization) without losing a first frame; the peer waits for the 101.
+   */
+  readonly admit?: (path: string, context: RemoteIngressContext) => Promise<boolean>;
   readonly request?: (
     request: http.IncomingMessage,
     response: http.ServerResponse,
@@ -116,21 +122,30 @@ export class RemoteTlsServer {
         socket.destroy();
         return;
       }
-      this.#ws.handleUpgrade(request, socket, head, (inner) => {
-        inner.on("error", () => inner.terminate());
-        // Invoke synchronously: the first frame may accompany the upgrade.
-        try {
-          Promise.resolve(
-            options.accept(
-              inner,
-              request.url!,
-              this.#contexts.get(request.socket) ?? DIRECT_INGRESS,
-            ),
-          ).catch(() => inner.terminate());
-        } catch {
-          inner.terminate();
-        }
-      });
+      const context = this.#contexts.get(request.socket) ?? DIRECT_INGRESS;
+      const upgrade = () =>
+        this.#ws.handleUpgrade(request, socket, head, (inner) => {
+          inner.on("error", () => inner.terminate());
+          // Invoke synchronously: the first frame may accompany the upgrade.
+          try {
+            Promise.resolve(options.accept(inner, request.url!, context)).catch(() =>
+              inner.terminate(),
+            );
+          } catch {
+            inner.terminate();
+          }
+        });
+      if (!options.admit) {
+        upgrade();
+        return;
+      }
+      void options.admit(request.url, context).then(
+        (admitted) => {
+          if (admitted && !socket.destroyed && !this.#closed) upgrade();
+          else socket.destroy();
+        },
+        () => socket.destroy(),
+      );
     });
   }
 
@@ -140,6 +155,12 @@ export class RemoteTlsServer {
 
   accept(outer: WebSocket, context: RemoteIngressContext = DIRECT_INGRESS): void {
     if (this.#closed || this.#connections.size >= (this.#options.maxConnections ?? 32)) {
+      // Refused peers never enter ciphertextStream, so this branch owns errors
+      // until the WebSocket close handshake finishes as well.
+      outer.on("error", () => {
+        reportReliabilityIssue("remote.tunnel_socket_error");
+        outer.terminate();
+      });
       outer.close(1013, "Remote connection limit reached");
       return;
     }

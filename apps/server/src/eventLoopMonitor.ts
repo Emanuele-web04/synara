@@ -3,6 +3,7 @@ import { monitorEventLoopDelay, performance, type Histogram } from "node:perf_ho
 import { Effect, Layer, ServiceMap } from "effect";
 import type { ServerRuntimeStatus } from "@synara/contracts";
 import { reportBetaOperationalIssue } from "./betaOperationalIssue";
+import { reportReliabilityIssue } from "./reliability";
 
 const SAMPLE_MS = 1000;
 const SUMMARY_MS = 30_000;
@@ -271,8 +272,10 @@ export const ServerEventLoopMonitorLive = Layer.effect(
             log(Effect.logInfo(message, payload));
           },
         },
-        onStall: (durationMs) =>
-          reportBetaOperationalIssue({ code: "server.event-loop.stall", durationMs }),
+        onStall: (durationMs) => {
+          reportBetaOperationalIssue({ code: "server.event-loop.stall", durationMs });
+          reportReliabilityIssue("backend.event_loop_stall");
+        },
       });
       const stop = startEventLoopMonitor(monitor);
       yield* Effect.addFinalizer(() => Effect.sync(stop));

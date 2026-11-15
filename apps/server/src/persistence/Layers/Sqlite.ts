@@ -155,7 +155,7 @@ const makeSetup = ({
       // so the fallback stays the last known-good database.
       const migrations = dbPath
         ? pendingRecovery
-          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
+          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations(), { divergenceConsent })
           : runWithPreMigrationBackup(dbPath, runMigrations(), { divergenceConsent })
         : runMigrations();
       yield* migrations.pipe(

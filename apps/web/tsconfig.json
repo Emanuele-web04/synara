@@ -21,5 +21,12 @@
       }
     ]
   },
-  "include": ["src", "perf", "scripts/production-assets*.ts", "vite.config.ts"]
+  "include": [
+    "src",
+    "perf",
+    "scripts/production-assets*.ts",
+    "scripts/settingsSearchRows.ts",
+    "scripts/generate-settings-search-rows.ts",
+    "vite.config.ts"
+  ]
 }

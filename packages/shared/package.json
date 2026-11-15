@@ -4,9 +4,17 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./parentBoundProcess": {
+      "types": "./src/parentBoundProcess.ts",
+      "import": "./src/parentBoundProcess.ts"
+    },
     "./hostUsage": {
       "types": "./src/hostUsage.ts",
       "import": "./src/hostUsage.ts"
+    },
+    "./backgroundTasks": {
+      "types": "./src/backgroundTasks.ts",
+      "import": "./src/backgroundTasks.ts"
     },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
@@ -91,6 +99,10 @@
     "./githubRepository": {
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
+    },
+    "./threadPullRequestLinks": {
+      "types": "./src/threadPullRequestLinks.ts",
+      "import": "./src/threadPullRequestLinks.ts"
     },
     "./logging": {
       "types": "./src/logging.ts",
@@ -535,6 +547,10 @@
     "./installerDownloads": {
       "types": "./src/installerDownloads.ts",
       "import": "./src/installerDownloads.ts"
+    },
+    "./releaseDownloads": {
+      "types": "./src/releaseDownloads.ts",
+      "import": "./src/releaseDownloads.ts"
     }
   },
   "scripts": {

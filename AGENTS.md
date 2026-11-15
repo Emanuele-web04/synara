@@ -55,6 +55,8 @@ Write replies and completion reports as a TL;DR: the result first, then only wha
 
 ## Verification and completion
 
+Migration changes require an independent review of data preservation, replay safety, and backup/recovery.
+
 Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 
 Use the smallest relevant checks while iterating. For code changes, finish with `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and affected Vitest tests. Use `bun run test`, never `bun test`, which selects a different runner. Cross-package or lifecycle changes warrant the broader repository test suite.

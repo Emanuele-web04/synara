@@ -1097,6 +1097,19 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         ],
       ] as const;
 
+      lifecycleManager.emit("event", {
+        id: asEventId("unstable-features-notice"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "warning",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          message:
+            "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/codex/config.toml.",
+        },
+      } satisfies ProviderEvent);
+
       for (const [method, message] of warnings) {
         lifecycleManager.emit("event", {
           id: asEventId(`evt-${method}`),
@@ -2219,6 +2232,38 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         if (event.value.type === "runtime.error" || event.value.type === "turn.completed") {
           assert.equal(event.value.payload.errorCode, "server_overloaded");
         }
+      }
+    }),
+  );
+
+  it.effect("names a Codex Cloudflare 403 page an edge block and keeps its HTTP status", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-edge-blocked"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "turn/completed",
+        payload: {
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "unexpected status 403 Forbidden: Attention Required! | Cloudflare",
+              codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 403 } },
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+      const event = yield* Fiber.join(eventFiber);
+      assert.equal(event._tag, "Some");
+      if (event._tag === "Some" && event.value.type === "turn.completed") {
+        assert.equal(event.value.payload.errorCode, "edge_blocked");
+        assert.equal(event.value.payload.httpStatus, 403);
       }
     }),
   );

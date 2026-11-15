@@ -65,7 +65,9 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentBackgroundTasksSection } from "./EnvironmentBackgroundTasksSection";
 import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import { useThreadBackgroundTasks } from "../useThreadBackgroundTasks";
 import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
@@ -80,6 +82,7 @@ import {
   EnvironmentSectionDivider,
 } from "./EnvironmentRow";
 import { useTranslation } from "~/i18n";
+import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 
 // Horizontal space (px) the docked card reserves on the right edge of the chat area.
 // Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
@@ -88,6 +91,9 @@ import { useTranslation } from "~/i18n";
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 export interface EnvironmentPanelProps {
+  activeProviderInstanceId?: string | undefined;
+  rateLimitStatus?: RateLimitStatus | null;
+  checkpointBaselineUnavailable?: boolean;
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
   open: boolean;
   /**
@@ -247,6 +253,9 @@ export function EnvironmentPanel({
   availableEditors,
   activeThreadId,
   activeProvider,
+  activeProviderInstanceId,
+  rateLimitStatus,
+  checkpointBaselineUnavailable,
   isGroupChat,
   groupFolderPath: groupFolderPathProp,
   showGitActions,
@@ -294,6 +303,8 @@ export function EnvironmentPanel({
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { settings } = useAppSettings();
   const openRightDockPane = useRightDockStore((store) => store.openPane);
+  // Derived only while the panel is open; a closed panel needs no task list.
+  const backgroundTasks = useThreadBackgroundTasks(open ? activeThreadId : null);
   const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
@@ -336,7 +347,7 @@ export function EnvironmentPanel({
           onClick={() =>
             void navigate({
               to: "/settings",
-              search: { target: SETTINGS_TARGETS.environmentPanel },
+              search: { section: "layout", target: SETTINGS_TARGETS.environmentPanel },
             })
           }
         >
@@ -362,7 +373,16 @@ export function EnvironmentPanel({
       {isGitRepo ? (
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label={t("git:panel_changes")}
+          label={
+            <span className="flex flex-col">
+              <span>{t("git:panel_changes")}</span>
+              {checkpointBaselineUnavailable ? (
+                <span className="whitespace-normal text-ui-xs text-muted-foreground">
+                  {t("chat:checkpointBaselineUnavailable")}
+                </span>
+              ) : null}
+            </span>
+          }
           trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
           disabled={changesDisabled}
           onClick={() => {
@@ -474,6 +494,16 @@ export function EnvironmentPanel({
         />
       ) : null}
 
+      {activeThreadId ? (
+        <EnvironmentBackgroundTasksSection
+          tasks={backgroundTasks}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "backgroundTasks" });
+            onClose();
+          }}
+        />
+      ) : null}
+
       {settings.showEnvironmentSubagents && subagentRoster && activeThreadId ? (
         <EnvironmentSubagentsSection
           roster={subagentRoster}
@@ -489,7 +519,13 @@ export function EnvironmentPanel({
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
         dangling rule. Visibility is gated on the per-section AppSettings flags.
       */}
-      {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
+      {settings.showEnvironmentUsage || rateLimitStatus ? (
+        <EnvironmentUsageSection
+          provider={activeProvider}
+          activeInstanceId={activeProviderInstanceId}
+          rateLimitStatus={rateLimitStatus}
+        />
+      ) : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <EnvironmentLabeledSection label={t("git:general_repository")}>

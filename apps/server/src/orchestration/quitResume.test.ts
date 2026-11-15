@@ -1,3 +1,4 @@
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, ThreadId, TurnId, type OrchestrationCommand } from "@synara/contracts";
 import { Deferred, Duration, Effect, FileSystem, Layer, Option } from "effect";
@@ -125,6 +126,12 @@ describe("crash recovery", () => {
     ];
     const record = await Effect.runPromise(
       captureCrashResumeRecord.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
         Effect.provideService(OrchestrationEngineService, {
           getReadModel: () =>
             Effect.succeed({
@@ -194,6 +201,12 @@ describe("crash recovery", () => {
   it("does not guess that human callbacks are absent when their durable read fails", async () => {
     const captured = await Effect.runPromise(
       captureCrashResumeRecord.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
         Effect.provideService(OrchestrationEngineService, {
           getReadModel: () => Effect.succeed({ threads: [makeRunningThread("running")] }),
         } as never),
@@ -365,7 +378,9 @@ describe("planQuitResumeTurns", () => {
           latestTurn: makeLatestTurn("follow-up-old", "completed", BEFORE_RECORD),
         }),
         // The pending turn started after the record and was interrupted by the quit.
-        makeThread("started-then-stopped", { latestTurn: makeLatestTurn("started-turn") }),
+        makeThread("started-then-stopped", {
+          latestTurn: { ...makeLatestTurn("started-turn"), startedAt: AFTER_RECORD },
+        }),
         // A turn finished on its own after the record: nothing left to continue.
         makeThread("answered", {
           latestTurn: makeLatestTurn("answered-turn", "completed", AFTER_RECORD),

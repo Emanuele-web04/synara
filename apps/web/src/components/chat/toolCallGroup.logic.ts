@@ -45,6 +45,7 @@ export type ToolCallSummaryCategory =
   | "command"
   | "fetch"
   | "agent"
+  | "background"
   | "tool"
   | "other";
 
@@ -71,9 +72,10 @@ export interface ToolCallGroupSummary {
   iconEntry: WorkLogEntry;
 }
 
-// Rich rows (subagent strips, automation cards, thread-creation recaps,
-// background tasks) and non-tool tones (errors, approvals, info) must stay
-// individually visible, so they never fold into a summary group.
+// Rich rows (subagent strips, automation cards, thread-creation recaps) and
+// non-tool tones (errors, approvals, info) must stay individually visible, so
+// they never fold into a summary group. Background task launches fold like any
+// command: their live state lives in the Environment panel, not the transcript.
 export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
   return (
     (entry.tone === "tool" ||
@@ -85,7 +87,6 @@ export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
     !entry.automation &&
     !entry.connectorProposalId &&
     !entry.subagentAction &&
-    !entry.backgroundTask &&
     (entry.subagents?.length ?? 0) === 0
   );
 }
@@ -108,6 +109,9 @@ function classifyCommandVerb(verb: string): ToolCallSummaryCategory {
 }
 
 export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSummaryCategory {
+  if (entry.backgroundTask) {
+    return "background";
+  }
   if (isFileChangeWorkLogEntry(entry)) {
     return "edit";
   }
@@ -220,6 +224,8 @@ function summaryPartPhrase(
         value0: count,
         value1: pluralize(count, "task"),
       });
+    case "background":
+      return translate("chat:inBackground", { count });
     case "tool":
       return translate("chat:used", { value0: countPhrase(count, "tool") });
     case "other":
@@ -281,7 +287,7 @@ export function summarizeToolCallGroup(
     if (entry.toolStatus === "running") {
       hasRunningEntry = true;
     }
-    if (entry.toolStatus === "failed") {
+    if (entry.toolStatus === "failed" || entry.backgroundTask?.status === "failed") {
       failedCount += 1;
     }
     const category = classifyToolCallSummaryCategory(entry);

@@ -17,6 +17,7 @@ import {
   ProviderUsageMenuPopup,
   useProviderUsageMenuModel,
 } from "~/components/ProviderUsageMenuControl";
+import { formatRateLimitMessage, type RateLimitStatus } from "~/lib/rateLimitStatus";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { MenuTrigger } from "~/components/ui/menu";
 import {
@@ -38,12 +39,14 @@ function EnvironmentUsageAccountRow({
   instance,
   snapshot,
   label,
+  rateLimitStatus,
 }: {
   instance: ResolvedProviderInstance;
-  snapshot: ServerProviderUsageSnapshot;
+  snapshot: ServerProviderUsageSnapshot | undefined;
   label: string;
+  rateLimitStatus: RateLimitStatus | null;
 }) {
-  const { t } = useTranslation();
+  const { t, formatLocale } = useTranslation();
   const provider = instance.driver;
   const model = useProviderUsageMenuModel(provider, {
     instanceId: instance.instanceId,
@@ -59,6 +62,8 @@ function EnvironmentUsageAccountRow({
     t,
   );
 
+  const warning = rateLimitStatus ? formatRateLimitMessage(rateLimitStatus, t, formatLocale) : null;
+
   return (
     <ProviderUsageMenuPopup provider={provider} model={model} align="start" showUsageLines={true}>
       <MenuTrigger
@@ -66,7 +71,11 @@ function EnvironmentUsageAccountRow({
           <button
             type="button"
             className={ENVIRONMENT_ROW_CLASS_NAME}
-            aria-label={summary.ariaLabel}
+            aria-label={
+              warning
+                ? t("settings:usageProviderSummary", { provider: label, summary: warning })
+                : summary.ariaLabel
+            }
           />
         }
       >
@@ -78,7 +87,16 @@ function EnvironmentUsageAccountRow({
               className={ENVIRONMENT_ROW_ICON_CLASS_NAME}
             />
           }
-          label={label}
+          label={
+            warning ? (
+              <span className="flex flex-col gap-0.5">
+                <span>{label}</span>
+                <span className="whitespace-normal text-ui-xs text-warning">{warning}</span>
+              </span>
+            ) : (
+              label
+            )
+          }
           trailing={
             <span className="flex items-center gap-1.5">
               {summary.rows.length > 0 ? (
@@ -94,7 +112,7 @@ function EnvironmentUsageAccountRow({
                     </span>
                   ))}
                 </span>
-              ) : (
+              ) : warning ? null : (
                 <span className="text-ui-xs text-[var(--color-text-foreground-secondary)]">
                   {summary.statusLabel}
                 </span>
@@ -108,7 +126,15 @@ function EnvironmentUsageAccountRow({
   );
 }
 
-export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+export function EnvironmentUsageSection({
+  provider,
+  activeInstanceId,
+  rateLimitStatus = null,
+}: {
+  provider: ProviderKind;
+  activeInstanceId?: string | undefined;
+  rateLimitStatus?: RateLimitStatus | null | undefined;
+}) {
   const { t } = useTranslation();
 
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
@@ -121,11 +147,13 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
       (entry) =>
         entry.provider === provider && (entry.instanceId ?? entry.provider) === instance.instanceId,
     );
-    if (!snapshot) return [];
+    const accountRateLimitStatus =
+      instance.instanceId === (activeInstanceId ?? provider) ? rateLimitStatus : null;
+    if (!snapshot && !accountRateLimitStatus) return [];
     const hasUsage =
-      snapshot.limits.length > 0 ||
-      snapshot.usageLines.length > 0 ||
-      (snapshot.resetCredits?.availableCount ?? 0) > 0;
+      (snapshot?.limits.length ?? 0) > 0 ||
+      (snapshot?.usageLines.length ?? 0) > 0 ||
+      (snapshot?.resetCredits?.availableCount ?? 0) > 0;
     // Unused default providers should not crowd the panel. Configured extra
     // accounts stay visible so an expired login or failed usage check is clear.
     if (
@@ -133,7 +161,8 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
       providerInstances.length === 1 &&
       !instance.raw.displayName &&
       !hasUsage &&
-      (snapshot.status === "needs-auth" || (snapshot.status ?? "ok") === "ok")
+      !accountRateLimitStatus &&
+      (snapshot?.status === "needs-auth" || (snapshot?.status ?? "ok") === "ok")
     )
       return [];
     const providerName = providerUsageDisplayName(provider);
@@ -147,6 +176,7 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
       {
         instance,
         snapshot,
+        accountRateLimitStatus,
         label: showAccountName
           ? t("common:symbol9", { value0: providerName, value1: accountName })
           : providerName,
@@ -158,12 +188,13 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
 
   return (
     <EnvironmentLabeledSection label={t("chat:general_usage")}>
-      {accounts.map(({ instance, snapshot, label }) => (
+      {accounts.map(({ instance, snapshot, label, accountRateLimitStatus }) => (
         <EnvironmentUsageAccountRow
           key={instance.instanceId}
           instance={instance}
           snapshot={snapshot}
           label={label}
+          rateLimitStatus={accountRateLimitStatus}
         />
       ))}
     </EnvironmentLabeledSection>

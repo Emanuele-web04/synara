@@ -228,6 +228,9 @@ export const GitRunStackedActionInput = Schema.Struct({
   resume: Schema.optional(Schema.Boolean),
   cwd: TrimmedNonEmptyStringSchema,
   action: GitStackedAction,
+  // Thread the action runs for: the server links the PR it creates, or the open PR it pushes
+  // to, to this thread. Omitted by callers outside a thread (and by older clients).
+  threadId: Schema.optional(ThreadId),
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
   // PR content overrides for create_pr/commit_push_pr; missing fields are generated.

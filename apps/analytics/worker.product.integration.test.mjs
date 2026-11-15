@@ -12,6 +12,7 @@ import worker, {
 } from "./worker.ts";
 import { captureInstallerDownloads } from "./installerDownloads.ts";
 import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
+import { ProductAnalytics } from "../desktop/src/productAnalytics.ts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -77,6 +78,277 @@ describe("analytics ingest and D1 storage", () => {
       }),
       env,
     );
+
+  const reliabilityRecord = (overrides = {}) => ({
+    v: 1,
+    id: crypto.randomUUID(),
+    day,
+    code: "recovery.crash_resume_accepted",
+    channel: "stable",
+    appVersion: "1.5.1",
+    platform: "darwin",
+    ...overrides,
+  });
+
+  const postReliability = (body, headers = { "content-type": "application/json" }) =>
+    worker.fetch(
+      new Request("https://worker.invalid/v1/reliability-events", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+
+  it("acknowledges committed reliability receipts once and exposes only authenticated aggregates", async () => {
+    const first = reliabilityRecord();
+    const second = reliabilityRecord();
+    const unrelated = reliabilityRecord({
+      channel: "beta",
+      appVersion: "1.6.0-beta.2",
+      platform: "linux",
+      code: "provider.event_quarantined",
+    });
+    const events = [first, second, unrelated];
+    for (const batch of [events, [...events, first]]) {
+      const response = await postReliability({ events: batch });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        stored: true,
+        acknowledged: events.map((event) => event.id),
+      });
+    }
+
+    const url = new URL("https://worker.invalid/api/reliability");
+    url.search = new URLSearchParams({
+      day,
+      channel: first.channel,
+      platform: first.platform,
+      version: first.appVersion,
+      code: first.code,
+    }).toString();
+    expect((await worker.fetch(new Request(url), env)).status).toBe(401);
+
+    const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+    const dashboard = (url) =>
+      worker.fetch(new Request(url, { headers: { cookie: `synara_beta_dash=${token}` } }), env);
+    const response = await dashboard(url);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      from: day,
+      to: day,
+      truncated: false,
+      rows: [
+        {
+          day,
+          code: first.code,
+          channel: first.channel,
+          appVersion: first.appVersion,
+          platform: first.platform,
+          count: 2,
+        },
+      ],
+    });
+    url.searchParams.set("version", "1.5.1+private-build");
+    expect((await dashboard(url)).status).toBe(400);
+    expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
+  });
+
+  it("rejects private, invalid, oversize or conflicting reliability batches without partial writes", async () => {
+    const original = reliabilityRecord();
+    env.INGEST_RATE_LIMITER = { limit: async () => ({ success: false }) };
+    expect((await postReliability({ events: [original] })).status).toBe(429);
+    delete env.INGEST_RATE_LIMITER;
+    expect(
+      (await postReliability({ events: [original] }, { "content-type": "text/plain" })).status,
+    ).toBe(415);
+    const invalidRecords = [
+      { ...original, accountId: "fixture-account" },
+      { ...original, installId: crypto.randomUUID() },
+      { ...original, threadId: "fixture-thread", error: "private failure" },
+      { ...original, code: "free form error or path" },
+      { ...original, appVersion: "1.5.1+private-build" },
+      { ...original, platform: "private-platform" },
+      { ...original, id: "00000000-0000-1000-8000-000000000001" },
+      { ...original, day: new Date(now).toISOString() },
+      { ...original, day: "2026-02-30" },
+      { ...original, day: new Date(now - 8 * 86_400_000).toISOString().slice(0, 10) },
+      { ...original, day: new Date(now + 86_400_000).toISOString().slice(0, 10) },
+    ];
+    for (const invalid of invalidRecords) {
+      const response = await postReliability({ events: [reliabilityRecord(), invalid] });
+      expect(response.status).toBe(400);
+    }
+    expect((await postReliability({ events: [original], metadata: "private" })).status).toBe(400);
+    expect(
+      (await postReliability({ events: Array.from({ length: 51 }, () => original) })).status,
+    ).toBe(413);
+    expect(
+      (await postReliability({ events: [original], metadata: "x".repeat(64 * 1024) })).status,
+    ).toBe(413);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(0);
+
+    expect((await postReliability({ events: [original] })).status).toBe(200);
+    const conflict = { ...original, code: "chat.settlement_unavailable" };
+    const rejected = await postReliability({ events: [reliabilityRecord(), conflict] });
+    expect(rejected.status).toBe(503);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(1);
+    expect(db.database.prepare("SELECT sum(count) AS n FROM reliability_daily").get().n).toBe(1);
+  });
+
+  it("expires reliability receipts before aggregates while keeping the legacy product lane", async () => {
+    const record = reliabilityRecord();
+    expect((await postReliability({ events: [record] })).status).toBe(200);
+    await worker.scheduled({ scheduledTime: now + 15 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(0);
+    expect(db.database.prepare("SELECT sum(count) AS n FROM reliability_daily").get().n).toBe(1);
+    await worker.scheduled({ scheduledTime: now + 91 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_daily").get().n).toBe(0);
+    const product = await postEvents([envelope()]);
+    expect(product.status).toBe(200);
+    expect(await product.json()).toMatchObject({ accepted: 1 });
+  });
+
+  it("counts anonymous Remote receipts once and rejects identity fields and mixed batches", async () => {
+    const record = {
+      id: crypto.randomUUID(),
+      ts: day,
+      channel: "stable",
+      event: "remote.pairing-approved",
+    };
+    const post = (body) =>
+      worker.fetch(
+        new Request("https://worker.invalid/v1/product-events", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        env,
+      );
+    for (const body of [
+      { anonymousEvents: [{ ...record, installId: crypto.randomUUID() }] },
+      { anonymousEvents: [{ ...record, ts: new Date(now).toISOString() }] },
+      { anonymousEvents: [record], events: [envelope()] },
+      {
+        anonymousEvents: [
+          { ...record, id: crypto.randomUUID() },
+          { ...record, event: "private invalid event" },
+        ],
+      },
+    ])
+      expect((await post(body)).status).toBe(400);
+    expect((await post({ anonymousEvents: [record, record] })).status).toBe(200);
+    expect((await post({ anonymousEvents: [record] })).status).toBe(200);
+    expect(
+      (await post({ anonymousEvents: [{ ...record, id: record.id.toUpperCase() }] })).status,
+    ).toBe(200);
+    expect(db.database.prepare("SELECT * FROM anonymous_product_daily").all()).toEqual([
+      expect.objectContaining({
+        day,
+        channel: "stable",
+        event: "remote.pairing-approved",
+        count: 1,
+      }),
+    ]);
+    expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
+    const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+    const response = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=stable`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).anonymousEvents).toEqual([
+      { day, pairings: 1, connections: 0, reconnections: 0, timeouts: 0, crashes: 0 },
+    ]);
+    const later = now + 9 * 86_400_000;
+    await worker.scheduled({ scheduledTime: later }, env);
+    expect(
+      db.database.prepare("SELECT count(*) AS n FROM anonymous_product_receipts").get().n,
+    ).toBe(0);
+    expect(db.database.prepare("SELECT count FROM anonymous_product_daily").get().count).toBe(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(later);
+    expect((await post({ anonymousEvents: [record] })).status).toBe(400);
+    await worker.scheduled({ scheduledTime: now + 31 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM anonymous_product_daily").get().n).toBe(
+      0,
+    );
+  });
+
+  it("delivers every anonymous desktop counter once after a lost receipt and restart", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "anonymous-desktop-delivery-"));
+    const requests = [];
+    const fetcher = async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      const response = await worker.fetch(
+        new Request("https://worker.invalid/v1/product-events", init),
+        env,
+      );
+      // The server committed, but the client did not receive the acknowledgement.
+      if (requests.length === 1) {
+        expect(response.status).toBe(200);
+        return new Response(null, { status: 503 });
+      }
+      return response;
+    };
+    const makeAnalytics = () => {
+      const analytics = new ProductAnalytics({
+        homeDir,
+        channel: "stable",
+        appVersion: "1.5.1",
+        platform: "darwin",
+        fetcher,
+      });
+      analytics.initialize();
+      return analytics;
+    };
+    let analytics = makeAnalytics();
+    try {
+      analytics.track({ event: "app.crash", outcome: "failed" });
+      await analytics.flush();
+      expect(requests).toHaveLength(0);
+      analytics.setEnabled(true);
+      for (const input of [
+        { event: "remote.pairing-approved", outcome: "succeeded" },
+        { event: "remote.connection-succeeded", outcome: "succeeded" },
+        { event: "remote.reconnection-succeeded", outcome: "succeeded" },
+        { event: "remote.connection-timeout", outcome: "failed" },
+        { event: "app.crash", outcome: "failed" },
+      ])
+        analytics.track({ ...input, email: "private@example.invalid", message: "private failure" });
+      analytics.track({ event: "app.open", outcome: "succeeded" });
+      await analytics.flush();
+      analytics.dispose();
+      analytics = makeAnalytics();
+      await analytics.flush();
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(3));
+      expect(requests[1]).toEqual(requests[0]);
+      expect(requests[0].anonymousEvents).toHaveLength(5);
+      expect(JSON.stringify(requests[0])).not.toMatch(/private|installId|appVersion|platform/);
+      expect(requests[2].events).toHaveLength(1);
+      const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=stable`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+      expect((await response.json()).anonymousEvents).toEqual([
+        { day, pairings: 1, connections: 1, reconnections: 1, timeouts: 1, crashes: 1 },
+      ]);
+      const requestsBeforeOptOut = requests.length;
+      analytics.setEnabled(false);
+      analytics.track({ event: "app.crash", outcome: "failed" });
+      await analytics.flush();
+      expect(requests).toHaveLength(requestsBeforeOptOut);
+    } finally {
+      analytics.dispose();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 
   it("excludes diagnostic content from Beta queues, legacy uploads and stored rows", async () => {
     const root = mkdtempSync(join(tmpdir(), "diagnostic-canary-"));
@@ -446,6 +718,12 @@ describe("analytics ingest and D1 storage", () => {
     db.database.exec(
       readFileSync(new URL("./migrations/0010_product_host_usage.sql", import.meta.url), "utf8"),
     );
+    db.database.exec(
+      readFileSync(new URL("./migrations/0012_anonymous_product.sql", import.meta.url), "utf8"),
+    );
+    db.database.exec(
+      readFileSync(new URL("./migrations/0013_reliability.sql", import.meta.url), "utf8"),
+    );
     await worker.scheduled({ scheduledTime: now }, env);
     expect(env.CRASH_DUMPS.list).not.toHaveBeenCalled();
     await expect(purgeLegacyDiagnosticDumps(env)).rejects.toThrow("synthetic deletion failure");
@@ -502,6 +780,13 @@ describe("analytics ingest and D1 storage", () => {
       applyMigrations(legacy.database, "0006");
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
+      // The current receiver also writes the turn-failure columns (0014 deploys first).
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
       );
       const at = new Date(now).toISOString();
       const installId = "00000000-0000-4000-8000-0000000000f1";
@@ -613,7 +898,11 @@ describe("analytics ingest and D1 storage", () => {
         return response.json();
       };
       // Prepare additive API tables while leaving the privacy migration under test unapplied.
-      for (const migration of ["0010_product_host_usage.sql", "0011_installer_downloads.sql"])
+      for (const migration of [
+        "0010_product_host_usage.sql",
+        "0011_installer_downloads.sql",
+        "0012_anonymous_product.sql",
+      ])
         legacy.database.exec(
           readFileSync(new URL(`./migrations/${migration}`, import.meta.url), "utf8"),
         );
@@ -691,6 +980,13 @@ describe("analytics ingest and D1 storage", () => {
       // The cohort receiver requires its additive columns; account removal is independent.
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
+      // The current receiver also writes the turn-failure columns (0014 deploys first).
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
       );
       const send = () =>
         worker.fetch(
@@ -945,6 +1241,111 @@ describe("analytics ingest and D1 storage", () => {
         },
       ]),
     );
+  });
+
+  it("adds turn failure columns to a populated product table without changing its rows", () => {
+    const deployed = new SQLiteD1();
+    try {
+      applyMigrations(deployed.database, "0013");
+      const columns = () =>
+        deployed.database
+          .prepare("PRAGMA table_info(product_events)")
+          .all()
+          .map((column) => column.name);
+      expect(columns()).not.toContain("failure");
+      deployed.database
+        .prepare(
+          `INSERT INTO product_events (event_id, ts, received_at, install_id, channel, surface,
+             platform, app_version, event, outcome, provider)
+           VALUES (?, ?, ?, ?, 'stable', 'desktop', 'darwin', '1.0.0', 'turn.completed', 'failed', 'claude')`,
+        )
+        .run(
+          crypto.randomUUID(),
+          new Date(now).toISOString(),
+          new Date(now).toISOString(),
+          "00000000-0000-4000-8000-0000000000c1",
+        );
+      const before = deployed.database.prepare("SELECT * FROM product_events").get();
+      deployed.database.exec(
+        readFileSync(
+          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(columns()).toEqual(expect.arrayContaining(["failure", "http_status"]));
+      expect(deployed.database.prepare("SELECT * FROM product_events").get()).toEqual({
+        ...before,
+        failure: null,
+        http_status: null,
+      });
+    } finally {
+      deployed.close();
+    }
+  });
+
+  it("stores turn failure categories and serves them grouped behind dashboard auth", async () => {
+    const turn = (patch) =>
+      envelope({
+        id: crypto.randomUUID(),
+        event: "turn.completed",
+        feature: undefined,
+        durationMs: undefined,
+        ...patch,
+      });
+    const mac = "00000000-0000-4000-8000-0000000000b1";
+    const linux = "00000000-0000-4000-8000-0000000000b2";
+    const response = await postEvents([
+      turn({
+        installId: mac,
+        outcome: "failed",
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+      }),
+      turn({
+        installId: linux,
+        platform: "linux",
+        outcome: "failed",
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+      }),
+      turn({ installId: mac, outcome: "cancelled", provider: "codex", failure: "network" }),
+      turn({ installId: mac, outcome: "succeeded", provider: "claude" }),
+      // Free text, a category on a success, or a status without a category is dropped.
+      turn({ installId: mac, outcome: "failed", provider: "claude", failure: "API Error: 403" }),
+      turn({ installId: mac, outcome: "succeeded", provider: "claude", failure: "auth" }),
+      turn({ installId: mac, outcome: "failed", provider: "claude", httpStatus: 401 }),
+    ]);
+    expect(await response.json()).toEqual({ accepted: 4, received: 7 });
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const dashboard = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    const body = await dashboard.json();
+    expect(body.turnFailures).toEqual([
+      expect.objectContaining({
+        provider: "claude",
+        failure: "edge_blocked",
+        httpStatus: 403,
+        outcome: "failed",
+        turns: 2,
+        installations: 2,
+      }),
+      expect.objectContaining({
+        provider: "codex",
+        failure: "network",
+        httpStatus: null,
+        outcome: "cancelled",
+        turns: 1,
+        installations: 1,
+      }),
+    ]);
+    expect(body.turnFailures[0].lastSeen).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("discards valid and malformed legacy account identifiers without linking installations", async () => {

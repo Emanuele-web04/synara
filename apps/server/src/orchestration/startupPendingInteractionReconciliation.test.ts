@@ -1,3 +1,4 @@
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,14 @@ describe("boot-time pending interaction reconciliation", () => {
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
       Layer.provideMerge(ProviderSessionRuntimeRepositoryLive),
+      Layer.provideMerge(
+        Layer.succeed(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
+      ),
       Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),

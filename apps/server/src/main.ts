@@ -88,6 +88,7 @@ import { ServerSettingsService, withoutNewThreadDefaultsOnlyChanges } from "./se
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { startHostConnectivity } from "./hostConnectivity";
 import { remoteTlsIdentityPath } from "./remoteTransport/certificates";
+import { registerRemoteAccessGrantedWake } from "./hostConnectivitySignals";
 import { superviseHostConnectivity } from "./hostConnectivitySupervisor";
 import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -510,6 +511,9 @@ const makeServerProgram = (input: CliInput) =>
           accountUrl: billingAuthority,
           required: config.remoteBillingPolicyRequired === true,
           remoteSessions,
+          // Without an auth token, a loopback server lets each local request in
+          // only while the policy is off (isLegacyTokenAuthorized), so it keeps polling.
+          pollWhileIdle: !config.authToken && isLoopbackHost(config.host) && !config.publicUrl,
         }),
       );
       yield* Effect.addFinalizer(() => Effect.promise(() => policy.stop()));
@@ -555,10 +559,23 @@ const makeServerProgram = (input: CliInput) =>
         Effect.catch((cause) =>
           Effect.logWarning("Host connectivity supervisor did not start.", {
             cause: String(cause),
-          }).pipe(Effect.as({ reconcile: () => Promise.resolve(), stop: async () => {} })),
+          }).pipe(
+            Effect.as({
+              reconcile: () => Promise.resolve(),
+              wakeAfterRefusal: () => {},
+              stop: async () => {},
+            }),
+          ),
         ),
       );
-      yield* Effect.addFinalizer(() => Effect.promise(() => hostConnectivity.stop()));
+      // A billing read showing remote access granted lets a refused host retry its start.
+      registerRemoteAccessGrantedWake(hostConnectivity.wakeAfterRefusal);
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => {
+          registerRemoteAccessGrantedWake(undefined);
+          return hostConnectivity.stop();
+        }),
+      );
     }
 
     const localUrl = `http://localhost:${config.port}`;
@@ -603,6 +620,10 @@ const makeServerProgram = (input: CliInput) =>
         completionPreviewTrust: {
           remoteTrust,
           tlsIdentityPath: remoteTlsIdentityPath(config.secretsDir),
+        },
+        remoteSessions: {
+          open: () => remoteSessions.size > 0,
+          onOpened: (listener) => remoteSessions.onRemoteConnectionOpened(listener),
         },
         ...(config.devUrl ? { devUrl: config.devUrl } : {}),
       });

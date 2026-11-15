@@ -5,7 +5,12 @@
 import { MCP_CONNECTOR_SERVER_NAME_SUFFIX, SYNARA_MCP_SERVER_NAME } from "./mcpConnectors";
 import { stripTerminalControlSequences } from "./text";
 
+// Stored on persisted warning rows that came from Codex stderr.
+export const CODEX_STDERR_NATIVE_EVENT_TYPE = "codex.process/stderr";
+
 const LOG_LINE = /^(\d{4}-\d{2}-\d{2}T\S+)\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+(\S+):\s+(.*)$/;
+// Plain (non-log) stderr is mostly progress chatter; only error-like lines are worth a row.
+const ERROR_LIKE_LINE = /error|failed|fatal|panic|exception|denied|refused/i;
 const BENIGN_ERRORS = [
   "state db missing rollout path for thread",
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
@@ -17,6 +22,14 @@ export function normalizeCodexProcessLine(line: string): string {
 
 export function isIgnorableCodexProcessLine(line: string): boolean {
   return !line || /^(?:\^C)?Token usage:/i.test(line);
+}
+
+// This startup notice describes opt-in configuration, not a failure of the task.
+export function isCodexUnstableFeaturesWarning(message: string): boolean {
+  return (
+    message.trimStart().startsWith("Under-development features enabled:") &&
+    message.includes("suppress_unstable_features_warning = true")
+  );
 }
 
 // Require a complete log envelope; arbitrary JSON and malformed output remain visible.
@@ -51,13 +64,17 @@ export function normalizeCodexUserVisibleErrorMessage(rawMessage: string): strin
 }
 
 // A user-configured MCP OAuth failure is reported to the host logger, not every chat.
+// `errorLikePlainLinesOnly` is opt-in and meant for raw Codex process stderr only: other
+// providers' warnings pass through this function too and must keep their plain text.
 export function classifyCodexStderr(
   line: string,
   mirroredUserConfigPath?: string,
+  options?: { errorLikePlainLinesOnly?: boolean },
 ): { kind: "notice"; message: string } | { kind: "user-mcp-oauth"; server: string } | null {
   line = normalizeCodexProcessLine(line);
   if (isIgnorableCodexProcessLine(line)) return null;
   const log = readLog(line);
+  if (isCodexUnstableFeaturesWarning(log?.message ?? line)) return null;
   if (log) {
     // The overlay already loads these settings at user level. Codex can rediscover
     // the source file as a project config; only that duplicate notice is harmless.
@@ -85,5 +102,6 @@ export function classifyCodexStderr(
       return { kind: "user-mcp-oauth", server };
     }
   }
+  if (!log && options?.errorLikePlainLinesOnly && !ERROR_LIKE_LINE.test(line)) return null;
   return { kind: "notice", message: normalizeCodexUserVisibleErrorMessage(line) };
 }

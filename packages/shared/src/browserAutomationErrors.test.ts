@@ -168,6 +168,38 @@ describe("browser automation error factories", () => {
     expect(JSON.stringify(error)).not.toContain(secret);
   });
 
+  it("carries a bounded script cause only on script failure codes", () => {
+    const cause = {
+      name: "TimeoutError",
+      api: "locator.waitFor",
+      message: "locator.waitFor: Timeout 15000ms exceeded.",
+    } as const;
+    expect(
+      makeBrowserAutomationError({
+        code: "BrowserEvaluationFailed",
+        retryable: false,
+        phase: "evaluate",
+        effectMayHaveCommitted: true,
+        cause,
+      }),
+    ).toMatchObject({ code: "BrowserEvaluationFailed", cause });
+    expect(() =>
+      makeBrowserAutomationError({
+        code: "BrowserTimeout",
+        retryable: true,
+        phase: "runtime",
+        effectMayHaveCommitted: true,
+        cause,
+      }),
+    ).toThrow();
+    expect(
+      makeBrowserAutomationError({
+        code: "BrowserInputUnsupported",
+        cause,
+      } as unknown as BrowserAutomationErrorInput),
+    ).not.toHaveProperty("cause");
+  });
+
   it("constructs canonical envelopes without copying arbitrary caller text", () => {
     const secret = "selector=#bank-account credential=hunter2";
     const unsafeInput = {

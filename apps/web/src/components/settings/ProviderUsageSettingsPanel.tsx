@@ -35,6 +35,7 @@ import { SettingsSegmentedControl } from "~/components/settings/SettingControls"
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
@@ -81,7 +82,29 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   }
 }
 
-function ProviderUsageCard({
+/**
+ * The account a usage card names under the agent: another account by its name; the
+ * default account only by a name the user gave it, else "Default account" once the
+ * snapshot names its instance. Shared by the Usage page and an account's detail view.
+ */
+export function providerUsageAccountLabel(
+  snapshot: Pick<ServerProviderUsageSnapshot, "provider" | "instanceId">,
+  account: {
+    /** The account's resolved name. */
+    readonly label: string | undefined;
+    /** The name the user saved for it, if any. */
+    readonly customName: string | undefined;
+  },
+  translate: typeof t = t,
+): string | null {
+  const instanceId = snapshot.instanceId ?? snapshot.provider;
+  if (instanceId !== snapshot.provider) return account.label ?? instanceId;
+  return (
+    account.customName?.trim() || (snapshot.instanceId ? translate("common:defaultAccount") : null)
+  );
+}
+
+export function ProviderUsageCard({
   snapshot,
   accountLabel,
 }: {
@@ -229,7 +252,7 @@ export function ProviderUsageSettingsPanel() {
 
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
-  return (
+  const appUsageSettings = (
     <>
       <SettingsSection
         translateTitle={false}
@@ -329,6 +352,13 @@ export function ProviderUsageSettingsPanel() {
           }
         />
       </SettingsSection>
+    </>
+  );
+
+  return (
+    <>
+      {/* Presentation preferences belong to the controlling app, not the selected host. */}
+      {!readWorkspaceFrame() ? appUsageSettings : null}
       <SettingsSectionShell
         title="settings:providerUsage"
         action={
@@ -355,11 +385,11 @@ export function ProviderUsageSettingsPanel() {
             {cards.map((snapshot) => {
               const instanceId = snapshot.instanceId ?? snapshot.provider;
               const instance = providerInstances.get(instanceId);
-              const accountLabel =
-                instanceId !== snapshot.provider
-                  ? (instance?.displayName ?? instanceId)
-                  : instance?.raw.displayName?.trim() ||
-                    (snapshot.instanceId ? t("common:defaultAccount") : null);
+              const accountLabel = providerUsageAccountLabel(
+                snapshot,
+                { label: instance?.displayName, customName: instance?.raw.displayName },
+                t,
+              );
               return (
                 <ProviderUsageCard
                   key={instanceId}

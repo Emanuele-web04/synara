@@ -165,3 +165,60 @@ diff --git a/dist/src/worker.js b/dist/src/worker.js
 +            executionSettled: executionSettled && !restartWorker,
              error: redactText(failure?.message || String(failure)),
              restartWorker,
+diff --git a/dist/src/human.js b/dist/src/human.js
+--- a/dist/src/human.js
++++ b/dist/src/human.js
+@@ -115,6 +115,16 @@
+         return true;
+     return isInsertOf(baseline, afterText, request);
+ }
++// Synara: expected keystroke time for typeText, so callers can refuse text that
++// cannot finish before their deadline instead of leaving it half-typed. The
++// pause model mirrors typeText; perKeyOverheadMs covers each key round trip.
++export function estimateTypeTextMs(text, options = {}, perKeyOverheadMs = 12) {
++    const minDelay = Math.max(10, Number(options?.minDelay) || 35);
++    const maxDelay = Math.max(minDelay, Number(options?.maxDelay) || 95);
++    const count = [...String(text)].length;
++    const pause = 0.92 * ((minDelay + maxDelay) / 2) + 0.08 * 300;
++    return Math.round(Math.max(0, count - 1) * pause + count * perKeyOverheadMs);
++}
+ export async function typeText(keyboard, text, options = {}) {
+     const minDelay = Math.max(10, Number(options.minDelay) || 35);
+     const maxDelay = Math.max(minDelay, Number(options.maxDelay) || 95);
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -28,7 +28,7 @@
+ import { mkdirPrivate, writePrivate, writePrivateBytes } from "./fs-private.js";
+ import { createGuardProxy, httpGetViaProxy, parseUpstreamProxy, } from "./guard-proxy.js";
+ import { createGuardUrl } from "./guard-url.js";
+-import { movePointer, pointInside, pressPointer, scrollWheel, typedTextLanded, typeText, } from "./human.js";
++import { estimateTypeTextMs, movePointer, pointInside, pressPointer, scrollWheel, typedTextLanded, typeText, } from "./human.js";
+ import { buildLaunchIdentityPlan, resolveGeoIdentity } from "./launch-identity.js";
+ import { createLiveViewServer } from "./live-view.js";
+ import { liveViewHtml, liveViewLoginHtml } from "./live-view-html.js";
+@@ -4458,6 +4458,16 @@
+     });
+     human.type = realm.safeFunction(async (target, text, options = {}) => {
+         const page = await ensureSessionPage(session);
++        // Synara: human pacing cannot stop midway without leaving half-typed
++        // text, so refuse up front when it cannot finish in this execution.
++        if (Number.isFinite(execution.deadline)) {
++            const count = [...String(text)].length;
++            const neededMs = estimateTypeTextMs(text, options);
++            const remainingMs = Math.max(0, Math.round(execution.deadline - Date.now() - 1_000));
++            if (neededMs > remainingMs) {
++                throw new Error(`human.type needs about ${neededMs} ms to type ${count} characters at human pace, but about ${remainingMs} ms remain in this call. Nothing was typed. Use locator.fill(text) or page.keyboard.insertText(text) for long text, or raise timeoutMs.`);
++            }
++        }
+         const clickedTarget = await humanClickTarget(page, session, target, options);
+         const clear = options?.clear !== false;
+         if (clear)
+@@ -7007,6 +7017,7 @@
+         });
+         const timeoutMs = Math.max(1_000, Number(message.timeoutMs || 30_000));
+         downloadDeadline = Date.now() + timeoutMs;
++        execution.deadline = downloadDeadline;
+         let timer;
+         const scriptOutcome = Promise.resolve(promise).then((result) => {
+             executionSettled = true;

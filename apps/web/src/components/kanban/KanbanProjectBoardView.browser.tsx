@@ -5,16 +5,20 @@ import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-vi.mock("~/appSettings", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/appSettings")>()),
-  useAppSettings: () => ({
-    settings: { defaultProvider: "codex", sidebarProjectSortOrder: "manual" },
-    setSetting: vi.fn(),
-  }),
-  getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
-  getProviderStartOptions: () => [],
-  resolveAssistantDeliveryMode: () => "default",
-}));
+vi.mock("~/appSettings", async (importOriginal) => {
+  const appSettings = await importOriginal<typeof import("~/appSettings")>();
+  const settings = appSettings.AppSettingsSchema.makeUnsafe({
+    defaultProvider: "codex",
+    sidebarProjectSortOrder: "manual",
+  });
+  return {
+    ...appSettings,
+    useAppSettings: () => ({ settings, setSetting: vi.fn() }),
+    getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
+    getProviderStartOptions: () => [],
+    resolveAssistantDeliveryMode: () => "default",
+  };
+});
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
   useProviderStatusesForLocalConfig: () => [READY_CODEX_STATUS],
 }));

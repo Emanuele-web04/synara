@@ -114,8 +114,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # The single saver for the shared full Linux node_modules key: every other
+      # full lane restores only, so a miss is archived once instead of per lane.
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          save-modules: "true"
 
       - name: Typecheck
         run: bun run typecheck
@@ -236,6 +240,8 @@ jobs:
         with:
           electron: "true"
           turbo: "true"
+          # Sole consumer of the electron:true node_modules key.
+          save-modules: "true"
 
       - name: Build desktop pipeline
         run: bun run build:desktop

@@ -22,6 +22,188 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.5.4",
+    date: "Nov 14",
+    features: [
+      {
+        id: "multiple-pull-requests",
+        title: "Manage multiple pull requests in one chat",
+        description:
+          "Link, view and manage several pull requests from the same thread, including stacked work.",
+      },
+      {
+        id: "multi-folder-worktrees",
+        title: "Use worktrees with multi-folder projects",
+        description:
+          "Add or remove source folders in Edit project and start worktree chats in multi-folder projects.",
+        details:
+          "Only the primary folder is isolated in the worktree. Additional folders remain live and changes in them affect the original folders.",
+      },
+      {
+        id: "remote-reconnect",
+        title: "Reconnect to your computers more easily",
+        description:
+          "Remote computers reconnect automatically when possible, and the computer picker offers a reconnect action. Folder browsing also recovers more gracefully from errors.",
+      },
+      {
+        id: "background-tasks",
+        title: "Keep track of background work",
+        description:
+          "Background tasks now live in the Environment panel. Status stays more accurate, and replies resumed by completed tasks are easier to follow and copy.",
+      },
+      {
+        id: "safer-diffs",
+        title: "Keep incoming Git history out of turn changes",
+        description:
+          "Turn diffs and file Undo avoid treating qualifying merged or checked-out history as edits, while retaining actual changes and conflict resolutions.",
+      },
+      {
+        id: "skills-plans-reliability",
+        title: "More reliable skills and Claude plans",
+        description:
+          "Typed and shared skills reach Claude and Codex more reliably, and Claude turn plans appear again. Temporary Cloudflare blocks are distinguished from sign-in failures; Claude retries blocked turns automatically.",
+      },
+      {
+        id: "performance",
+        title: "Less waiting and background work",
+        description:
+          "Synara starts more promptly, opens large threads with less backend work and avoids warming unused providers. The new-chat background pauses after five seconds without input.",
+        details:
+          "In a Linux source-build test with 20 open threads across 12 projects, median process-tree memory fell from 3,009 MB to 766 MB. Results depend on installed providers and workload; packaged apps and other platforms were not measured.",
+      },
+      {
+        id: "chat-polish",
+        title: "Clearer chat details",
+        description:
+          "The project appears beside the chat title when tabs are off, and images sharing a paragraph with text get their own row.",
+      },
+    ],
+  },
+  {
+    version: "1.5.3",
+    date: "Nov 12",
+    features: [
+      {
+        id: "settings-accounts",
+        title: "Find settings and manage accounts more easily",
+        description:
+          "Settings are grouped by purpose, with a dedicated Accounts page for provider sign-ins and a choice of default account for new chats.",
+        details:
+          "Search accounts and edit their settings separately. Resetting the agents list keeps your accounts and sign-in folders.",
+      },
+      {
+        id: "subagent-work",
+        title: "Follow subagents alongside your chat",
+        description:
+          "Open a subagent next to its parent conversation, and follow related agent-created threads together in the sidebar and Activity.",
+        details:
+          "Running subagents remain visible after the parent finishes. The running-agents indicator opens the Subagents list.",
+      },
+      {
+        id: "calmer-chats",
+        title: "Clearer conversations",
+        description:
+          "Tool activity and provider warnings are less noisy, questions use a compact composer, and choosing a starred model keeps its picker open.",
+      },
+      {
+        id: "claude-usage",
+        title: "Avoid unnecessary Claude usage",
+        description:
+          "New installs ask before resuming a large, long-idle Claude session and offer to continue from a summary.",
+        details:
+          "Existing installations keep their preference. Claude is also guided to avoid unrequested subagents when parallel work does not clearly help.",
+      },
+      {
+        id: "account-reliability",
+        title: "More reliable sign-in and Remote work",
+        description:
+          "Temporary account refresh failures no longer force a sign-out. Sign-in and background account requests handle delays and retries more gracefully.",
+      },
+      {
+        id: "performance-recovery",
+        title: "Less background work, smoother recovery",
+        description:
+          "Idle account polling and usage synchronization do less work, while interrupted chats and Remote project placement recover more reliably.",
+        details:
+          "Account API changes also reduce database and service round trips; their availability depends on the deployed service.",
+      },
+      {
+        id: "browser-errors",
+        title: "More useful browser automation errors",
+        description:
+          "Supported browser script failures provide a safe, actionable cause and guidance without exposing arbitrary page text.",
+      },
+    ],
+  },
+  {
+    version: "1.5.2",
+    date: "Nov 11",
+    features: [
+      {
+        id: "linux-arm64",
+        title: "Synara for Linux ARM64",
+        description:
+          "Download the new ARM64 AppImage alongside the existing x86_64 build. Each architecture uses its own update feed.",
+      },
+      {
+        id: "usage-analytics",
+        title: "Explore your usage",
+        description:
+          "The new Analytics tab in Usage & limits shows token and activity trends by provider, model and project, with API-rate costs.",
+        details:
+          "Costs are reported or estimated at API rates, not what your subscription bills. On a Mac, you can also include local Codex and Claude Code sessions.",
+      },
+      {
+        id: "computer-settings",
+        title: "Choose which computer to configure",
+        description:
+          "Select a connected computer in Settings to view and change its settings, and see the signed-in account for supported providers.",
+      },
+      {
+        id: "chat-reliability",
+        title: "More reliable chats and connections",
+        description:
+          "Account recovery, chat sends, queued work and Remote connections handle interruptions more reliably. Provider and checkpoint warnings now appear in the environment panel.",
+      },
+      {
+        id: "desktop-refinements",
+        title: "A smoother desktop experience",
+        description:
+          "macOS update preparation and shutdown are more reliable, simulator control stays active across chats, and onboarding and rate-limit messages are clearer.",
+      },
+    ],
+  },
+  {
+    version: "1.5.1",
+    date: "Nov 11",
+    features: [
+      {
+        id: "stable-upgrade",
+        title: "Upgrade older Stable databases safely",
+        description:
+          "The affected upgrade from an older Stable release now creates a migration backup and continues automatically.",
+        details:
+          "Only the exact known released history takes this path. Unrecognized database histories still require review, and backup and recovery safeguards remain active.",
+      },
+      {
+        id: "remote-reliability-totals",
+        title: "Optional anonymous Remote reliability totals",
+        description:
+          "With product sharing enabled, Synara counts approved pairings, live Remote connections, reconnects, connection timeouts and unexpected crashes.",
+        details:
+          "These separate daily totals contain no account, device or installation identifiers, chat text, file contents or error messages. Stable sharing stays off by default. Crash reporting is best-effort.",
+      },
+      {
+        id: "website-alto-checkout",
+        title: "Start Alto checkout from the website",
+        description:
+          "Choose a monthly or yearly plan on the Synara pricing page and verify your account by email before checkout.",
+        details:
+          "The checkout is linked to the verified Synara account. Account credentials stay out of the website response.",
+      },
+    ],
+  },
+  {
     version: "1.5.0",
     date: "Nov 10",
     features: [

@@ -1,4 +1,5 @@
 import { ThreadId, type ModelSelection, type ProviderModelOptions } from "@synara/contracts";
+import { vi } from "vitest";
 import {
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -7,6 +8,29 @@ import {
 } from "./composerDraftStore";
 import type { TerminalContextDraft } from "./lib/terminalContext";
 import type { BrowserAnnotationDraft } from "./lib/browserAnnotations";
+
+function createTestBrowserStorage(): Storage {
+  const entries = new Map<string, string>();
+  return {
+    get length() {
+      return entries.size;
+    },
+    clear: () => entries.clear(),
+    getItem: (key) => entries.get(key) ?? null,
+    key: (index) => Array.from(entries.keys())[index] ?? null,
+    removeItem: (key) => {
+      entries.delete(key);
+    },
+    setItem: (key, value) => {
+      entries.set(key, value);
+    },
+  };
+}
+
+export function stubComposerDraftBrowserStorage(): void {
+  vi.stubGlobal("localStorage", createTestBrowserStorage());
+  vi.stubGlobal("sessionStorage", createTestBrowserStorage());
+}
 
 export function makeBrowserAnnotation(
   input: Partial<BrowserAnnotationDraft> & { id: string },

@@ -175,6 +175,47 @@ describe("decider thread.turn.start resumePrecondition", () => {
     );
   });
 
+  it.each([
+    { state: "interrupted", requestedAt: NOW },
+    { state: "error", requestedAt: NOW },
+    { state: "interrupted", requestedAt: BEFORE_RECORD },
+  ] as const)(
+    "rejects a planned continuation for a replacement ($state, requested $requestedAt)",
+    async ({ state, requestedAt }) => {
+      const plannedReadModel = makeReadModel({ latestTurn: makeLatestTurn("interrupted") });
+      const plan = planQuitResumeTurns({
+        record: {
+          version: 1,
+          recordId: "before-replacement",
+          recordedAt: RECORDED_AT,
+          continuationPrompt: "Continue where you left off.",
+          threads: [{ threadId: THREAD_ID, turnId: RECORDED_TURN_ID }],
+        },
+        threads: plannedReadModel.threads,
+        projects: [{ id: plannedReadModel.threads[0]!.projectId, deletedAt: null }],
+        now: NOW,
+      });
+      expect(plan.commands).toHaveLength(1);
+      const readModel = makeReadModel({
+        latestTurn: {
+          ...makeLatestTurn(state, TurnId.makeUnsafe("turn-replacement")),
+          requestedAt,
+        },
+      });
+      const result = await Effect.runPromise(
+        Effect.result(decideOrchestrationCommand({ command: plan.commands[0]!, readModel })),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "OrchestrationCommandInvariantError",
+          commandType: "thread.turn.start",
+          detail: "Thread 'thread-resume' started another turn after it was remembered for resume.",
+        },
+      });
+    },
+  );
+
   it("rejects when the recorded turn completed on its own", async () => {
     await expectRejected(
       makeReadModel({ latestTurn: makeLatestTurn("completed") }),

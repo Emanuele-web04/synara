@@ -57,7 +57,7 @@ it.each([false, true])(
         interactionMode: "default",
         envMode: "local",
         sendAsDraft: false,
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "streaming",
         providerOptionsForDispatch: undefined,
         providerInstances: [],

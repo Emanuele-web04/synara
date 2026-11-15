@@ -386,6 +386,8 @@ export const AccountErrorCode = Schema.Literals([
   "organization_rename_not_allowed",
   "validation_failed",
   "rate_limited",
+  /** A 429 from the account service before the refresh token reached the provider. */
+  "refresh_not_attempted",
   "internal_error",
 ]);
 export type AccountErrorCode = typeof AccountErrorCode.Type;

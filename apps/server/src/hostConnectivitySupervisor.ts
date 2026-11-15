@@ -16,6 +16,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { accountCredentialsPath, readAccountFile, type StoredAccountFile } from "./accountAuth";
+import { isAccountRefusal } from "./accountRefusal";
+import { exponentialBackoffMs, jitterMs } from "./backoff";
+
+/** Retries after repeated account refusals to start back off up to this. */
+const REFUSED_START_RETRY_MAX_MS = 5 * 60_000;
 
 /** The fields whose change means "a different host link": restart on any of them. */
 export function hostLinkKey(file: StoredAccountFile | undefined): string | undefined {
@@ -53,6 +58,8 @@ export interface HostConnectivitySupervisorOptions {
 export interface HostConnectivitySupervisor {
   /** Re-reads the file now; useful after a write the caller made itself. */
   readonly reconcile: () => Promise<void>;
+  /** Ends a refusal backoff early, at most once per poll interval; otherwise does nothing. */
+  readonly wakeAfterRefusal: () => void;
   readonly stop: () => Promise<void>;
 }
 
@@ -73,6 +80,17 @@ export async function superviseHostConnectivity(
   let activeKey: string | undefined;
   let activeStop: (() => void | Promise<void>) | undefined;
   let stopped = false;
+  // The account refusing a link (403) does not change between polls or with a
+  // token renewal, so the same link retries only after a jittered backoff. A
+  // changed link retries at once.
+  let refused: { key: string; starts: number; retryAt: number } | undefined;
+  let refusalRetry: ReturnType<typeof setTimeout> | undefined;
+  let lastWakeAt = Number.NEGATIVE_INFINITY;
+  const clearRefusal = () => {
+    refused = undefined;
+    if (refusalRetry) clearTimeout(refusalRetry);
+    refusalRetry = undefined;
+  };
   // Reconciliations are serialized: a change that lands while one is in
   // flight queues exactly one more pass, which reads the newest file state.
   let inFlight: Promise<void> | undefined;
@@ -101,6 +119,7 @@ export async function superviseHostConnectivity(
     }
     const key = linkKey ? `${linkKey}:${rootKey}` : undefined;
     if (stopped || key === activeKey) return;
+    if (key !== undefined && refused?.key === key && performance.now() < refused.retryAt) return;
     if (activeStop) {
       log(
         key
@@ -109,9 +128,13 @@ export async function superviseHostConnectivity(
       );
       await stopActive();
     }
-    if (!key) return;
+    if (!key) {
+      clearRefusal();
+      return;
+    }
     try {
       const stop = await options.start();
+      clearRefusal();
       if (stopped) {
         await stop();
         return;
@@ -120,6 +143,22 @@ export async function superviseHostConnectivity(
       activeKey = key;
       log("Host connectivity started.");
     } catch (error) {
+      if (isAccountRefusal(error)) {
+        const starts = refused?.key === key ? refused.starts + 1 : 1;
+        // One, two, four… poll intervals apart, never further apart than the cap.
+        const delay = jitterMs(
+          exponentialBackoffMs(starts, pollIntervalMs, REFUSED_START_RETRY_MAX_MS),
+        );
+        clearRefusal();
+        refused = { key, starts, retryAt: performance.now() + delay };
+        refusalRetry = setTimeout(() => {
+          refusalRetry = undefined;
+          void reconcile().catch(() =>
+            log("Host connectivity reconciliation failed; teardown remains pending."),
+          );
+        }, delay);
+        refusalRetry.unref();
+      } else clearRefusal();
       // Leave activeKey unset so the next change (or poll) tries again.
       log("Host connectivity did not start.", { error: String(error) });
     }
@@ -202,9 +241,19 @@ export async function superviseHostConnectivity(
 
   return {
     reconcile,
+    wakeAfterRefusal: () => {
+      // However often billing is read, a still-refused host retries at most once per interval.
+      if (stopped || !refused || performance.now() - lastWakeAt < pollIntervalMs) return;
+      lastWakeAt = performance.now();
+      refused = { ...refused, retryAt: 0 };
+      void reconcile().catch(() =>
+        log("Host connectivity reconciliation failed; teardown remains pending."),
+      );
+    },
     stop: async () => {
       stopped = true;
       if (debounce) clearTimeout(debounce);
+      clearRefusal();
       clearInterval(poll);
       watcher?.close();
       identityWatcher?.close();

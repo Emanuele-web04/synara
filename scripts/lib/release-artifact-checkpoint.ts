@@ -4,6 +4,12 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { hashFile } from "./file-digest.ts";
+import {
+  type DesktopArtifactArch,
+  type DesktopArtifactPlatform,
+  payloadArchLabel,
+  stagedUpdaterManifestName,
+} from "./desktop-artifact-naming.ts";
 import type {
   ReleaseArtifactProvenanceInput,
   ReleaseArtifactProvenanceManifest,
@@ -32,6 +38,13 @@ export interface ReleaseArtifactCheckpointInput extends Pick<
 > {
   readonly flavor: "production" | "beta" | "remote";
 }
+
+// Windows still ships one x64 installer; macOS and Linux package per architecture.
+const SUPPORTED_ARCHES: Record<DesktopArtifactPlatform, ReadonlyArray<DesktopArtifactArch>> = {
+  mac: ["arm64", "x64"],
+  linux: ["x64", "arm64"],
+  win: ["x64"],
+};
 
 function record(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -127,11 +140,11 @@ export async function verifyReleaseArtifactCheckpoint(
   const validTarget = { mac: "dmg", win: "nsis", linux: "AppImage" }[input.platform];
   if (
     input.target !== validTarget ||
-    !["arm64", "x64"].includes(input.arch) ||
-    (input.platform !== "mac" && input.arch !== "x64") ||
+    !SUPPORTED_ARCHES[input.platform].includes(input.arch as DesktopArtifactArch) ||
     !["production", "beta", "remote"].includes(input.flavor) ||
     (input.flavor === "remote" &&
       ((input.platform === "mac" && input.arch !== "arm64") ||
+        (input.platform === "linux" && input.arch !== "x64") ||
         !/^\d+\.\d+\.\d+-remote(?:\.|$)/.test(input.version))) ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(input.version) ||
     !/^[0-9a-f]{40}$/i.test(input.sourceCommit) ||
@@ -158,8 +171,8 @@ export async function verifyReleaseArtifactCheckpoint(
   equal("source tag", source.tag, input.sourceTag);
   equal("lockfile", source.lockfileSha256, input.lockfileSha256.toLowerCase());
 
-  // AppImage names use the native x86_64 alias; provenance keeps the matrix arch x64.
-  const fileArch = input.platform === "linux" ? "x86_64" : input.arch;
+  const arch = input.arch as DesktopArtifactArch;
+  const fileArch = payloadArchLabel(input.platform, arch);
   const productName = { production: "Synara", beta: "Synara-Beta", remote: "Synara-Remote" }[
     input.flavor
   ];
@@ -168,10 +181,7 @@ export async function verifyReleaseArtifactCheckpoint(
     input.platform === "mac"
       ? [`${stem}.dmg`, `${stem}.zip`]
       : [`${stem}.${input.platform === "win" ? "exe" : "AppImage"}`];
-  const updaterName =
-    input.platform === "mac"
-      ? `latest-mac${input.arch === "x64" ? "-x64" : ""}.yml`
-      : `latest${input.platform === "linux" ? "-linux" : ""}.yml`;
+  const updaterName = stagedUpdaterManifestName(input.platform, arch);
   const allowedNames = new Set([
     ...payloads,
     ...payloads.map((name) => `${name}.blockmap`),

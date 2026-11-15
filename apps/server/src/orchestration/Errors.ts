@@ -6,6 +6,9 @@ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 export const NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED =
   "Native code reviews do not support attachments. Send the files as a normal message.";
 
+export const threadModelSelectionChangedDetail = (threadId: string): string =>
+  `Thread '${threadId}' model selection changed before the conditional update.`;
+
 export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<OrchestrationCommandInvariantError>()(
   "OrchestrationCommandInvariantError",
   {

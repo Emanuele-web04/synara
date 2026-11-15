@@ -1,7 +1,6 @@
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { spawnProcess } from "@synara/shared/processRuntime";
-import { teardownChildProcessTree } from "../platform/supervisedProcessTeardown";
+import { spawnParentBoundProcess } from "@synara/shared/parentBoundProcess";
 
 async function metricsPort(): Promise<number> {
   const server = net.createServer();
@@ -47,7 +46,7 @@ export function startCloudflareConnector(options: {
       }
       if (signal.aborted) break;
       const started = Date.now();
-      const child = spawnProcess(
+      const owned = spawnParentBoundProcess(
         executable,
         [
           "tunnel",
@@ -68,9 +67,9 @@ export function startCloudflareConnector(options: {
             TUNNEL_TOKEN: token,
           },
           cwd: options.home,
-          stdio: "ignore",
         },
       );
+      const { child } = owned;
       let exited = false;
       child.once("error", () => {
         exited = true;
@@ -99,7 +98,7 @@ export function startCloudflareConnector(options: {
       } finally {
         options.ready(false);
         // A teardown failure rejects done and prevents spawning another child.
-        await teardownChildProcessTree(child);
+        await owned.stop();
       }
       if (Date.now() - started > 30_000) failures = 0;
       await wait(

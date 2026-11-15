@@ -12,18 +12,27 @@ import type {
   ServerProviderStatus,
   ServerSettings,
 } from "@synara/contracts";
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 
 import {
   getProviderInstanceOptions,
   getProviderStartOptions,
+  newChatDefaultInstanceIdFor,
+  resolveSelectableProviderInstanceId,
   type AppSettings,
+  type NewChatDefault,
 } from "../appSettings";
 import { isProviderKind } from "../providerOrdering";
 import type { DraftThreadEnvMode } from "../composerDraftDomain";
-import { findProviderStatus, resolveAvailableProviderPreference } from "./providerAvailability";
+import {
+  findProviderStatus,
+  findUsableProviderStatus,
+  providerStatusInstanceKey,
+  resolveAvailableProviderPreference,
+} from "./providerAvailability";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
+  hasForegroundProviderModelDiscovery,
   prioritizeProviderModelDiscovery,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
@@ -33,7 +42,6 @@ import {
 
 export type ProviderModelPrefetchSettings = Pick<
   AppSettings,
-  | "defaultProvider"
   | "claudeBinaryPath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
@@ -58,6 +66,7 @@ export type ProviderModelPrefetchSettings = Pick<
       | "openCodeExperimentalWebSockets"
       | "openCodeServerUrl"
       | "providerInstances"
+      | "disabledProviders"
     >
   >;
 
@@ -88,6 +97,10 @@ export const NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS = 30 * 60_000;
 export const NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS = 24 * 60 * 60_000;
 
 const EMPTY_PROVIDER_STATUSES: readonly ServerProviderStatus[] = [];
+
+// Track which in-flight queries were started only by a passive warm. A query
+// joined by an explicit create or protected by a picker refresh stays live.
+const passiveModelPrefetches = new WeakMap<Query, Promise<void>>();
 
 function providerStartOptionsForInstance(
   settings: ProviderModelPrefetchSettings,
@@ -314,6 +327,7 @@ export function prefetchProviderModelsForNewThread(
     providers?: ReadonlyArray<ProviderKind>;
     foregroundProvider?: ProviderKind;
     foregroundInstanceId?: ProviderInstanceId;
+    passive?: boolean;
   },
 ): void {
   const cwd = input.cwd ?? null;
@@ -333,7 +347,11 @@ export function prefetchProviderModelsForNewThread(
       cwd,
       priority: provider === (input.foregroundProvider ?? providers[0]) ? "prefetch" : "background",
     });
-    void queryClient.prefetchQuery({
+    const query = queryClient
+      .getQueryCache()
+      .find({ queryKey: modelsOptions.queryKey, exact: true });
+    const wasPending = query !== undefined && query.state.fetchStatus !== "idle";
+    const prefetch = queryClient.prefetchQuery({
       ...modelsOptions,
       ...(provider === "codex" || provider === "claudeAgent" ? { retry: 0 } : {}),
       staleTime:
@@ -342,6 +360,21 @@ export function prefetchProviderModelsForNewThread(
           : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
       gcTime: NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS,
     });
+
+    if (input.passive && !wasPending) {
+      const started = queryClient.getQueryCache().find({
+        queryKey: modelsOptions.queryKey,
+        exact: true,
+      });
+      if (started && started.state.fetchStatus !== "idle") {
+        passiveModelPrefetches.set(started, prefetch);
+        void prefetch.then(() => {
+          if (passiveModelPrefetches.get(started) === prefetch) {
+            passiveModelPrefetches.delete(started);
+          }
+        });
+      }
+    }
 
     // Agent/mode lists ride along for providers that surface them next to models.
     const agentsOptions = providerAgentsPrefetchQueryOptions({
@@ -414,6 +447,8 @@ export function prefetchModelsForNewThread(
   queryClient: QueryClient,
   input: {
     settings: ProviderModelPrefetchSettings;
+    /** Agent and account the new chat starts on when nothing else picks one. */
+    newChatDefault: NewChatDefault;
     serverSettings?: ServerSettings | null;
     hiddenProviders?: ReadonlyArray<ProviderKind>;
     /** Normalized provider health (custom binary paths applied), see useProviderStatusesForLocalConfig. */
@@ -433,14 +468,23 @@ export function prefetchModelsForNewThread(
     fresh?: boolean;
     envMode?: DraftThreadEnvMode | null;
     includeDroid?: boolean;
+    /**
+     * Warm only the provider the new thread would start with. Use it where the
+     * user has not asked for a new thread yet; the picker loads the others.
+     */
+    selectedProviderOnly?: boolean;
   },
 ): void {
-  const configuredProviderInstances = getProviderInstanceOptions({
+  const instanceSettings = {
     codexAccounts: input.settings.codexAccounts ?? [],
     codexHomePath: input.settings.codexHomePath ?? "",
     selectedCodexAccountId: input.settings.selectedCodexAccountId ?? "default",
     providerInstances: input.settings.providerInstances ?? {},
-  });
+    ...(input.settings.disabledProviders
+      ? { disabledProviders: input.settings.disabledProviders }
+      : {}),
+  };
+  const configuredProviderInstances = getProviderInstanceOptions(instanceSettings);
   const resolveProviderForInstanceId = (instanceId: ProviderInstanceId): ProviderKind | null =>
     configuredProviderInstances.find((instance) => instance.instanceId === instanceId)?.provider ??
     null;
@@ -449,32 +493,53 @@ export function prefetchModelsForNewThread(
     draftActiveProvider: input.draftActiveProvider,
     stickyActiveProvider: input.stickyActiveProvider,
     projectDefaultProvider: input.projectDefaultProvider,
-    defaultProvider: input.settings.defaultProvider,
+    defaultProvider: input.newChatDefault.defaultProvider,
     resolveProviderForInstanceId,
   });
-  const preferredInstanceId = (() => {
-    if (input.providerOverride) return input.providerOverride;
-    for (const instanceId of [input.draftActiveProvider, input.stickyActiveProvider]) {
-      if (instanceId && resolveProviderForInstanceId(instanceId) === resolvedProvider) {
-        return instanceId;
-      }
-    }
-    return resolvedProvider;
-  })();
+  const preferredInstanceId = input.providerOverride
+    ? undefined
+    : ([input.draftActiveProvider, input.stickyActiveProvider].find(
+        (instanceId) => instanceId && resolveProviderForInstanceId(instanceId) === resolvedProvider,
+      ) ??
+      // Nothing picked a provider, so the new chat starts on the default account.
+      newChatDefaultInstanceIdFor(
+        input.newChatDefault,
+        resolvedProvider,
+        input.projectDefaultProvider,
+      ) ??
+      undefined);
   // ChatView resolves the new thread's provider with the same availability
   // preference (resolveAvailableProviderPreference) once statuses are reconciled,
   // so the warm-first provider is the one the composer will actually show.
   const selectedProvider =
-    input.statusesReconciled === true
+    input.providerOverride ??
+    (input.statusesReconciled === true
       ? resolveAvailableProviderPreference({
           preferredProvider: resolvedProvider,
           statuses: input.providerStatuses ?? EMPTY_PROVIDER_STATUSES,
           providerOrder: input.providerOrder ?? [],
           hiddenProviders: input.hiddenProviders ?? [],
         })
-      : resolvedProvider;
-  const selectedProviderInstanceId =
-    selectedProvider === resolvedProvider ? preferredInstanceId : selectedProvider;
+      : resolvedProvider);
+  const requestedInstanceId =
+    selectedProvider === resolvedProvider ? preferredInstanceId : undefined;
+  const configuredInstanceId = resolveSelectableProviderInstanceId(
+    instanceSettings,
+    selectedProvider,
+    requestedInstanceId,
+  );
+  const fallback =
+    input.statusesReconciled && requestedInstanceId !== configuredInstanceId
+      ? findUsableProviderStatus(
+          input.providerStatuses ?? EMPTY_PROVIDER_STATUSES,
+          selectedProvider,
+          configuredInstanceId,
+          configuredProviderInstances,
+        )
+      : null;
+  const selectedProviderInstanceId = fallback
+    ? providerStatusInstanceKey(fallback)
+    : configuredInstanceId;
   const cwd = resolveNewThreadModelPrefetchCwd({
     worktreePath: input.worktreePath ?? null,
     hasExplicitWorktreePath: input.hasExplicitWorktreePath === true,
@@ -519,7 +584,11 @@ export function prefetchModelsForNewThread(
     }
     return true;
   };
-  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(isProviderWarmable);
+  const providers = NEW_THREAD_MODEL_PREFETCH_PROVIDERS.filter(
+    (provider) =>
+      isProviderWarmable(provider) &&
+      (input.selectedProviderOnly !== true || provider === selectedProvider),
+  );
   const orderedProviders =
     selectedProvider === "droid" || !isProviderWarmable(selectedProvider)
       ? providers
@@ -552,19 +621,26 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  // Hovering another project supersedes only inactive model prefetches. Active
-  // composer queries and exact-key prefetches keep running. Include both
-  // fetching and offline-paused queries so stale hover work cannot revive on
-  // reconnect and consume native admission.
+  const passive = input.selectedProviderOnly === true;
+  const isDesired = (queryKey: readonly unknown[]) =>
+    desiredModelQueryKeys.some(
+      (desired) =>
+        queryKey.length === desired.length &&
+        queryKey.every((value, index) => Object.is(value, desired[index])),
+    );
+  if (!passive) {
+    for (const queryKey of desiredModelQueryKeys) {
+      const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+      if (query) passiveModelPrefetches.delete(query);
+    }
+  }
   void queryClient.cancelQueries({
     queryKey: providerDiscoveryQueryKeys.modelsAll,
     type: "inactive",
     predicate: (query) =>
-      !desiredModelQueryKeys.some(
-        (queryKey) =>
-          query.queryKey.length === queryKey.length &&
-          query.queryKey.every((value, index) => Object.is(value, queryKey[index])),
-      ),
+      (!passive || passiveModelPrefetches.has(query)) &&
+      !hasForegroundProviderModelDiscovery(query.queryKey) &&
+      !isDesired(query.queryKey),
   });
 
   if (shouldWarmSelectedDroid) {
@@ -580,5 +656,6 @@ export function prefetchModelsForNewThread(
     providers: orderedProviders,
     foregroundProvider: selectedProvider,
     foregroundInstanceId: selectedProviderInstanceId,
+    passive,
   });
 }

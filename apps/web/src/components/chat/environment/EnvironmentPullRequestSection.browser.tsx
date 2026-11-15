@@ -22,6 +22,7 @@ import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { useStore } from "~/store";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
 import { pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
@@ -36,6 +37,7 @@ const {
   getAutoFix,
   setAutoFix,
   getSettings,
+  dispatchCommand,
 } = vi.hoisted(() => ({
   getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
   getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
@@ -44,10 +46,14 @@ const {
   setAutoFix: vi.fn<NativeApi["pullRequests"]["setAutoFix"]>(),
   getSettings: vi.fn<NativeApi["server"]["getSettings"]>(),
   runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
+  dispatchCommand: vi.fn<NativeApi["orchestration"]["dispatchCommand"]>(),
 }));
 
 vi.mock("~/nativeApi", () => ({
+  // The section reads thread links from the app store, whose module graph also imports this.
+  readNativeApi: () => undefined,
   ensureNativeApi: () => ({
+    orchestration: { dispatchCommand },
     git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
     pullRequests: {
       detail: getPullRequestDetail,
@@ -482,5 +488,208 @@ describe("EnvironmentPullRequestSection", () => {
       const lineHeight = Number.parseFloat(getComputedStyle(span).lineHeight);
       expect(span.getBoundingClientRect().height).toBeGreaterThanOrEqual(lineHeight - 0.5);
     }
+  });
+});
+
+describe("EnvironmentPullRequestSection thread links", () => {
+  const earlierPullRequest = {
+    ...pullRequest,
+    number: 300,
+    title: "Earlier work",
+    url: "https://github.com/example/synara/pull/300",
+    headBranch: "fix/earlier",
+    state: "merged",
+  } satisfies GitResolvedPullRequest;
+
+  function seedThreadLinks(
+    links: ReadonlyArray<{
+      pullRequest: GitResolvedPullRequest;
+      source: "agent" | "created" | "discovered";
+      linkedAt: string;
+      dismissedAt?: string;
+    }>,
+  ) {
+    useStore.setState((state) => ({
+      threadShellById: {
+        ...state.threadShellById,
+        [threadId]: { pullRequests: links } as never,
+      },
+    }));
+  }
+
+  // The checkout sits on a branch without a PR; only the thread's links can name one.
+  function createLinkedQueryClient() {
+    const queryClient = new QueryClient();
+    queryClients.add(queryClient);
+    queryClient.setQueryData(gitQueryKeys.status(cwd), {
+      branch: "main",
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+      hasUpstream: true,
+      upstreamBranch: "origin/main",
+      aheadCount: 0,
+      behindCount: 0,
+      pr: null,
+    } satisfies GitStatusResult);
+    queryClient.setQueryData(
+      gitPullRequestSnapshotQueryOptions({ cwd, reference: pullRequest.url, enabled: true })
+        .queryKey,
+      {
+        pullRequest,
+        checks: [],
+        comments: [],
+        commentsTruncated: false,
+        commentsError: null,
+      } satisfies GitPullRequestSnapshotResult,
+    );
+    return queryClient;
+  }
+
+  beforeEach(() => {
+    getAutoFix.mockResolvedValue({ states: [] });
+    getSettings.mockResolvedValue(DEFAULT_SERVER_SETTINGS_VIEW);
+    dispatchCommand.mockResolvedValue({ sequence: 1 });
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    for (const queryClient of queryClients) queryClient.clear();
+    queryClients.clear();
+    dispatchCommand.mockReset();
+    runPullRequestAction.mockReset();
+    getPullRequestDetail.mockReset();
+    useStore.setState((state) => {
+      const { [threadId]: _removed, ...threadShellById } = state.threadShellById ?? {};
+      return { threadShellById };
+    });
+  });
+
+  it("shows the linked PR when the branch has none and unlinks the others", async () => {
+    seedThreadLinks([
+      { pullRequest: earlierPullRequest, source: "created", linkedAt: "2026-11-13T09:00:00.000Z" },
+      { pullRequest, source: "agent", linkedAt: "2026-11-13T10:00:00.000Z" },
+    ]);
+    await renderSection(createLinkedQueryClient());
+
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .toBeVisible();
+    await expect.element(page.getByText("Pull requests", { exact: true })).toBeVisible();
+    const earlierRow = page.getByTestId("pr-linked-row");
+    await expect.element(earlierRow).toHaveTextContent("#300 Earlier work");
+
+    await earlierRow.getByRole("button", { name: "Unlink from this chat" }).click();
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.pull-request.unlink",
+        threadId,
+        url: earlierPullRequest.url,
+      }),
+    );
+  });
+
+  it("unlinks the current PR from its menu", async () => {
+    seedThreadLinks([{ pullRequest, source: "agent", linkedAt: "2026-11-13T10:00:00.000Z" }]);
+    await renderSection(createLinkedQueryClient());
+
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    await page.getByText("Unlink from this chat", { exact: true }).click();
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.pull-request.unlink", url: pullRequest.url }),
+    );
+  });
+
+  it("keeps a dismissed PR hidden when the checked-out branch still reports it", async () => {
+    seedThreadLinks([
+      {
+        pullRequest,
+        source: "discovered",
+        linkedAt: "2026-11-13T09:00:00.000Z",
+        dismissedAt: "2026-11-13T10:00:00.000Z",
+      },
+    ]);
+    await renderSection(createQueryClient());
+
+    await expect.element(page.getByTestId("pr-link-row")).toBeVisible();
+    await expect
+      .element(page.getByText("#321 Keep PR context visible", { exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  it("passes the linking thread when reopening a PR on another branch", async () => {
+    const projectId = ProjectId.makeUnsafe("stack-project");
+    seedThreadLinks([
+      {
+        pullRequest: { ...pullRequest, state: "closed" },
+        source: "created",
+        linkedAt: "2026-11-13T09:00:00.000Z",
+      },
+    ]);
+    getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+    runPullRequestAction.mockReturnValue(new Promise(() => {}));
+    await render(section(createLinkedQueryClient(), vi.fn(), { projectId }));
+
+    await page.getByRole("button", { name: "#321 Keep PR context visible Closed" }).click();
+    await page.getByRole("menuitem", { name: /^Status/ }).hover();
+    await page.getByRole("menuitem", { name: "Reopen", exact: true }).click();
+
+    await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+    expect(runPullRequestAction).toHaveBeenCalledWith({
+      projectId,
+      repository: "example/synara",
+      number: 321,
+      action: "reopen",
+      threadId,
+    });
+  });
+
+  it("unlinks a sibling from its existing stack row", async () => {
+    const projectId = ProjectId.makeUnsafe("stack-project");
+    const queryClient = createQueryClient();
+    const repository = "example/synara";
+    const sibling = { ...earlierPullRequest, baseBranch: "main" };
+    const current = { ...pullRequest, baseBranch: sibling.headBranch };
+    seedThreadLinks([
+      { pullRequest: sibling, source: "created", linkedAt: "2026-11-13T09:00:00.000Z" },
+      { pullRequest: current, source: "agent", linkedAt: "2026-11-13T10:00:00.000Z" },
+    ]);
+    queryClient.setQueryData(pullRequestQueryKeys.detail({ projectId, repository, number: 321 }), {
+      mergeCapabilities: { merge: true, squash: true, rebase: true, deleteBranchOnMerge: false },
+      stack: {
+        entries: [
+          { ...sibling, position: 1, mergeStateStatus: null },
+          { ...current, position: 2, mergeStateStatus: null },
+        ],
+        number: 300,
+        size: 2,
+        position: 2,
+        baseBranch: "main",
+      },
+    });
+    await render(section(queryClient, vi.fn(), { projectId }));
+
+    const earlierRow = page.getByTestId("pr-stack-row");
+    await expect.element(earlierRow).toHaveTextContent("#300 Earlier work");
+    await earlierRow.getByRole("button", { name: "Unlink from this chat" }).click();
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.pull-request.unlink",
+        threadId,
+        url: sibling.url,
+      }),
+    );
+  });
+
+  it("offers to link a PR when the thread has none", async () => {
+    seedThreadLinks([]);
+    await renderSection(createLinkedQueryClient());
+
+    await page.getByTestId("pr-link-row").click();
+    await expect.element(page.getByText("Link Pull Request", { exact: true })).toBeVisible();
+  });
+
+  it("stays hidden for a draft thread without a PR", async () => {
+    await renderSection(createLinkedQueryClient());
+    await expect.element(page.getByTestId("pr-link-row")).not.toBeInTheDocument();
   });
 });

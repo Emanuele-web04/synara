@@ -1223,6 +1223,7 @@
   "task_quickAddPlaceholder": "Add a task, or press Tab to hand it to an agent",
   "closeNamedItem": "Close {{title}}",
   "image_retryPreview": "Retry image preview",
+  "appSnapHeroAddedToChat": "Added to chat",
   "account_viewPublicProfile": "View public profile",
   "account_makeYourProfilePublic": "Make your profile public"
 }

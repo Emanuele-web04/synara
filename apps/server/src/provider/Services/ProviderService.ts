@@ -288,6 +288,14 @@ export interface ProviderServiceShape {
   readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
 
   /**
+   * The extra folders the thread's persisted runtime was launched with, or undefined
+   * without a binding. Covers runtimes this process recovered or prewarmed itself.
+   */
+  readonly getSessionAdditionalDirectories?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<string> | undefined, ProviderServiceError>;
+
+  /**
    * Forget a stale provider-native resume cursor while preserving local routing
    * metadata such as provider options and runtime mode.
    */

@@ -7,9 +7,11 @@ const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
 const stablePattern = testNamePattern as RegExp;
 // Measured complementary groups keep every stable ChatView case in exactly one lane.
 // The final fallback also owns unknown future stable cases instead of silently skipping them.
+// Sidebar and provider-handoff cases moved from the fallback to balance lane time.
 // See .github/CI.md for the paired measurements and runner-time tradeoff.
 const followPattern = "(?:restores streaming follow|anchor|scroll|tool)";
-const projectPattern = "(?:project|worktree|Space|approval|preserves three answers|queued|queue)";
+const projectPattern =
+  "(?:project|worktree|Space|approval|preserves three answers|queued|queue|sidebar|handoff)";
 
 export default defineConfig({
   ...stableConfig,

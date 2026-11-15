@@ -17,6 +17,7 @@ import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   normalizeProviderAccentColor,
+  providerAccountIdentityLabel,
   providerAccountQualifiedLabel,
 } from "~/lib/providerInstancePresentation";
 import { ProviderAccountDot } from "../ProviderAccountMark";
@@ -92,6 +93,8 @@ export type ComposerModelPickerProviderTab = {
   /** A second account of its provider: its icon is dotted to differ from the default. */
   dotted: boolean;
   accentColor?: string | undefined;
+  /** Who the account is signed in as; null until its provider has reported that. */
+  identity: string | null;
   /** Tooltip sentence explaining why the account cannot run right now; null when it can. */
   unavailableLabel: string | null;
   /** The tab cannot be opened at all (another account's thread, status still loading). */
@@ -179,13 +182,14 @@ export function resolveComposerModelPickerProviderTabs(input: {
             },
           ];
     return tabs.map((tab) => {
+      const status = findProviderStatusForInstance({
+        providers: input.providers,
+        provider: option.value,
+        instanceId: tab.instanceId,
+      });
       const state = resolveAccountTabState({
         label: tab.label,
-        status: findProviderStatusForInstance({
-          providers: input.providers,
-          provider: option.value,
-          instanceId: tab.instanceId,
-        }),
+        status,
         lockedToSibling:
           input.lockedInstanceId != null &&
           tab.instanceId !== input.lockedInstanceId &&
@@ -198,6 +202,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         name: tab.name,
         dotted: tab.dotted,
         accentColor: tab.accentColor,
+        identity: providerAccountIdentityLabel(status),
         unavailableLabel: state.unavailableLabel,
         blocked: state.blocked,
         setupMessage: state.setupMessage,
@@ -239,7 +244,12 @@ export function ComposerModelPickerTabs(props: {
             <PickerTabButton
               key={providerTab.instanceId}
               label={providerTab.label}
-              tooltip={providerTab.unavailableLabel ?? providerTab.label}
+              tooltip={
+                providerTab.unavailableLabel ??
+                (providerTab.identity
+                  ? `${providerTab.label} · ${providerTab.identity}`
+                  : providerTab.label)
+              }
               active={props.tab === providerTab.instanceId}
               disabled={providerTab.blocked}
               accentColor={normalizeProviderAccentColor(providerTab.accentColor)}

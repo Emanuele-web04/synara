@@ -107,6 +107,28 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
   );
 }
 
+/**
+ * Narrower than the eviction predicate: work that is still producing thread
+ * events. An idle "ready" session emits nothing, but a running turn or the
+ * background tasks behind an "In Background" row will. A thread here that loses
+ * its lease keeps deriving that status from frozen detail and never sees the
+ * tasks end, so it leases ahead of threads that are merely alive.
+ */
+function isThreadWorkInFlight(threadId: ThreadId): boolean {
+  const state = useStore.getState();
+  const sidebarThread = state.sidebarThreadSummaryById[threadId];
+  if ((sidebarThread?.pendingBackgroundWorkCount ?? 0) > 0) {
+    return true;
+  }
+  const orchestrationStatus = state.threadSessionById?.[threadId]?.orchestrationStatus;
+  return (
+    orchestrationStatus === "starting" ||
+    orchestrationStatus === "running" ||
+    sidebarThread?.latestTurn?.state === "running" ||
+    state.threadTurnStateById?.[threadId]?.latestTurn?.state === "running"
+  );
+}
+
 export function shouldReconcileThreadDetailRetention(
   current: AppState,
   previous: AppState,
@@ -342,8 +364,10 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
     (threadId) =>
       !input.retentionExcludedThreadIds?.has(threadId) && input.serverThreadIds.has(threadId),
   );
-  // Same predicate that shields detail from eviction: live or actionable work.
+  // Work still producing events first, then the predicate that shields detail
+  // from eviction (live or actionable work), then the rest.
   for (const threadId of [
+    ...leasableRetainedThreadIds.filter((threadId) => isThreadWorkInFlight(threadId)),
     ...leasableRetainedThreadIds.filter((threadId) => isThreadDetailEvictionUnsafe(threadId)),
     ...leasableRetainedThreadIds,
   ]) {

@@ -31,6 +31,7 @@ export function SidebarPrimaryAction({
   shortcutLabel,
   badge,
   coachmark,
+  tourAnchor,
 }: {
   // Accepts both Lucide adapters and raw react-icons glyphs (rendered via SidebarGlyph).
   icon: ComponentType<{ className?: string }>;
@@ -38,6 +39,8 @@ export function SidebarPrimaryAction({
   iconClassName?: string;
   label: string;
   coachmark?: Pick<ComponentProps<typeof OneTimeCoachmark>, "storageKey" | "title" | "description">;
+  /** Lets the app tour point at this row (`data-app-tour`). */
+  tourAnchor?: string;
   onClick?: () => void;
   onMouseEnter?: () => void;
   onFocus?: () => void;
@@ -93,7 +96,7 @@ export function SidebarPrimaryAction({
     </SidebarMenuButton>
   );
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem data-app-tour={tourAnchor}>
       {coachmark ? (
         <OneTimeCoachmark {...coachmark} tooltip={label}>
           {button}

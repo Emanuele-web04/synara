@@ -347,7 +347,191 @@ export type SidebarProjectEntry = {
   kind: "thread";
   rowId: ThreadId;
   thread: SidebarThreadSummary;
+  /** Nesting level (0 = top level); only set when agent-created threads are nested. */
+  depth?: number;
+  childCount?: number;
+  childrenCollapsed?: boolean;
+  /** Last child under its parent: the parent's stem hooks into this row and ends. Only set at depth > 0. */
+  isLastChild?: boolean;
+  /** Per ancestor level above the parent's: whether that ancestor's stem runs past this row. Only set at depth > 0. */
+  guideContinues?: readonly boolean[];
 };
+
+function isAgentCreatedChild(thread: SidebarThreadSummary): boolean {
+  return (
+    thread.creationSource === "synara_mcp" &&
+    thread.sourceThreadId !== null &&
+    thread.sourceThreadId !== undefined &&
+    thread.sourceThreadId !== thread.id
+  );
+}
+
+/** Splits nested entries into runs of a top-level row plus its visible descendants. */
+export function groupSidebarThreadFamilies(
+  entries: readonly SidebarProjectEntry[],
+): SidebarProjectEntry[][] {
+  const families: SidebarProjectEntry[][] = [];
+  for (const entry of entries) {
+    const family = families.at(-1);
+    const isDescendantOfCurrentFamily = (entry.depth ?? 0) > 0;
+    if (family && isDescendantOfCurrentFamily) {
+      family.push(entry);
+    } else {
+      families.push([entry]);
+    }
+  }
+  return families;
+}
+
+/** Direct agent-created children per creator thread, for hover cards and folded clusters. */
+export function groupAgentCreatedChildren(
+  threads: readonly SidebarThreadSummary[],
+): Map<ThreadId, SidebarThreadSummary[]> {
+  const children = new Map<ThreadId, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    if (!isAgentCreatedChild(thread) || !thread.sourceThreadId) {
+      continue;
+    }
+    const siblings = children.get(thread.sourceThreadId);
+    if (siblings) {
+      siblings.push(thread);
+    } else {
+      children.set(thread.sourceThreadId, [thread]);
+    }
+  }
+  return children;
+}
+
+/** Every agent-created descendant of a thread, nearest first; stops at cycles. */
+export function collectAgentCreatedDescendants(
+  threadId: ThreadId,
+  childrenByParent: ReadonlyMap<ThreadId, readonly SidebarThreadSummary[]> | null,
+): SidebarThreadSummary[] {
+  const descendants: SidebarThreadSummary[] = [];
+  if (!childrenByParent) {
+    return descendants;
+  }
+  const seen = new Set<ThreadId>([threadId]);
+  const queue = [...(childrenByParent.get(threadId) ?? [])];
+  for (let index = 0; index < queue.length; index += 1) {
+    const thread = queue[index]!;
+    if (seen.has(thread.id)) {
+      continue;
+    }
+    seen.add(thread.id);
+    descendants.push(thread);
+    queue.push(...(childrenByParent.get(thread.id) ?? []));
+  }
+  return descendants;
+}
+
+/**
+ * Reorders threads depth-first so agent-created threads (synara_mcp) sit under the thread that
+ * created them in the same project. A thread whose creator is absent or in another project,
+ * or that is in `detachedIds` (such as a pinned thread), stays top-level with its children.
+ */
+export function nestAgentCreatedThreadEntries(
+  threads: readonly SidebarThreadSummary[],
+  collapsedParentIds: ReadonlySet<ThreadId>,
+  detachedIds: ReadonlySet<ThreadId> = new Set(),
+): SidebarProjectEntry[] {
+  const projectByThreadId = new Map(threads.map((thread) => [thread.id, thread.projectId]));
+  const childrenByParent = new Map<ThreadId, SidebarThreadSummary[]>();
+  const roots: SidebarThreadSummary[] = [];
+  for (const thread of threads) {
+    const parentId = thread.sourceThreadId;
+    if (
+      isAgentCreatedChild(thread) &&
+      parentId &&
+      projectByThreadId.get(parentId) === thread.projectId &&
+      !detachedIds.has(thread.id)
+    ) {
+      const siblings = childrenByParent.get(parentId);
+      if (siblings) {
+        siblings.push(thread);
+      } else {
+        childrenByParent.set(parentId, [thread]);
+      }
+    } else {
+      roots.push(thread);
+    }
+  }
+
+  const entries: SidebarProjectEntry[] = [];
+  const visited = new Set<ThreadId>();
+  // Hidden subtrees count as visited so the cycle fallback below doesn't resurrect them.
+  const markHidden = (thread: SidebarThreadSummary) => {
+    if (visited.has(thread.id)) {
+      return;
+    }
+    visited.add(thread.id);
+    for (const child of childrenByParent.get(thread.id) ?? []) {
+      markHidden(child);
+    }
+  };
+  const visit = (
+    thread: SidebarThreadSummary,
+    depth: number,
+    guideContinues: readonly boolean[],
+    isLastChild: boolean,
+  ) => {
+    if (visited.has(thread.id)) {
+      return;
+    }
+    visited.add(thread.id);
+    const children = childrenByParent.get(thread.id) ?? [];
+    const collapsed = children.length > 0 && collapsedParentIds.has(thread.id);
+    const entry: SidebarProjectEntry = { kind: "thread", rowId: thread.id, thread, depth };
+    if (children.length > 0) {
+      entry.childCount = children.length;
+      entry.childrenCollapsed = collapsed;
+    }
+    if (depth > 0) {
+      entry.isLastChild = isLastChild;
+      entry.guideContinues = guideContinues;
+    }
+    entries.push(entry);
+    if (collapsed) {
+      for (const child of children) {
+        markHidden(child);
+      }
+      return;
+    }
+    const visible = children.filter((child) => !visited.has(child.id));
+    // This row's own stem keeps running below it unless it was the last sibling.
+    const childGuides = depth > 0 ? [...guideContinues, !isLastChild] : guideContinues;
+    visible.forEach((child, index) => {
+      visit(child, depth + 1, childGuides, index === visible.length - 1);
+    });
+  };
+  for (const root of roots) {
+    visit(root, 0, [], false);
+  }
+  // Cycles (A↔B) have no root; surface any unvisited thread at the top level.
+  for (const thread of threads) {
+    visit(thread, 0, [], false);
+  }
+  return entries;
+}
+
+/** Creator chain of an agent-created thread, nearest first; stops at cycles. */
+export function agentCreatedAncestorIds(
+  threadId: ThreadId,
+  threads: readonly SidebarThreadSummary[],
+): ThreadId[] {
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const ancestors: ThreadId[] = [];
+  let current = byId.get(threadId);
+  while (current && isAgentCreatedChild(current) && current.sourceThreadId) {
+    const parentId = current.sourceThreadId;
+    if (parentId === threadId || ancestors.includes(parentId)) {
+      break;
+    }
+    ancestors.push(parentId);
+    current = byId.get(parentId);
+  }
+  return ancestors;
+}
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
 
@@ -936,6 +1120,7 @@ export function resolveSidebarThreadListPaging(input: {
 export function getVisibleSidebarEntriesForPreview<
   T extends {
     rowId: string;
+    depth?: number;
   },
 >(input: {
   entries: readonly T[];
@@ -965,15 +1150,25 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  if (!entries.some((entry) => entry.rowId === activeEntryId)) {
+  const activeIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+  if (activeIndex < 0) {
     return {
       hasHiddenEntries: true,
       visibleEntries: previewEntries,
     };
   }
 
-  // Keep the open thread's row visible even when it sorts past the preview cap.
+  // Keep the open row and its creator chain visible past the preview cap.
   visibleEntryIds.add(activeEntryId);
+  let depth = entries[activeIndex]?.depth ?? 0;
+  for (let index = activeIndex - 1; index >= previewLimit && depth > 0; index -= 1) {
+    const entry = entries[index]!;
+    const candidateDepth = entry.depth ?? 0;
+    if (candidateDepth < depth) {
+      visibleEntryIds.add(entry.rowId);
+      depth = candidateDepth;
+    }
+  }
 
   return {
     hasHiddenEntries: true,
@@ -1640,6 +1835,8 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  nestChildThreads?: boolean;
+  collapsedChildParentIds?: ReadonlySet<ThreadId>;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1666,10 +1863,28 @@ export function deriveSidebarProjectData(input: {
     );
     const requestedExtraPages =
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
-    const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
-
     // Collapsed folders should not build or render their full tree; large projects can
-    // contain hundreds of rows and folder toggles are on the sidebar hot path.
+    // contain hundreds of rows and folder toggles are on the sidebar hot path, so the nested
+    // DFS below only runs while a project is open.
+    let orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+    let nestedEntries: SidebarProjectEntry[] | null = null;
+    if (input.nestChildThreads && project.expanded) {
+      // Pinned threads take their children to the Pinned section, so drop those families.
+      const pinned = new Set(input.pinnedThreadIds);
+      const projectEntries = groupSidebarThreadFamilies(
+        nestAgentCreatedThreadEntries(
+          allProjectThreads,
+          input.collapsedChildParentIds ?? new Set(),
+          pinned,
+        ),
+      )
+        .filter(([root]) => root !== undefined && !pinned.has(root.rowId))
+        .flat();
+      // Shift-click range selection follows visual order, so use the nested DFS order.
+      orderedProjectThreadIds = projectEntries.map((entry) => entry.rowId);
+      nestedEntries = projectEntries;
+    }
+
     if (!project.expanded) {
       const activeThread =
         input.activeSidebarThreadId === undefined
@@ -1701,11 +1916,13 @@ export function deriveSidebarProjectData(input: {
       continue;
     }
 
-    const orderedEntries: SidebarProjectEntry[] = projectThreads.map((thread) => ({
-      kind: "thread",
-      rowId: thread.id,
-      thread,
-    }));
+    const orderedEntries: SidebarProjectEntry[] =
+      nestedEntries ??
+      projectThreads.map((thread) => ({
+        kind: "thread",
+        rowId: thread.id,
+        thread,
+      }));
 
     const activeEntry =
       input.activeSidebarThreadId === undefined

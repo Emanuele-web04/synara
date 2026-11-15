@@ -16,6 +16,7 @@ import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../sess
 import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
+import { mergeSubagentRunEntries } from "./SubagentRunCard.logic";
 import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
@@ -57,7 +58,7 @@ export function canSubmitUserMessageEdit(input: {
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
-  | { kind: "work"; id: string; entry: WorkLogEntry; backgroundTaskConsumed?: true }
+  | { kind: "work"; id: string; entry: WorkLogEntry }
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
@@ -65,51 +66,11 @@ export type CollapsedTurnItem =
 // narration and rich rows pass through individually.
 export type CollapsedTurnChunk =
   | { kind: "item"; item: CollapsedTurnItem }
-  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] }
-  | { kind: "background-group"; id: string; entries: WorkLogEntry[] };
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
 
 export type WorkEntryChunk =
   | { kind: "item"; id: string; entry: WorkLogEntry }
-  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] }
-  | { kind: "background-group"; id: string; entries: WorkLogEntry[] };
-
-// A cascade of background task rows reads as noise past a couple; three or
-// more in a row share one expandable line.
-export const MIN_BACKGROUND_TASK_GROUP_SIZE = 3;
-
-function isBackgroundTaskItem(
-  item: CollapsedTurnItem,
-): item is Extract<CollapsedTurnItem, { kind: "work" }> {
-  return item.kind === "work" && item.entry.backgroundTask !== undefined;
-}
-
-// Splits runs of 3+ consecutive background task rows into their own group.
-function groupBackgroundTaskRuns(chunks: ReadonlyArray<CollapsedTurnChunk>): CollapsedTurnChunk[] {
-  const grouped: CollapsedTurnChunk[] = [];
-  let run: Extract<CollapsedTurnItem, { kind: "work" }>[] = [];
-  const flushRun = () => {
-    if (run.length >= MIN_BACKGROUND_TASK_GROUP_SIZE) {
-      grouped.push({
-        kind: "background-group",
-        id: run[0]!.id,
-        entries: run.map((item) => item.entry),
-      });
-    } else {
-      for (const item of run) grouped.push({ kind: "item", item });
-    }
-    run = [];
-  };
-  for (const chunk of chunks) {
-    if (chunk.kind === "item" && isBackgroundTaskItem(chunk.item)) {
-      run.push(chunk.item);
-      continue;
-    }
-    flushRun();
-    grouped.push(chunk);
-  }
-  flushRun();
-  return grouped;
-}
+  | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
 
 export function chunkCollapsedTurnItems(
   items: ReadonlyArray<CollapsedTurnItem>,
@@ -146,14 +107,14 @@ export function chunkCollapsedTurnItems(
     chunks.push({ kind: "item", item });
   }
   flushPendingRun();
-  return groupBackgroundTaskRuns(chunks);
+  return chunks;
 }
 
 export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntryChunk[] {
   return chunkCollapsedTurnItems(
     entries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
   ).map((chunk) => {
-    if (chunk.kind === "tool-group" || chunk.kind === "background-group") return chunk;
+    if (chunk.kind === "tool-group") return chunk;
     if (chunk.item.kind !== "work") {
       throw new Error("Work-entry chunking produced an unexpected narration item.");
     }
@@ -170,8 +131,6 @@ export interface WorkEntryRenderPlanChunk {
   entries: WorkLogEntry[];
   summary: ToolCallGroupSummary | null;
   liveEntry: WorkLogEntry | null;
-  // Three or more background task rows sharing one expandable line.
-  backgroundGroup?: boolean;
 }
 
 // Keep the latest activity description visible as technical calls arrive.
@@ -195,15 +154,6 @@ export function planWorkEntryRenderChunks(
     if (chunk.kind === "item") {
       return { id: chunk.id, entries: [chunk.entry], summary: null, liveEntry: null };
     }
-    if (chunk.kind === "background-group") {
-      return {
-        id: chunk.id,
-        entries: chunk.entries,
-        summary: null,
-        liveEntry: null,
-        backgroundGroup: true,
-      };
-    }
     const summary = summarizeToolCallGroup(chunk.entries);
     const isLiveTail = options.tailIsLive && index === chunks.length - 1;
     const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
@@ -219,7 +169,7 @@ export function planWorkEntryRenderChunks(
 // A folded chunk renders as one line (settled summary or live newest call)
 // instead of listing its rows.
 export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
-  return chunk.summary !== null || chunk.liveEntry !== null || chunk.backgroundGroup === true;
+  return chunk.summary !== null || chunk.liveEntry !== null;
 }
 
 // How a folded chunk renders: the line's summary, the rows its disclosure
@@ -491,23 +441,22 @@ export function deriveTurnTimingByTurnId(input: {
   return timings;
 }
 
-// A background task still running when its turn ended stays pinned under the
-// folded turn's header: its status is the turn's lasting result. One the turn
-// started and settled itself (a dev server it stopped) folds with its work.
-// A successful later response can also consume that exact task completion.
-export function isPinnedBackgroundTaskEntry(
+function isSubagentRunWorkRow(entries: ReadonlyArray<WorkLogEntry>): boolean {
+  return entries.length > 0 && entries.every((entry) => entry.subagentRun);
+}
+
+/**
+ * A folded subagent row with a child still at work stays visible at the end
+ * of its turn's answer until every child settles. `liveEntryIds` are the scanned cards
+ * with a live row; a merged row is live when any of its launches is.
+ */
+export function isPinnedSubagentRunEntry(
   entry: WorkLogEntry,
-  turnEndedAt: string | null,
-  backgroundTaskConsumed = false,
+  liveEntryIds: ReadonlySet<string> | undefined,
 ): boolean {
-  const task = entry.backgroundTask;
-  if (!task) return false;
-  if (task.completedAt === null || turnEndedAt === null) return true;
-  const completedMs = Date.parse(task.completedAt);
-  const endedMs = Date.parse(turnEndedAt);
-  if (Number.isNaN(completedMs) || Number.isNaN(endedMs)) return true;
-  if (backgroundTaskConsumed && task.status === "finished") return false;
-  return completedMs > endedMs;
+  const run = entry.subagentRun;
+  if (!run || !liveEntryIds || liveEntryIds.size === 0) return false;
+  return liveEntryIds.has(entry.id) || (run.entryIds ?? []).some((id) => liveEntryIds.has(id));
 }
 
 const TURN_RESUMED_TASK_MESSAGES = {
@@ -646,6 +595,11 @@ export type MessagesTimelineRow =
       turnEndMarker?: TurnEndMarker;
       durationStart: string;
       showAssistantCopyButton: boolean;
+      // Set on a terminal answer that a background task woke the agent to carry
+      // on; the woken response's final answer owns the time and at-rest actions.
+      assistantResponseContinues?: true;
+      // On the reply's last answer: the whole reply's answers, for its copy action.
+      assistantReplyCopyText?: string;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       // True while this row's turn is still running. The end-of-turn changes
@@ -731,25 +685,36 @@ export interface ThreadFindJumpTarget {
 export function resolveWorkEntryJumpTarget(
   rows: readonly MessagesTimelineRow[],
   entryId: string,
-): { rowIndex: number; expandCollapsedWorkMessageId?: MessageId } | null {
+): {
+  rowIndex: number;
+  /** The rendered card's `data-subagent-run-card` id (a merged card wears its first launch's). */
+  cardEntryId: string;
+  expandCollapsedWorkMessageId?: MessageId;
+} | null {
+  // A merged subagent card answers for every launch folded into it.
+  const matches = (entry: WorkLogEntry) =>
+    entry.id === entryId || (entry.subagentRun?.entryIds ?? []).includes(entryId);
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]!;
-    if (row.kind === "work" && row.groupedEntries.some((entry) => entry.id === entryId)) {
-      return { rowIndex };
+    if (row.kind === "work" && row.groupedEntries.some(matches)) {
+      const cardEntryId = row.groupedEntries.every((entry) => entry.subagentRun)
+        ? (row.groupedEntries[0]?.id ?? entryId)
+        : entryId;
+      return { rowIndex, cardEntryId };
     }
     if (row.kind !== "message") continue;
     const hasEntry = (entries: readonly WorkLogEntry[] | undefined) =>
-      (entries ?? []).some((entry) => entry.id === entryId);
+      (entries ?? []).some(matches);
     if (hasEntry(row.leadingWorkEntries) || hasEntry(row.inlineWorkEntries)) {
-      return { rowIndex };
+      return { rowIndex, cardEntryId: entryId };
     }
-    if (
-      (row.collapsedTurnItems ?? []).some(
-        (item) => item.kind === "work" && item.entry.id === entryId,
-      )
-    ) {
+    const collapsed = (row.collapsedTurnItems ?? []).find(
+      (item) => item.kind === "work" && matches(item.entry),
+    );
+    if (collapsed?.kind === "work") {
       return {
         rowIndex: turnHeaderRowIndex(rows, rowIndex),
+        cardEntryId: collapsed.entry.id,
         expandCollapsedWorkMessageId: row.message.id,
       };
     }
@@ -1024,6 +989,76 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
+/**
+ * Terminal assistant messages whose response a finished background task carried
+ * on: the woken response reads as the same reply, so only the last response of
+ * the chain ends with the copy/fork/pin/time row. A wake that has not produced
+ * any assistant text yet leaves the previous footer in place.
+ */
+export function deriveContinuedAssistantMessageIds(
+  messages: ReadonlyArray<TimelineDurationMessage>,
+  terminalAssistantMessageIds: ReadonlySet<string>,
+  wakeIds: ReadonlySet<string>,
+): Set<string> {
+  const continuedAssistantMessageIds = new Set<string>();
+  let latestTerminalId: string | null = null;
+  let wokenAfterTerminal = false;
+
+  for (const message of messages) {
+    if (wakeIds.has(message.id)) {
+      wokenAfterTerminal = latestTerminalId !== null;
+      continue;
+    }
+    if (message.role !== "assistant") {
+      latestTerminalId = null;
+      wokenAfterTerminal = false;
+      continue;
+    }
+    if (latestTerminalId !== null && wokenAfterTerminal) {
+      continuedAssistantMessageIds.add(latestTerminalId);
+    }
+    latestTerminalId = terminalAssistantMessageIds.has(message.id) ? message.id : null;
+    wokenAfterTerminal = false;
+  }
+
+  return continuedAssistantMessageIds;
+}
+
+/**
+ * Copy text for a reply's last answer when background tasks carried the reply
+ * on: every earlier answer of the reply, then its own, so one copy takes the
+ * whole reply. Answers that a user message ended copy only themselves.
+ */
+export function deriveReplyCopyTextByMessageId(
+  messages: ReadonlyArray<Pick<TimelineDurationMessage, "id" | "role"> & { text?: string }>,
+  terminalAssistantMessageIds: ReadonlySet<string>,
+  continuedAssistantMessageIds: ReadonlySet<string>,
+  wakeIds: ReadonlySet<string>,
+): Map<string, string> {
+  const replyCopyTextByMessageId = new Map<string, string>();
+  let earlierAnswers: string[] = [];
+
+  for (const message of messages) {
+    if (wakeIds.has(message.id)) continue;
+    if (message.role !== "assistant") {
+      earlierAnswers = [];
+      continue;
+    }
+    if (!terminalAssistantMessageIds.has(message.id)) continue;
+    const text = message.text?.trim() ?? "";
+    if (continuedAssistantMessageIds.has(message.id)) {
+      if (text) earlierAnswers.push(text);
+      continue;
+    }
+    if (earlierAnswers.length > 0 && text) {
+      replyCopyTextByMessageId.set(message.id, [...earlierAnswers, text].join("\n\n"));
+    }
+    earlierAnswers = [];
+  }
+
+  return replyCopyTextByMessageId;
+}
+
 // Notices, handoff boundaries, and connector proposals stay visible in their
 // own rows when a turn's work is grouped or folded.
 export function isStandaloneWorkEntry(
@@ -1060,9 +1095,6 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
-  // Background subagents still running after the parent turn ended: the parent
-  // turn is idle but its work is not done, so it must not fold yet.
-  subagentsRunning?: boolean;
   // User setting: false keeps every finished turn expanded.
   collapseFinishedTurns?: boolean;
   activeTurnId?: TurnId | null | undefined;
@@ -1078,15 +1110,28 @@ export function deriveMessagesTimelineRows(input: {
   const embeddedVisualOwners = collectInlineVisualEmbedOwners(input.timelineEntries);
   // A finished background task wakes the agent into a new response, so it ends
   // the previous response and starts the next one's clock like a user message.
-  const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
-    entry.kind === "message"
-      ? [entry.message]
-      : entry.kind === "work" && wakesAgent(entry.entry)
-        ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
-        : [],
+  const wakeIds = new Set<string>();
+  const responseMessages = input.timelineEntries.flatMap(
+    (entry): Array<TimelineDurationMessage & { text?: string }> => {
+      if (entry.kind === "message") return [entry.message];
+      if (entry.kind !== "work" || !wakesAgent(entry.entry)) return [];
+      wakeIds.add(entry.id);
+      return [{ id: entry.id, role: "user", createdAt: entry.createdAt }];
+    },
   );
   const durationStartByMessageId = computeMessageDurationStart(responseMessages);
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(responseMessages);
+  const continuedAssistantMessageIds = deriveContinuedAssistantMessageIds(
+    responseMessages,
+    terminalAssistantMessageIds,
+    wakeIds,
+  );
+  const replyCopyTextByMessageId = deriveReplyCopyTextByMessageId(
+    responseMessages,
+    terminalAssistantMessageIds,
+    continuedAssistantMessageIds,
+    wakeIds,
+  );
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
 
   const groupedEntriesEqual = (
@@ -1290,6 +1335,12 @@ export function deriveMessagesTimelineRows(input: {
       durationStart: durationStartByMessageId.get(message.id) ?? message.createdAt,
       showAssistantCopyButton:
         message.role === "assistant" && terminalAssistantMessageIds.has(message.id),
+      ...(continuedAssistantMessageIds.has(message.id)
+        ? { assistantResponseContinues: true as const }
+        : {}),
+      ...(replyCopyTextByMessageId.has(message.id)
+        ? { assistantReplyCopyText: replyCopyTextByMessageId.get(message.id)! }
+        : {}),
       assistantCopyStreaming: message.streaming || assistantTurnStillInProgress,
       assistantTurnInProgress: assistantTurnStillInProgress,
       assistantTurnDiffSummary:
@@ -1343,8 +1394,9 @@ export function deriveMessagesTimelineRows(input: {
     collapseSettledTurns(nextRows, {
       terminalAssistantMessageIds,
       collapseWork: input.collapseFinishedTurns !== false,
-      activeTurnInProgress:
-        (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
+      // A turn folds when the agent's own turn ends. Background subagents that
+      // outlive it fold too; live ones stay at the end of the answer.
+      activeTurnInProgress: input.activeTurnInProgress ?? false,
       activeTurnId: input.activeTurnId ?? null,
       activeResponseStartedAt: liveBoundary.resumedStartedAt,
       turnTimingByTurnId: input.turnTimingByTurnId,
@@ -1578,10 +1630,6 @@ function collapseSettledTurns(
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
-  // Match the exact native completion activity, not a reused task id, label,
-  // or timestamp (task.updated can settle a row before task.completed wakes us).
-  const consumedCompletions = new Map<string, WorkLogEntry>();
-
   const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
     for (const entry of entries) {
       into.push({ kind: "work", id: entry.id, entry });
@@ -1638,7 +1686,13 @@ function collapseSettledTurns(
           continue;
         }
         // Standalone rows stay visible without stopping the fold of nearby work.
-        if (prev.groupedEntries.some(isStandaloneWorkEntry)) continue;
+        // Subagent rows fold with the turn: the Environment panel and the
+        // Subagents dock list them; the ones still at work close the answer.
+        if (
+          !isSubagentRunWorkRow(prev.groupedEntries) &&
+          prev.groupedEntries.some(isStandaloneWorkEntry)
+        )
+          continue;
         foldIndices.push(scan);
         continue;
       }
@@ -1692,7 +1746,13 @@ function collapseSettledTurns(
       }
       if (folded.kind === "work") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
-        collectWorkItems(folded.groupedEntries, collapsedItems);
+        if (isSubagentRunWorkRow(folded.groupedEntries)) {
+          // Adjacent launches keep reading as one card inside the disclosure.
+          const merged = mergeSubagentRunEntries(folded.groupedEntries);
+          collapsedItems.push({ kind: "work", id: merged.id, entry: merged });
+        } else {
+          collectWorkItems(folded.groupedEntries, collapsedItems);
+        }
       } else if (folded.kind === "message-segment") {
         collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         if (!foldedSegmentMessageIds.has(folded.message.id)) {
@@ -1790,9 +1850,8 @@ function collapseSettledTurns(
       resumedBy,
     };
 
-    // Only a successful, settled response consumes its wake. Until then the
-    // launching row keeps the task visible; unrelated later replies cannot do so.
-    // Reused-turn timing can retain an old end before the wake: discarding that
+    // Only a successful, settled response consumes its wake; unrelated later
+    // replies cannot do so. Reused-turn timing can retain an old end before the wake: discarding that
     // duration must not discard an explicit failure/stop outcome as success.
     if (
       header.outcome === "completed" &&
@@ -1805,9 +1864,7 @@ function collapseSettledTurns(
     ) {
       const consumedWakeEntries = wakeEntries.filter((entry) => {
         const completion = entry.backgroundTaskCompletion;
-        if (!completion || (completion.outcome ?? "finished") !== "finished") return false;
-        consumedCompletions.set(entry.id, entry);
-        return true;
+        return completion !== undefined && (completion.outcome ?? "finished") === "finished";
       });
       // Keep the wake's details available in Worked without duplicating a
       // completed notification between the two genuine final answers.
@@ -1852,30 +1909,6 @@ function collapseSettledTurns(
       rows.splice(index, 1);
     }
     pass -= recapIndices.length;
-  }
-
-  if (consumedCompletions.size === 0) return;
-  for (const row of rows) {
-    if (row.kind !== "message" || !row.collapsedTurnItems) continue;
-    for (const item of row.collapsedTurnItems) {
-      if (item.kind !== "work") continue;
-      const task = item.entry.backgroundTask;
-      if (!task || task.status !== "finished" || task.completedAt === null) continue;
-      const wake = task.completionActivityId
-        ? consumedCompletions.get(task.completionActivityId)
-        : undefined;
-      const completion = wake?.backgroundTaskCompletion;
-      if (
-        !completion ||
-        completion.taskId !== task.taskId ||
-        (completion.taskType !== null &&
-          task.taskType !== null &&
-          completion.taskType !== task.taskType) ||
-        (wake?.turnId && item.entry.turnId && wake.turnId !== item.entry.turnId)
-      )
-        continue;
-      item.backgroundTaskConsumed = true;
-    }
   }
 }
 
@@ -2164,10 +2197,7 @@ function collapsedTurnItemsEqual(
     const other = right[index]!;
     if (item.kind !== other.kind || item.id !== other.id) return false;
     if (item.kind === "work" && other.kind === "work") {
-      return (
-        item.backgroundTaskConsumed === other.backgroundTaskConsumed &&
-        workLogEntryContentEqual(item.entry, other.entry)
-      );
+      return workLogEntryContentEqual(item.entry, other.entry);
     }
     if (item.kind === "narration" && other.kind === "narration") {
       return item.message === other.message;
@@ -2299,6 +2329,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         turnEndMarkersEqual(a.turnEndMarker, bm.turnEndMarker) &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
+        a.assistantResponseContinues === bm.assistantResponseContinues &&
+        a.assistantReplyCopyText === bm.assistantReplyCopyText &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnInProgress === bm.assistantTurnInProgress &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

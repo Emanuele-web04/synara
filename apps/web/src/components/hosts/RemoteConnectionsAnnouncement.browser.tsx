@@ -52,10 +52,7 @@ vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
     remote: fixture.remote,
   }),
 }));
-vi.mock("~/lib/accountBilling", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/lib/accountBilling")>()),
-  ACCOUNT_BILLING_ENABLED: true,
-}));
+vi.mock("~/lib/accountBillingFlag", () => ({ ACCOUNT_BILLING_ENABLED: true }));
 vi.mock("~/lib/accountReactQuery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/accountReactQuery")>()),
   accountBillingQueryOptions: (status: AccountStatus | null) => ({

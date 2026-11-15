@@ -17,15 +17,28 @@ export interface RemoteSession {
 
 export const REMOTE_SESSION_REVOKED_CLOSE_CODE = HOST_SESSION_CLOSE_REVOKED;
 
+interface GlobalBillingPolicy {
+  readonly authority: string;
+  readonly enforced: () => boolean;
+  /** Brings an idle policy up to its polling freshness; never rejects. */
+  readonly ensureFresh?: () => Promise<void>;
+}
+
+interface AdmissionGuard {
+  readonly authority?: string;
+  readonly available: () => boolean;
+  /** Fetches an authorization snapshot when the last one is older than its poll; never rejects. */
+  readonly prepare?: () => Promise<void>;
+}
+
 export class RemoteSessionRegistry {
   readonly #sessions = new Map<string, RemoteSession>();
   readonly #legacyConnections = new Set<() => void>();
+  readonly #openedListeners = new Set<() => void>();
   #remoteBillingEnforced = false;
   #billingPolicyRevision = 0;
-  #globalBillingPolicy:
-    | { readonly authority: string; readonly enforced: () => boolean }
-    | undefined;
-  #admissionGuard: { readonly authority?: string; readonly available: () => boolean } | undefined;
+  #globalBillingPolicy: GlobalBillingPolicy | undefined;
+  #admissionGuard: AdmissionGuard | undefined;
 
   /** Only authenticated account snapshots/refusals establish this policy. */
   setRemoteBillingEnforced(enforced: boolean): void {
@@ -43,10 +56,7 @@ export class RemoteSessionRegistry {
   }
 
   /** The deployment policy remains independent of a user's account/host credentials. */
-  registerGlobalBillingPolicy(policy: {
-    readonly authority: string;
-    readonly enforced: () => boolean;
-  }): () => void {
+  registerGlobalBillingPolicy(policy: GlobalBillingPolicy): () => void {
     this.#globalBillingPolicy = policy;
     return () => {
       if (this.#globalBillingPolicy !== policy) return;
@@ -59,16 +69,48 @@ export class RemoteSessionRegistry {
     };
   }
 
-  registerAdmissionGuard(guard: {
-    readonly authority?: string;
-    readonly available: () => boolean;
-  }): () => void {
+  registerAdmissionGuard(guard: AdmissionGuard): () => void {
     this.#admissionGuard = guard;
     return () => {
       if (this.#admissionGuard !== guard) return;
       this.#admissionGuard = undefined;
       if (this.remoteBillingEnforced) this.closeLegacyConnections();
     };
+  }
+
+  /** Open sessions or legacy sockets: what a policy change or revocation must reach in time. */
+  get remoteConnectionsOpen(): boolean {
+    return this.#sessions.size > 0 || this.#legacyConnections.size > 0;
+  }
+
+  /** Runs on every session or legacy socket registration; returns the unsubscribe. */
+  onRemoteConnectionOpened(listener: () => void): () => void {
+    this.#openedListeners.add(listener);
+    return () => this.#openedListeners.delete(listener);
+  }
+
+  /** Await before a decision that reads only the billing policy; it never rejects. */
+  async prepareBillingPolicy(): Promise<void> {
+    await this.#globalBillingPolicy?.ensureFresh?.();
+  }
+
+  /**
+   * Await before admitting a remote session or socket; it never rejects. A
+   * fresh authorization snapshot also refreshes the billing policy it carries.
+   */
+  async prepareRemoteAdmission(): Promise<void> {
+    await this.#admissionGuard?.prepare?.();
+    await this.#globalBillingPolicy?.ensureFresh?.();
+  }
+
+  #connectionOpened(): void {
+    for (const listener of this.#openedListeners) {
+      try {
+        listener();
+      } catch {
+        /* Bookkeeping survives observers. */
+      }
+    }
   }
 
   canAdmitRemoteSession(): boolean {
@@ -84,6 +126,7 @@ export class RemoteSessionRegistry {
   registerLegacyConnection(close: () => void): (() => void) | undefined {
     if (!this.canAdmitRemoteSession()) return undefined;
     this.#legacyConnections.add(close);
+    this.#connectionOpened();
     return () => this.#legacyConnections.delete(close);
   }
 
@@ -96,6 +139,7 @@ export class RemoteSessionRegistry {
 
   add(session: RemoteSession): () => void {
     this.#sessions.set(session.id, session);
+    this.#connectionOpened();
     return () => this.#sessions.delete(session.id);
   }
 

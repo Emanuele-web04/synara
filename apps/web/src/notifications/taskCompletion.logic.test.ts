@@ -449,6 +449,20 @@ describe("collectCompletedThreadCandidates", () => {
       },
     );
 
+    it("releases a held completion when only the server background count reaches zero", () => {
+      const held = wokenTurnThread({
+        activities: [movedToBackground("agent-a")],
+        pendingBackgroundTaskCount: 1,
+      });
+      const released = { ...held, pendingBackgroundTaskCount: 0 };
+      const options = { waitForSubagents: true };
+
+      expect(collectCompletedThreadCandidates(previous, [held], options)).toEqual([]);
+      expect(collectCompletedThreadCandidates([held], [released], options)).toEqual([
+        expect.objectContaining({ turnId: held.latestTurn?.turnId }),
+      ]);
+    });
+
     it("does not alert for a subagent's own thread", () => {
       const parentThreadId = ThreadId.makeUnsafe("parent-thread");
       const next = [wokenTurnThread({ parentThreadId })];

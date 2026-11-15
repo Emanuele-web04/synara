@@ -47,6 +47,9 @@ import {
   removeManageableProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  newChatDefaultForProvider,
+  newChatDefaultInstanceIdFor,
+  resolveNewChatDefault,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
   revealHubsRailItemOnce,
@@ -544,6 +547,8 @@ describe("normalizeStoredAppSettings", () => {
   it("builds the initial server migration patch from legacy plaintext before storage redaction", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({
+        openCodeServerUrl: "http://127.0.0.1:4096",
+        openCodeServerPassword: "legacy-password-fixture",
         providerInstances: {
           grok_work: {
             driver: "grok",
@@ -557,7 +562,14 @@ describe("normalizeStoredAppSettings", () => {
       }),
     );
 
-    expect(buildInitialServerSettingsMigrationPatch(decodedSettings).providerInstances).toEqual({
+    const patch = buildInitialServerSettingsMigrationPatch(decodedSettings);
+    expect(patch).not.toHaveProperty("providerInstances");
+    expect(patch).not.toHaveProperty("providers");
+    expect(patch.legacyProviders?.opencode).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "legacy-password-fixture",
+    });
+    expect(patch.legacyProviderInstances).toEqual({
       grok_work: {
         driver: "grok",
         environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
@@ -586,6 +598,7 @@ describe("normalizeStoredAppSettings", () => {
   it("keeps legacy provider secrets until the server migration is committed", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({
+        openCodeServerPassword: "legacy-fixture",
         providerInstances: {
           grok_work: {
             driver: "grok",
@@ -599,6 +612,14 @@ describe("normalizeStoredAppSettings", () => {
       }),
     );
 
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, false)
+        .openCodeServerPassword,
+    ).toBe("legacy-fixture");
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, true)
+        .openCodeServerPassword,
+    ).toBe("");
     expect(
       normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, false).providerInstances,
     ).toEqual({
@@ -1121,6 +1142,111 @@ describe("mergeProviderStartOptions", () => {
     ).toEqual({
       codex: { binaryPath: "/group/codex", homePath: "/home/me/.codex" },
     });
+  });
+});
+
+describe("resolveNewChatDefault", () => {
+  const base = {
+    ...AppSettingsSchema.makeUnsafe({}),
+    defaultProvider: "claudeAgent" as const,
+    providerInstances: {
+      claude_work: { driver: "claudeAgent", displayName: "Work", enabled: true },
+      claude_off: { driver: "claudeAgent", displayName: "Off", enabled: false },
+      codex_team: { driver: "codex", displayName: "Team", enabled: true },
+    },
+  };
+
+  it("defaults to an empty account on fresh settings", () => {
+    const fresh = AppSettingsSchema.makeUnsafe({});
+    expect(fresh.defaultProviderInstanceId).toBe("");
+    expect(resolveNewChatDefault(fresh)).toEqual({
+      defaultProvider: "codex",
+      defaultProviderInstanceId: null,
+    });
+  });
+
+  it("returns a stored account that exists, is enabled, and belongs to the agent", () => {
+    expect(resolveNewChatDefault({ ...base, defaultProviderInstanceId: " claude_work " })).toEqual({
+      defaultProvider: "claudeAgent",
+      defaultProviderInstanceId: "claude_work",
+    });
+  });
+
+  it("keeps the migrated Codex preference until the user explicitly chooses the default account", () => {
+    const settings = AppSettingsSchema.makeUnsafe({
+      codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+      selectedCodexAccountId: "work",
+    });
+    expect(resolveNewChatDefault(settings).defaultProviderInstanceId).toBe(
+      codexAccountInstanceId("work"),
+    );
+    expect(
+      resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "codex" })
+        .defaultProviderInstanceId,
+    ).toBe("codex");
+  });
+
+  it("falls back to the agent's default account for an unusable stored account", () => {
+    for (const defaultProviderInstanceId of ["", "claude_missing", "claude_off", "codex_team"]) {
+      expect(resolveNewChatDefault({ ...base, defaultProviderInstanceId })).toEqual({
+        defaultProvider: "claudeAgent",
+        defaultProviderInstanceId: null,
+      });
+    }
+  });
+
+  it("drops the account while its agent is disabled", () => {
+    expect(
+      resolveNewChatDefault({
+        ...base,
+        defaultProviderInstanceId: "claude_work",
+        disabledProviders: ["claudeAgent"],
+      }),
+    ).toEqual({ defaultProvider: "claudeAgent", defaultProviderInstanceId: null });
+  });
+
+  it("keeps one object per agent and account across unrelated settings writes", () => {
+    const settings = { ...base, defaultProviderInstanceId: "claude_work" };
+    const resolved = resolveNewChatDefault(settings);
+    expect(resolveNewChatDefault(settings)).toBe(resolved);
+    // A write that leaves the default alone (new settings object) keeps the identity.
+    const rewritten: typeof settings = { ...settings, uiFontFamily: "Inter" };
+    expect(rewritten).not.toBe(settings);
+    expect(resolveNewChatDefault(rewritten)).toBe(resolved);
+    // Changing the account yields a different object.
+    expect(resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "" })).not.toBe(
+      resolved,
+    );
+    expect(resolveNewChatDefault({ ...settings, defaultProviderInstanceId: "claude_off" })).toBe(
+      newChatDefaultForProvider("claudeAgent"),
+    );
+  });
+});
+
+describe("newChatDefaultInstanceIdFor", () => {
+  const newChatDefault = {
+    defaultProvider: "claudeAgent" as const,
+    defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+  };
+
+  it("applies the account when its agent is used and no project default chose it", () => {
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", null)).toBe("claude_work");
+  });
+
+  it("drops the account for another agent, under a project default, or without a default", () => {
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "codex", null)).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", "claudeAgent")).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, "claudeAgent", "codex")).toBeNull();
+    expect(newChatDefaultInstanceIdFor(null, "claudeAgent", null)).toBeNull();
+    expect(newChatDefaultInstanceIdFor(newChatDefault, null, null)).toBeNull();
+  });
+
+  it("pins an explicit provider pick to that agent's default account", () => {
+    expect(newChatDefaultForProvider("codex")).toEqual({
+      defaultProvider: "codex",
+      defaultProviderInstanceId: null,
+    });
+    expect(newChatDefaultForProvider("codex")).toBe(newChatDefaultForProvider("codex"));
   });
 });
 

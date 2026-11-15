@@ -58,6 +58,28 @@ so legacy strings stay hidden during this rollout. Never
 run the old receiver against the migrated schema. No production migration or
 deployment is authorized by the presence of this file.
 
+For `0014_product_turn_failures.sql` (turn failure categories), apply the migration
+before deploying the receiver that writes it. Some environments intentionally skipped
+`0007` and `0009`, so never run a bare `wrangler d1 migrations apply`: it would also
+run those cleanups. Instead:
+
+1. Record a D1 Time Travel bookmark (`bunx wrangler d1 time-travel info
+synara-beta-diagnostics`).
+2. Apply only this file with `bunx wrangler d1 execute synara-beta-diagnostics --remote
+--file migrations/0014_product_turn_failures.sql`, then record it in `d1_migrations`
+   using the same procedure as earlier selective migrations.
+3. Check `PRAGMA table_info(product_events)` shows `failure` and `http_status`. If the
+   run stopped after the first `ALTER`, run only the missing one: SQLite has no
+   `ADD COLUMN IF NOT EXISTS`, and re-running the file fails on the existing column.
+4. Deploy the receiver.
+
+A receiver deployed before the migration fails every product-event insert with 500
+(desktop clients keep their queue and retry for up to seven days) and the Product
+dashboard query fails. The old receiver works against the migrated schema and leaves
+the new columns `NULL`, so rolling the Worker back needs no schema change. To undo the
+schema, drop the two columns; restoring the bookmark would discard events received
+since then. Clients may ship first: older receivers drop the unknown fields.
+
 `POST /v1/product-events` accepts bounded, consented desktop/iOS/iPadOS reports;
 `GET /api/product` requires dashboard authentication. Raw product events expire
 after 30 days. Raw diagnostic provider and turn samples (`usage_providers` and
@@ -144,3 +166,25 @@ first launch is never used as a download proxy. See the GitHub
 [release API](https://docs.github.com/en/rest/releases/releases#list-releases)
 for the public counter source. Tests use synthetic responses and local SQLite;
 they never call a live Worker or D1 database.
+
+## Anonymous reliability
+
+`POST /v1/reliability-events` accepts JSON `{ "events": [...] }` from the existing
+opt-in product-analytics owner. Each version-1 record contains a random receipt
+UUID, UTC day, fixed reliability code, channel, release version and fixed
+platform. The receiver validates every record before committing the batch.
+It returns `{ "stored": true, "acknowledged": [...] }` after the receipts and
+counts commit. A retry of an identical receipt does not increment the count.
+
+`GET /api/reliability` requires the dashboard session. Query an exact `day` or an
+inclusive `from`/`to` range of up to 90 UTC days. Optional `channel`, `platform`,
+`version` and `code` filters narrow the result. The default is the most recent
+seven UTC days. The response returns up to 1,000 grouped rows and a `truncated`
+flag. Receipt IDs never appear in dashboard responses.
+
+Apply additive D1 migration `0013_reliability.sql` before deploying the Worker
+that serves these endpoints. The scheduled cleanup removes receipts after 14
+days and totals after 90 days. Existing product and release-diagnostics tables
+keep their separate contracts and retention.
+See [the reliability runbook](RELIABILITY.md) for selective migration rollout,
+query examples and the limits of anonymous observations.

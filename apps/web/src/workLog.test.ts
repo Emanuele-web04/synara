@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveSubagentTaskEnds,
+  deriveThreadBackgroundTasks,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
@@ -432,7 +433,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.userInputExchange).toBeUndefined();
   });
 
-  it("keeps skipped baseline feedback visible before a provider turn id exists", () => {
+  it("keeps checkpoint status out of tool history before a provider turn id exists", () => {
     const activities: OrchestrationThreadActivity[] = [
       {
         ...makeActivity({
@@ -456,15 +457,29 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
       visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      id: "baseline-skipped",
-      activityKind: "checkpoint.baseline.skipped",
+    expect(entries).toEqual([]);
+    expect(deriveTimelineEntries([], [], entries)).toEqual([]);
+    expect(
+      deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+        keepMissingCheckpointNotices: true,
+      }),
+    ).toMatchObject([{ id: "baseline-skipped" }]);
+  });
+
+  it("preserves Hub-only preparation failures independently of the checkpoint baseline", () => {
+    const activity = makeActivity({
+      id: "hub-baseline-skipped",
+      kind: "checkpoint.baseline.skipped",
       tone: "info",
+      summary: "Turn continued without Hub baseline",
+      payload: { checkpointBaseline: "captured", studioPreparation: "unavailable" },
     });
-    const timeline = deriveTimelineEntries([], [], entries);
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("work");
+    const turnId = TurnId.makeUnsafe("visible-turn");
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      visibleTurnIds: new Set([turnId]),
+    });
+    expect(entries).toMatchObject([{ id: "hub-baseline-skipped" }]);
   });
 
   it("reuses unchanged entry objects across passes over the same activities", () => {
@@ -709,6 +724,117 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entry?.detail).toBe("Enabled [full] mode");
     expect(entry?.label).toBe("Pi extension");
+  });
+
+  it("hides persisted Pi unsupported-UI warnings but keeps extension notifications", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "pi-info",
+          kind: "runtime.warning",
+          summary: "Pi extension",
+          payload: { message: "Indexing finished", nativeEventType: "info" },
+        }),
+        makeActivity({
+          id: "pi-unsupported",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Pi extension UI API 'setWidget' is not supported in Synara yet." },
+        }),
+        makeActivity({
+          id: "pi-warning",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Extension could not load its config", nativeEventType: "warning" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
+  });
+
+  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
+    const stderr = (id: string, message: string, nativeEventType?: string) =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: { message, ...(nativeEventType ? { nativeEventType } : {}) },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        // Stored only because ingestion kept it: a structured ERROR whose level
+        // the message normalization removed must not be judged again.
+        stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
+        stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
+        stderr("other-provider", "Bash was denied: outside workspace"),
+        stderr("other-plain", "Falling back to the default model"),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "codex-error",
+      "codex-structured-error",
+      "other-plain",
+      "other-provider",
+    ]);
+  });
+
+  it("hides stored Claude warnings the adapter now only logs", () => {
+    const retry = (id: string, attempt: number, error = "overloaded") =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: {
+          message: `Request retry ${attempt}/3 in 2s (HTTP 503).`,
+          data: { type: "system", subtype: "api_retry", attempt, max_retries: 3, error },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unhandled",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Unhandled Claude system message subtype 'notification'." },
+        }),
+        makeActivity({
+          id: "attachment-missing",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message: "Unhandled Claude system message subtype 'file_attachments_missing'.",
+          },
+        }),
+        makeActivity({
+          id: "uncached",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: {
+            message:
+              "Claude reported ~60k input tokens outside cache in one request, plus ~2k cache writes and ~0 cache reads.",
+          },
+        }),
+        retry("retry-1", 1),
+        retry("retry-2-rate-limit", 2, "rate_limit"),
+        retry("retry-3", 3),
+        makeActivity({
+          id: "denied",
+          kind: "runtime.warning",
+          summary: "Runtime warning",
+          payload: { message: "Bash was denied: outside the workspace" },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "attachment-missing",
+      "denied",
+      "retry-2-rate-limit",
+      "retry-3",
+    ]);
   });
 
   it("does not expose unmapped diagnostic data as a transcript preview", () => {
@@ -986,6 +1112,39 @@ describe("deriveWorkLogEntries", () => {
           },
         },
       ]);
+    });
+
+    // The Environment panel and the right-dock list read the thread's tasks
+    // without transcript rows; they must describe the same tasks the same way.
+    it("lists the thread's tasks with their launch commands, matching the transcript rows", () => {
+      const activities = [
+        launchCall("launch-a", "toolu_a", "sleep 4 && echo a", "2026-10-10T00:15:20.000Z"),
+        launchCall("launch-b", "toolu_b", "false", "2026-10-10T00:15:20.100Z"),
+        notice(
+          "moved",
+          [
+            ["task-a", "a"],
+            ["task-b", "b"],
+          ],
+          "2026-10-10T00:15:20.300Z",
+        ),
+        taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.301Z"),
+        taskStarted("task-b", "toolu_b", "2026-10-10T00:15:20.302Z"),
+        taskCompleted(
+          "task-b",
+          "failed",
+          'Background command "b" failed with exit code 1',
+          "2026-10-10T00:15:21.302Z",
+        ),
+      ];
+      const rowTasks = deriveWorkLogEntries(activities, undefined, options).flatMap((entry) =>
+        entry.backgroundTask ? [entry.backgroundTask] : [],
+      );
+      expect(rowTasks.map((task) => [task.command, task.status, task.exitCode])).toEqual([
+        ["sleep 4 && echo a", "running", null],
+        ["false", "failed", 1],
+      ]);
+      expect(deriveThreadBackgroundTasks(activities)).toEqual(rowTasks);
     });
 
     it("updates the same row in place when the task finishes, fails or is stopped", () => {
@@ -2289,6 +2448,48 @@ describe("deriveWorkLogEntries", () => {
       label: "Permission denied opening the working directory",
       detail: "Permission denied opening the working directory",
     });
+  });
+
+  it("omits approaching-limit and Codex unstable-feature notices while retaining blocked limits and failures", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "approaching",
+          kind: "account.rate-limited",
+          payload: { status: "allowed_warning" },
+        }),
+        makeActivity({
+          id: "unstable",
+          kind: "runtime.warning",
+          payload: {
+            message:
+              "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/codex/config.toml.",
+            nativeEventType: "codex.warning",
+          },
+        }),
+        makeActivity({
+          id: "blocked",
+          kind: "account.rate-limited",
+          tone: "error",
+          payload: { status: "rejected" },
+        }),
+        makeActivity({ id: "checkpoint-failed", kind: "checkpoint.capture.failed", tone: "error" }),
+        makeActivity({
+          id: "real-warning",
+          kind: "runtime.warning",
+          payload: {
+            message: "Cannot parse config.toml: invalid TOML",
+            nativeEventType: "codex.warning",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "blocked",
+      "checkpoint-failed",
+      "real-warning",
+    ]);
   });
 
   it("shows runtime warning messages and collapses repeated identical warning rows", () => {
@@ -6263,13 +6464,7 @@ describe("deriveTimelineEntries", () => {
       [],
       workEntries,
     );
-    expect(entries.map((entry) => entry.id)).toEqual([
-      "request",
-      "answer",
-      "tool",
-      "final-answer",
-      "baseline-skipped",
-    ]);
+    expect(entries.map((entry) => entry.id)).toEqual(["request", "answer", "tool", "final-answer"]);
   });
 
   it("keeps timestamp ties in message, proposed-plan, then work order", () => {

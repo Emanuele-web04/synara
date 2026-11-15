@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { outboundHttp } from "@synara/shared/outboundHttp";
-import { fetchJson } from "./http";
+import { fetchJson, isEdgeBlockedResponse } from "./http";
 
 function response() {
   return {
@@ -65,5 +65,30 @@ describe("fetchJson outbound policy", () => {
       allowLoopbackHttp: true,
       requirePublicAddress: true,
     });
+  });
+});
+
+function result(status: number, headers: Record<string, string>, json: unknown = null) {
+  return { status, json, headers: new Headers(headers) };
+}
+
+describe("isEdgeBlockedResponse", () => {
+  it("recognizes Cloudflare block and challenge pages", () => {
+    expect(isEdgeBlockedResponse(result(403, { "cf-mitigated": "challenge" }))).toBe(true);
+    expect(isEdgeBlockedResponse(result(403, { "content-type": "text/html; charset=UTF-8" }))).toBe(
+      true,
+    );
+    expect(isEdgeBlockedResponse(result(403, { server: "cloudflare" }))).toBe(true);
+  });
+
+  it("keeps provider JSON rejections and non-403 statuses as non-edge responses", () => {
+    const jsonError = { error: { type: "permission_error" } };
+    expect(
+      isEdgeBlockedResponse(
+        result(403, { server: "cloudflare", "content-type": "application/json" }, jsonError),
+      ),
+    ).toBe(false);
+    expect(isEdgeBlockedResponse(result(401, { "cf-mitigated": "challenge" }))).toBe(false);
+    expect(isEdgeBlockedResponse(result(403, {}))).toBe(false);
   });
 });

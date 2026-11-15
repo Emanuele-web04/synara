@@ -11,7 +11,11 @@ import {
 import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
+import {
+  ProviderDriverKind,
+  ProviderInstanceConfigMap,
+  ProviderInstanceId,
+} from "./providerInstance";
 import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
@@ -110,6 +114,8 @@ const ServerProviderStatusWire = Schema.Struct({
   authStatus: ServerProviderAuthStatus,
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),
+  accountEmail: Schema.optional(TrimmedNonEmptyString),
+  accountOrganization: Schema.optional(TrimmedNonEmptyString),
   voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
   supportsAutoRuntimeMode: Schema.optional(Schema.Boolean),
   autoRuntimeModeBinaryPath: Schema.optional(TrimmedNonEmptyString),
@@ -156,6 +162,8 @@ const ServerProviderStatusSource = Schema.Struct({
   authStatus: ServerProviderAuthStatus,
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),
+  accountEmail: Schema.optional(TrimmedNonEmptyString),
+  accountOrganization: Schema.optional(TrimmedNonEmptyString),
   voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
   supportsAutoRuntimeMode: Schema.optional(Schema.Boolean),
   autoRuntimeModeBinaryPath: Schema.optional(TrimmedNonEmptyString),
@@ -712,10 +720,19 @@ export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;
 export const ServerGetEnvironmentResult = ExecutionEnvironmentDescriptor;
 export type ServerGetEnvironmentResult = typeof ServerGetEnvironmentResult.Type;
 
-export const ServerUpdateSettingsInput = ServerSettingsPatch;
+export const ServerUpdateSettingsInput = Schema.Struct({
+  ...ServerSettingsPatch.fields,
+  /** Import provider defaults and explicit instances from the owner's legacy browser settings. */
+  legacyProviders: ServerSettingsPatch.fields.providers,
+  legacyProviderInstances: Schema.optionalKey(ProviderInstanceConfigMap),
+});
 export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
-export const ServerUpdateSettingsResult = ServerSettingsView;
+export const ServerUpdateSettingsResult = Schema.Struct({
+  ...ServerSettingsView.fields,
+  /** The authoritative server processed and recorded this legacy provider import. */
+  legacyProviderImportAcknowledged: Schema.optionalKey(Schema.Literal(true)),
+});
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;
 
 /** Aggregate runtime counters only: safe for the unauthenticated health route. */

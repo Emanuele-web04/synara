@@ -162,10 +162,24 @@ async function generateAndPersistDeviceIdentity(filePath: string): Promise<Devic
   return hydrate(persisted);
 }
 
+/** Serializes registration and replacement of the same durable shell key across processes. */
+export function withDeviceIdentityFile<A>(
+  filePath: string,
+  use: (file: {
+    readonly read: () => Promise<DeviceIdentity | undefined>;
+    readonly writeNew: () => Promise<DeviceIdentity>;
+  }) => Promise<A>,
+): Promise<A> {
+  ensurePrivateDirectorySync(path.dirname(filePath));
+  return withCredentialFileLock(filePath, () =>
+    use({
+      read: () => readDeviceIdentity(filePath),
+      writeNew: () => generateAndPersistDeviceIdentity(filePath),
+    }),
+  );
+}
+
 /** Loads this shell's key, or creates it exactly once across local processes. */
 export async function loadOrCreateDeviceIdentity(filePath: string): Promise<DeviceIdentity> {
-  ensurePrivateDirectorySync(path.dirname(filePath));
-  return withCredentialFileLock(filePath, async () => {
-    return (await readDeviceIdentity(filePath)) ?? generateAndPersistDeviceIdentity(filePath);
-  });
+  return withDeviceIdentityFile(filePath, async (file) => (await file.read()) ?? file.writeNew());
 }

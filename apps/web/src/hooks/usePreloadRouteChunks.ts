@@ -14,18 +14,20 @@ export function usePreloadRouteChunks() {
   const router = useRouter();
 
   useEffect(() => {
-    // New-task navigation is a primary startup action. Warm that route as soon
-    // as the root commits so an immediate click never waits for the browser's
-    // idle callback (which can be delayed for several seconds during hydration).
-    router.preloadRoute({ to: "/$threadId", params: { threadId: "chunk-preload" } }).catch(() => {
-      // Preloading is best-effort; navigation falls back to loading on demand.
-    });
-
-    const preloadSettings = () => {
-      router.preloadRoute({ to: "/settings" }).catch(() => {
-        // Preloading is best-effort; navigation falls back to loading on demand.
-      });
+    const warmChunk = async (routeId: "/_chat/$threadId" | "/_chat/settings") => {
+      try {
+        // Preload the code without a speculative route match. Navigation can
+        // evict a component-only match while its chunk is still loading.
+        await router.loadRouteChunk(router.routesById[routeId]);
+      } catch {
+        // Warming is best-effort; navigation loads the route on demand.
+      }
     };
+
+    // Start before idle callbacks so the first New chat can reuse this load.
+    void warmChunk("/_chat/$threadId");
+
+    const preloadSettings = () => void warmChunk("/_chat/settings");
 
     if (typeof requestIdleCallback === "function") {
       const idleCallbackId = requestIdleCallback(preloadSettings, { timeout: 5000 });

@@ -68,3 +68,61 @@ it("preserves a typed destination while the initial folder listing is still load
   await page.getByRole("button", { name: "Use folder" }).click();
   expect(await selected).toBe("/chosen");
 });
+
+it("shows the host's reason for string defects and errors from a workspace frame", async () => {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const FrameError = (frame.contentWindow as unknown as { Error: ErrorConstructor }).Error;
+  const browse = vi.fn(async ({ partialPath }: { partialPath: string }) => {
+    if (partialPath === "~/") throw "Expected a string, got a folder name";
+    if (partialPath === "/Volumes/SSD/")
+      throw new FrameError("EPERM: operation not permitted, scandir '/Volumes/SSD'");
+    return { parentPath: "/", entries: [] };
+  });
+  try {
+    const selected = showExecutionFolderPicker({ label: "Mac mini", browse });
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Expected a string, got a folder name");
+    await page.getByRole("textbox", { name: "Folder path", exact: true }).fill("/Volumes/SSD");
+    await page.getByRole("button", { name: "Go", exact: true }).click();
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("EPERM: operation not permitted, scandir '/Volumes/SSD'");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await selected).toBeNull();
+  } finally {
+    frame.remove();
+  }
+});
+
+it("keeps the last readable folder usable after a folder fails to open", async () => {
+  const browse = vi.fn(async ({ partialPath }: { partialPath: string }) => {
+    if (partialPath === "/Volumes/SSD/")
+      throw new Error("EPERM: operation not permitted, scandir '/Volumes/SSD'");
+    if (partialPath === "/Volumes/Backup/")
+      return {
+        parentPath: "/Volumes/Backup",
+        entries: [{ name: "Photos ", fullPath: "/Volumes/Backup/Photos " }],
+      };
+    if (partialPath === "/Volumes/../") return { parentPath: "/", entries: [] };
+    return {
+      parentPath: "/Volumes",
+      entries: [
+        { name: "Backup", fullPath: "/Volumes/Backup" },
+        { name: "SSD", fullPath: "/Volumes/SSD" },
+      ],
+    };
+  });
+  const selected = showExecutionFolderPicker({ label: "Mac mini", browse });
+  await page.getByRole("button", { name: "SSD", exact: true }).click();
+  await expect.element(page.getByRole("alert")).toHaveTextContent("EPERM");
+  await expect.element(page.getByText("/Volumes", { exact: true })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Up", exact: true })).toBeEnabled();
+  await expect.element(page.getByRole("button", { name: "Use folder" })).toBeEnabled();
+  await page.getByRole("button", { name: "Backup", exact: true }).click();
+  await expect.element(page.getByRole("button", { name: "Photos", exact: true })).toBeVisible();
+  expect(page.getByRole("alert").elements()).toHaveLength(0);
+  await page.getByRole("button", { name: "Use folder" }).click();
+  expect(await selected).toBe("/Volumes/Backup");
+});

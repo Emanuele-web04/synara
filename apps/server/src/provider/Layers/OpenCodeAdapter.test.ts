@@ -1101,6 +1101,110 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     },
   );
 
+  it("marks provider retries with a constant message so repeats can merge", async () => {
+    const queue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({ eventSubscriptions: [queue.stream] });
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-retry-warnings");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "hello",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "local/model" },
+        });
+        for (const attempt of [1, 2]) {
+          queue.push({
+            id: `retry-status-${attempt}`,
+            type: "session.status",
+            properties: {
+              sessionID: "opencode-session-1",
+              status: {
+                type: "retry",
+                attempt,
+                message: `Overloaded (attempt ${attempt})`,
+                next: 1,
+              },
+            },
+          });
+        }
+        queue.push({
+          id: "retried-next",
+          type: "session.next.retried",
+          properties: {
+            sessionID: "opencode-session-1",
+            timestamp: 1,
+            attempt: 3,
+            error: { message: "Overloaded (attempt 3)" },
+          },
+        });
+        queue.push({
+          id: "end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        queue.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const warnings = Array.from(events).filter((event) => event.type === "runtime.warning");
+    expect(warnings).toHaveLength(3);
+    expect(new Set(warnings.map((event) => event.payload.message))).toEqual(
+      new Set(["OpenCode is retrying the request."]),
+    );
+    expect(warnings.every((event) => event.payload.willRetry === true)).toBe(true);
+  });
+
+  it("emits the reconnect warning only from the second consecutive failed attempt", async () => {
+    const first = createSubscribedEventQueue();
+    const second = createSubscribedEventQueue();
+    const third = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      eventSubscriptions: [first.stream, second.stream, third.stream],
+    });
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-reconnect-warning");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "hello",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "local/model" },
+        });
+        first.close();
+        second.close();
+        third.push({
+          id: "end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        third.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const warnings = Array.from(events).filter((event) => event.type === "runtime.warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.payload.message).toBe("OpenCode event stream disconnected; reconnecting.");
+  });
+
   it("projects a native background continuation as a new turn without submitting another prompt", async () => {
     const queue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();

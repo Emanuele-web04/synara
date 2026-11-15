@@ -1,6 +1,6 @@
 // FILE: AppIconTile.tsx
-// Purpose: App-icon tiles joined by connector dots, shared by the project import
-//   promos and the connector consent dialog.
+// Purpose: App-icon tiles joined by connector dots, used by the connector consent
+//   dialog.
 // Layer: Web UI primitive
 // Exports: AppIconTile, ConnectorDots, APP_ICON_TILE_SIZE_CLASSES
 

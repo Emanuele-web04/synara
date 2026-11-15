@@ -143,7 +143,7 @@ describe("initial remote relationship recovery", () => {
       expect(settled).toBe(false);
       expect(attempts).toBe(1);
       expect(mocks.instances).toHaveLength(1);
-      recovery!.resume();
+      recovery!.resume({ automatic: true });
       await started;
       expect(attempts).toBe(2);
       expect(mocks.instances).toHaveLength(2);
@@ -251,6 +251,31 @@ describe("initial remote relationship recovery", () => {
     await started;
     expect(attempts).toBe(2);
     expect(mocks.instances).toHaveLength(2);
+  });
+
+  it("preserves an in-flight connect refusal across automatic controller refreshes", async () => {
+    const failure = new Error("initial refusal");
+    let rejectConnect!: (error: Error) => void;
+    let attempts = 0;
+    mocks.request.mockImplementation(async (url, method) => {
+      if (method === WS_METHODS.hostsConnect) {
+        if (++attempts > 1) return selected;
+        return new Promise((_, reject) => {
+          rejectConnect = reject;
+        });
+      }
+      if (method === WS_METHODS.hostsListConnections) return terminalResponse("reconnecting");
+      return respondToBootstrapRead(url, method);
+    });
+    const api = await bootstrap();
+    const started = api.bootstrapExecutionContext();
+    await vi.waitFor(() => expect(attempts).toBe(1));
+
+    recovery!.resume({ automatic: true });
+    rejectConnect(failure);
+
+    await expect(started).rejects.toBe(failure);
+    expect(attempts).toBe(1);
   });
 
   it("rejects a recovered connection with a different account before creating an execution transport", async () => {

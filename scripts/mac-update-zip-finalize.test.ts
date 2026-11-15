@@ -25,6 +25,7 @@ import { parseMacUpdateManifest } from "./merge-mac-update-manifests.ts";
 const roots: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -208,6 +209,33 @@ releaseDate: '2026-10-25T00:00:00.000Z'
       ]);
     },
   );
+
+  it("packs the ZIP without blocking the event loop that awaits DMG notarization", async () => {
+    const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);
+    const bin = join(fixture.root, "bin");
+    const marker = join(fixture.root, "event-loop-ran");
+    mkdirSync(bin);
+    // The real ditto runs only after this process's timer fires. A blocking
+    // subprocess call would starve that timer until the bounded wait fails.
+    writeFileSync(
+      join(bin, "ditto"),
+      `#!/bin/sh
+for _ in $(seq 1 100); do
+  if [ -f "${marker}" ]; then exec /usr/bin/ditto "$@"; fi
+  sleep 0.05
+done
+echo "event loop was blocked" >&2
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    const finalization = finalizeMacUpdateZip({ stageDistDir: fixture.dist, signed: false });
+    setTimeout(() => writeFileSync(marker, ""), 50);
+    const result = await finalization;
+    expect(result.zipFileName).toBe(`${fixture.artifactStem}.zip`);
+    expect(existsSync(result.zipPath)).toBe(true);
+  });
 
   it("requires the app signature before creating a signed update ZIP", async () => {
     const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);

@@ -38,7 +38,7 @@ const BASE_INPUT = {
   runtimeMode: "approval-required",
   interactionMode: "debug",
   envMode: "local",
-  defaultProvider: "codex",
+  newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
   assistantDeliveryMode: "buffered",
 } as const;
 
@@ -60,7 +60,7 @@ describe("createAndSendKanbanTask send-as-goal routing", () => {
       expect.objectContaining({
         projectId: BASE_INPUT.projectId,
         thread: null,
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
       }),
     );

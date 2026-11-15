@@ -73,11 +73,57 @@ test("filtered scopes preserve lifecycle scripts and the scripts workspace links
   assert.ok(setup.includes("runtime) bun install --frozen-lockfile --filter '!@synara/marketing'"));
   assert.ok(!setup.includes("--ignore-scripts"));
   assert.ok(setup.includes("runner.os != 'Windows' && inputs.scope == 'full'"));
-  assert.ok(setup.includes("steps.modules.outputs.cache-hit != 'true'"));
   assert.ok(setup.includes("inputs.turbo == 'true'"));
   const turbo = JSON.parse(read("../../turbo.json"));
   assert.equal(turbo.tasks.test.cache, false);
   assert.equal(turbo.tasks.typecheck.cache, false);
+});
+test("caches restore in every consumer and save from one owner per key", () => {
+  const steps = Object.fromEntries(
+    setup
+      .split("\n    - name: ")
+      .slice(1)
+      .map((step) => [step.split("\n")[0], step]),
+  );
+  const modulesKey =
+    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}";
+  // The Bun package archive shared the modules hash, so it missed whenever it was needed.
+  assert.ok(!setup.includes("~/.bun/install/cache"));
+  const restore = steps["Restore node_modules"];
+  assert.ok(restore.includes("uses: actions/cache/restore@v5"));
+  assert.ok(restore.includes("if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}"));
+  assert.ok(restore.includes(`key: ${modulesKey}`));
+  assert.ok(!restore.includes("restore-keys"), "modules restore stays exact-key only");
+  const save = steps["Save node_modules"];
+  assert.ok(save.includes("uses: actions/cache/save@v5"));
+  for (const condition of [
+    "runner.os != 'Windows'",
+    "inputs.scope == 'full'",
+    "inputs.save-modules == 'true'",
+    "steps.modules.outputs.cache-hit != 'true'",
+  ])
+    assert.ok(save.includes(condition), condition);
+  assert.ok(save.includes("key: ${{ steps.modules.outputs.cache-primary-key }}"));
+  assert.equal(setup.match(/actions\/cache\/save@/g)?.length, 1);
+  const actionDefault = setup.split("  save-modules:\n")[1].split("\n\n")[0];
+  assert.ok(actionDefault.includes('default: "false"'), "restore-only unless a job opts in");
+  // One saver per CI key: typecheck owns electron:false, Desktop Build owns electron:true.
+  const savers = workflow
+    .split(/\n  (?=[a-z_-]+:\n)/)
+    .filter((job) => job.includes('save-modules: "true"'))
+    .map((job) => job.split(":")[0]);
+  assert.deepEqual(savers, ["static-typecheck", "build"]);
+  assert.equal(workflow.match(/save-modules: "true"/g)?.length, 2);
+  // Turbo: pull requests restore main's newest entry; only pushes to main save.
+  const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
+  assert.ok(steps["Restore Turbo outputs"].includes("uses: actions/cache/restore@v5"));
+  assert.ok(steps["Restore Turbo outputs"].includes(`inputs.turbo == 'true' && !(${main})`));
+  assert.ok(steps["Cache Turbo outputs (main)"].includes("uses: actions/cache@v5"));
+  assert.ok(steps["Cache Turbo outputs (main)"].includes(`inputs.turbo == 'true' && ${main}`));
+  const saving = Object.entries(steps)
+    .filter(([, step]) => step.includes("uses: actions/cache@"))
+    .map(([name]) => name);
+  assert.deepEqual(saving, ["Cache Turbo outputs (main)", "Cache Electron runtime"]);
 });
 test("Windows install uses the runner-volume cache without changing other platforms", () => {
   const install = setup.match(
@@ -147,6 +193,11 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
 test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
+  // Pinned placement only moves whole files between shards; each shard stays serial.
+  const server = JSON.parse(read("../../apps/server/package.json"));
+  assert.equal(server.scripts.test, "vitest run --maxWorkers=1 --no-file-parallelism");
+  const serverConfig = read("../../apps/server/vitest.config.ts");
+  assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);
   for (const project of ["chat-follow", "chat-projects", "chat-workflows"])

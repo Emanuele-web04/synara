@@ -5,8 +5,15 @@ import {
   TurnId,
   type OrchestrationCommand,
   type OrchestrationThreadPullRequest,
+  type OrchestrationThreadPullRequestLink,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
+import {
+  legacyPullRequestLinks,
+  linkPullRequest,
+  resolveCurrentPullRequest,
+  syncDiscoveredPullRequest,
+} from "@synara/shared/threadPullRequestLinks";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -35,6 +42,7 @@ interface MutableThreadShell {
   readonly worktreePath: string | null;
   branch: string | null;
   lastKnownPr: OrchestrationThreadPullRequest | null;
+  pullRequests?: OrchestrationThreadPullRequestLink[];
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -91,8 +99,19 @@ describe("ThreadGitMetadataReactor", () => {
   }) => {
     const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     const commands: OrchestrationCommand[] = [];
+    // One entry per reconciliation: the reactor dispatches the workspace patch
+    // (`thread.meta.update`) and the branch-discovered PR (`thread.pull-request.sync`) as
+    // adjacent commands; tests assert the combined outcome here and the split in `commands`.
+    const reconciliations: Array<Record<string, unknown>> = [];
     const pullRequestLookups: string[] = [];
+    const resolvedPullRequestReferences: string[] = [];
     const statusCwds: string[] = [];
+    for (const thread of input.threads) {
+      thread.pullRequests ??= legacyPullRequestLinks(
+        thread.lastKnownPr,
+        "2026-08-07T09:00:00.000Z",
+      );
+    }
     const threads = new Map(input.threads.map((thread) => [thread.id, thread]));
     const projectId = input.threads[0]!.projectId;
 
@@ -130,16 +149,60 @@ describe("ThreadGitMetadataReactor", () => {
           }
           return branch === pullRequest.headBranch ? pullRequest : null;
         }),
+      resolvePullRequest: ({ reference }: { reference: string }) =>
+        Effect.sync(() => {
+          resolvedPullRequestReferences.push(reference);
+          return { pullRequest: { ...pullRequest, url: reference } };
+        }),
     } as unknown as GitManagerShape;
     const orchestrationEngine = {
       dispatch: (command: OrchestrationCommand) =>
         Effect.sync(() => {
           commands.push(command);
           if (command.type === "thread.meta.update") {
+            const { type: _type, commandId: _commandId, ...patch } = command;
+            reconciliations.push(patch);
+          }
+          if (command.type === "thread.pull-request.sync" && command.discovered !== undefined) {
+            const previous = reconciliations.at(-1);
+            const previousCommand = commands.at(-2);
+            if (
+              previous &&
+              previousCommand?.type === "thread.meta.update" &&
+              previousCommand.threadId === command.threadId
+            ) {
+              previous.discoveredPullRequest = command.discovered;
+            } else {
+              reconciliations.push({
+                threadId: command.threadId,
+                discoveredPullRequest: command.discovered,
+              });
+            }
+            const thread = threads.get(command.threadId);
+            if (thread) {
+              thread.pullRequests = syncDiscoveredPullRequest(
+                thread.pullRequests,
+                command.discovered,
+                "2026-08-07T10:02:00.000Z",
+              );
+              thread.lastKnownPr = resolveCurrentPullRequest(thread.pullRequests);
+            }
+          }
+          if (command.type === "thread.pull-request.link") {
+            const thread = threads.get(command.threadId);
+            if (thread) {
+              thread.pullRequests = linkPullRequest(thread.pullRequests, {
+                pullRequest: command.pullRequest,
+                source: command.source ?? "user",
+                linkedAt: "2026-08-07T10:02:00.000Z",
+              });
+              thread.lastKnownPr = resolveCurrentPullRequest(thread.pullRequests);
+            }
+          }
+          if (command.type === "thread.meta.update") {
             const thread = threads.get(command.threadId);
             if (thread) {
               if (command.branch !== undefined) thread.branch = command.branch;
-              if (command.lastKnownPr !== undefined) thread.lastKnownPr = command.lastKnownPr;
               if (command.associatedWorktreePath !== undefined) {
                 thread.associatedWorktreePath = command.associatedWorktreePath;
               }
@@ -174,6 +237,9 @@ describe("ThreadGitMetadataReactor", () => {
 
     return {
       commands,
+      reconciliations,
+      resolvedPullRequestReferences,
+      threads,
       pullRequestLookups,
       statusCwds,
       publish,
@@ -244,13 +310,13 @@ describe("ThreadGitMetadataReactor", () => {
 
     await harness.publish(completedEvent(threadId, turnId));
     await waitFor(() => harness.statusCwds.length === 1);
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId,
       branch: pullRequest.headBranch,
-      lastKnownPr: pullRequest,
+      discoveredPullRequest: pullRequest,
       associatedWorktreePath: "/repo/.worktrees/thread",
       associatedWorktreeBranch: pullRequest.headBranch,
       associatedWorktreeRef: pullRequest.headBranch,
@@ -290,13 +356,13 @@ describe("ThreadGitMetadataReactor", () => {
       providerRefs: childProviderRefs,
     });
     await harness.publish(completedEvent(threadId, parentTurnId));
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId,
       branch: pullRequest.headBranch,
-      lastKnownPr: pullRequest,
+      discoveredPullRequest: pullRequest,
     });
   });
 
@@ -330,10 +396,10 @@ describe("ThreadGitMetadataReactor", () => {
 
     await harness.publish(completedEvent(localThreadId, TurnId.makeUnsafe("unowned-turn")));
     await harness.publish(completedEvent(worktreeThreadId, TurnId.makeUnsafe("flush-turn")));
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId: worktreeThreadId,
     });
   });
@@ -374,18 +440,18 @@ describe("ThreadGitMetadataReactor", () => {
     await harness.publish(
       completedEvent(sentinelThreadId, TurnId.makeUnsafe("sentinel-worktree-turn")),
     );
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId: sentinelThreadId,
     });
     expect(harness.statusCwds).toEqual([sentinelCwd]);
 
     await harness.publish(completedEvent(localThreadId, activeTurnId));
-    await waitFor(() => harness.commands.length === 2);
-    expect(harness.commands[1]).toMatchObject({
-      type: "thread.meta.update",
+    await waitFor(() => harness.reconciliations.length === 2);
+    await harness.drain();
+    expect(harness.reconciliations[1]).toMatchObject({
       threadId: localThreadId,
       branch: pullRequest.headBranch,
     });
@@ -417,10 +483,10 @@ describe("ThreadGitMetadataReactor", () => {
     const thirdTurnId = TurnId.makeUnsafe("third-local-turn");
     await harness.publish(startedEvent(thirdThreadId, thirdTurnId));
     await harness.publish(completedEvent(thirdThreadId, thirdTurnId));
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId: thirdThreadId,
     });
   });
@@ -450,7 +516,7 @@ describe("ThreadGitMetadataReactor", () => {
     await waitFor(() => harness.pullRequestLookups.length === 1);
     await harness.drain();
 
-    expect(harness.commands).toEqual([]);
+    expect(harness.reconciliations).toEqual([]);
   });
 
   it("keeps an associated PR when a shared checkout is back on a branch without one", async () => {
@@ -476,7 +542,7 @@ describe("ThreadGitMetadataReactor", () => {
     await harness.drain();
 
     expect(harness.pullRequestLookups).toEqual(["main"]);
-    expect(harness.commands).toEqual([]);
+    expect(harness.reconciliations).toEqual([]);
   });
 
   it.each(["commit", "code_change_published"])(
@@ -505,15 +571,15 @@ describe("ThreadGitMetadataReactor", () => {
           ...(kind === "commit" ? { cwd } : {}),
         }),
       );
-      await waitFor(() => harness.commands.length === 1);
+      await waitFor(() => harness.reconciliations.length === 1);
+      await harness.drain();
 
       expect(harness.statusCwds).toEqual([cwd]);
       expect(harness.pullRequestLookups).toEqual([pullRequest.headBranch]);
-      expect(harness.commands[0]).toMatchObject({
-        type: "thread.meta.update",
+      expect(harness.reconciliations[0]).toMatchObject({
         threadId,
         branch: pullRequest.headBranch,
-        lastKnownPr: pullRequest,
+        discoveredPullRequest: pullRequest,
         associatedWorktreeBranch: pullRequest.headBranch,
       });
     },
@@ -540,11 +606,11 @@ describe("ThreadGitMetadataReactor", () => {
       vcsStateChangedEvent(threadId, { cwd: "/elsewhere", eventId: "vcs-elsewhere" }),
     );
     await harness.publish(vcsStateChangedEvent(threadId, { cwd }));
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
     expect(harness.statusCwds).toEqual([cwd]);
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId,
       branch: pullRequest.headBranch,
     });
@@ -583,9 +649,9 @@ describe("ThreadGitMetadataReactor", () => {
 
     await harness.publish(startedEvent(firstThreadId, TurnId.makeUnsafe("vcs-first-turn")));
     await harness.publish(vcsStateChangedEvent(firstThreadId, { cwd: "/repo" }));
-    await waitFor(() => harness.commands.length === 1);
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId: firstThreadId,
       branch: pullRequest.headBranch,
     });
@@ -595,11 +661,11 @@ describe("ThreadGitMetadataReactor", () => {
       vcsStateChangedEvent(secondThreadId, { cwd: "/repo", eventId: "vcs-ambiguous" }),
     );
     await harness.publish(completedEvent(sentinelThreadId, TurnId.makeUnsafe("vcs-sentinel-turn")));
-    await waitFor(() => harness.commands.length === 2);
+    await waitFor(() => harness.reconciliations.length === 2);
+    await harness.drain();
 
     expect(harness.statusCwds).toEqual(["/repo", sentinelCwd]);
-    expect(harness.commands[1]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[1]).toMatchObject({
       threadId: sentinelThreadId,
     });
   });
@@ -625,12 +691,189 @@ describe("ThreadGitMetadataReactor", () => {
     await harness.publish(runtimeErrorEvent(staleThreadId));
     await harness.publish(startedEvent(nextThreadId, TurnId.makeUnsafe("next-turn")));
     await harness.publish(completedEvent(nextThreadId, TurnId.makeUnsafe("next-turn")));
-    await waitFor(() => harness.commands.length === 1);
+    await waitFor(() => harness.reconciliations.length === 1);
+    await harness.drain();
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
+    expect(harness.reconciliations[0]).toMatchObject({
       threadId: nextThreadId,
       branch: pullRequest.headBranch,
     });
+  });
+
+  it("dispatches the workspace patch and the discovered PR as separate commands", async () => {
+    const threadId = ThreadId.makeUnsafe("split-worktree-thread");
+    const cwd = "/repo/.worktrees/split";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "worktree",
+          worktreePath: cwd,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: { [cwd]: pullRequest.headBranch },
+    });
+
+    await harness.publish(completedEvent(threadId, TurnId.makeUnsafe("split-turn")));
+    await waitFor(() => harness.commands.length === 2);
+    await harness.drain();
+
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      branch: pullRequest.headBranch,
+    });
+    expect(harness.commands[0]).not.toHaveProperty("lastKnownPr");
+    expect(harness.commands[1]).toMatchObject({
+      type: "thread.pull-request.sync",
+      threadId,
+      discovered: pullRequest,
+    });
+  });
+
+  it("keeps an explicitly linked PR when the worktree moves to a branch without one", async () => {
+    const threadId = ThreadId.makeUnsafe("explicit-link-thread");
+    const cwd = "/repo/.worktrees/explicit";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "worktree",
+          worktreePath: cwd,
+          branch: pullRequest.headBranch,
+          lastKnownPr: pullRequest,
+          pullRequests: [{ pullRequest, source: "agent", linkedAt: "2026-08-07T09:30:00.000Z" }],
+          associatedWorktreePath: cwd,
+          associatedWorktreeBranch: pullRequest.headBranch,
+          associatedWorktreeRef: pullRequest.headBranch,
+        },
+      ],
+      branchByCwd: { [cwd]: "main" },
+    });
+
+    await harness.publish(completedEvent(threadId, TurnId.makeUnsafe("explicit-turn")));
+    await waitFor(() => harness.commands.length === 1);
+    await harness.drain();
+
+    expect(harness.commands.map((command) => command.type)).toEqual(["thread.meta.update"]);
+    expect(harness.threads.get(threadId)?.lastKnownPr).toEqual(pullRequest);
+  });
+
+  const commandCompletedEvent = (
+    threadId: ThreadId,
+    itemId: string,
+    command: string,
+    output: string,
+  ): ProviderRuntimeEvent =>
+    ({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe(`item-${itemId}`),
+      provider: "codex",
+      threadId,
+      turnId: TurnId.makeUnsafe("command-turn"),
+      itemId,
+      createdAt: "2026-08-07T10:00:30.000Z",
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        data: { item: { command, aggregatedOutput: output } },
+      },
+    }) as unknown as ProviderRuntimeEvent;
+
+  it.each(["unlinked", "discovered"] as const)(
+    "keeps a command-created pull request attached after its branch changes (%s)",
+    async (initialLink) => {
+      const threadId = ThreadId.makeUnsafe("command-created-thread");
+      const createdUrl = "https://github.com/Emanuele-web04/synara/pull/601";
+      const harness = await createHarness({
+        threads: [
+          {
+            id: threadId,
+            projectId: ProjectId.makeUnsafe("project-1"),
+            envMode: "local",
+            worktreePath: null,
+            branch: "feat/thing",
+            lastKnownPr: null,
+            pullRequests:
+              initialLink === "discovered"
+                ? [
+                    {
+                      pullRequest: { ...pullRequest, url: createdUrl },
+                      source: "discovered",
+                      linkedAt: "2026-08-07T09:00:00.000Z",
+                    },
+                  ]
+                : [],
+          },
+        ],
+        branchByCwd: { "/repo": "feat/thing" },
+      });
+
+      await harness.publish(
+        commandCompletedEvent(
+          threadId,
+          "item-create",
+          'bash -lc \'gh pr create --title "Thing" --body "Body"\'',
+          `Creating pull request for feat/thing into main\n\n${createdUrl}\n`,
+        ),
+      );
+      await waitFor(() => harness.commands.length === 1);
+      await harness.drain();
+
+      expect(harness.resolvedPullRequestReferences).toEqual([createdUrl]);
+      expect(harness.commands[0]).toMatchObject({
+        type: "thread.pull-request.link",
+        threadId,
+        source: "created",
+        pullRequest: { url: createdUrl },
+      });
+      // Discovery clears branch-managed links when the checkout moves to another branch.
+      expect(
+        syncDiscoveredPullRequest(
+          harness.threads.get(threadId)?.pullRequests,
+          null,
+          "2026-08-07T10:05:00.000Z",
+        ),
+      ).toMatchObject([{ source: "created", pullRequest: { url: createdUrl } }]);
+    },
+  );
+
+  it("does not re-link a pull request the user unlinked", async () => {
+    const threadId = ThreadId.makeUnsafe("command-unlinked-thread");
+    const createdUrl = "https://github.com/Emanuele-web04/synara/pull/602";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "local",
+          worktreePath: null,
+          branch: "feat/thing",
+          lastKnownPr: null,
+          pullRequests: [
+            {
+              pullRequest: { ...pullRequest, url: createdUrl, number: 602 },
+              source: "created",
+              linkedAt: "2026-08-07T09:30:00.000Z",
+              dismissedAt: "2026-08-07T09:40:00.000Z",
+            },
+          ],
+        },
+      ],
+      branchByCwd: { "/repo": "feat/thing" },
+    });
+
+    await harness.publish(
+      commandCompletedEvent(threadId, "item-recreate", "gh pr create --fill", `${createdUrl}\n`),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await harness.drain();
+
+    expect(harness.resolvedPullRequestReferences).toEqual([]);
+    expect(harness.commands).toEqual([]);
   });
 });

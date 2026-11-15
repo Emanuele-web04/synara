@@ -85,6 +85,55 @@ no automatic expiry; the historical content scrub is distinct from retention.
 
 ## Product analytics
 
+### Anonymous reliability reports
+
+The desktop can also send fixed reliability categories through the product-sharing
+choice. This separate lane requires a recorded affirmative choice in every flavor,
+including Remote; Remote's default-on product policy alone does not enable it.
+Stable still does not construct the release-diagnostics sender.
+
+Reports contain only an independent random receipt UUID, UTC day, fixed issue
+code, release version, channel and platform. They contain no installation,
+account, session or thread identifiers, precise times, stack traces, error text,
+paths, prompts or chat content. Backend reports travel over local child IPC to
+the desktop; the server does not independently upload them. Browser-only and
+headless CLI installations do not use this sender.
+
+Categories cover unexpected backend exits before/after readiness, renderer/main
+failures, automatic crash continuation accepted/skipped/failed, shutdown event
+drain timeouts, restart reconciliation failures, uncertain chat delivery, account
+renewal failures, revoked device enrollment, billing redirects, migration startup
+blocks/recovery failures, provider turn-start failures, and event retries/quarantine.
+They also include handled remote-ingress/tunnel socket errors and event-loop stalls.
+Peer-driven socket reports are limited to one per category per thirty seconds in
+each backend, so connection churn cannot flood desktop IPC or its durable spool.
+Stall observations use the existing monitor's two-second threshold and thirty-second
+reporting limit; they do not identify a slow query or upload its text.
+Each producer uses a fixed code at the owning operation, never parses free-form log text.
+An accepted continuation means the command was accepted, not that a provider
+completed the work. Reports count observations, not distinct users or incidents;
+multiple categories may describe the same underlying failure.
+
+The primary desktop process owns the flavor-local
+`product-analytics/reliability.json` spool. It retains at most 500 records for
+seven UTC days and removes expired records during flush even while offline.
+It retries batches of at most 50 records/64 KiB and
+removes only receipt IDs acknowledged by `/v1/reliability-events` after durable
+storage. An older receiver, offline network or missing acknowledgment keeps
+receipts for retry. The receiver deduplicates identical receipts. Opt-out aborts
+uploads where possible and removes pending data; explicit re-enablement must
+replace the old spool before consent is saved. An old upload response cannot
+modify a new consent epoch. This bounded queue cannot guarantee capture through
+an immediate process kill, disk failure, prolonged outage or sustained overflow.
+
+Cloudflare exposes authenticated aggregate reads at `/api/reliability`, grouped
+by day/version/platform/channel/code. Receipts expire after 14 days and totals
+after 90 days in bounded cleanup batches. No account lookup or customer-specific
+incident reconstruction is available from these anonymous aggregates. See the
+[reliability runbook](../apps/analytics/RELIABILITY.md) for deployment order and queries.
+
+### Product event collection
+
 Desktop Settings → General → Privacy offers **Share product analytics**, off by
 default in Stable and Beta. Event consent belongs to the controlling installation, not the account. Host
 execution aggregates follow the execution host’s own local product choice,
@@ -95,6 +144,13 @@ When enabled, fixed events record app readiness, selected feature opens, pairing
 connection/reconnection outcomes, chat request acknowledgements and startup
 duration. The desktop also observes live terminal turn activities; available
 usage counters are included without model names. Missing counters stay unknown.
+A turn that failed, or was interrupted by a provider error, also carries one fixed
+`failure` category derived from the provider's error code (for example
+`edge_blocked` for a Cloudflare 403 page, `auth`, `rate_limit`, `usage_limit`,
+`overloaded`, `server_error`, `network`) and, when the provider reports it, the
+numeric HTTP status. A cancelled turn without a provider error is a user stop and
+has no category. Error messages never leave the app; the receiver rejects any
+category outside the fixed list and a status without a category.
 These observations are not complete host execution totals: closed clients,
 history and native completion events are not included. They are not billing data.
 
@@ -125,7 +181,11 @@ discards its unsent telemetry before replay. Consent and local workspace history
 are preserved.
 
 Release dependency: deploy additive migration `0010_product_host_usage.sql` and
-the receiving Worker before shipping the host-usage client. `/v1/crash` remains
+the receiving Worker before shipping the host-usage client. Apply additive migration
+`0014_product_turn_failures.sql` before deploying the Worker that writes turn
+failure categories, applying only that file as described in
+[the analytics README](../apps/analytics/README.md#deployment); clients may ship first
+because older Workers drop the unknown fields. `/v1/crash` remains
 retired with HTTP 410 in every flavor. `/v1/events` accepts Beta and
 Remote diagnostics; Remote events follow the sharing switch.
 

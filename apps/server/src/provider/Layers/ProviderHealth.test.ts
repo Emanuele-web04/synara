@@ -76,6 +76,12 @@ import {
 
 const encoder = new TextEncoder();
 
+// An unsigned ChatGPT id token shaped like the one `codex login` stores in auth.json.
+function codexIdToken(payload: Record<string, unknown>): string {
+  const base64Url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${base64Url({ alg: "RS256", typ: "JWT" })}.${base64Url(payload)}.signature`;
+}
+
 function assertProviderInstanceEnv(
   env: NodeJS.ProcessEnv | undefined,
   name: string,
@@ -820,6 +826,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             ...cachedReadyCodexStatus,
             authType: "chatgpt",
             authLabel: "Default Account",
+            accountEmail: "default@example.com",
+            accountOrganization: "Example Org",
           },
         ],
         {
@@ -841,9 +849,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       const workCodex = statuses.find((status) => status.instanceId === "codex_work");
       assert.strictEqual(defaultCodex?.authStatus, "authenticated");
       assert.strictEqual(defaultCodex?.authLabel, "Default Account");
+      assert.strictEqual(defaultCodex?.accountEmail, "default@example.com");
       assert.strictEqual(workCodex?.status, "warning");
       assert.strictEqual(workCodex?.authStatus, "unknown");
       assert.strictEqual(workCodex?.authLabel, undefined);
+      assert.strictEqual(workCodex?.accountEmail, undefined);
+      assert.strictEqual(workCodex?.accountOrganization, undefined);
     });
 
     it("does not project a custom instance status onto the default account", () => {
@@ -1371,7 +1382,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       } satisfies ServerProviderStatus;
 
       const result = stabilizeProviderStatusesAgainstTransientTimeouts(
-        [previousReadyClaude],
+        [
+          {
+            ...previousReadyClaude,
+            accountEmail: "stale@example.com",
+            accountOrganization: "Old Org",
+          },
+        ],
         [
           {
             provider: "claudeAgent",
@@ -1546,6 +1563,30 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         false,
       );
     });
+
+    it("treats a changed account identity as a status change", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [cachedReadyCodexStatus],
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+        ),
+        false,
+      );
+      assert.strictEqual(
+        providerStatusesEqual(
+          [cachedReadyCodexStatus],
+          [{ ...cachedReadyCodexStatus, accountOrganization: "Example Org" }],
+        ),
+        false,
+      );
+      assert.strictEqual(
+        providerStatusesEqual(
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+        ),
+        true,
+      );
+    });
   });
 
   // ── checkCodexProviderStatus tests ────────────────────────────────
@@ -1591,6 +1632,215 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "-c mcp_servers={} login status")
               return { stdout: "Logged in\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect.each([
+      {
+        store: "file",
+        expectedEmail: "work@example.com",
+        expectedPlan: "plus",
+        expectedLabel: "ChatGPT Plus Subscription",
+      },
+      {
+        store: "keyring",
+        expectedEmail: undefined,
+        expectedPlan: undefined,
+        expectedLabel: undefined,
+      },
+    ] as const)(
+      "uses account identity only from the active Codex credentials store ($store)",
+      ({ store, expectedEmail, expectedPlan, expectedLabel }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { tmpDir } = yield* withTempCodexHome();
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "config.toml"),
+            'cli_auth_credentials_store = "' + store + '"\n',
+          );
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "auth.json"),
+            JSON.stringify({
+              tokens: {
+                access_token: "access",
+                refresh_token: "refresh",
+                id_token: codexIdToken({
+                  email: "work@example.com",
+                  "https://api.openai.com/auth": {
+                    chatgpt_plan_type: "plus",
+                    chatgpt_account_id: "acct_1",
+                  },
+                }),
+              },
+            }),
+          );
+
+          const status = yield* makeCheckCodexProviderStatus("codex");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.authStatus, "authenticated");
+          assert.strictEqual(status.accountEmail, expectedEmail);
+          assert.strictEqual(status.accountOrganization, undefined);
+          assert.strictEqual(status.authType, expectedPlan);
+          assert.strictEqual(status.authLabel, expectedLabel);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              if (joined === "-c mcp_servers={} login status")
+                return { stdout: "", stderr: "Logged in using ChatGPT\n", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+    );
+
+    it.effect("prefers the plan the Codex CLI reports over the stored id token", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            tokens: {
+              access_token: "access",
+              id_token: codexIdToken({
+                email: "work@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, "work@example.com");
+        assert.strictEqual(status.authType, "pro");
+        assert.strictEqual(status.authLabel, "ChatGPT Pro Subscription");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return {
+                stdout: '{"loggedIn":true,"type":"chatgpt","planType":"pro"}\n',
+                stderr: "",
+                code: 0,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect.each([
+      {
+        name: "the CLI is signed out",
+        authStatus: "unauthenticated",
+        loginStatus: { stdout: "Not logged in\n", stderr: "", code: 1 },
+      },
+      {
+        name: "the CLI does not identify the login method",
+        authStatus: "authenticated",
+        loginStatus: { stdout: "Logged in\n", stderr: "", code: 0 },
+      },
+    ] as const)("does not name a Codex account when $name", ({ authStatus, loginStatus }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            tokens: {
+              access_token: "stale",
+              id_token: codexIdToken({
+                email: "stale@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.authStatus, authStatus);
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.authType, undefined);
+        assert.strictEqual(status.authLabel, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status") return loginStatus;
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps an API-key Codex login free of the ChatGPT identity its auth file holds", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            OPENAI_API_KEY: "sk-test",
+            tokens: {
+              access_token: "stale",
+              id_token: codexIdToken({
+                email: "old@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "OpenAI API Key");
+        assert.strictEqual(status.accountEmail, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in using an API key - sk-te***st\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps a Codex account authenticated when its auth file is unreadable", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(path.join(tmpDir, "auth.json"), "{not json");
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in using ChatGPT\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -2270,7 +2520,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               }
               if (joined === "auth status")
                 return {
-                  stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                  stdout:
+                    '{"loggedIn":false,"authMethod":"claude.ai","email":"stale@example.com","orgName":"Old Org"}\n',
                   stderr: "",
                   code: 0,
                 };
@@ -2285,7 +2536,77 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "max");
         assert.strictEqual(status.authLabel, "Claude Max Subscription");
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.accountOrganization, undefined);
         assert.strictEqual(status.message, undefined);
+      }),
+    );
+
+    it.effect("reports who the signed-in Claude account is", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-identity-",
+        });
+
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout:
+                    '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"work@example.com","orgId":"org_1","orgName":"Example Org","subscriptionType":"max"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, "work@example.com");
+        assert.strictEqual(status.accountOrganization, "Example Org");
+        assert.strictEqual(status.authLabel, "Claude Max Subscription");
+      }),
+    );
+
+    it.effect("does not name a Claude account the CLI is signed out of", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-identity-signed-out-",
+        });
+
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir, {
+          falseNegativeRetryDelayMs: 0,
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout:
+                    '{"loggedIn":false,"authMethod":"none","email":"stale@example.com","orgName":"Example Org"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.accountOrganization, undefined);
       }),
     );
 

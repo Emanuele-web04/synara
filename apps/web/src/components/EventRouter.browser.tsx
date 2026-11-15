@@ -87,7 +87,10 @@ import {
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
-import { requestShellSnapshotRefresh } from "../routeRestoreRefreshCoordinator";
+import {
+  requestEmptyRouteRestoreRefresh,
+  requestShellSnapshotRefresh,
+} from "../routeRestoreRefreshCoordinator";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
 import "./ChatView";
@@ -454,13 +457,16 @@ const worker = setupWorker(
 
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
+  initialPath?: string;
   waitForThreadId?: ThreadId | null;
   requireSyncedThread?: boolean;
 }): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
   const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
-  const router = getRouter(createMemoryHistory({ initialEntries: [`/${routeThreadId}`] }));
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [options?.initialPath ?? `/${routeThreadId}`] }),
+  );
   const screen = await render(<RouterProvider router={router} />, { container: host });
 
   try {
@@ -1035,6 +1041,40 @@ describe("EventRouter scoped orchestration sync", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 200));
       expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("accepts a current empty-shell proof without overwriting hydrated collections", async () => {
+    fixture.snapshot = { ...fixture.snapshot, snapshotSequence: 3, threads: [] };
+    const mounted = await mountApp({ initialPath: "/settings", waitForThreadId: null });
+    const api = createWsNativeApi();
+    const proof = {
+      ...createShellSnapshotFromReadModel(fixture.snapshot),
+      emptyThreadShellVerified: true,
+      projects: fixture.snapshot.projects.map((project) => ({
+        ...project,
+        title: "Queried project metadata",
+      })),
+    };
+    const query = vi
+      .spyOn(api.orchestration, "getShellSnapshot")
+      .mockResolvedValueOnce({ ...proof, snapshotSequence: 2 })
+      .mockResolvedValue(proof);
+    const repairState = vi
+      .spyOn(api.orchestration, "repairState")
+      .mockResolvedValue(fixture.snapshot);
+    try {
+      expect(useStore.getState().threadIds).toEqual([]);
+      const refresh = requestEmptyRouteRestoreRefresh();
+      await expect(refresh).resolves.toBe("verified-empty");
+      // Revision 2 may not certify the empty route after the revision 3 stream.
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(repairState).not.toHaveBeenCalled();
+      expect(useStore.getState().projects[0]?.name).toBe("Project");
+    } finally {
+      repairState.mockRestore();
+      query.mockRestore();
       await mounted.cleanup();
     }
   });

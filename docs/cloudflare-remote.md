@@ -27,7 +27,33 @@ Version `2026.10.3` is pinned in `packages/shared/src/cloudflared.ts`, with offi
 
 Native assets are pinned for macOS arm64/x64, Linux arm64/x64 and Windows x64. Windows ARM desktop packaging carries the official x64 executable and therefore needs OS emulation; this has not been runtime-qualified. The local MVP qualification targets macOS arm64. Linux, Windows, universal Mac and signed distribution need their respective runtime evidence.
 
-The host owns one connector child at a time and waits for shared process-tree teardown before replacing it. Readiness comes from cloudflared's local `/ready`, not process existence. Restart delay grows from approximately one second to sixty seconds with jitter. The child uses an installation-owned home and explicit empty local configuration, so a personal cloudflared configuration cannot change the managed ingress. Tokens travel only in the child environment, with no inherited provider credentials, command-line token, log forwarding or renderer exposure. Connector restarts reuse the current allocation. API administrators' credentials never reach the host.
+The host owns one connector child at a time and waits for its guardian to confirm native child exit before replacing it. Readiness comes from cloudflared's local `/ready`, not process existence. Restart delay grows from approximately one second to sixty seconds with jitter. The child uses an installation-owned home and explicit empty local configuration, so a personal cloudflared configuration cannot change the managed ingress. Tokens travel only in the child environment, with no inherited provider credentials, command-line token, log forwarding or renderer exposure. Connector restarts reuse the current allocation. API administrators' credentials never reach the host.
+
+A small runtime guardian owns the connector and holds a pipe from the backend.
+Backend termination, including a fatal uncaught error or SIGKILL, closes the pipe;
+the guardian terminates the connector and escalates after 1.5 seconds if it has
+not exited. A blocked backend event loop does not close this pipe. Normal shutdown
+closes the same pipe and requires both the child-exit receipt and guardian closure;
+it never races the guardian with a second kill timer. Missing proof or a ten-second
+deadline fails shutdown and prevents replacement, including during early startup.
+On POSIX the connector starts in an isolated process group; shell overrides and
+their descendants receive the same signals, and the group must have no live
+members before acknowledgement. Linux zombie-only groups count as exited even
+when a container's init process has not reaped them. The guardian has the same
+minimal environment as the connector; a Windows tree-kill helper receives only
+system variables. This prevents new orphaned native connectors; it does not scan
+for or kill unowned processes left by older releases. POSIX lifetime fixtures cover
+normal and immediate stop, fatal owner exit, owner SIGKILL, an uncooperative
+connector, and refusal to accept an externally killed guardian as exit proof.
+Packaged Windows execution remains a separate qualification requirement.
+
+Rejected HTTP upgrades retain a raw-socket error handler until closure. A peer
+reset or failed rejection write closes that connection instead of terminating the
+backend. The remote TLS server also owns WebSocket errors while refusing a peer
+because it is closed or full. Authorization still fails closed when the lease
+expires; these error handlers never admit a denied connection. Fixed anonymous
+reliability categories distinguish ingress socket errors, rejected tunnel socket
+errors and event-loop stalls, subject to the desktop product-sharing choice.
 
 The dedicated listener binds IPv4 loopback on an unused port and requires the exact assigned hostname. Spoofed forwarded headers do not grant local authority. Controller dial/probe operations are bounded; transport switching creates a fresh verified stream and does not replay arbitrary commands.
 
@@ -38,6 +64,16 @@ Sign in to the same account/workspace on both computers. On the execution host, 
 Codes expire after nine minutes (leaving one minute of clock-skew headroom below the API publication limit) and are claimed once, transactionally, by a registered nonrevoked device key. Per-IP, per-account and per-code attempt budgets use PostgreSQL so multiple API instances share limits. Renewal cancels older rendezvous and pending local invitations. Cancellation revokes locally even if the API is temporarily unreachable. Invitation bundles remain only on the trusted servers and are removed from rendezvous storage on redemption/cancellation/expiry. The normal UI does not copy JSON. A redeemed bundle remains on the controller server until successful pairing, explicit cancellation/forgetting, account change or expiry. A temporary directory/dial failure can therefore retry the reviewed identity without redeeming the public code again. Cancellation waits for the in-flight setup before forgetting local trust. Existing [headless private-file pairing](remote-connections-v2.md#headless-owner-pairing) remains supported.
 
 ### Diagnosing a rejected pairing code
+
+**Find computer** prepares the controller's device identity before submitting
+the code. Preparation failures appear in the dialog and leave the code unused
+so the user can retry. An account-revoked device key is a separate failure from
+an expired code: a new code or signing in again does not replace that durable
+key. When the account confirms revocation, the dialog offers **Re-register this
+computer**. Confirming creates a new device identity; it does not restore old
+grants or approvals. Then choose **Find computer** again and complete fresh
+pairing. If registration is interrupted, **Find computer** rechecks the current
+identity before offering recovery again, without consuming the pairing code.
 
 The account API deliberately returns the same `400 challenge_expired` response for
 an unavailable code and an invitation outside the caller's account/workspace.
@@ -60,9 +96,9 @@ accept another account's invitation or replay a spent code to recover. A generic
 pairing `400` is not a reason to force account logout or blindly spend another
 single-use refresh token.
 
-Authorization polls have ±10% jitter around ten seconds and account requests have fifteen-second deadlines. Successful snapshots renew a sixty-second lease only after local application; the expiry check closes remote streams within approximately one additional second. Online revocation normally arrives on the next poll, with request/application latency added. Do not promise a strict wall-clock bound if the operating system or event loop is suspended. During outages the last lease expires; a failed refresh never extends it. Local provider tasks remain execution-host work when controllers disconnect.
+Authorization polls have ±10% jitter around ten seconds while a remote session or legacy remote socket is open, and account requests have fifteen-second deadlines, except the authorization snapshot on the poll and admission paths: each attempt has five seconds and is retried once, at once, when it timed out or its connection dropped (an answer from the account service, refusals and errors included, is never retried). Successful snapshots renew a sixty-second lease only after local application; the expiry check closes remote streams within approximately one additional second. Online revocation of a connected device normally arrives on the next poll, with request/application latency added. With no remote connection open the host keeps no lease renewed: every admission (Cloudflare ingress and its `/health`, the inner tunnel upgrade for direct, SSH-forwarded and pairing streams, device authorization, the connector token and legacy remote sockets) first fetches a snapshot unless one was requested within the last ten seconds, so a device revoked before that snapshot is refused. A jittered five-minute poll keeps tombstones, revocation confirmations, ownership denials and discoverability current, and revoking a device from this app checks at once. Revocation confirmations for devices revoked elsewhere can therefore show "delivery pending" for up to about five minutes on an idle host. The first connection that opens returns the host to the ten-second cadence. Do not promise a strict wall-clock bound if the operating system or event loop is suspended. During outages the last lease expires; a failed refresh never extends it. Local provider tasks remain execution-host work when controllers disconnect.
 
-Remote .15 treats the legacy temporary enrollment refusal as unavailable access and keeps polling without revoking device trust. Admission still requires a fresh successful snapshot. Opening a populated remote workspace on its home route also no longer treats the home as an empty chat identifier. If an older build already revoked a pairing, updating does not restore it automatically: create a fresh code and pair normally. Do not erase local app data or restore revoked devices through database edits.
+Remote .15 treats the legacy temporary enrollment refusal as unavailable access and keeps polling without revoking device trust. Admission still requires a fresh successful snapshot. A refusal closes every remote connection, so a refused host falls back to the five-minute idle poll; the next admission attempt after the owner regains access checks on demand and succeeds at once. A host refused when connectivity starts retries one, two, four… minutes apart (jittered), up to five; a token renewal does not bring that retry forward, while a changed host link retries at once, and so does a subscription read in this app that reports access granted (at most once a minute). That read only triggers the normal start, which still needs its own fresh authorization. An ownership denial closes admission on the snapshot that carries it; on an idle host the confirmations that retire trust come from the slower poll and from admissions, so retirement can take longer than five minutes, never less, and never with fewer than three confirmations. Opening a populated remote workspace on its home route also no longer treats the home as an empty chat identifier. If an older build already revoked a pairing, updating does not restore it automatically: create a fresh code and pair normally. Do not erase local app data or restore revoked devices through database edits.
 
 Remote .16 treats rejected/stale proofs and transient API/proxy failures as retryable checks; they expire the existing authorization lease rather than revoking every paired device. Known ownership denials close admission immediately and only retire local trust after repeated checks spanning at least five minutes. Successful snapshots reset that window. Explicit device revocation and durable tombstones still apply immediately. Proof timestamps are sampled after private-key import, and desktop backends default to a 16-worker libuv pool so blocked filesystem work is less likely to starve DNS/crypto.
 
@@ -257,7 +293,14 @@ cleared on retirement. No prompt, output, project path, or conversation title is
 uploaded; the background widget uses the generic title “Synara task”.
 
 The Beta host reporter polls only explicitly subscribed turns (15 seconds while
-idle, 5 seconds while watched); delivery sweeps run every 5 seconds. This is
+idle, 5 seconds while watched); delivery sweeps run every 5 seconds. Idle reads
+run every 15 seconds while a device is connected, at once when one connects, and
+for ten minutes after the last one leaves; after that once a minute, because the
+phone can retry a registration while disconnected and the first report must land
+within ninety seconds. A watched turn is sent only when it changes, plus a
+30-second heartbeat. A host that has never approved a remote device skips the
+request, since no device can know its turns. A refused host waits one, two,
+four… minutes up to ten, and reads again when a device connects. This is
 bounded polling, not instantaneous streaming. Completion across multiple hosts
 ends the activity only once all watched turns settle. Ninety seconds without a
 fresh host report stops its displayed run; retry exhaustion retires the server

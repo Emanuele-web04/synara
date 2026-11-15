@@ -3,6 +3,7 @@
 //
 // Endpoints:
 //   POST /v1/events   — NDJSON diagnostics events -> D1 `events` table
+//   POST /v1/reliability-events — anonymous reliability receipts -> D1 daily totals
 //   POST /v1/crash    — permanently retired; body is never consumed
 //   POST /api/login   — password login -> signed session cookie
 //   GET  /api/*       — dashboard reads (session cookie required)
@@ -15,10 +16,22 @@
 // Deploy: `cd apps/analytics && wrangler deploy`
 
 import {
+  decodeAnonymousProductRecord,
   isProductAnalyticsCommand,
   PRODUCT_COHORT_WINDOWS,
+  PRODUCT_TURN_FAILURES,
+  ANONYMOUS_PRODUCT_RETRY_DAYS,
   type ProductAnalyticsCohortStage,
+  type AnonymousProductRecord,
 } from "@synara/contracts/productAnalytics";
+
+import {
+  decodeReliabilityRecord,
+  RELIABILITY_MAX_BODY_BYTES,
+  RELIABILITY_MAX_EVENTS_PER_POST,
+  RELIABILITY_MAX_RECORD_AGE_DAYS,
+  type ReliabilityRecord,
+} from "@synara/contracts/reliability";
 
 import {
   diagnosticErrorFingerprint,
@@ -38,6 +51,12 @@ import { diagnosticMetadataSql, diagnosticReadCteSql } from "./diagnosticsPrivac
 import { HOST_USAGE_RECEIPT_DAYS, HOST_USAGE_RETENTION_DAYS } from "@synara/contracts/hostUsage";
 import { normalizeHostUsageWindow } from "@synara/shared/hostUsage";
 import { readHostUsage, storeHostUsage } from "./hostUsage";
+import {
+  readReliabilityTotals,
+  RELIABILITY_RECEIPT_RETENTION_DAYS,
+  RELIABILITY_TOTAL_RETENTION_DAYS,
+  storeReliabilityRecords,
+} from "./reliability";
 import { captureInstallerDownloads, loadInstallerDownloads } from "./installerDownloads";
 
 export interface Env {
@@ -109,6 +128,7 @@ const PRODUCT_REASONS = new Set([
   "rejected",
   "other",
 ]);
+const PRODUCT_TURN_FAILURE_SET = new Set<string>(PRODUCT_TURN_FAILURES);
 const PRODUCT_SURFACES = new Set(["desktop", "ios", "ipados"]);
 const PRODUCT_PLATFORMS = new Set(["darwin", "win32", "linux", "ios", "ipados", "other"]);
 const PRODUCT_MAX_EVENTS_PER_POST = 50;
@@ -141,6 +161,8 @@ interface NormalizedProductEvent {
   mode: string | null;
   provider: string | null;
   reason: string | null;
+  failure: string | null;
+  httpStatus: number | null;
   command: string | null;
   durationMs: number | null;
   inputTokens: number | null;
@@ -151,8 +173,8 @@ interface NormalizedProductEvent {
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
   event_id, ts, received_at, install_id, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, command, duration_ms,
-  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage, failure, http_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(event_id) DO UPDATE SET cohort_day = excluded.cohort_day, cohort_stage = excluded.cohort_stage
 WHERE product_events.cohort_stage IS NULL AND excluded.cohort_stage IS NOT NULL
   AND product_events.install_id = excluded.install_id AND julianday(product_events.ts) = julianday(excluded.ts)
@@ -186,6 +208,8 @@ function productEventStatement(
     event.cachedInputTokens,
     event.cohortDay,
     event.cohortStage,
+    event.failure,
+    event.httpStatus,
   );
 }
 
@@ -306,6 +330,27 @@ export function normalizeProductEvent(
   ) {
     return null;
   }
+  // A turn that ended badly may name a fixed failure category; its status needs one.
+  const failure =
+    raw.failure === undefined
+      ? null
+      : typeof raw.failure === "string" &&
+          PRODUCT_TURN_FAILURE_SET.has(raw.failure) &&
+          raw.event === "turn.completed" &&
+          (raw.outcome === "failed" || raw.outcome === "cancelled")
+        ? raw.failure
+        : undefined;
+  const httpStatus =
+    raw.httpStatus === undefined
+      ? null
+      : typeof raw.httpStatus === "number" &&
+          Number.isInteger(raw.httpStatus) &&
+          raw.httpStatus >= 100 &&
+          raw.httpStatus <= 599 &&
+          typeof failure === "string"
+        ? raw.httpStatus
+        : undefined;
+  if (failure === undefined || httpStatus === undefined) return null;
   const command =
     raw.command === undefined
       ? null
@@ -373,6 +418,8 @@ export function normalizeProductEvent(
     mode,
     provider,
     reason,
+    failure,
+    httpStatus,
     command,
     durationMs,
     inputTokens,
@@ -1422,6 +1469,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     return new Response("unauthorized", { status: 401 });
   }
 
+  if (url.pathname === "/api/reliability" && request.method === "GET") {
+    return readReliabilityTotals(env.DB, url);
+  }
+
   const f = parseApiFilters(url);
 
   if (url.pathname === "/api/filters" && request.method === "GET") {
@@ -2070,8 +2121,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       commandRows,
       platformRows,
       reasonRows,
+      turnFailureRows,
       hostExecutions,
       installerDownloads,
+      anonymousEvents,
     ] = await Promise.all([
       env.DB.prepare(
         `SELECT COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
@@ -2243,8 +2296,55 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           events: number;
           installations: number;
         }>(),
+      env.DB.prepare(
+        `SELECT provider, failure, http_status AS httpStatus, outcome, channel,
+                  COUNT(*) AS turns, COUNT(DISTINCT install_id) AS installations,
+                  MAX(ts) AS lastSeen
+           FROM product_events
+           WHERE ${where} AND event = 'turn.completed' AND failure IS NOT NULL
+           GROUP BY provider, failure, http_status, outcome, channel
+           ORDER BY turns DESC, provider, failure LIMIT 200`,
+      )
+        .bind(...binds)
+        .all<{
+          provider: string | null;
+          failure: string;
+          httpStatus: number | null;
+          outcome: string;
+          channel: string;
+          turns: number;
+          installations: number;
+          lastSeen: string;
+        }>(),
       readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
       loadInstallerDownloads(env.DB, productFilters),
+      productFilters.surface && productFilters.surface !== "desktop"
+        ? null
+        : env.DB.prepare(
+            `SELECT day,
+                    SUM(CASE WHEN event = 'remote.pairing-approved' THEN count ELSE 0 END) AS pairings,
+                    SUM(CASE WHEN event = 'remote.connection-succeeded' THEN count ELSE 0 END) AS connections,
+                    SUM(CASE WHEN event = 'remote.reconnection-succeeded' THEN count ELSE 0 END) AS reconnections,
+                    SUM(CASE WHEN event = 'remote.connection-timeout' THEN count ELSE 0 END) AS timeouts,
+                    SUM(CASE WHEN event = 'app.crash' THEN count ELSE 0 END) AS crashes
+             FROM anonymous_product_daily
+             WHERE day BETWEEN ? AND ? AND (? IS NULL OR channel = ?)
+             GROUP BY day ORDER BY day DESC`,
+          )
+            .bind(
+              productFilters.from,
+              productFilters.to,
+              productFilters.channel,
+              productFilters.channel,
+            )
+            .all<{
+              day: string;
+              pairings: number;
+              connections: number;
+              reconnections: number;
+              timeouts: number;
+              crashes: number;
+            }>(),
     ]);
 
     const dayCount = Math.floor(
@@ -2268,6 +2368,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       activeInstallations: totals?.installations ?? 0,
       hostExecutions,
       installerDownloads,
+      anonymousEvents: anonymousEvents?.results ?? null,
       activeUsers: {
         day: activeRows?.day ?? 0,
         week: activeRows?.week ?? 0,
@@ -2278,6 +2379,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       },
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
+      turnFailures: turnFailureRows.results,
       commands: commandRows.results,
       daily,
       features: featureRows.results,
@@ -2453,6 +2555,52 @@ export default {
       return new Response("ok", { status: 200 });
     }
 
+    if (url.pathname === "/v1/reliability-events") {
+      if (request.method !== "POST") {
+        return new Response("method not allowed", { status: 405, headers: { allow: "POST" } });
+      }
+      if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
+        return new Response("rate limited", { status: 429 });
+      }
+      if (request.headers.get("content-type")?.split(";")[0]?.trim() !== "application/json") {
+        return new Response("unsupported media type", { status: 415 });
+      }
+      const bodyBytes = await readBodyBytes(request, RELIABILITY_MAX_BODY_BYTES);
+      if (!bodyBytes) return new Response("payload too large", { status: 413 });
+      let records: ReliabilityRecord[];
+      try {
+        const body: unknown = JSON.parse(new TextDecoder().decode(bodyBytes));
+        if (
+          !isRecord(body) ||
+          Object.keys(body).length !== 1 ||
+          !Array.isArray(body.events) ||
+          body.events.length === 0
+        ) {
+          return new Response("bad reliability batch", { status: 400 });
+        }
+        if (body.events.length > RELIABILITY_MAX_EVENTS_PER_POST) {
+          return new Response("too many events", { status: 413 });
+        }
+        records = body.events.map((record) => decodeReliabilityRecord(record));
+      } catch {
+        return new Response("bad reliability record", { status: 400 });
+      }
+      const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
+      const cutoff = new Date(now - RELIABILITY_MAX_RECORD_AGE_DAYS * DAY_MS)
+        .toISOString()
+        .slice(0, 10);
+      if (records.some((record) => record.day < cutoff || record.day > today)) {
+        return new Response("reliability day out of range", { status: 400 });
+      }
+      try {
+        const acknowledged = await storeReliabilityRecords(env.DB, records, today);
+        return Response.json({ stored: true, acknowledged });
+      } catch {
+        return new Response("reliability intake unavailable", { status: 503 });
+      }
+    }
+
     if (url.pathname === "/v1/product-events" && request.method === "POST") {
       if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
         return new Response("rate limited", { status: 429 });
@@ -2467,6 +2615,36 @@ export default {
         body = JSON.parse(new TextDecoder().decode(bodyBytes));
       } catch {
         return new Response("bad request", { status: 400 });
+      }
+      if (isRecord(body) && Object.hasOwn(body, "anonymousEvents")) {
+        if (
+          Object.keys(body).length !== 1 ||
+          !Array.isArray(body.anonymousEvents) ||
+          body.anonymousEvents.length === 0 ||
+          body.anonymousEvents.length > PRODUCT_MAX_EVENTS_PER_POST
+        )
+          return new Response("bad anonymous product batch", { status: 400 });
+        let records: AnonymousProductRecord[];
+        try {
+          records = body.anonymousEvents.map((record) => decodeAnonymousProductRecord(record));
+        } catch {
+          return new Response("bad anonymous product record", { status: 400 });
+        }
+        const now = Date.now();
+        const today = new Date(now).toISOString().slice(0, 10);
+        const cutoff = new Date(now - ANONYMOUS_PRODUCT_RETRY_DAYS * DAY_MS)
+          .toISOString()
+          .slice(0, 10);
+        if (records.some((record) => record.ts < cutoff || record.ts > today))
+          return new Response("anonymous product day out of range", { status: 400 });
+        await env.DB.batch(
+          records.map((record) =>
+            env.DB.prepare(
+              "INSERT OR IGNORE INTO anonymous_product_receipts (receipt_id, day, channel, event) VALUES (?, ?, ?, ?)",
+            ).bind(record.id.toLowerCase(), record.ts, record.channel, record.event),
+          ),
+        );
+        return Response.json({ stored: true });
       }
       if (isRecord(body) && body.hostUsage !== undefined) {
         const window = normalizeHostUsageWindow(body.hostUsage);
@@ -2653,6 +2831,7 @@ export default {
       {
         table: "product_cohorts",
         key: "rowid",
+        orderBy: "cohort_day",
         where: "cohort_day < ?",
         cutoffs: [before(COHORT_RETENTION_DAYS).slice(0, 10)],
       },
@@ -2668,12 +2847,40 @@ export default {
         where: "day < ?",
         cutoffs: [before(HOST_USAGE_RETENTION_DAYS).slice(0, 10)],
       },
+      {
+        table: "anonymous_product_receipts",
+        key: "receipt_id",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(ANONYMOUS_PRODUCT_RETRY_DAYS).slice(0, 10)],
+      },
+      {
+        table: "anonymous_product_daily",
+        key: "rowid",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(PRODUCT_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "reliability_receipts",
+        key: "receipt_id",
+        orderBy: "received_day",
+        where: "received_day < ?",
+        cutoffs: [before(RELIABILITY_RECEIPT_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "reliability_daily",
+        key: "rowid",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(RELIABILITY_TOTAL_RETENTION_DAYS).slice(0, 10)],
+      },
     ];
-    for (const { table, key, where, cutoffs } of retention) {
+    for (const { table, key, where, cutoffs, orderBy = "received_at" } of retention) {
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const result = await env.DB.prepare(
           `DELETE FROM ${table} WHERE ${key} IN (
-             SELECT ${key} FROM ${table} WHERE ${where} ORDER BY ${table === "product_cohorts" ? "cohort_day" : "received_at"} LIMIT ?
+             SELECT ${key} FROM ${table} WHERE ${where} ORDER BY ${orderBy} LIMIT ?
            )`,
         )
           .bind(...cutoffs, RETENTION_DELETE_BATCH_SIZE)

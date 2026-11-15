@@ -189,7 +189,7 @@ it
       },
     );
     await page.addLocatorHandler(
-      page.getByRole("button", { name: "Skip tour", exact: true }),
+      page.getByRole("button", { name: /^(Skip|Close) tour$/ }),
       async (button) => {
         await button.click();
       },
@@ -453,6 +453,17 @@ it
       });
       expect(await fs.readFile(path.join(roots[0]!, "same.txt"), "utf8")).toBe("REMOTE changed");
       expect(await fs.readFile(path.join(roots[1]!, "same.txt"), "utf8")).toBe("LOCAL original");
+      const destinationSpaceId = randomUUID();
+      await localRpc.request("orchestration.dispatchCommand", {
+        type: "space.create",
+        commandId: randomUUID(),
+        spaceId: destinationSpaceId,
+        name: "Remote destination",
+        icon: "bag",
+        createdAt: new Date().toISOString(),
+      });
+      const destination = page.getByRole("tab", { name: /^Remote destination/ });
+      await destination.click();
       const addedRoot = path.join(host.baseDir, "added-from-picker");
       await fs.mkdir(addedRoot);
       await fs.writeFile(path.join(addedRoot, "README.md"), "PICKED ON REMOTE");
@@ -505,11 +516,109 @@ it
       expect(
         localProjects.projects.some((project) => project.workspaceRoot === canonicalAddedRoot),
       ).toBe(false);
+      const assignedProject = projectsList.getByText("Named remote project", { exact: true });
+      await assignedProject.waitFor();
       await page.reload();
+      await destination.click();
+      await assignedProject.waitFor();
+      await page.getByRole("tab", { name: /^Void/ }).click();
+      await assignedProject.waitFor({ state: "hidden" });
       await page
         .getByRole("button", { name: /^REMOTE checkout, E2E host/ })
         .first()
         .waitFor();
+      // Move an already-linked Remote project out of Void through the same menu as local projects.
+      const existingRemoteProject = page
+        .getByRole("button", { name: /^REMOTE checkout, E2E host/ })
+        .first();
+      await page.waitForURL((url) => url.pathname !== "/remote");
+      await existingRemoteProject.hover();
+      await page
+        .getByRole("button", { name: /^Project actions for REMOTE checkout on E2E host/ })
+        .click();
+      await page.getByRole("menuitem", { name: "Move to space", exact: true }).press("ArrowRight");
+      await page.getByRole("menuitemradio", { name: "Remote destination", exact: true }).click();
+      await existingRemoteProject.waitFor({ state: "hidden" });
+      await destination.click();
+      await existingRemoteProject.waitFor();
+
+      const secondRemoteThreadId = randomUUID();
+      await remoteRpc.request("orchestration.dispatchCommand", {
+        type: "thread.create",
+        commandId: randomUUID(),
+        threadId: secondRemoteThreadId,
+        projectId,
+        title: "Remote rail second",
+        modelSelection: { provider: "codex", model: "gpt-6-astra" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        createdAt: new Date().toISOString(),
+      });
+      const primary = page.getByRole("navigation", { name: "Primary" });
+      const spacesButton = primary.getByRole("button", { name: "Spaces", exact: true });
+      await spacesButton.click();
+      const remoteRailThread = page.getByRole("button", {
+        name: /^Remote navigation fixture, E2E host/,
+      });
+      const secondRailThread = page.getByRole("button", { name: /^Remote rail second, E2E host/ });
+      await remoteRailThread.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Pin thread", exact: true }).click();
+      await expect
+        .poll(
+          async () =>
+            (
+              await remoteRpc.request<OrchestrationThreadDetailSnapshot>(
+                "orchestration.getThreadDetailSnapshot",
+                { threadId: remoteNavigationThreadId },
+              )
+            ).thread.isPinned,
+        )
+        .toBe(true);
+      await remoteRailThread.waitFor();
+      await secondRailThread.waitFor();
+
+      const readRemotePath = () => new URL(page.url()).searchParams.get("path")?.split("?")[0];
+      const firstRow = await remoteRailThread
+        .or(secondRailThread)
+        .first()
+        .getAttribute("aria-label");
+      const firstThreadId = firstRow?.startsWith("Remote navigation fixture")
+        ? remoteNavigationThreadId
+        : secondRemoteThreadId;
+      const otherThreadId =
+        firstThreadId === remoteNavigationThreadId
+          ? secondRemoteThreadId
+          : remoteNavigationThreadId;
+      const modifier = (await page.evaluate(() => navigator.platform.startsWith("Mac")))
+        ? "Meta"
+        : "Control";
+      await spacesButton.press(`${modifier}+1`);
+      await expect.poll(readRemotePath).toBe(`/${firstThreadId}`);
+      await spacesButton.press(`${modifier}+Shift+]`);
+      await expect.poll(readRemotePath).toBe(`/${otherThreadId}`);
+      await spacesButton.press(`${modifier}+Shift+[`);
+      await expect.poll(readRemotePath).toBe(`/${firstThreadId}`);
+
+      await remoteRailThread.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Unpin thread", exact: true }).click();
+      await localRpc.request("orchestration.dispatchCommand", {
+        type: "space.delete",
+        commandId: randomUUID(),
+        spaceId: destinationSpaceId,
+      });
+      const railVoid = page.getByText("Void", { exact: true }).locator("xpath=../../..");
+      await railVoid.getByText("Named remote project", { exact: true }).waitFor();
+      await railVoid.getByText("REMOTE checkout", { exact: true }).waitFor();
+      await remoteRpc.request("orchestration.dispatchCommand", {
+        type: "thread.delete",
+        commandId: randomUUID(),
+        threadId: secondRemoteThreadId,
+      });
+      await primary.getByRole("button", { name: "Home", exact: true }).click();
+
       expect(await remoteRpc.request("git.status", { cwd: roots[0] })).toMatchObject({
         branch: "fixture-remote",
       });

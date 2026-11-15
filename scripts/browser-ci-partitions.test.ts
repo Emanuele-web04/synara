@@ -37,25 +37,39 @@ describe("browser CI partitions", () => {
           "chat-projects (chromium)",
           "chat-workflows (chromium)",
         ]);
-        for (const name of [
-          "ChatView transcript geometry (full app) renders the active thread title",
-          "ChatView transcript geometry (full app) restores streaming follow after wheel",
-          "keeps scroll anchor stable",
-          "renders tool activity",
-          "creates a project",
-          "new worktree",
-          "approval already answered",
-          "queued composer request",
-          "a newly added case",
-        ]) {
+        const geometry = "ChatView transcript geometry (full app)";
+        for (const [name, lane] of [
+          [`${geometry} renders the active thread title`, "chat-workflows"],
+          [`${geometry} restores streaming follow after wheel`, "chat-follow"],
+          ["keeps scroll anchor stable", "chat-follow"],
+          ["renders tool activity", "chat-follow"],
+          // Follow keywords keep precedence over the projects group.
+          [
+            `${geometry} keeps subagents out of the sidebar while navigating ('click', scroll takeover: false)`,
+            "chat-follow",
+          ],
+          ["creates a project", "chat-projects"],
+          ["new worktree", "chat-projects"],
+          ["approval already answered", "chat-projects"],
+          ["queued composer request", "chat-projects"],
+          [`${geometry} keeps sidebar shortcut hints clear of row content`, "chat-projects"],
+          [
+            `${geometry} provider handoff destination hands the thread off before sending`,
+            "chat-projects",
+          ],
+          ["a newly added case", "chat-workflows"],
+        ] as const) {
           // Expected membership must not come from the config being checked.
-          for (const [title, expected] of [
-            [name, 1],
-            [`[geometry:linux] ${name}`, 0],
-          ] as const) {
-            const selected = owners.filter(({ pattern }) => pattern?.test(title));
-            expect(selected.length, title).toBe(expected);
-          }
+          const selected = owners.filter(({ pattern }) => pattern?.test(name));
+          expect(
+            selected.map(({ project }) => project),
+            name,
+          ).toEqual([`${lane} (chromium)`]);
+          const quarantined = `[geometry:linux] ${name}`;
+          expect(
+            owners.filter(({ pattern }) => pattern?.test(quarantined)),
+            quarantined,
+          ).toHaveLength(0);
         }
       } else {
         expect(owners.map(({ project }) => project)).toEqual(["components (chromium)"]);

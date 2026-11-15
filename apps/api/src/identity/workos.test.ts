@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { createServer, type RequestListener } from "node:http";
 import { generateKeyPair, SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorkosApiConfig } from "../config";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import {
@@ -34,6 +35,50 @@ function discoveryPath(clientId: string): string {
 }
 
 describe("verifyAccessToken", () => {
+  it("checks that the user still exists before provisioning from a cached identity", async () => {
+    const user = workos.addUser({ id: "user_deleted_before_provision", email: "gone@example.net" });
+    const { verifier, grants } = createWorkosIdentityProvider(workos.config());
+    await verifier.deleteUser!(user.id);
+    const requestsBefore = workos.requests.length;
+
+    await expect(
+      grants.resolveEnvironmentScope({ userId: user.id, sessionId: "session_deleted" }, user.email),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(workos.requests.slice(requestsBefore)).not.toContainEqual(
+      expect.objectContaining({ method: "POST", path: "/organizations" }),
+    );
+  });
+
+  it("asks for a lazily read email only to provision, and never provisions when that read fails", async () => {
+    const member = workos.addUser({ id: "user_lazy_email_member" });
+    const org = workos.addOrganization({ name: "Lazy email workspace" });
+    workos.addMembership(org.id, member.id);
+    const { verifier, grants } = createWorkosIdentityProvider(workos.config());
+    const unused = vi.fn(async () => member.email);
+    await expect(
+      grants.resolveEnvironmentScope(
+        { userId: member.id, sessionId: "session_lazy", orgId: org.id },
+        unused,
+        { freshMembership: true },
+      ),
+    ).resolves.toMatchObject({ kind: "scoped", organization: { orgId: org.id } });
+    expect(unused).not.toHaveBeenCalled();
+
+    const orphan = workos.addUser({ id: "user_lazy_email_deleted" });
+    await verifier.deleteUser!(orphan.id);
+    const requestsBefore = workos.requests.length;
+    await expect(
+      grants.resolveEnvironmentScope(
+        { userId: orphan.id, sessionId: "session_lazy_deleted" },
+        async () => (await verifier.getUser(orphan.id)).email,
+        { freshMembership: true },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(workos.requests.slice(requestsBefore)).not.toContainEqual(
+      expect.objectContaining({ method: "POST", path: "/organizations" }),
+    );
+  });
+
   it("preserves migrated ownership across email/SSO grants, refresh, membership and revocation", async () => {
     const user = workos.addUser({
       id: "user_production_migration",
@@ -267,14 +312,15 @@ describe("issuer discovery", () => {
     expect(discoveries).toHaveLength(1);
   });
 
-  it("throws naming the discovery URL when the metadata cannot be loaded", async () => {
+  it("classifies unavailable discovery metadata as a provider fault", async () => {
     // An unroutable origin: without a trusted issuer there is nothing safe to
     // fall back to, so verification must fail loudly rather than relax.
     const auth = createWorkosAuth(workos.config({ workosApiUrl: "http://127.0.0.1:1" }));
     const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
-    await expect(auth.verifyAccessToken(token)).rejects.toThrow(
-      `http://127.0.0.1:1/user_management/${workos.clientId}/.well-known/openid-configuration`,
-    );
+    await expect(auth.verifyAccessToken(token)).rejects.toMatchObject({
+      name: "IdentityProviderError",
+      status: 503,
+    });
   });
 
   // A stalled connection would otherwise wedge every verification behind a
@@ -657,46 +703,175 @@ it("revokes the verified session across refresh rotations without ending other s
   });
 });
 
-describe("refreshTokens classification", () => {
-  /** A stand-in that answers the refresh grant with a fixed response. */
-  async function refreshAgainst(status: number, body: unknown) {
-    const { serve } = await import("@hono/node-server");
-    const { Hono } = await import("hono");
-    const app = new Hono();
-    app.post("/user_management/authenticate", (c) => c.json(body as object, status as 400));
-    const server = serve({ fetch: app.fetch, port: 0 });
+describe("refreshTokens", () => {
+  async function withRefreshServer<A>(
+    respond: RequestListener,
+    exercise: (auth: ReturnType<typeof createWorkosAuth>) => Promise<A>,
+    options?: Pick<WorkosApiConfig, "workosGrantTimeoutMs">,
+  ): Promise<A> {
+    const server = createServer(respond).listen(0, "127.0.0.1");
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("failed to bind");
-      const auth = createWorkosAuth(
-        workos.config({ workosApiUrl: `http://127.0.0.1:${address.port}` }),
+      const port = await boundPort(server);
+      return await exercise(
+        createWorkosAuth(workos.config({ ...options, workosApiUrl: `http://127.0.0.1:${port}` })),
       );
-      return await auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error);
     } finally {
       server.close();
+      server.closeAllConnections();
     }
   }
 
+  // A 2s budget fits three attempts (backoff 250ms, then 500ms) and not a
+  // fourth (1s more), with jitter pinned to its midpoint.
+  const SHORT_REFRESH_BUDGET = { workosGrantTimeoutMs: 2_000 };
+
+  async function refreshAgainst(status: number, body: unknown) {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const respond = vi.fn<RequestListener>((_request, response) => {
+      response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    });
+    const startedAt = performance.now();
+    const error = await withRefreshServer(
+      respond,
+      (auth) => auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error),
+      SHORT_REFRESH_BUDGET,
+    );
+    return {
+      error,
+      attempts: respond.mock.calls.length,
+      elapsedMs: performance.now() - startedAt,
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   // Only the allowlisted OAuth refusal is terminal: HTTP 400 invalid_grant.
   it("classifies 400 invalid_grant as a terminal refusal", async () => {
-    const caught = await refreshAgainst(400, {
+    const { error, attempts } = await refreshAgainst(400, {
       error: "invalid_grant",
       error_description: "Refresh token is invalid or spent",
     });
-    expect(caught).toMatchObject({ name: "RefreshRejectedError" });
+    expect(error).toMatchObject({ name: "RefreshRejectedError" });
+    expect(attempts).toBe(1);
   });
 
-  // 408, 429, other 4xx shapes, and 5xx say nothing about the token: they
-  // must surface as provider faults, never clear a stored session.
   it.each([
-    [408, { message: "timeout" }],
-    [429, { message: "slow down" }],
-    [400, { error: "invalid_request", error_description: "malformed" }],
-    [403, { message: "forbidden" }],
-    [502, { message: "bad gateway" }],
-  ])("keeps %i (non-invalid_grant) a retryable provider fault", async (status, body) => {
-    const caught = await refreshAgainst(status, body);
-    expect(caught).toMatchObject({ name: "IdentityProviderError", status });
+    [408, 3, { message: "timeout" }],
+    [429, 3, { message: "slow down" }],
+    [400, 1, { error: "invalid_request", error_description: "malformed" }],
+    [403, 1, { message: "forbidden" }],
+    [502, 3, { message: "bad gateway" }],
+    [503, 3, { message: "unavailable" }],
+  ])("surfaces provider status %i after %i attempts", async (status, attempts, body) => {
+    const result = await refreshAgainst(status, body);
+    expect(result).toMatchObject({ attempts, error: { name: "IdentityProviderError", status } });
+    expect(result.elapsedMs).toBeLessThan(SHORT_REFRESH_BUDGET.workosGrantTimeoutMs);
+  });
+
+  // WorkOS answers short-lived refresh contention with 429 and asks callers
+  // to back off briefly and present the same token again.
+  it("backs off contention and replays the same request until WorkOS answers", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const requests: Array<{ body: string; at: number }> = [];
+    const tokens = await withRefreshServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push({ body, at: performance.now() });
+          if (requests.length < 3) {
+            response
+              .writeHead(429, { "content-type": "application/json" })
+              .end(JSON.stringify({ message: "slow down" }));
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              access_token: "access_rotated",
+              refresh_token: "refresh_rotated",
+              user: { id: "user_1", email: "ada@example.com" },
+            }),
+          );
+        });
+      },
+      (auth) => auth.refreshTokens({ refreshToken: "refresh_initial" }),
+      SHORT_REFRESH_BUDGET,
+    );
+
+    expect(tokens).toMatchObject({
+      accessToken: "access_rotated",
+      refreshToken: "refresh_rotated",
+    });
+    expect(requests).toHaveLength(3);
+    expect(new Set(requests.map(({ body }) => body)).size).toBe(1);
+    const [first, second, third] = requests.map(({ at }) => at);
+    expect(second! - first!).toBeGreaterThanOrEqual(200);
+    expect(third! - second!).toBeGreaterThanOrEqual(450);
+  });
+
+  it("recovers the original rotated pair after the provider response is interrupted", async () => {
+    const requests: string[] = [];
+    let minted: string | undefined;
+    const pair = {
+      access_token: "access_rotated",
+      refresh_token: "refresh_rotated",
+      user: { id: "user_1", email: "ada@example.com" },
+      organization_id: "org_1",
+    };
+    const tokens = await withRefreshServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push(body);
+          if (!minted) {
+            minted = JSON.stringify(pair);
+            response.writeHead(200, { "content-type": "application/json" });
+            response.write(minted.slice(0, 8), () => response.destroy());
+            return;
+          }
+          if (body !== requests[0]) {
+            response.writeHead(400).end(JSON.stringify({ error: "invalid_grant" }));
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" }).end(minted);
+        });
+      },
+      (auth) => auth.refreshTokens({ refreshToken: "refresh_initial", organizationId: "org_1" }),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(tokens).toMatchObject({
+      accessToken: "access_rotated",
+      refreshToken: "refresh_rotated",
+      organizationId: "org_1",
+    });
+  });
+
+  it("bounds response-body reads and stops when the configured refresh deadline is exhausted", async () => {
+    const respond = vi.fn<RequestListener>((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"access_token":');
+    });
+    await withRefreshServer(
+      respond,
+      async (auth) => {
+        await expect(auth.refreshTokens({ refreshToken: "rt_test" })).rejects.toMatchObject({
+          name: "IdentityProviderError",
+          status: 504,
+        });
+      },
+      { workosGrantTimeoutMs: 500 },
+    );
+    expect(respond).toHaveBeenCalledTimes(1);
   });
 });
 

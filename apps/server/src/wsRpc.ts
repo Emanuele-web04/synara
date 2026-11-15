@@ -23,6 +23,10 @@ import { EditorLanguageService } from "./editor/languageService";
 import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
+import {
+  pullRequestFromGitActionResult,
+  refreshReopenedThreadPullRequest,
+} from "./git/gitActionPullRequest";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
 import { execFile } from "node:child_process";
 
@@ -51,18 +55,19 @@ import {
   type DeviceEvent,
   type ComputerEvent,
   type GitRemoveWorktreeInput,
+  type GitRunStackedActionResult,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
-  type OrchestrationProject,
   type ProjectDevServerEvent,
   type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type ProjectId,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadPullRequest,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
@@ -70,7 +75,18 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import * as Arr from "effect/Array";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -109,7 +125,11 @@ import {
 } from "./projectAgent/libraryGit";
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
-import { isTrustedLocalServerToken, runWithRemoteAdmission } from "./auth/remoteAccess";
+import {
+  decideWithBillingPolicy,
+  isTrustedLocalServerToken,
+  runWithRemoteAdmission,
+} from "./auth/remoteAccess";
 import {
   ServerAuth,
   AuthError,
@@ -127,7 +147,6 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
-import { PROJECT_FOLDERS_WORKTREE_ISSUE } from "@synara/shared/projectFolders";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
@@ -212,6 +231,7 @@ import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsag
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { RecapStatsQuery } from "./recapStats";
+import { UsageAnalyticsQuery } from "./usageAnalyticsStats";
 import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
@@ -242,7 +262,7 @@ import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnostics
 import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagnostics";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
-import { requireWsOwnerSession } from "./wsOwnerAuthorization";
+import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
 import {
   WsRequestAdmissionMiddleware,
@@ -264,7 +284,7 @@ import {
 } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
-import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
+import { isOwnerRole, projectProviderStatusesForWsSession, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -507,24 +527,6 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
-/** Keeps the two worktree RPCs behind the same project eligibility check. */
-export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
-  readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
-  readonly getActiveProjectByWorkspaceRoot: (
-    cwd: string,
-  ) => Effect.Effect<Option.Option<OrchestrationProject>, E2, R2>;
-}) {
-  return (cwd: string) =>
-    dependencies.canonicalizeWorkspaceRoot(cwd).pipe(
-      Effect.flatMap(dependencies.getActiveProjectByWorkspaceRoot),
-      Effect.flatMap((project) =>
-        Option.isSome(project) && (project.value.additionalFolders ?? []).length > 0
-          ? Effect.fail(new WsRpcError({ message: PROJECT_FOLDERS_WORKTREE_ISSUE }))
-          : Effect.void,
-      ),
-    );
-}
-
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -558,6 +560,7 @@ const makeWsRpcHandlersLayer = () =>
       const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
+      const usageAnalyticsQuery = yield* UsageAnalyticsQuery;
       const threadSearchQuery = yield* ThreadSearchQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
@@ -643,7 +646,7 @@ const makeWsRpcHandlersLayer = () =>
         Effect.gen(function* () {
           const settings = yield* serverSettings.getSettings;
           const routing = resolveTextGenerationRouting(settings, input);
-          yield* gitManager.runStackedAction(
+          const result = yield* gitManager.runStackedAction(
             {
               ...input,
               ...(routing.modelSelection
@@ -653,7 +656,9 @@ const makeWsRpcHandlersLayer = () =>
             },
             { actionId: input.actionId, progressReporter: { publish } },
           );
-          yield* refreshGitStatusInBackground(input.cwd);
+          yield* input.threadId !== undefined
+            ? linkGitActionPullRequestInBackground(input.threadId, input.cwd, result)
+            : refreshGitStatusInBackground(input.cwd);
         }).pipe(
           Effect.catchCause((cause) => Effect.fail(toWsRpcError(cause, "Git action failed"))),
         ),
@@ -854,11 +859,6 @@ const makeWsRpcHandlersLayer = () =>
           Effect.provideService(Path.Path, path),
         );
       });
-      // Fail before Git runs; a refused turn must not leave an orphaned worktree.
-      const refuseMultiFolderProjectWorktree = makeProjectWorktreeGuard({
-        canonicalizeWorkspaceRoot: canonicalizeProjectWorkspaceRoot,
-        getActiveProjectByWorkspaceRoot: projectionReadModelQuery.getActiveProjectByWorkspaceRoot,
-      });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
       // Claude Outbox layout). Keeping a single implementation keeps error handling and
@@ -1040,9 +1040,15 @@ const makeWsRpcHandlersLayer = () =>
         return result;
       });
 
+      const readProviderStatuses = providerHealth.getStatuses.pipe(
+        Effect.flatMap(projectProviderStatusesForWsSession),
+      );
+      const streamProviderStatuses = providerHealth.streamChanges.pipe(
+        Stream.mapEffect(projectProviderStatusesForWsSession),
+      );
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providerStatuses = yield* providerHealth.getStatuses;
+        const providerStatuses = yield* readProviderStatuses;
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
@@ -1072,6 +1078,43 @@ const makeWsRpcHandlersLayer = () =>
           Effect.forkDetach,
           Effect.asVoid,
         );
+
+      // The thread owns the PR its git action created, or the open PR it pushed to. Linking is
+      // server-side so a client that disconnects after the action cannot drop the association.
+      const linkGitActionPullRequestInBackground = (
+        threadId: ThreadId,
+        cwd: string,
+        result: GitRunStackedActionResult,
+      ) => {
+        const dispatchLink = (
+          pullRequest: OrchestrationThreadPullRequest,
+          source: "created" | "user",
+        ) =>
+          orchestrationEngine.dispatch({
+            type: "thread.pull-request.link",
+            commandId: CommandId.makeUnsafe(`server:git-action-pr:${crypto.randomUUID()}`),
+            threadId,
+            pullRequest,
+            source,
+          });
+        return Effect.gen(function* () {
+          const created = pullRequestFromGitActionResult(result);
+          if (created) yield* dispatchLink(created, "created");
+          const status = yield* gitStatusBroadcaster.refreshStatus(cwd);
+          if (!created && result.push.status === "pushed" && status.pr?.state === "open") {
+            yield* dispatchLink(status.pr, "user");
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("git action pull request link failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+      };
 
       const validateArchiveWorktreeRemoval = (input: GitRemoveWorktreeInput) =>
         Effect.gen(function* () {
@@ -1639,7 +1682,7 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot(),
+            projectionReadModelQuery.getShellSnapshot({ verifyEmptyThreads: true }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
@@ -2375,7 +2418,37 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.pullRequestsDiff]: (input) =>
           pullRequestsEffect(pullRequests.diff(input), "Failed to load pull request diff"),
         [WS_METHODS.pullRequestsAction]: (input) =>
-          pullRequestsEffect(pullRequests.action(input), "Pull request action failed"),
+          pullRequestsEffect(
+            pullRequests.action(input).pipe(
+              Effect.tap((result) => {
+                const threadId = input.threadId;
+                if (input.action !== "reopen" || !threadId) return Effect.void;
+                // GitHub has already accepted the reopen. Persist it even if the caller
+                // disconnects, and report local refresh failures without failing the action.
+                return Effect.gen(function* () {
+                  const thread = Option.getOrUndefined(
+                    yield* projectionReadModelQuery.getThreadShellById(threadId),
+                  );
+                  if (!thread || thread.projectId !== result.projectId) return;
+                  yield* refreshReopenedThreadPullRequest({
+                    thread,
+                    repository: result.repository,
+                    number: result.number,
+                    dispatch: orchestrationEngine.dispatch,
+                  });
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("reopened pull request link refresh failed", {
+                      threadId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                  Effect.uninterruptible,
+                );
+              }),
+            ),
+            "Pull request action failed",
+          ),
         [WS_METHODS.pullRequestsComment]: (input) =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>
@@ -2390,13 +2463,9 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refuseMultiFolderProjectWorktree(input.cwd).pipe(
-              Effect.andThen(
-                refreshGitStatusAfter(
-                  input.cwd,
-                  git.withMutation(input.cwd, git.createWorktree(input)),
-                ),
-              ),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.createWorktree(input)),
             ),
             "Failed to create worktree",
           ),
@@ -2404,34 +2473,28 @@ const makeWsRpcHandlersLayer = () =>
           bufferLiveUiStream(
             Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
               const progressId = input.progressId ?? null;
-              return refuseMultiFolderProjectWorktree(input.cwd)
-                .pipe(
-                  Effect.andThen(
-                    refreshGitStatusAfter(
-                      input.cwd,
-                      git.withMutation(
-                        input.cwd,
-                        git.createDetachedWorktree(input, {
-                          onPhase: (phase) =>
-                            Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
-                              Effect.asVoid,
-                            ),
-                        }),
-                      ),
-                    ),
-                  ),
-                )
-                .pipe(
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) =>
-                      Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
-                    onSuccess: (result) =>
-                      Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
-                        Effect.andThen(Queue.end(queue)),
+              return refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(
+                  input.cwd,
+                  git.createDetachedWorktree(input, {
+                    onPhase: (phase) =>
+                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
                         Effect.asVoid,
                       ),
                   }),
-                );
+                ),
+              ).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) =>
+                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
+                  onSuccess: (result) =>
+                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
+                      Effect.andThen(Queue.end(queue)),
+                      Effect.asVoid,
+                    ),
+                }),
+              );
             }),
             { label: "git.create-detached-worktree" },
           ),
@@ -2637,13 +2700,26 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
+          rpcEffect(
+            (input.legacyProviders === undefined && input.legacyProviderInstances === undefined
+              ? Effect.void
+              : requireWsOwnerSession
+            ).pipe(Effect.andThen(serverSettings.updateSettingsView(input))),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
-            providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
+            providerHealth.refresh.pipe(
+              Effect.flatMap(projectProviderStatusesForWsSession),
+              Effect.map((providers) => ({ providers })),
+            ),
             "Failed to refresh providers",
           ),
-        [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.serverUpdateProvider]: (input) =>
+          providerHealth.updateProvider(input).pipe(
+            Effect.flatMap(({ providers }) => projectProviderStatusesForWsSession(providers)),
+            Effect.map((providers) => ({ providers })),
+          ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
@@ -2707,6 +2783,15 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.statsGetRecap]: (input) =>
           rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
+        [WS_METHODS.statsGetUsageAnalytics]: (input) =>
+          requireUsageAnalyticsAccess(input.scope).pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                usageAnalyticsQuery.getUsageAnalytics(input),
+                "Failed to load usage analytics",
+              ),
+            ),
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
@@ -2937,7 +3022,7 @@ const makeWsRpcHandlersLayer = () =>
                   })),
                 ),
                 Stream.merge(
-                  bufferLiveUiStream(providerHealth.streamChanges, {
+                  bufferLiveUiStream(streamProviderStatuses, {
                     label: "server.provider-statuses",
                     onDroppedEvents: failLiveUiStreamForSnapshotResync,
                   }).pipe(
@@ -2965,9 +3050,9 @@ const makeWsRpcHandlersLayer = () =>
             { key: "server.provider-statuses" },
             Stream.concat(
               Stream.fromEffect(
-                providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
+                readProviderStatuses.pipe(Effect.map((providers) => ({ providers }))),
               ),
-              bufferLiveUiStream(providerHealth.streamChanges, {
+              bufferLiveUiStream(streamProviderStatuses, {
                 label: "server.provider-statuses",
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }).pipe(Stream.map((providers) => ({ providers }))),
@@ -3648,33 +3733,36 @@ export function authenticateRpcWebSocketUpgrade(input: {
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
   readonly remoteSessions: RemoteSessionRegistry;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
-  // The local desktop retains its private-token authority even with a stale browser cookie.
-  if (
-    input.remoteSessions.remoteBillingEnforced &&
-    isTrustedLocalServerToken(input.config, input.legacyToken)
-  )
-    return Effect.succeed(null);
-  // An explicit client ticket must retain its client role even on an otherwise
-  // accountless loopback server. Never promote an authenticated remote bridge.
-  if (
+  const explicitCredential =
     input.request.url?.searchParams.has("wsToken") ||
     input.request.headers.authorization ||
     Object.entries(input.request.cookies).some(
       ([name, value]) => /^synara_session(?:_\d+)?$/.test(name) && Boolean(value),
+    );
+  const route = (remoteBillingEnforced: boolean): "local" | "authenticate" => {
+    // The local desktop retains its private-token authority even with a stale browser cookie.
+    if (remoteBillingEnforced && isTrustedLocalServerToken(input.config, input.legacyToken))
+      return "local";
+    // An explicit client ticket must retain its client role even on an otherwise
+    // accountless loopback server. Never promote an authenticated remote bridge.
+    if (explicitCredential) return "authenticate";
+    if (
+      !remoteBillingEnforced &&
+      (!requiresWebSocketAuthentication(input.config) ||
+        (isLoopbackHost(input.config.host) &&
+          !input.config.publicUrl &&
+          input.legacyToken === input.config.authToken))
     )
-  ) {
-    return input.serverAuth.authenticateWebSocketUpgrade(input.request);
-  }
-  if (
-    !input.remoteSessions.remoteBillingEnforced &&
-    (!requiresWebSocketAuthentication(input.config) ||
-      (isLoopbackHost(input.config.host) &&
-        !input.config.publicUrl &&
-        input.legacyToken === input.config.authToken))
-  ) {
-    return Effect.succeed(null);
-  }
-  return input.serverAuth.authenticateWebSocketUpgrade(input.request);
+      return "local";
+    return "authenticate";
+  };
+  return decideWithBillingPolicy(input.remoteSessions, route).pipe(
+    Effect.flatMap((decision) =>
+      decision === "local"
+        ? Effect.succeed(null)
+        : input.serverAuth.authenticateWebSocketUpgrade(input.request),
+    ),
+  );
 }
 
 /**

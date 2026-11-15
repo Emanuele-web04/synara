@@ -1,5 +1,115 @@
 # Changelog
 
+## 1.5.4 — 2026-11-14
+
+**More flexible projects and pull requests, smoother Remote recovery, and less background work.**
+
+### Added
+
+- Link and manage multiple pull requests in a thread, including stacked work. Existing single-PR links are preserved.
+- Edit a project's additional source folders and use worktree chats in multi-folder projects. Only the primary folder is isolated; additional folders remain live.
+- Claude turn plans are displayed again through Synara's plan tool.
+
+### Changed
+
+- Background tasks appear in the Environment panel. Responses resumed by completed tasks form a clearer reply, with a single copy action for the complete reply.
+- The computer picker offers reconnect, and eligible disconnected Remote computers reconnect automatically. Folder browsing retains the last readable location after an error.
+- Turn diffs and file Undo exclude qualifying incoming Git history while retaining authored changes and conflict resolutions; older checkpoints keep their original behavior.
+- Provider discovery warms only the provider a new thread would use until more are needed. On a Linux source-build test with 20 threads across 12 projects, median process-tree memory fell from 3,009 MB to 766 MB (75%); this depends on installed providers and workload, and packaged apps, macOS and Windows were not measured.
+- Desktop startup avoids unnecessary connection backoff and, for a data home with no thread history, a recovery wait. Large-thread reads use existing indexes. The new-chat background pauses after five seconds without input.
+- With tabs off, a project chat shows its project alongside the title. Images sharing a paragraph with text appear on their own row, and project logos have a clearer border.
+
+### Fixed
+
+- Typed and shared skills reach Claude and Codex more reliably, including skills from another provider's folder.
+- Temporary Cloudflare 403 blocks are distinguished from authentication failures. Claude retries blocked turns after 5, 15 and 45 seconds; stopping or steering cancels a waiting retry.
+- Background task status no longer relies on stale client activity for threads without a live detail stream, and resumed replies no longer briefly appear interrupted because of a missing checkpoint.
+- Remote folder browsing remains usable after navigation errors, including paths with leading or trailing whitespace.
+
+### Verification
+
+The release checkpoint records local checks and their inputs. The exact-tag workflow must pass quality, server tests, native packages, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Packaged startup does not establish manual installation, upgrades or live provider behavior. The separate analytics service migration and deployment are not part of the desktop release.
+
+## 1.5.3 — 2026-11-12
+
+**Clearer settings and chats, more reliable accounts, and less background work.**
+
+### Added
+
+- Settings groups navigation by purpose and gives provider accounts their own searchable page. Choose a provider account as the default for new chats; account and sign-in data survive an agents-list reset.
+- Open a subagent alongside its launching chat. Related agent-created threads can be nested in the sidebar and Activity, and the running-agents indicator opens the Subagents list.
+- Browser automation reports bounded, sanitized causes for supported script failures and suggests supported alternatives when an API is unavailable.
+
+### Changed
+
+- Transcript tool activity and routine provider warnings are quieter. Provider questions use a compact composer, and the model picker stays open when selecting a favorite.
+- New installations ask before resuming a large, long-idle Claude session and offer a summary; existing preferences remain intact. Claude is guided to avoid unnecessary unrequested subagents.
+- Idle account polling, usage synchronization and account API requests perform less work. API improvements include fewer database and service round trips and shorter database lock exposure; service availability depends on deployment.
+- Release packaging overlaps independent macOS work while preserving signing and notarization; results vary by runner and no general speedup is claimed.
+
+### Fixed
+
+- Transient account token refresh failures retain the session and retry rather than forcing a sign-out. Sign-in no longer waits on a stalled enrollment, which retries in the background.
+- Usage synchronization avoids stalls on large histories. Stale interrupted-command blockers are settled without suppressing safeguards for other ambiguous commands.
+- Remote projects remain in their selected Space, and Space moves and rail navigation are more consistent.
+- Provider warnings and Claude subagent activity retain actionable information while suppressing routine bookkeeping.
+
+### Verification
+
+The release checkpoint records local checks and their inputs. The exact-tag workflow must pass quality, server tests, all native packages, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Packaged startup does not establish manual installation, upgrades or live provider behavior.
+
+## 1.5.2 — 2026-11-11
+
+**Linux ARM64 desktop packages beside the existing x86_64 build.**
+
+### Added
+
+- Usage & limits includes Analytics for token and activity trends by provider, model and project, with reported or estimated API-rate costs. On macOS, This Mac can include local Claude Code and Codex sessions; API-rate estimates are not subscription charges.
+- Settings can target a connected computer. Supported Codex and Claude accounts show available signed-in identity to help distinguish accounts.
+- Linux ARM64 AppImage (`Synara-<version>-arm64.AppImage`) built on an ARM64 runner with the same provenance record, packaged-startup smoke test and unsigned Linux publication policy as the x86_64 build.
+- Dedicated Linux feed per architecture (`synara-linux.yml` for x86_64, `synara-linux-arm64.yml` for ARM64). electron-updater derives that suffix from the running architecture and, inside a manifest, prefers an AppImage whose name contains `process.arch` before falling back to the first `.AppImage` match. `x64` never matches the `x86_64` file alias, so a shared manifest could still hand x64 the arm64 payload.
+- The download page exposes both Linux builds through an architecture toggle, and the installation and troubleshooting docs describe the `aarch64` choice and the FUSE 2 requirement.
+
+### Changed
+
+- `dist:desktop:linux` follows the host architecture instead of forcing x64; `--arch arm64` also works there.
+- The pinned compatibility release stays x64-only: it predates ARM64 support, so publishing an ARM64 build there would point an old app at the x86_64 feed.
+- Usage & limits separates overview, analytics and billing; provider and checkpoint warnings appear in the environment panel when available. Rate-limit reset durations and onboarding are clearer, and users can hide rate-limit warnings.
+- Simulator control persists across chats with less helper overhead. The app tour and announcement presentation have been refreshed.
+
+### Fixed
+
+- Account refresh and revoked-device recovery, uncertain chat sends, queued work, provider lifecycle and Remote connection recovery handle interruptions more reliably.
+- macOS update preparation and window shutdown handle application lifecycle more reliably. Onboarding provider counts follow their switches and window controls no longer obscure its header.
+- Migration backups and recovery protect database and WAL state through interrupted restores; deleted-chat usage retains supported aggregates.
+
+### Verification
+
+Local release checks and the independent migration review are recorded in the release checkpoint. The exact-tag workflow must pass quality, server tests, all native packages including Linux ARM64, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Manual installation, installed-app upgrades and live-provider behavior are not established by packaged startup checks.
+
+## 1.5.1 — 2026-11-11
+
+**Safer upgrades from older Stable databases and optional anonymous Remote reliability totals.**
+
+### Added
+
+- With product sharing enabled, desktop Synara reports separate daily totals for approved pairings, live Remote RPC connections, reconnects, environment-read timeouts and unexpected app/backend crashes. These records contain only a UTC day, channel, fixed event and random delivery receipt; no account, device or installation identity, private content or error text. Stable remains opt-in; crash reports are best-effort.
+- The website can start monthly or yearly Alto checkout after verifying the Synara account by email. It receives the Polar redirect without account credentials. This account API improvement is also available to existing desktop installations.
+
+### Changed
+
+- The exact database history shipped by the affected older Stable releases now creates its migration backup and upgrades automatically. Unknown or modified histories retain the existing confirmation and recovery safeguards.
+- Migration changes require an independent review of data preservation, replay safety and backup/recovery.
+
+### Fixed
+
+- An ordinary upgrade from the released migration gap no longer stops at the migration-136 import confirmation. Original recorded identities must match before any legacy-name normalization; near-matching histories still require review.
+- Anonymous event retry expiry now matches the receiver's UTC-day window. Lost acknowledgements and duplicate receipt delivery count each event once.
+
+### Verification
+
+Focused migration, backup/replay, analytics privacy/delivery and Remote transport checks passed, including regressions that failed before their fixes. A real local workerd/D1 test covered consent, lost acknowledgements, concurrent retries and restart recovery. The exact-tag workflow must still pass full quality/server suites, all four native packages, macOS signing/notarization, provenance, Defender and packaged startup before publication. The subscriber's reported Remote timeout has no confirmed root cause; recording it does not establish a fix.
+
 ## 1.5.0 — 2026-11-10
 
 **Remote connections, Synara Alto, public profiles, and private Inbox history in Stable.**

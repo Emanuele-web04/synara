@@ -168,11 +168,13 @@ it("persists terminal error identity and announced retry state in chat activitie
         state: "failed",
         errorMessage: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         errorCode: "server_overloaded",
+        httpStatus: 529,
       },
     }),
   )[0]!;
   expect(completion.payload).toMatchObject({
     errorCode: "server_overloaded",
+    httpStatus: 529,
     state: "failed",
     errorMessage: "Temporarily unavailable",
   });
@@ -300,6 +302,26 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
     payload: { message: "Extension notification", detail: "Extension notification" },
   });
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
+it("marks Codex stderr warnings so replay can apply the stderr policy to them alone", () => {
+  const project = (provider: "codex" | "cursor", method: string) =>
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider,
+        type: "runtime.warning",
+        eventId: `${provider}-${method}`,
+        turnId: TURN_ID,
+        payload: { message: "fatal: permission denied" },
+        raw: { source: "codex.app-server.notification", method, payload: {} },
+      }),
+    )[0];
+
+  expect(project("codex", "process/stderr")?.payload).toMatchObject({
+    nativeEventType: "codex.process/stderr",
+  });
+  expect(project("cursor", "process/stderr")?.payload).not.toHaveProperty("nativeEventType");
+  expect(project("codex", "warning")?.payload).toMatchObject({ nativeEventType: "codex.warning" });
 });
 
 it("projects Claude Monitor events as labeled notices", () => {
@@ -1728,5 +1750,23 @@ it("projects the real nested Claude SDK rate-limit envelope", () => {
     resetsAt: "2027-01-15T08:00:00.000Z",
     utilization: 1,
   });
+  expectSchemaValidActivities(event);
+});
+
+it("keeps approaching limits as usage state without adding work-log warnings", () => {
+  const event = runtimeEvent({
+    type: "account.rate-limits.updated",
+    eventId: "claude-approaching",
+    provider: "claudeAgent",
+    turnId: TURN_ID,
+    payload: {
+      rateLimits: {
+        rate_limit_info: { status: "allowed_warning", utilization: 0.9, resetsAt: 1_800_000_000 },
+      },
+    },
+  });
+  expect(projectProviderRuntimeActivities(event).map((activity) => activity.kind)).toEqual([
+    "account.rate-limits.updated",
+  ]);
   expectSchemaValidActivities(event);
 });
