@@ -335,7 +335,7 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
-import { ComposerUsageLimitRecovery } from "./chat/ComposerUsageLimitRecovery";
+import { ComposerUsageLimitCapsules } from "./chat/ComposerUsageLimitCapsules";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -391,7 +391,6 @@ import { NewChatComputerPicker } from "./hosts/ComputerPicker";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
-import { RateLimitBanner } from "./chat/RateLimitBanner";
 import { isMissingCheckpointBaselineActivity } from "../workLog";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
@@ -6385,15 +6384,6 @@ export default function ChatView({
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
-          {visibleActiveRateLimitStatus &&
-          (visibleActiveRateLimitStatus.status === "rejected" || !environmentEnabled) ? (
-            <div className="pb-2">
-              <RateLimitBanner
-                rateLimitStatus={visibleActiveRateLimitStatus}
-                onDismiss={dismissActiveRateLimitBanner}
-              />
-            </div>
-          ) : null}
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
           <div>
@@ -6401,12 +6391,17 @@ export default function ChatView({
                 the stacked rail fused onto the input. */}
             <ComposerCapsuleRow>
               <ComposerTransportNotice />
-              {activeThread?.usageLimitRecovery && phase !== "running" ? (
-                <ComposerUsageLimitRecovery
-                  recovery={activeThread.usageLimitRecovery}
-                  onCancel={onInterruptFromStopControl}
-                />
-              ) : null}
+              <ComposerUsageLimitCapsules
+                provider={quotaProvider}
+                instanceId={quotaInstanceId}
+                rateLimitStatus={enabledRateLimitStatus}
+                // Environment → Usage carries the approaching-limit warning when it is shown.
+                showWarning={!environmentEnabled && visibleActiveRateLimitStatus !== null}
+                recovery={phase !== "running" ? (activeThread?.usageLimitRecovery ?? null) : null}
+                onDismissWarning={dismissActiveRateLimitBanner}
+                onCancelRecovery={onInterruptFromStopControl}
+                onChangeModel={() => handleModelPickerOpenChange(true)}
+              />
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}

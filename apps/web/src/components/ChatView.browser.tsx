@@ -2616,9 +2616,12 @@ describe("ChatView transcript geometry (full app)", () => {
           await expect
             .element(page.getByRole("button", { name: /Toggle environment panel/ }))
             .not.toBeInTheDocument();
-          const warning = page.getByText("Approaching rate limit (91% used).", { exact: true });
+          const warning = page.getByTestId("composer-usage-limit-warning");
           if (warningsHidden) expect(warning.query()).toBeNull();
-          else await expect.element(warning, { timeout: 3_000 }).toBeVisible();
+          else {
+            await expect.element(warning, { timeout: 3_000 }).toBeVisible();
+            await expect.element(warning).toHaveTextContent("91% used");
+          }
           return;
         }
         const toggle = page.getByRole("button", { name: /Toggle environment panel/ });
@@ -2661,8 +2664,9 @@ describe("ChatView transcript geometry (full app)", () => {
           snapshot.snapshotSequence + 1,
           new Date(Date.now() + (2 * 24 + 2) * 3_600_000 + 300_000).toISOString(),
         );
-        const banner = page.getByRole("alert").filter({ hasText: "Rate limit reached." });
+        const banner = page.getByTestId("composer-usage-limit-capsule");
         await expect.element(banner).toBeVisible();
+        await expect.element(banner).toHaveTextContent("Limit reached");
         await expect.element(banner).toHaveTextContent("Resets in 2d 2h");
         expect(
           document.querySelector('[data-chat-composer-form="true"]')!.contains(banner.element()),

@@ -6821,7 +6821,7 @@ const make = Effect.gen(function* () {
       sourceEventSequence: event.sequence,
       messageId: MessageId.makeUnsafe(`usage-limit:${recovery.id}`),
       messageText:
-        "Continue the remaining task after the provider usage limit. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
+        "I hit my usage limit while you were working, but it has reset now. Please continue from where you left off.",
       dispatchOrigin: "automation",
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
