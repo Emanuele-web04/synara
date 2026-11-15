@@ -5,6 +5,9 @@ name: CI
 
 on:
   pull_request:
+  # The merge queue runs every lane before a change reaches main; selection
+  # below only narrows pull request feedback.
+  merge_group:
   push:
     branches:
       - main
@@ -31,14 +34,23 @@ jobs:
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      core: ${{ steps.select.outputs.core }}
+      web: ${{ steps.select.outputs.web }}
+      server: ${{ steps.select.outputs.server }}
+      build: ${{ steps.select.outputs.build }}
+      windows: ${{ steps.select.outputs.windows }}
     # dorny/paths-filter lists PR files via the API: it needs pull-requests
     # scope on top of the checkout's contents scope (repo default is tighter).
     permissions:
       contents: read
       pull-requests: read
     steps:
+      # Reads history (merge base for lane selection): a blobless full clone.
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Filter docs-only changes
         id: filter
@@ -64,6 +76,26 @@ jobs:
               - '!**/*.mdx'
               - '!apps/marketing/content/**'
               - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # Root-only install for turbo; no lifecycle scripts are needed to read the graph.
+      - name: Install Turbo
+        run: bun install --frozen-lockfile --filter './' --ignore-scripts
+
+      # Pull requests run only the lanes their diff can reach (turbo's package
+      # graph plus the global and undeclared edges in scripts/ci-affected.ts).
+      # merge_group and push events select every lane.
+      - name: Select affected lanes
+        id: select
+        run: node scripts/ci-affected.ts "$EVENT" "$BASE_SHA" "$HEAD_SHA"
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
   # Root + scripts dependencies suffice for every static check and release smoke.
   # Never wait for the changes job to report formatting or lint failures.
@@ -124,38 +156,56 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # Keep each server shard serial internally, but use three independent runners.
-  # The measured native 3-way split lowers the slowest shard without changing
-  # collected tests. Tests import @synara/contracts from source (its ESM export),
-  # so no package build precedes them; every lane starts at the test files.
-  unit:
-    name: Unit Tests (${{ matrix.pkg }})
+  # Tests import @synara/contracts from source (its ESM export), so no package
+  # build precedes them; every lane starts at the test files. Core, web and
+  # server are separate jobs so pull requests can skip a lane their diff
+  # cannot reach (scripts/ci-affected.ts); merge_group and main run all three.
+  unit_core:
+    name: Unit Tests (core)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.core == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Test (core)
+        run: bunx turbo run test --filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics
+
+  unit_web:
+    name: Unit Tests (web)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.web == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Test (web)
+        run: bunx turbo run test --filter=@synara/web
+
+  # Three independent server runners; the measured native 3-way split lowers
+  # the slowest shard without changing collected tests.
+  unit_server:
+    name: Unit Tests (server ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.server == 'true'
     strategy:
       # Deliberate non-default: one shard's failure must not cancel the other
       # shards, so every lane reports complete signal for the gate.
       fail-fast: false
       matrix:
-        include:
-          - pkg: core
-            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics"
-            test-args: ""
-          - pkg: web
-            filters: "--filter=@synara/web"
-            test-args: ""
-          # Server lane tests the CLI package (package name @synara/cli).
-          - pkg: server 1/3
-            filters: "--filter=@synara/cli"
-            test-args: "--shard=1/3"
-          - pkg: server 2/3
-            filters: "--filter=@synara/cli"
-            test-args: "--shard=2/3"
-          - pkg: server 3/3
-            filters: "--filter=@synara/cli"
-            test-args: "--shard=3/3"
+        shard: ["1/3", "2/3", "3/3"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -164,11 +214,12 @@ jobs:
         uses: ./.github/actions/setup-workspace
 
       - name: Verify Linux terminal PTY native dependency
-        if: matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
+        if: matrix.shard == '1/3'
         run: node scripts/node-pty-smoke.mjs
 
-      - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+      # Server lane tests the CLI package (package name @synara/cli).
+      - name: Test (server ${{ matrix.shard }})
+        run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}
 
   # ChatView is one large file, so split it by complementary test-name groups.
   # Other browser files use native 3-way file sharding. Every runner keeps serial
@@ -178,7 +229,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.web == 'true'
     strategy:
       # Deliberate non-default: one shard's failure must not cancel the other
       # shards, so every lane reports complete signal for the gate.
@@ -230,7 +281,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.build == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -283,7 +334,9 @@ jobs:
       - changes
       - static-fast
       - static-typecheck
-      - unit
+      - unit_core
+      - unit_web
+      - unit_server
       - browser
       - build
       - windows_process
@@ -292,11 +345,19 @@ jobs:
     steps:
       - name: Aggregate lane results
         env:
+          EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
+          SELECT_CORE: ${{ needs.changes.outputs.core }}
+          SELECT_WEB: ${{ needs.changes.outputs.web }}
+          SELECT_SERVER: ${{ needs.changes.outputs.server }}
+          SELECT_BUILD: ${{ needs.changes.outputs.build }}
+          SELECT_WINDOWS: ${{ needs.changes.outputs.windows }}
           STATIC_FAST: ${{ needs.static-fast.result }}
           TYPECHECK: ${{ needs.static-typecheck.result }}
-          UNIT: ${{ needs.unit.result }}
+          UNIT_CORE: ${{ needs.unit_core.result }}
+          UNIT_WEB: ${{ needs.unit_web.result }}
+          UNIT_SERVER: ${{ needs.unit_server.result }}
           BROWSER: ${{ needs.browser.result }}
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
@@ -317,13 +378,38 @@ jobs:
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
+          # name=result=selection; "always" lanes run for every code change.
+          for lane in \
+            "typecheck=$TYPECHECK=always" \
+            "migration-lineage=$MIGRATION_LINEAGE=always" \
+            "unit-core=$UNIT_CORE=$SELECT_CORE" \
+            "unit-web=$UNIT_WEB=$SELECT_WEB" \
+            "unit-server=$UNIT_SERVER=$SELECT_SERVER" \
+            "browser=$BROWSER=$SELECT_WEB" \
+            "build=$BUILD=$SELECT_BUILD" \
+            "windows-process=$WINDOWS_PROCESS=$SELECT_WINDOWS"; do
             name="${lane%%=*}"
-            result="${lane#*=}"
+            rest="${lane#*=}"
+            result="${rest%%=*}"
+            selected="${rest#*=}"
             if [ "$CODE" != "true" ]; then
               # Docs-only run: heavy lanes must be skipped, never failed.
               if [ "$result" != "skipped" ]; then
                 echo "$name=$result (docs-only run: expected skipped)"
+                fail=1
+              fi
+              continue
+            fi
+            if [ "$selected" != "always" ] && [ "$selected" != "true" ] && [ "$selected" != "false" ]; then
+              echo "$name: selection=$selected (must be true or false)"
+              fail=1
+            elif [ "$selected" = "false" ] && [ "$EVENT" != "pull_request" ]; then
+              # Only pull requests may narrow; the merge queue and main run everything.
+              echo "$name: unselected on $EVENT (only pull requests may skip lanes)"
+              fail=1
+            elif [ "$selected" = "false" ]; then
+              if [ "$result" != "skipped" ]; then
+                echo "$name=$result (unselected: expected skipped)"
                 fail=1
               fi
             elif [ "$result" != "success" ]; then
@@ -341,7 +427,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
