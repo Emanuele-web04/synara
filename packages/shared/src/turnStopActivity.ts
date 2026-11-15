@@ -16,7 +16,7 @@ export function deriveTurnStopActivity(
     tone: "info",
     kind: "turn.stop-requested",
     summary: "Stop requested",
-    payload: { requestedBy: "user" },
+    payload: { requestedBy: "agent" },
     sequence: event.sequence,
     sequenceSource: "orchestration",
   };
