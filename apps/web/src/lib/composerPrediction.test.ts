@@ -3,15 +3,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   canShowComposerPrediction,
+  COMPOSER_PREDICTION_RETRY_DELAYS_MS,
   COMPOSER_PREDICTION_SETTLED_LIMIT,
   COMPOSER_PREDICTION_STORE_LIMIT,
+  composerPredictionEntryForResult,
   composerPredictionKey,
   composerPredictionStore,
   fitComposerPredictionText,
   nextComposerPredictionRequest,
+  resolveComposerPredictionInstanceId,
   resolveComposerPredictionTarget,
-  shouldAcceptComposerPredictionOnTab,
-  shouldDiscardComposerPredictionAfterEdit,
+  shouldAcceptComposerPrediction,
 } from "./composerPrediction";
 
 const THREAD = ThreadId.makeUnsafe("thread-1");
@@ -44,6 +46,50 @@ describe("composerPredictionKey", () => {
       composerPredictionKey({ ...base, turnId: TurnId.makeUnsafe("turn-2") }),
     ]);
     expect(keys.size).toBe(5);
+  });
+});
+
+describe("resolveComposerPredictionInstanceId", () => {
+  const claudeChat = { provider: "claudeAgent" as const, model: "claude-opus-4-8" };
+
+  it("uses the live session's instance first", () => {
+    expect(
+      resolveComposerPredictionInstanceId({
+        session: { providerInstanceId: "claude_work" },
+        modelSelection: { ...claudeChat, instanceId: "other" },
+      }),
+    ).toBe("claude_work");
+  });
+
+  it("falls back to the chat's model selection instance", () => {
+    expect(
+      resolveComposerPredictionInstanceId({
+        session: null,
+        modelSelection: { ...claudeChat, instanceId: "claude_work" },
+      }),
+    ).toBe("claude_work");
+  });
+
+  it("gives an older chat with no instance id anywhere its provider, like the server", () => {
+    expect(resolveComposerPredictionInstanceId({ session: null, modelSelection: claudeChat })).toBe(
+      "claudeAgent",
+    );
+    expect(resolveComposerPredictionInstanceId({ session: {}, modelSelection: claudeChat })).toBe(
+      "claudeAgent",
+    );
+    expect(
+      resolveComposerPredictionTarget({
+        ...settledTargetInput,
+        providerInstanceId: resolveComposerPredictionInstanceId({
+          session: null,
+          modelSelection: claudeChat,
+        }),
+      }),
+    ).not.toBeNull();
+  });
+
+  it("is null without a thread", () => {
+    expect(resolveComposerPredictionInstanceId(null)).toBeNull();
   });
 });
 
@@ -119,7 +165,7 @@ describe("canShowComposerPrediction", () => {
   });
 });
 
-describe("shouldAcceptComposerPredictionOnTab", () => {
+describe("shouldAcceptComposerPrediction", () => {
   const prediction = { key: "key-1", suggestion: "Rerun the failing test" };
   const accepted = {
     event: {
@@ -136,8 +182,11 @@ describe("shouldAcceptComposerPredictionOnTab", () => {
     entry: { status: "ready" as const, suggestion: prediction.suggestion },
   };
 
-  it("accepts on a plain Tab in the focused, empty composer", () => {
-    expect(shouldAcceptComposerPredictionOnTab(accepted)).toBe(true);
+  it("accepts on a plain Tab or Right Arrow in the focused, empty composer", () => {
+    expect(shouldAcceptComposerPrediction(accepted)).toBe(true);
+    expect(
+      shouldAcceptComposerPrediction({ ...accepted, event: { ...accepted.event, keyCode: 39 } }),
+    ).toBe(true);
   });
 
   it.each([
@@ -156,49 +205,43 @@ describe("shouldAcceptComposerPredictionOnTab", () => {
     [
       "a prediction still pending",
       {
-        entry: { status: "pending" as const, controller: new AbortController(), retry: false },
+        entry: { status: "pending" as const, controller: new AbortController(), attempt: 1 },
       },
     ],
-  ])("keeps normal Tab with %s", (_label, overrides) => {
-    expect(shouldAcceptComposerPredictionOnTab({ ...accepted, ...overrides })).toBe(false);
+    ["a prediction without an answer", { entry: { status: "unavailable" as const, attempts: 1 } }],
+  ])("keeps the key's normal behavior with %s", (_label, overrides) => {
+    expect(shouldAcceptComposerPrediction({ ...accepted, ...overrides })).toBe(false);
   });
 });
 
-describe("shouldDiscardComposerPredictionAfterEdit", () => {
-  const ready = { status: "ready" as const, suggestion: "Ship it" };
-
-  it("discards a pending or shown prediction once the user types", () => {
+describe("composerPredictionEntryForResult", () => {
+  it("shows a suggestion", () => {
     expect(
-      shouldDiscardComposerPredictionAfterEdit({
-        previous: { key: "a", prompt: "" },
-        next: { key: "a", prompt: "S" },
-        entry: ready,
-      }),
-    ).toBe(true);
-    expect(
-      shouldDiscardComposerPredictionAfterEdit({
-        previous: { key: "a", prompt: "" },
-        next: { key: "a", prompt: "S" },
-        entry: { status: "pending", controller: new AbortController(), retry: false },
-      }),
-    ).toBe(true);
+      composerPredictionEntryForResult({ suggestion: "Ship it", outcome: "suggested" }, 1),
+    ).toEqual({ status: "ready", suggestion: "Ship it" });
+    expect(composerPredictionEntryForResult({ suggestion: "Ship it" }, 1)).toEqual({
+      status: "ready",
+      suggestion: "Ship it",
+    });
   });
 
-  it("ignores a chat or turn switch and an unchanged prompt", () => {
+  it("settles the turn only on the model's own none", () => {
+    expect(composerPredictionEntryForResult({ suggestion: null, outcome: "none" }, 2)).toEqual({
+      status: "done",
+    });
+  });
+
+  it("keeps an unavailable answer retryable, counting the attempt", () => {
     expect(
-      shouldDiscardComposerPredictionAfterEdit({
-        previous: { key: "a", prompt: "" },
-        next: { key: "b", prompt: "Other chat draft" },
-        entry: ready,
-      }),
-    ).toBe(false);
-    expect(
-      shouldDiscardComposerPredictionAfterEdit({
-        previous: { key: "a", prompt: "" },
-        next: { key: "a", prompt: "" },
-        entry: ready,
-      }),
-    ).toBe(false);
+      composerPredictionEntryForResult({ suggestion: null, outcome: "unavailable" }, 2),
+    ).toEqual({ status: "unavailable", attempts: 2 });
+  });
+
+  it("treats a bare null from an older server as unavailable, not as an answer", () => {
+    expect(composerPredictionEntryForResult({ suggestion: null }, 1)).toEqual({
+      status: "unavailable",
+      attempts: 1,
+    });
   });
 });
 
@@ -211,7 +254,7 @@ describe("composerPredictionStore", () => {
     const controller = new AbortController();
     composerPredictionStore
       .getState()
-      .setEntry("first", { status: "pending", controller, retry: false });
+      .setEntry("first", { status: "pending", controller, attempt: 1 });
     for (let index = 0; index < COMPOSER_PREDICTION_STORE_LIMIT; index += 1) {
       composerPredictionStore.getState().setEntry(`key-${index}`, { status: "done" });
     }
@@ -225,7 +268,9 @@ describe("composerPredictionStore", () => {
   it("remembers a settled key after its entry was evicted", () => {
     composerPredictionStore.getState().setEntry("used", { status: "done" });
     for (let index = 0; index < COMPOSER_PREDICTION_STORE_LIMIT; index += 1) {
-      composerPredictionStore.getState().setEntry(`key-${index}`, { status: "failed" });
+      composerPredictionStore
+        .getState()
+        .setEntry(`key-${index}`, { status: "unavailable", attempts: 1 });
     }
 
     const state = composerPredictionStore.getState();
@@ -234,6 +279,15 @@ describe("composerPredictionStore", () => {
     expect(
       nextComposerPredictionRequest({ entry: state.entries.get("used"), settled: true }),
     ).toBeNull();
+  });
+
+  it("settles only done keys, never ready or unavailable ones", () => {
+    const store = composerPredictionStore.getState();
+    store.setEntry("ready", { status: "ready", suggestion: "Ship it" });
+    store.setEntry("unavailable", { status: "unavailable", attempts: 3 });
+    store.setEntry("done", { status: "done" });
+
+    expect([...composerPredictionStore.getState().settledKeys]).toEqual(["done"]);
   });
 
   it("bounds the settled keys, dropping the oldest first", () => {
@@ -249,17 +303,25 @@ describe("composerPredictionStore", () => {
 });
 
 describe("nextComposerPredictionRequest", () => {
-  it("asks once for a new key and once more after a failure", () => {
+  it("asks at once for a new key", () => {
     expect(nextComposerPredictionRequest({ entry: undefined, settled: false })).toEqual({
-      retry: false,
-    });
-    expect(nextComposerPredictionRequest({ entry: { status: "failed" }, settled: false })).toEqual({
-      retry: true,
+      attempt: 1,
+      delayMs: 0,
     });
   });
 
+  it("retries an unanswered key after 2, 5, and 15 seconds, then stops", () => {
+    expect(COMPOSER_PREDICTION_RETRY_DELAYS_MS).toEqual([2_000, 5_000, 15_000]);
+    const after = (attempts: number) =>
+      nextComposerPredictionRequest({ entry: { status: "unavailable", attempts }, settled: false });
+    expect(after(1)).toEqual({ attempt: 2, delayMs: 2_000 });
+    expect(after(2)).toEqual({ attempt: 3, delayMs: 5_000 });
+    expect(after(3)).toEqual({ attempt: 4, delayMs: 15_000 });
+    expect(after(4)).toBeNull();
+  });
+
   it("does not ask while a request runs, after a result, or for a settled key", () => {
-    const pending = { status: "pending", controller: new AbortController(), retry: false } as const;
+    const pending = { status: "pending", controller: new AbortController(), attempt: 1 } as const;
     expect(nextComposerPredictionRequest({ entry: pending, settled: false })).toBeNull();
     expect(
       nextComposerPredictionRequest({
@@ -269,6 +331,12 @@ describe("nextComposerPredictionRequest", () => {
     ).toBeNull();
     expect(nextComposerPredictionRequest({ entry: { status: "done" }, settled: false })).toBeNull();
     expect(nextComposerPredictionRequest({ entry: undefined, settled: true })).toBeNull();
+    expect(
+      nextComposerPredictionRequest({
+        entry: { status: "unavailable", attempts: 1 },
+        settled: true,
+      }),
+    ).toBeNull();
   });
 });
 

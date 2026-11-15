@@ -77,6 +77,24 @@ describe("ServerGenerateComposerPredictionResult", () => {
     expect(decode({ suggestion: null })).toEqual({ suggestion: null });
     expect(() => decode({ suggestion: `${longest}a` })).toThrow();
   });
+
+  it("carries an optional outcome and still reads results from servers without one", () => {
+    expect(decode({ suggestion: "Ship it", outcome: "suggested" })).toEqual({
+      suggestion: "Ship it",
+      outcome: "suggested",
+    });
+    expect(decode({ suggestion: null, outcome: "none" })).toEqual({
+      suggestion: null,
+      outcome: "none",
+    });
+    expect(decode({ suggestion: null, outcome: "unavailable" })).toEqual({
+      suggestion: null,
+      outcome: "unavailable",
+    });
+    expect(decode({ suggestion: null })).toEqual({ suggestion: null });
+    expect("outcome" in decode({ suggestion: null })).toBe(false);
+    expect(() => decode({ suggestion: null, outcome: "maybe" })).toThrow();
+  });
 });
 
 describe("ServerProviderStatus account identity", () => {

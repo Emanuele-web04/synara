@@ -426,17 +426,26 @@ settles in the main chat view. The suggestion contains at most 320 characters of
 dimmed ghost text in the empty composer, followed by a `Tab` key chip. The ghost text wraps
 up to three rows and the composer grows to fit them, switching the single-row composer to
 its block layout like a draft that no longer fits one line; a longer suggestion ends with an
-ellipsis on the third row. Tab inserts the full suggestion as an ordinary editable draft with
-the cursor at the end; nothing is ever sent automatically, and typing over a suggestion
-discards it for that turn.
+ellipsis on the third row. Tab or an unmodified Right Arrow in the focused, empty composer
+inserts the full suggestion as an ordinary editable draft with the cursor at the end; Enter
+never accepts it, and nothing is ever sent automatically. Typing only hides the suggestion: it
+shows again when the composer is empty again for the same turn, and a request still running
+when the user starts typing keeps running. Accepting it, or a new turn, ends it.
 **Settings → Chat behavior → Show suggestions** (on by default) turns it off. The
 `server.generateComposerPrediction` RPC takes only the thread and turn ids and derives
 everything else from the read model: it reads the latest few exchanges of visible user and
 assistant text and generates through the isolated text-generation path on the chat's own
 provider instance, using the Git-writing model only when it is that same instance and the
-chat's model otherwise, either one at its lowest catalog effort. Suggestions live in memory only; the window's
-session storage keeps just the keys of turns whose suggestion was used, discarded, or absent,
-so a reload does not bring one back.
+chat's model otherwise, either one at its lowest catalog effort. A chat without a stored
+provider instance id uses its provider's default instance, on the server and in the client.
+The result's `outcome` is `suggested`, `none` (the model had no suggestion), or `unavailable`
+(a timeout, a failed generation, a busy or moved-on thread, or no usable route; the server
+logs one content-free reason code for each). The client asks again after an `unavailable`
+answer or a failed request after 2, 5, and 15 seconds while the composer could show the
+suggestion, then stops until the chat or turn is left and opened again; a result without
+`outcome`, from an older server, counts as `unavailable`. Suggestions live in memory only;
+the window's session storage keeps just the keys of turns whose suggestion was accepted or
+that the model had none for, so a reload does not bring one back.
 The `server.getEnvironment` descriptor advertises RPC support as
 `capabilities.composerPredictions`. Older servers may omit the capability.
 

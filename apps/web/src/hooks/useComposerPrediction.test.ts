@@ -1,5 +1,5 @@
 import { ThreadId, TurnId } from "@synara/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const nativeApi = vi.hoisted(() => ({
   generateComposerPrediction: vi.fn(),
@@ -12,7 +12,11 @@ vi.mock("~/nativeApi", () => ({
   }),
 }));
 
-import { composerPredictionStore, type ComposerPredictionTarget } from "~/lib/composerPrediction";
+import {
+  COMPOSER_PREDICTION_RETRY_DELAYS_MS,
+  composerPredictionStore,
+  type ComposerPredictionTarget,
+} from "~/lib/composerPrediction";
 import { reactHookHarness } from "../test/reactHookHarness";
 import { useComposerPrediction } from "./useComposerPrediction";
 
@@ -39,6 +43,13 @@ interface HookInput {
   prompt: string;
 }
 
+/** Lets a resolved request land in the store. */
+async function flush() {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
+}
+
+const entryOf = (key = "key-turn-1") => composerPredictionStore.getState().entries.get(key);
+
 function mountHook(initial: HookInput) {
   let input = initial;
   const render = (next: Partial<HookInput> = {}) => {
@@ -55,9 +66,15 @@ describe("useComposerPrediction", () => {
     composerPredictionStore.setState({ entries: new Map(), settledKeys: new Set() });
     nativeApi.generateComposerPrediction.mockReset();
   });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("requests once per turn and shows the suggestion in an empty composer", async () => {
-    nativeApi.generateComposerPrediction.mockResolvedValue({ suggestion: "Rerun that test" });
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: "Rerun that test",
+      outcome: "suggested",
+    });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
 
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledWith(
@@ -112,100 +129,224 @@ describe("useComposerPrediction", () => {
     expect(composerPredictionStore.getState().entries.has("key-turn-1")).toBe(false);
   });
 
-  it("discards for good a result the user typed over during the request", async () => {
-    const response = deferred<{ suggestion: string | null }>();
+  it("keeps a request running while the user types and shows its result once emptied", async () => {
+    const response = deferred<{ suggestion: string | null; outcome?: string }>();
     nativeApi.generateComposerPrediction.mockReturnValue(response.promise);
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
     const signal = nativeApi.generateComposerPrediction.mock.calls[0]![1].signal as AbortSignal;
 
     hook.render({ prompt: "N", canShow: false });
-    expect(signal.aborted).toBe(true);
-    response.resolve({ suggestion: "Late suggestion" });
-    await Promise.resolve();
-    const cleared = hook.render({ prompt: "", canShow: true });
+    expect(signal.aborted).toBe(false);
+    response.resolve({ suggestion: "Late suggestion", outcome: "suggested" });
+    await flush();
+    const typing = hook.render();
+    expect(typing.suggestion).toBeNull();
+    expect(typing.ghost).toBeNull();
 
-    expect(cleared.suggestion).toBeNull();
+    const cleared = hook.render({ prompt: "", canShow: true });
+    expect(cleared.suggestion).toBe("Late suggestion");
+    expect(cleared.ghost).toBe("Late suggestion");
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 
-  it("never brings back a suggestion after the user typed over it", async () => {
-    nativeApi.generateComposerPrediction.mockResolvedValue({ suggestion: "Ship it" });
+  it("hides a shown suggestion while the user types and brings it back when emptied", async () => {
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: "Ship it",
+      outcome: "suggested",
+    });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("ready"),
-    );
+    await flush();
     expect(hook.render().suggestion).toBe("Ship it");
 
-    hook.render({ prompt: "Something else", canShow: false });
-    const cleared = hook.render({ prompt: "", canShow: true });
+    const typing = hook.render({ prompt: "Something else", canShow: false });
+    expect(typing.suggestion).toBeNull();
+    expect(typing.ghost).toBeNull();
+    expect(typing.controller.readVisible()).toBeNull();
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(false);
 
-    expect(cleared.suggestion).toBeNull();
+    const cleared = hook.render({ prompt: "", canShow: true });
+    expect(cleared.suggestion).toBe("Ship it");
+    expect(cleared.controller.readVisible()).toEqual({ key: "key-turn-1", suggestion: "Ship it" });
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 
   it("hides an accepted suggestion for the rest of the turn", async () => {
-    nativeApi.generateComposerPrediction.mockResolvedValue({ suggestion: "Ship it" });
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: "Ship it",
+      outcome: "suggested",
+    });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("ready"),
-    );
+    await flush();
 
     const shown = hook.render();
     expect(shown.ghost).toBe("Ship it");
     shown.controller.accept({ key: "key-turn-1", suggestion: "Ship it" });
 
     // The draft is on its way into the editor: the text stays the ghost so the composer
-    // never empties in between, but Tab has nothing left to accept.
+    // never empties in between, but there is nothing left to accept.
     const accepting = hook.render({ prompt: "Ship it", canShow: false });
     expect(accepting.suggestion).toBeNull();
     expect(accepting.ghost).toBe("Ship it");
     expect(accepting.controller.readVisible()).toBeNull();
-    expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("done");
+    expect(entryOf()?.status).toBe("done");
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(true);
 
     // Any edit, including clearing the draft, ends it for this turn.
     expect(hook.render({ prompt: "Ship it now", canShow: false }).ghost).toBeNull();
     const cleared = hook.render({ prompt: "", canShow: true });
     expect(cleared.suggestion).toBeNull();
     expect(cleared.ghost).toBeNull();
+
+    // Leaving the chat and coming back does not bring it back either.
+    hook.render({ target: null });
+    const back = hook.render({ target: target("turn-1") });
+    expect(back.suggestion).toBeNull();
+    expect(back.ghost).toBeNull();
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 
-  it("stays silent after a failed request and retries it once", async () => {
-    nativeApi.generateComposerPrediction.mockRejectedValueOnce(new Error("socket closed"));
-    nativeApi.generateComposerPrediction.mockResolvedValueOnce({ suggestion: "Rerun that test" });
+  it("settles the turn for good when the model has no suggestion", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction.mockResolvedValue({ suggestion: null, outcome: "none" });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("failed"),
-    );
-    expect(hook.render().suggestion).toBeNull();
+    await flush();
+    hook.render();
+
+    expect(entryOf()?.status).toBe("done");
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(true);
+    vi.advanceTimersByTime(60_000);
+    hook.render({ target: null });
+    hook.render({ target: target("turn-1") });
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
+  });
 
-    // The composer could show a suggestion again (the user came back to it).
-    hook.render({ canShow: false });
-    hook.render({ canShow: true });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("ready"),
-    );
+  it("retries an unavailable answer after 2, 5, and 15 seconds, then stops", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: null,
+      outcome: "unavailable",
+    });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
 
+    for (const [index, delayMs] of COMPOSER_PREDICTION_RETRY_DELAYS_MS.entries()) {
+      await flush();
+      expect(entryOf()).toEqual({ status: "unavailable", attempts: index + 1 });
+      hook.render();
+      vi.advanceTimersByTime(delayMs - 1);
+      expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(index + 1);
+      vi.advanceTimersByTime(1);
+      expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(index + 2);
+      hook.render();
+    }
+
+    await flush();
+    hook.render();
+    vi.advanceTimersByTime(10 * 60_000);
+    hook.render();
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(4);
+    expect(entryOf()).toEqual({ status: "unavailable", attempts: 4 });
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(false);
+  });
+
+  it("asks afresh once the user leaves the turn and comes back after the retries ran out", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: null,
+      outcome: "unavailable",
+    });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    for (const delayMs of COMPOSER_PREDICTION_RETRY_DELAYS_MS) {
+      await flush();
+      hook.render();
+      vi.advanceTimersByTime(delayMs);
+      hook.render();
+    }
+    await flush();
+    hook.render();
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(4);
+
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: "Rerun that test",
+      outcome: "suggested",
+    });
+    hook.render({ target: null });
+    expect(entryOf()).toBeUndefined();
+    hook.render({ target: target("turn-1") });
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(5);
+    await flush();
+    expect(hook.render().suggestion).toBe("Rerun that test");
+  });
+
+  it("treats a bare null from an older server as unavailable and retries it", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction
+      .mockResolvedValueOnce({ suggestion: null })
+      .mockResolvedValueOnce({ suggestion: "Rerun that test" });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    await flush();
+    hook.render();
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(false);
+
+    vi.advanceTimersByTime(COMPOSER_PREDICTION_RETRY_DELAYS_MS[0]!);
+    await flush();
     expect(hook.render().suggestion).toBe("Rerun that test");
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
   });
 
-  it("gives up for the turn after the retry fails too", async () => {
-    nativeApi.generateComposerPrediction.mockRejectedValue(new Error("offline"));
+  it("retries a failed request silently, on the same schedule", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValueOnce({ suggestion: "Rerun that test", outcome: "suggested" });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("failed"),
-    );
-    hook.render({ canShow: false });
-    hook.render({ canShow: true });
-    await vi.waitFor(() =>
-      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("done"),
-    );
-    hook.render({ canShow: false });
-    hook.render({ canShow: true });
-
+    await flush();
+    expect(entryOf()).toEqual({ status: "unavailable", attempts: 1 });
     expect(hook.render().suggestion).toBeNull();
+
+    vi.advanceTimersByTime(COMPOSER_PREDICTION_RETRY_DELAYS_MS[0]!);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(hook.render().suggestion).toBe("Rerun that test");
+  });
+
+  it("holds a retry while the ghost could not show and waits the full delay after", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: null,
+      outcome: "unavailable",
+    });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    await flush();
+    hook.render();
+    vi.advanceTimersByTime(1_000);
+
+    hook.render({ prompt: "typing", canShow: false });
+    vi.advanceTimersByTime(30_000);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
+
+    hook.render({ prompt: "", canShow: true });
+    vi.advanceTimersByTime(COMPOSER_PREDICTION_RETRY_DELAYS_MS[0]! - 1);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a pending retry when the turn changes or the chat unmounts", async () => {
+    vi.useFakeTimers();
+    nativeApi.generateComposerPrediction.mockResolvedValue({
+      suggestion: null,
+      outcome: "unavailable",
+    });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    await flush();
+    hook.render();
+
+    nativeApi.generateComposerPrediction.mockReturnValue(new Promise(() => {}));
+    hook.render({ target: target("turn-2") });
+    expect(entryOf("key-turn-1")).toBeUndefined();
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+    reactHookHarness.unmount();
+    vi.advanceTimersByTime(60_000);
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
   });
 

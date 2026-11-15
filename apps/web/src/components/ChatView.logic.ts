@@ -66,6 +66,7 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
+import type { ComposerCommandKey } from "../composer-logic";
 import { type ProviderModelOption } from "../providerModelOptions";
 import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
@@ -433,7 +434,7 @@ export function promptStillMatchesActiveHistoryBrowse(input: {
 }
 
 export function shouldHandlePromptHistoryNavigationKey(input: {
-  key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash";
+  key: ComposerCommandKey;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;

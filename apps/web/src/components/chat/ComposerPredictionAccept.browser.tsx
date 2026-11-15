@@ -1,6 +1,6 @@
-// Accepting a multi-row composer prediction with Tab, in a composer that floats over a
-// transcript following its end: the swap from ghost text to draft must not pass through a
-// collapsed composer, or the reader at the end is left short of it.
+// Accepting a multi-row composer prediction with Tab (or Right Arrow), in a composer that
+// floats over a transcript following its end: the swap from ghost text to draft must not
+// pass through a collapsed composer, or the reader at the end is left short of it.
 
 import "../../index.css";
 
@@ -15,7 +15,7 @@ import { collapseExpandedComposerCursor } from "../../composer-logic";
 import { useComposerPrediction } from "../../hooks/useComposerPrediction";
 import {
   composerPredictionStore,
-  shouldAcceptComposerPredictionOnTab,
+  shouldAcceptComposerPrediction,
   type ComposerPredictionTarget,
 } from "../../lib/composerPrediction";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
@@ -33,7 +33,10 @@ const nativeApi = vi.hoisted(() => ({ suggestion: "" }));
 vi.mock("~/nativeApi", () => ({
   readNativeApi: () => ({
     server: {
-      generateComposerPrediction: async () => ({ suggestion: nativeApi.suggestion }),
+      generateComposerPrediction: async () => ({
+        suggestion: nativeApi.suggestion,
+        outcome: "suggested",
+      }),
     },
   }),
 }));
@@ -91,15 +94,15 @@ function AcceptHarness() {
     isInactiveSplitPane: false,
   });
 
-  // The chat's Tab branch: accept on the editor's current state, write the full draft.
+  // The chat's accept branch: accept on the editor's current state, write the full draft.
   const onCommandKeyDown = (key: string, event: KeyboardEvent) => {
-    if (key !== "Tab") return false;
+    if (key !== "Tab" && key !== "ArrowRight") return false;
     const editor = editorRef.current;
     const visible = prediction.controller.readVisible();
     if (
       !editor ||
       !visible ||
-      !shouldAcceptComposerPredictionOnTab({
+      !shouldAcceptComposerPrediction({
         event,
         editorFocused: editor.isFocused(),
         snapshot: editor.readSnapshot(),
@@ -249,6 +252,16 @@ describe("accepting a composer prediction with Tab", () => {
     await waitForFrames(6);
 
     expect(transcript().scrollTop).toBe(150);
+  });
+
+  it("accepts with Right Arrow through the editor", async () => {
+    await mountWithSuggestion("Rerun that test.");
+    const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!;
+    editor.focus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    await expect.poll(() => editor.textContent).toBe("Rerun that test.");
+    expect(composerPredictionStore.getState().entries.get(TARGET.key)?.status).toBe("done");
   });
 
   it("accepts a one-row suggestion without moving the composer", async () => {
