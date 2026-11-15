@@ -124,7 +124,6 @@ async function findPiPackageDir(binaryPath: string): Promise<string | undefined>
   if ((await stat(realBinaryPath)).size > 16 * 1024) return undefined;
   const script = await readFile(realBinaryPath, "utf8");
   if (
-    process.platform !== "win32" &&
     realBinaryPath.endsWith("/bin/pi") &&
     script.startsWith("#!/bin/sh\n") &&
     script.includes("\npi_current_file=$pi_agent_dir/install/current-version\n") &&
