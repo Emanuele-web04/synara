@@ -29,6 +29,8 @@ interface ComposerChoiceRowProps {
   /** `inline` puts the description after the label (approval cards). `stacked` drops it
    *  under the label at a smaller size, so chip, label and description wrap on one lane. */
   layout?: "inline" | "stacked";
+  /** Provider-authored question options can set their own reading direction. */
+  dir?: "auto";
   onSelect: () => void;
 }
 
@@ -58,6 +60,7 @@ export function ComposerChoiceRow({
   trailing,
   badge,
   layout: layoutProp,
+  dir,
   onSelect,
 }: ComposerChoiceRowProps) {
   const selected = selectedProp ?? false;
@@ -84,11 +87,10 @@ export function ComposerChoiceRow({
       disabled={disabled}
       aria-pressed={selectedProp === undefined ? undefined : selected}
       onClick={onSelect}
-      // Option labels and descriptions are provider content: let the first strong
-      // character decide whether the whole row (chip, label, badge) reads RTL.
-      dir="auto"
+      dir={dir}
       className={cn(
-        "group flex w-full items-start gap-2.5 rounded-lg py-1.5 text-start transition-colors duration-150",
+        "group flex w-full items-start gap-2.5 rounded-lg py-1.5 transition-colors duration-150",
+        dir === "auto" ? "text-start" : "text-left",
         stacked ? "px-2.5" : "px-2",
         selected ? "bg-[var(--color-background-button-secondary)]" : ROW_TONE_CLASS_NAME[tone],
         disabled && "cursor-not-allowed opacity-50",
@@ -114,7 +116,7 @@ export function ComposerChoiceRow({
           <div className="min-w-0 flex-1 leading-snug">
             <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
             {showDescription ? (
-              <span className="ms-1.5 text-ui text-muted-foreground/55">{description}</span>
+              <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
             ) : null}
           </div>
         </>

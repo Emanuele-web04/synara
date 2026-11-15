@@ -194,6 +194,7 @@ export function UserInputQuestionForm({
               <ComposerChoiceRow
                 key={`${activeQuestion.id}:${option.label}`}
                 layout="stacked"
+                dir="auto"
                 shortcut={shortcutKey}
                 label={display.label}
                 description={option.description}
