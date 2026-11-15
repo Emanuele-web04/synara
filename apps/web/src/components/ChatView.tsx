@@ -68,7 +68,7 @@ import {
   canShowComposerPrediction,
   resolveComposerPredictionTarget,
 } from "~/lib/composerPrediction";
-import { executionNamespace } from "~/lib/hosts/executionContext";
+import { executionNamespace, readExecutionContext } from "~/lib/hosts/executionContext";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
@@ -3698,6 +3698,7 @@ export default function ChatView({
     target: resolveComposerPredictionTarget({
       enabled:
         settings.showComposerSuggestions &&
+        readExecutionContext()?.execution.capabilities.composerPredictions === true &&
         isServerThread &&
         !isEditorRail &&
         !isInactiveSplitPane &&

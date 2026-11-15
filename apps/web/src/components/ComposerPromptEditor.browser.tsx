@@ -300,6 +300,14 @@ describe("ComposerPromptEditor prediction overlay", () => {
     expect(mounted.editor.getAttribute("aria-placeholder")).toBe("Write a message");
   });
 
+  it("anchors an RTL prediction on the right with the Tab chip after it", async () => {
+    await mountPredictionEditor({ prediction: "مرحبا بالعالم" });
+
+    const { box, chip, lastTextRow } = ghostParts();
+    expect(box.getBoundingClientRect().right - lastTextRow.right).toBeLessThan(1);
+    expect(chip.getBoundingClientRect().right).toBeLessThan(lastTextRow.left);
+  });
+
   it("hides the ghost text once the editor has content", async () => {
     const mounted = await mountEditor({ value: "", cursor: 0, prediction });
     await expect.poll(() => overlay()).not.toBeNull();

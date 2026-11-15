@@ -530,7 +530,7 @@ export const AppSettingsSchema = Schema.Struct({
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
   // After a turn settles, show one predicted next message as ghost text in the
-  // empty composer (Tab inserts it as a draft). Inert on Stable, which never reads it.
+  // empty composer (Tab inserts it as a draft).
   showComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
   // Off hides the early "Approaching rate limit" banner. A reached limit still shows.
   showRateLimitWarnings: Schema.Boolean.pipe(withDefaults(() => true)),

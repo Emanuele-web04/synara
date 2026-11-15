@@ -70,6 +70,7 @@ export function ComposerPredictionGhost({
   return (
     <div
       ref={boxRef}
+      dir="auto"
       className={cn(
         "pointer-events-none relative min-w-0 break-words",
         COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
@@ -83,8 +84,8 @@ export function ComposerPredictionGhost({
           {shown}
         </span>
         {/* One line tall and top-aligned, so the chip is centered on the text's last row. */}
-        <span className="ml-1.5 inline-flex h-[1lh] items-center align-top" data-prediction-chip="">
-          <ShortcutKbd shortcutLabel={COMPOSER_PREDICTION_ACCEPT_KEY_LABEL} />
+        <span className="ms-1.5 inline-flex h-[1lh] items-center align-top" data-prediction-chip="">
+          <ShortcutKbd dir="ltr" shortcutLabel={COMPOSER_PREDICTION_ACCEPT_KEY_LABEL} />
         </span>
       </span>
       <div ref={probeRef} aria-hidden className="invisible absolute inset-x-0 top-0" />
