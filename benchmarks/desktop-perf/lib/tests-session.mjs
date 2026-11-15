@@ -320,10 +320,16 @@ export async function measureSwitching({ build, home }) {
     requireFrontmost(app, "before thread switching");
     for (const [name, threadId] of SWITCH_PLAN.cold) {
       record.cold[name] = await measureOpen(session, threadId);
+      // One thread that did not open invalidates the whole sample: its other readings
+      // would otherwise enter the summaries while this timing went missing.
+      if (record.cold[name].failed) throw new Error(`invalid sample: ${record.cold[name].failed}`);
       await sleep(600);
     }
     for (const [name, threadId] of SWITCH_PLAN.warm) {
       record.warm[name] = await measureOpen(session, threadId);
+      // One thread that did not open invalidates the whole sample: its other readings
+      // would otherwise enter the summaries while this timing went missing.
+      if (record.warm[name].failed) throw new Error(`invalid sample: ${record.warm[name].failed}`);
       await sleep(600);
     }
     // Memory per viewed thread: renderer + backend + main only. The GPU process is

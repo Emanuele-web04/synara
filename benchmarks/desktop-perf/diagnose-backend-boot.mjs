@@ -164,7 +164,10 @@ const target = join(
   "results",
   `diagnose-${out.at.replace(/[:.]/g, "-")}-${build.name}-backend-boot.json`,
 );
-writeFileSync(target, `${JSON.stringify(out, null, 1)}\n`);
+// Print first: the profile directory is already gone, so a failed write must not lose
+// the measurements. The results directory is git-ignored and may not exist yet.
 console.log(JSON.stringify(out, null, 1));
+mkdirSync(dirname(target), { recursive: true });
+writeFileSync(target, `${JSON.stringify(out, null, 1)}\n`);
 console.log(`\nsaved: ${target}`);
 process.exit(0);
