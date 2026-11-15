@@ -2664,9 +2664,9 @@ describe("ChatView transcript geometry (full app)", () => {
           snapshot.snapshotSequence + 1,
           new Date(Date.now() + (2 * 24 + 2) * 3_600_000 + 300_000).toISOString(),
         );
-        const banner = page.getByTestId("composer-usage-limit-capsule");
+        const banner = page.getByTestId("composer-usage-limit-card");
         await expect.element(banner).toBeVisible();
-        await expect.element(banner).toHaveTextContent("Limit reached");
+        await expect.element(banner).toHaveTextContent("usage limit reached");
         await expect.element(banner).toHaveTextContent("Resets in 2d 2h");
         expect(
           document.querySelector('[data-chat-composer-form="true"]')!.contains(banner.element()),

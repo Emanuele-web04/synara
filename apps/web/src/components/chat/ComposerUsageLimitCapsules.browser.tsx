@@ -2,10 +2,11 @@ import "../../index.css";
 
 import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ComponentProps } from "react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
+import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { makeUsageLimitRecovery } from "../../storeTestFixtures";
 import { makeQueuedTurn } from "../../composerDraftStoreTestFixtures";
@@ -21,38 +22,80 @@ vi.mock("~/nativeApi", async (importOriginal) => ({
 import { ComposerCapsuleRow } from "./ComposerCapsule";
 import { ComposerColumnFrame } from "./ComposerColumnFrame";
 import { ComposerQueuedHeader } from "./ComposerQueuedHeader";
-import { ComposerUsageLimitCapsules } from "./ComposerUsageLimitCapsules";
+import {
+  ComposerUsageLimitCapsules,
+  ComposerUsageLimitCard,
+  usageLimitCardKey,
+} from "./ComposerUsageLimitCapsules";
 
-type Props = ComponentProps<typeof ComposerUsageLimitCapsules>;
+type Recovery = ReturnType<typeof makeUsageLimitRecovery>;
+interface SceneProps {
+  rateLimitStatus?: RateLimitStatus | null;
+  recovery?: Recovery | null;
+  showWarning?: boolean;
+  onCancelRecovery?: () => void;
+  onDismissWarning?: () => void;
+  onChangeModel?: () => void;
+}
+
+/** Mirrors ChatView: the card opens per limit episode and collapses into the capsule row. */
+function Scene({
+  rateLimitStatus = null,
+  recovery = null,
+  showWarning = true,
+  onCancelRecovery = () => undefined,
+  onDismissWarning = () => undefined,
+  onChangeModel,
+}: SceneProps) {
+  const inputs = { rateLimitStatus, recovery };
+  const [collapsedKey, setCollapsedKey] = useState<string | null>(null);
+  const key = usageLimitCardKey("thread-1", inputs);
+  const cardOpen = key !== null && key !== collapsedKey;
+  return (
+    <ComposerColumnFrame>
+      <ComposerCapsuleRow>
+        <ComposerUsageLimitCapsules
+          {...inputs}
+          showWarning={showWarning}
+          cardOpen={cardOpen}
+          onOpenCard={() => setCollapsedKey(null)}
+          onDismissWarning={onDismissWarning}
+          onCancelRecovery={onCancelRecovery}
+        />
+      </ComposerCapsuleRow>
+      {cardOpen ? (
+        <ComposerUsageLimitCard
+          {...inputs}
+          provider="claudeAgent"
+          instanceId="claudeAgent"
+          onCollapse={() => setCollapsedKey(key)}
+          onCancelRecovery={onCancelRecovery}
+          onChangeModel={onChangeModel}
+        />
+      ) : null}
+    </ComposerColumnFrame>
+  );
+}
 
 const clients: QueryClient[] = [];
-function mount(overrides: Partial<Props> = {}, settings = DEFAULT_SERVER_SETTINGS_VIEW) {
+function mount(props: SceneProps = {}, settings = DEFAULT_SERVER_SETTINGS_VIEW) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
   client.setQueryData(serverQueryKeys.settings(), settings);
   client.setQueryData(serverQueryKeys.allProviderUsage(), []);
-  const props: Props = {
-    provider: "claudeAgent",
-    instanceId: "claudeAgent",
-    rateLimitStatus: null,
-    showWarning: true,
-    recovery: null,
-    onDismissWarning: vi.fn(),
-    onCancelRecovery: vi.fn(),
-    ...overrides,
-  };
   return render(
     <QueryClientProvider client={client}>
-      <ComposerCapsuleRow>
-        <ComposerUsageLimitCapsules {...props} />
-      </ComposerCapsuleRow>
+      <Scene {...props} />
     </QueryClientProvider>,
   );
 }
 
 const inOneHour = () => new Date(Date.now() + 3_600_000).toISOString();
-const autoResumeChip = () => page.getByTestId("composer-usage-limit-auto-resume");
+const limited = (): RateLimitStatus => ({ status: "rejected", resetsAt: inOneHour() });
+const card = () => page.getByTestId("composer-usage-limit-card");
 const limitCapsule = () => page.getByTestId("composer-usage-limit-capsule");
+const autoResumeChip = () => page.getByTestId("composer-usage-limit-auto-resume");
+const switchNamed = (name: string) => page.getByRole("switch", { name });
 
 beforeEach(() => {
   harness.supported = true;
@@ -63,18 +106,39 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("usage-limit capsules", () => {
-  it("shows the host deadline and only cancels the wait when asked", async () => {
-    const onCancelRecovery = vi.fn();
-    await mount({
-      recovery: makeUsageLimitRecovery({ resetAt: inOneHour() }),
-      onCancelRecovery,
-    });
+describe("usage-limit card", () => {
+  it("opens on its own, collapses into a capsule, and reopens from it", async () => {
+    await mount({ rateLimitStatus: limited() });
+    await expect.element(card()).toHaveTextContent("Claude usage limit reached");
+    await expect.element(card()).toHaveTextContent("Resets in");
+    await expect.element(limitCapsule()).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Collapse usage limit details" }).click();
+    await expect.element(card()).not.toBeInTheDocument();
     await expect.element(limitCapsule()).toHaveTextContent("Limit reached");
-    await expect.element(autoResumeChip()).toHaveTextContent("Auto-resume");
+    await limitCapsule().click();
+    await expect.element(card()).toBeVisible();
+  });
+
+  it("shows an armed wait and cancels it only when asked", async () => {
+    const onCancelRecovery = vi.fn();
+    await mount(
+      {
+        rateLimitStatus: limited(),
+        recovery: makeUsageLimitRecovery({ resetAt: inOneHour() }),
+        onCancelRecovery,
+      },
+      { ...DEFAULT_SERVER_SETTINGS_VIEW, autoResumeAfterUsageLimits: true },
+    );
+    await expect.element(card()).toHaveTextContent("Synara will continue this task");
+    const thisTask = switchNamed("Resume this task at reset");
+    expect(thisTask.element().getAttribute("aria-checked")).toBe("true");
     expect(onCancelRecovery).not.toHaveBeenCalled();
-    await page.getByRole("button", { name: "Cancel auto-resume" }).click();
+    await thisTask.click();
     expect(onCancelRecovery).toHaveBeenCalledOnce();
+    await page.getByRole("button", { name: "Collapse usage limit details" }).click();
+    await expect.element(autoResumeChip()).toHaveTextContent("Auto-resume");
+    await page.getByRole("button", { name: "Cancel auto-resume" }).click();
+    expect(onCancelRecovery).toHaveBeenCalledTimes(2);
   });
 
   it.each(["waiting", "resuming"] as const)(
@@ -85,12 +149,12 @@ describe("usage-limit capsules", () => {
         recovery: makeUsageLimitRecovery({ state, resetAt: "2026-01-01T00:00:00.000Z" }),
         onCancelRecovery,
       });
+      await expect.element(card()).not.toBeInTheDocument();
       await expect
         .element(limitCapsule())
         .toHaveTextContent(
           state === "resuming" ? "Continuing on your computer" : "waiting for computer",
         );
-      if (state === "resuming") await expect.element(autoResumeChip()).not.toBeInTheDocument();
       expect(onCancelRecovery).not.toHaveBeenCalled();
       await expect
         .element(page.getByRole("button", { name: "Resume now" }))
@@ -98,51 +162,50 @@ describe("usage-limit capsules", () => {
     },
   );
 
-  it("turns the policy on from the chip when no wait is armed", async () => {
+  it("turns the policy on from the card without claiming this task is armed", async () => {
     harness.update.mockImplementation(async (patch) => ({
       ...DEFAULT_SERVER_SETTINGS_VIEW,
       ...patch,
     }));
-    await mount({ rateLimitStatus: { status: "rejected", resetsAt: inOneHour() } });
-    await expect.element(limitCapsule()).toHaveTextContent("Resets in");
-    await expect.element(autoResumeChip()).toHaveTextContent("Auto-resume");
+    await mount({ rateLimitStatus: limited() });
+    const thisTask = switchNamed("Resume this task at reset");
+    expect(thisTask.element().getAttribute("aria-disabled")).toBe("true");
+    const always = switchNamed("Always resume after limits");
+    expect(always.element().getAttribute("aria-checked")).toBe("false");
+    await always.click();
+    await vi.waitFor(() =>
+      expect(harness.update).toHaveBeenCalledExactlyOnceWith({ autoResumeAfterUsageLimits: true }),
+    );
+    await vi.waitFor(() => expect(always.element().getAttribute("aria-checked")).toBe("true"));
+    // The policy cannot arm a turn that already failed; the card and chip say so.
+    await expect.element(card()).toHaveTextContent("wasn't set up to resume automatically");
+    await page.getByRole("button", { name: "Collapse usage limit details" }).click();
+    await expect.element(autoResumeChip()).toHaveTextContent("Auto-resume unavailable");
+  });
+
+  it("offers the policy as a chip when collapsed and the host supports recovery", async () => {
+    harness.update.mockImplementation(async (patch) => ({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      ...patch,
+    }));
+    await mount({ rateLimitStatus: limited() });
+    await page.getByRole("button", { name: "Collapse usage limit details" }).click();
     await autoResumeChip().click();
     await vi.waitFor(() =>
       expect(harness.update).toHaveBeenCalledExactlyOnceWith({ autoResumeAfterUsageLimits: true }),
     );
-    // The policy cannot arm a turn that already failed; the chip says so instead of pretending.
-    await expect.element(autoResumeChip()).toHaveTextContent("Auto-resume unavailable");
   });
 
-  it("hides auto-resume controls on hosts without durable recovery", async () => {
+  it("hides auto-resume controls on hosts without durable recovery but keeps Change model", async () => {
     harness.supported = false;
-    await mount({ rateLimitStatus: { status: "rejected", resetsAt: inOneHour() } });
-    await expect.element(limitCapsule()).toBeVisible();
-    await expect.element(autoResumeChip()).not.toBeInTheDocument();
-  });
-
-  it("explains the wait and cancels it from the popover switch", async () => {
-    const onCancelRecovery = vi.fn();
     const onChangeModel = vi.fn();
-    await mount(
-      {
-        recovery: makeUsageLimitRecovery({ resetAt: inOneHour() }),
-        onCancelRecovery,
-        onChangeModel,
-      },
-      { ...DEFAULT_SERVER_SETTINGS_VIEW, autoResumeAfterUsageLimits: true },
-    );
-    await limitCapsule().click();
-    const popover = page.getByTestId("composer-usage-limit-popover");
-    await expect.element(popover).toHaveTextContent("Claude usage limit");
-    const always = page.getByRole("switch", { name: "Always resume after limits" });
-    expect(always.element().getAttribute("aria-checked")).toBe("true");
-    const thisTask = page.getByRole("switch", { name: "Resume this task at reset" });
-    expect(thisTask.element().getAttribute("aria-checked")).toBe("true");
-    await thisTask.click();
-    expect(onCancelRecovery).toHaveBeenCalledOnce();
-    await page.getByRole("button", { name: "Change model" }).click();
+    await mount({ rateLimitStatus: limited(), onChangeModel });
+    await expect.element(card()).toBeVisible();
+    await expect.element(switchNamed("Always resume after limits")).not.toBeInTheDocument();
+    await page.getByRole("button", { name: /Change model/ }).click();
     expect(onChangeModel).toHaveBeenCalledOnce();
+    await page.getByRole("button", { name: "Collapse usage limit details" }).click();
+    await expect.element(autoResumeChip()).not.toBeInTheDocument();
   });
 
   it("shows an approaching limit as a dismissible tip only where asked", async () => {
@@ -151,7 +214,7 @@ describe("usage-limit capsules", () => {
     const screen = await mount({ rateLimitStatus: status, onDismissWarning });
     const warning = page.getByTestId("composer-usage-limit-warning");
     await expect.element(warning).toHaveTextContent("91% used");
-    await expect.element(limitCapsule()).not.toBeInTheDocument();
+    await expect.element(card()).not.toBeInTheDocument();
     await page.getByRole("button", { name: "Dismiss rate limit status" }).click();
     expect(onDismissWarning).toHaveBeenCalledOnce();
     await screen.unmount();

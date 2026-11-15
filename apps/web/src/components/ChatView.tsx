@@ -335,7 +335,11 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
-import { ComposerUsageLimitCapsules } from "./chat/ComposerUsageLimitCapsules";
+import {
+  ComposerUsageLimitCapsules,
+  ComposerUsageLimitCard,
+  usageLimitCardKey,
+} from "./chat/ComposerUsageLimitCapsules";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -897,6 +901,9 @@ export default function ChatView({
   const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
     null,
   );
+  // The usage-limit card opens on its own for each limit episode; collapsing it keeps
+  // only its capsule until a new wait or reset reopens it.
+  const [collapsedUsageLimitCardKey, setCollapsedUsageLimitCardKey] = useState<string | null>(null);
   const [dismissedClaudeSwitchKey, setDismissedClaudeSwitchKey] = useState<string | null>(null);
   const [submittedClaudeSwitchKey, setSubmittedClaudeSwitchKey] = useState<string | null>(null);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
@@ -1569,6 +1576,15 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
+  const usageLimitInputs = {
+    rateLimitStatus: enabledRateLimitStatus,
+    recovery: phase !== "running" ? (activeThread?.usageLimitRecovery ?? null) : null,
+  };
+  const activeUsageLimitCardKey = activeThread
+    ? usageLimitCardKey(activeThread.id, usageLimitInputs)
+    : null;
+  const usageLimitCardOpen =
+    activeUsageLimitCardKey !== null && activeUsageLimitCardKey !== collapsedUsageLimitCardKey;
   const isConnecting = phase === "connecting";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
@@ -6392,15 +6408,13 @@ export default function ChatView({
             <ComposerCapsuleRow>
               <ComposerTransportNotice />
               <ComposerUsageLimitCapsules
-                provider={quotaProvider}
-                instanceId={quotaInstanceId}
-                rateLimitStatus={enabledRateLimitStatus}
+                {...usageLimitInputs}
                 // Environment → Usage carries the approaching-limit warning when it is shown.
                 showWarning={!environmentEnabled && visibleActiveRateLimitStatus !== null}
-                recovery={phase !== "running" ? (activeThread?.usageLimitRecovery ?? null) : null}
+                cardOpen={usageLimitCardOpen}
+                onOpenCard={() => setCollapsedUsageLimitCardKey(null)}
                 onDismissWarning={dismissActiveRateLimitBanner}
                 onCancelRecovery={onInterruptFromStopControl}
-                onChangeModel={() => handleModelPickerOpenChange(true)}
               />
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
@@ -6535,6 +6549,18 @@ export default function ChatView({
                   onAdvance={onAdvanceActivePendingUserInput}
                   onPrevious={onPreviousActivePendingUserInputQuestion}
                   onCancel={onCancelActivePendingUserInput}
+                />
+              </div>
+            ) : null}
+            {usageLimitCardOpen ? (
+              <div className="pb-2">
+                <ComposerUsageLimitCard
+                  {...usageLimitInputs}
+                  provider={quotaProvider}
+                  instanceId={quotaInstanceId}
+                  onCollapse={() => setCollapsedUsageLimitCardKey(activeUsageLimitCardKey)}
+                  onCancelRecovery={onInterruptFromStopControl}
+                  onChangeModel={() => handleModelPickerOpenChange(true)}
                 />
               </div>
             ) : null}
