@@ -1,3 +1,4 @@
+// Selection probe: server-only change (do not merge).
 import type { ChildProcess as ChildProcessHandle } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { isCommandNotFoundExit } from "@synara/shared/platformProcess";
