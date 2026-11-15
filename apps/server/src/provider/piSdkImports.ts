@@ -1,104 +1,121 @@
 // FILE: piSdkImports.ts
-// Purpose: Loads the Pi SDK packages from the `pi` CLI installation when they are not resolvable in-process.
+// Purpose: Loads the SDK from the Pi CLI selected for a provider instance.
 // Layer: Provider runtime support
-// Depends on: @synara/shared/executable.
 
-import { access, readFile, realpath } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolve as resolveImport } from "import-meta-resolve";
 
 import { resolveExecutable } from "@synara/shared/executable";
 
-// Packaged builds ship the Pi SDK as an external, so the provider only works
-// once the user installs the `pi` CLI. npm links bin shims into the package
-// directory, while bun writes real shim scripts under ~/.bun/bin; both layouts
-// are covered by walking ancestors and checking the well-known sibling dirs.
-export async function piNodeModulesRoot(binaryPath: string): Promise<string | undefined> {
-  let resolved = binaryPath;
+const PI_AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
+
+export type PiPackageImporter = <M>(specifier: string) => Promise<M>;
+
+export interface PiInstallation {
+  readonly binaryPath: string;
+  readonly importPackage: PiPackageImporter;
+}
+
+export function makePiPackageImporter(agentEntry: string): PiPackageImporter {
+  return async <M>(specifier: string): Promise<M> =>
+    (await import(
+      specifier === PI_AGENT_PACKAGE ? agentEntry : resolveImport(specifier, agentEntry)
+    )) as M;
+}
+
+async function readPiManifest(packageDir: string): Promise<string | undefined> {
   try {
-    resolved = await realpath(binaryPath);
+    const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as {
+      name?: unknown;
+      bin?: { pi?: unknown };
+    };
+    if (manifest.name === PI_AGENT_PACKAGE && typeof manifest.bin?.pi === "string") {
+      return resolve(packageDir, manifest.bin.pi);
+    }
   } catch {
-    // Fall back to the unresolved path; shim scripts still carry a usable dir.
+    // This candidate directory is not the selected Pi package.
   }
-  const startDir = dirname(resolved);
-  const roots = [
-    join(startDir, "..", "lib", "node_modules"), // npm global prefix layout
-    join(startDir, "..", "install", "global", "node_modules"), // bun global layout
-  ];
-  for (let current = startDir; ; ) {
-    roots.push(join(current, "node_modules"));
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
+  return undefined;
+}
+
+async function findPiPackageDir(binaryPath: string): Promise<string | undefined> {
+  const realBinaryPath = await realpath(binaryPath);
+  // npm and Bun on Unix normally link directly to the package's declared bin.
+  for (let directory = dirname(realBinaryPath); ; directory = dirname(directory)) {
+    const declaredBin = await readPiManifest(directory);
+    if (declaredBin && (await realpath(declaredBin).catch(() => undefined)) === realBinaryPath) {
+      return directory;
+    }
+    if (dirname(directory) === directory) break;
   }
-  for (const root of roots) {
-    try {
-      await access(join(root, "@earendil-works", "pi-coding-agent", "package.json"));
-      return root;
-    } catch {
-      // Candidate root does not host the SDK; keep walking.
+
+  // npm's Windows .cmd and text shims refer to their target relative to the bin directory.
+  if ((await stat(realBinaryPath)).size > 16 * 1024) return undefined;
+  const shim = (await readFile(realBinaryPath, "utf8")).replaceAll("\\", "/");
+  const binaryDir = dirname(realBinaryPath);
+  for (const root of [
+    join(binaryDir, "node_modules"),
+    join(binaryDir, ".."),
+    join(binaryDir, "..", "lib", "node_modules"),
+    join(binaryDir, "..", "install", "global", "node_modules"),
+  ]) {
+    const packageDir = join(root, PI_AGENT_PACKAGE);
+    const target = await readPiManifest(packageDir);
+    if (!target || !(await realpath(target).catch(() => false))) continue;
+    const relativeTarget = relative(binaryDir, target).replaceAll("\\", "/");
+    if (
+      shim.includes(`"${target.replaceAll("\\", "/")}"`) ||
+      shim.includes(`%dp0%/${relativeTarget}"`) ||
+      shim.includes(`$basedir/${relativeTarget}"`)
+    ) {
+      return packageDir;
     }
   }
   return undefined;
 }
 
-export async function piPackageEntry(moduleRoot: string, specifier: string): Promise<string> {
-  const segments = specifier.split("/");
-  const scoped = specifier.startsWith("@");
-  const packageName = scoped
-    ? `${segments[0] ?? ""}/${segments[1] ?? ""}`
-    : (segments[0] ?? specifier);
-  const subpath = segments.slice(scoped ? 2 : 1).join("/");
-  const packageDir = join(moduleRoot, ...packageName.split("/"));
-  const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8")) as {
-    exports?: Record<string, unknown>;
-    main?: string;
-    module?: string;
-  };
-  const key = subpath ? `./${subpath}` : ".";
-  for (const [pattern, target] of Object.entries(manifest.exports ?? {})) {
-    const entry =
-      typeof target === "string"
-        ? target
-        : ((target as Record<string, unknown>)?.import ??
-          (target as Record<string, unknown>)?.default);
-    if (typeof entry !== "string") continue;
-    if (pattern === key) return resolve(packageDir, entry);
-    if (pattern.includes("*")) {
-      const [pre = "", post = ""] = pattern.split("*");
-      if (key.startsWith(pre) && key.endsWith(post)) {
-        return resolve(
-          packageDir,
-          entry.replace("*", key.slice(pre.length, key.length - post.length)),
-        );
-      }
-    }
+export async function resolvePiInstallation(
+  options: { binaryPath?: string | undefined; env?: NodeJS.ProcessEnv | undefined } = {},
+): Promise<PiInstallation> {
+  const executable = options.binaryPath?.trim() || "pi";
+  const binaryPath = resolveExecutable(executable, { env: options.env });
+  if (!binaryPath) {
+    throw new Error(
+      options.binaryPath?.trim()
+        ? `The configured Pi CLI (${executable}) is unavailable.`
+        : "Pi is not installed. Install the Pi CLI with `npm install -g @earendil-works/pi-coding-agent` or `bun install -g @earendil-works/pi-coding-agent`.",
+    );
   }
-  if (!subpath) return resolve(packageDir, manifest.module ?? manifest.main ?? "dist/index.js");
-  throw new Error(`Cannot resolve "${key}" of ${packageName} inside the installed Pi CLI.`);
-}
 
-export async function importPiPackage<M>(
-  specifier: string,
-  options?: { binaryPath?: string | undefined },
-): Promise<M> {
   try {
-    return (await import(specifier)) as M;
-  } catch {
-    // The SDK is not bundled into packaged builds; resolve it from the user's
-    // `pi` CLI install instead.
-  }
-  const binary = options?.binaryPath ?? resolveExecutable("pi");
-  if (!binary) {
-    throw new Error(
-      "Pi is not installed. Install it with `npm install -g @earendil-works/pi-coding-agent` or `bun install -g @earendil-works/pi-coding-agent`.",
+    const packageDir = await findPiPackageDir(binaryPath);
+    if (!packageDir) throw new Error("The executable does not identify a Pi SDK package.");
+    const agentEntry = resolveImport(
+      PI_AGENT_PACKAGE,
+      pathToFileURL(join(packageDir, "package.json")).href,
     );
-  }
-  const moduleRoot = await piNodeModulesRoot(binary);
-  if (!moduleRoot) {
-    throw new Error(
-      `Found the Pi CLI at ${binary} but could not locate @earendil-works packages next to it.`,
+    // Resolve Pi AI from the coding agent, so it can have a private dependency.
+    // Health checks use the same graph without evaluating any SDK modules.
+    await Promise.all(
+      [
+        agentEntry,
+        ...[
+          "@earendil-works/pi-ai/compat",
+          "@earendil-works/pi-ai/providers/azure",
+          "@earendil-works/pi-ai/providers/opencode",
+          "@earendil-works/pi-ai/providers/openrouter",
+          "@earendil-works/pi-ai/utils/model-operations",
+        ].map((specifier) => resolveImport(specifier, agentEntry)),
+      ].map(async (entry) => {
+        if (!(await stat(new URL(entry))).isFile()) throw new Error("Missing Pi SDK entry.");
+      }),
     );
+    return { binaryPath, importPackage: makePiPackageImporter(agentEntry) };
+  } catch (cause) {
+    throw new Error(`Could not locate a compatible Pi SDK for the CLI at ${binaryPath}.`, {
+      cause,
+    });
   }
-  return (await import(pathToFileURL(await piPackageEntry(moduleRoot, specifier)).href)) as M;
 }
