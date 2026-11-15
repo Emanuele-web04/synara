@@ -20,7 +20,7 @@ concurrency:
 jobs:
   prerequisites:
     name: Live Defender prerequisite qualification
-    runs-on: windows-2022
+    runs-on: blacksmith-2vcpu-windows-2025
     timeout-minutes: 10
     steps:
       - name: Checkout

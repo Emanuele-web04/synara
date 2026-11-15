@@ -20,7 +20,7 @@ concurrency:
 jobs:
   browser-geometry:
     name: Browser Tests (Linux geometry quarantine)
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
       NODE_OPTIONS: --max-old-space-size=4096

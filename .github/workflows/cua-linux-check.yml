@@ -24,7 +24,7 @@ concurrency:
 jobs:
   linux:
     name: Linux host, native driver and X11 browser smoke
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 35
     env:
       TURBO_TELEMETRY_DISABLED: "1"

@@ -28,7 +28,7 @@ concurrency:
 jobs:
   validate:
     name: Test, lint, build, and smoke
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 35
     defaults:
       run:

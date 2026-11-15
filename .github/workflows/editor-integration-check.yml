@@ -46,7 +46,7 @@ jobs:
   # ci.yml already runs every browser test; this job adds only the editor acceptance journey.
   browser:
     name: Native editor and real application acceptance
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

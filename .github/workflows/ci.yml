@@ -17,6 +17,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Runners: Blacksmith (no per-account concurrency cap). Aggregation and other
+# light jobs use 2 vCPU; test, typecheck and build lanes use 8 vCPU, and
+# Vitest runs one worker per core (os.availableParallelism()).
 # Single heap ceiling for every Node lane (typecheck OOM fix): set once here
 # instead of per job so a future bump cannot miss a lane.
 env:
@@ -27,7 +30,7 @@ jobs:
   # run static-fast + gate only. outputs.code is 'true' when any code file changed.
   changes:
     name: Detect code changes
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -69,7 +72,7 @@ jobs:
   # Never wait for the changes job to report formatting or lint failures.
   static-fast:
     name: Static Checks (fast)
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -106,7 +109,7 @@ jobs:
 
   static-typecheck:
     name: Static Checks (typecheck)
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -130,7 +133,7 @@ jobs:
   # so no package build precedes them; every lane starts at the test files.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -175,7 +178,7 @@ jobs:
   # execution and the stable geometry quarantine; only distribution changes.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -227,7 +230,7 @@ jobs:
 
   build:
     name: Desktop Build
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -277,7 +280,7 @@ jobs:
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
     permissions: {}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     needs:
       - changes
@@ -338,7 +341,7 @@ jobs:
 
   windows_process:
     name: Windows Process Regression
-    runs-on: windows-2022
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -404,7 +407,7 @@ jobs:
   # dependency-free guard needs a real tag history, never a missing-history skip.
   migration_lineage:
     name: Migration Lineage
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     needs: [changes]
     if: needs.changes.outputs.code == 'true'

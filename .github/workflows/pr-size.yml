@@ -14,7 +14,7 @@ permissions:
 jobs:
   prepare-config:
     name: Prepare PR size config
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       labels_json: ${{ steps.config.outputs.labels_json }}
     steps:
@@ -61,7 +61,7 @@ jobs:
   sync-label-definitions:
     name: Sync PR size label definitions
     needs: prepare-config
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
       issues: write
@@ -117,7 +117,7 @@ jobs:
   label:
     name: Label PR size
     needs: [prepare-config, sync-label-definitions]
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
       issues: write
