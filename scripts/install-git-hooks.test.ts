@@ -139,7 +139,7 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
   const zero = "0".repeat(40);
   const oid = "1".repeat(40);
 
-  function push(stdin: string, bun: "pass" | "fail" | "missing", trackedHook = true) {
+  function push(stdin: string, node: "pass" | "fail" | "missing", trackedHook = true) {
     const root = makeCheckout();
     const prePush = defaultPrePushPath(root);
     expect(installGitHooks(root, developer)).toEqual({ action: "installed" });
@@ -147,13 +147,13 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
     const bin = makeDirectory();
     const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     symlinkSync(gitPath, join(bin, "git"));
-    if (bun !== "missing") {
-      // Records each `bun run <script>` call and passes or fails it.
+    if (node !== "missing") {
+      // Records each `node <script>` call with the refs it read, then passes or fails.
       writeFileSync(
-        join(bin, "bun"),
-        `#!/bin/sh\necho "$*" >> "${join(bin, "calls")}"\nexit ${bun === "pass" ? 0 : 1}\n`,
+        join(bin, "node"),
+        `#!/bin/sh\necho "$* $(/bin/cat)" >> "${join(bin, "calls")}"\nexit ${node === "pass" ? 0 : 1}\n`,
       );
-      chmodSync(join(bin, "bun"), 0o755);
+      chmodSync(join(bin, "node"), 0o755);
     }
     const result = spawnSync(prePush, ["origin", "url"], {
       cwd: root,
@@ -168,22 +168,19 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
     return { status: result.status, calls: calls.trim().split("\n").filter(Boolean) };
   }
 
-  const update = `refs/heads/topic ${oid} refs/heads/topic ${zero}\n`;
+  const update = `refs/heads/topic ${oid} refs/heads/topic ${zero}`;
 
-  it("runs fmt:check then lint and blocks the push when either fails", () => {
-    expect(push(update, "pass")).toEqual({ status: 0, calls: ["run fmt:check", "run lint"] });
-    expect(push(update, "fail")).toEqual({ status: 1, calls: ["run fmt:check"] });
+  it("hands the pushed refs to the changed-file check and blocks the push when it fails", () => {
+    const call = `scripts/pre-push-check.ts ${update}`;
+    expect(push(`${update}\n`, "pass")).toEqual({ status: 0, calls: [call] });
+    expect(push(`${update}\n`, "fail")).toEqual({ status: 1, calls: [call] });
   });
 
-  it("skips branch deletions and machines without bun", () => {
-    expect(push(`(delete) ${zero} refs/heads/old ${oid}\n`, "fail")).toEqual({
-      status: 0,
-      calls: [],
-    });
-    expect(push(update, "missing")).toEqual({ status: 0, calls: [] });
+  it("blocks instead of silently skipping when node is missing", () => {
+    expect(push(`${update}\n`, "missing").status).toBe(1);
   });
 
   it("skips branches where the tracked hook is absent", () => {
-    expect(push(update, "fail", false)).toEqual({ status: 0, calls: [] });
+    expect(push(`${update}\n`, "fail", false)).toEqual({ status: 0, calls: [] });
   });
 });

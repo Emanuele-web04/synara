@@ -62,20 +62,21 @@ That gives you a chance to check whether the direction fits before spending time
 
 `bun install` adds a pre-push launcher in Git's default hooks directory. It runs
 `.githooks/pre-push` from the current worktree when that file exists. The hook
-runs the same two checks as CI's fast static lane, which take about 15–20 seconds:
+(`scripts/pre-push-check.ts`) checks only the files the push changes, compared
+with what the remote already has (or the default branch, for a new branch):
 
-```bash
-bun run fmt:check
-```
+- formatting with `oxfmt --check`
+- lint errors with `oxlint --quiet`
+- types with `tsrs`, for the projects that own those files, or every project
+  when shared code (`packages/`, `scripts/lib/`) or the lockfile changes
 
-```bash
-bun run lint
-```
-
-They check the working tree, so uncommitted edits count too. Run `bun run fmt`
-to fix formatting. To skip the check once, push with `git push --no-verify`.
-Pushes that only delete branches skip it automatically, and so do machines where
-`bun` is not on `PATH`.
+`tsrs` keeps incremental build info under each workspace's
+`node_modules/.cache`, so a repeat check usually takes about a second; a first
+check of every project took about 7 seconds. It checks the working tree, so
+uncommitted edits to those files count too. Run `bun run fmt` to fix formatting.
+CI still checks the whole tree and also runs the Effect language-service
+diagnostics, which are too slow for a hook. To skip the check once, push with
+`git push --no-verify`. Pushes that only delete branches skip it.
 
 The setup preserves existing hooks and skips installation when `core.hooksPath`
 is already configured, in CI, during `--ignore-scripts` installs, and in copies
