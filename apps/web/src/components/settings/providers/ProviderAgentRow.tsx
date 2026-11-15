@@ -85,6 +85,8 @@ export function ProviderAgentRow(props: {
   onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
   onManageAccounts: (provider: ProviderKind) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  /** Extra classes merged onto the row's root element (e.g. tile chrome in the grid layout). */
+  className?: string;
 }) {
   const { t } = useTranslation();
 
@@ -158,6 +160,7 @@ export function ProviderAgentRow(props: {
         SETTINGS_CARD_ROW_CLASS_NAME,
         "relative",
         isDragging && "z-10 bg-background opacity-80 shadow-lg",
+        props.className,
       )}
     >
       <Collapsible open={props.open} onOpenChange={props.onOpenChange}>
