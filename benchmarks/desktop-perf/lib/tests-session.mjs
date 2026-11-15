@@ -44,15 +44,24 @@ export async function startApp({ build, home, expectTranscript = true }) {
     profile: home.profile,
     debugPort: await freePort(),
   });
-  const { session } = await attachMainPage(app);
-  await waitFor(
-    () =>
-      session.evaluate(
-        `Boolean(document.querySelector(${JSON.stringify(SELECTORS.composer)})) && (${!expectTranscript} || document.querySelectorAll(${JSON.stringify(SELECTORS.messageRow)}).length > 0)`,
-      ),
-    { timeoutMs: 90_000, intervalMs: 100, label: "app ready" },
-  );
-  return { app, session };
+  let session = null;
+  try {
+    ({ session } = await attachMainPage(app));
+    await waitFor(
+      () =>
+        session.evaluate(
+          `Boolean(document.querySelector(${JSON.stringify(SELECTORS.composer)})) && (${!expectTranscript} || document.querySelectorAll(${JSON.stringify(SELECTORS.messageRow)}).length > 0)`,
+        ),
+      { timeoutMs: 90_000, intervalMs: 100, label: "app ready" },
+    );
+    return { app, session };
+  } catch (error) {
+    // The next sample restores the same data home: an app left running here would have
+    // it replaced underneath it and would contaminate every later measurement.
+    session?.close();
+    await quitDesktop(app);
+    throw error;
+  }
 }
 
 export async function windowBounds(session) {
@@ -470,6 +479,27 @@ export async function measureLoad({ build, home, threads = 3, timeoutSeconds = 2
     requireFrontmost(app, "after typing under load");
     record.cpuWhileStreaming = await cpuDuringStream;
     record.memoryWhileStreaming = memorySnapshot(app);
+    // The readings above only count as load if every session was still answering when
+    // they were taken. Check each thread now; one that already finished invalidates
+    // the sample instead of passing idle readings off as streaming ones.
+    let stillStreaming = 0;
+    for (const route of routes) {
+      if (!(await session.evaluate(`location.href.includes(${JSON.stringify(route)})`))) {
+        await openThreadFromSidebar(session, route);
+        await sleep(300);
+      }
+      if (await isGenerating(session)) stillStreaming += 1;
+    }
+    record.sessionsStreamingAfterReadings = stillStreaming;
+    if (
+      !record.typing.streamingWhenStarted ||
+      !record.typing.streamingWhenFinished ||
+      stillStreaming < threads
+    ) {
+      throw new Error(
+        `invalid sample: only ${stillStreaming} of ${threads} sessions were still streaming after the load readings (typing started while streaming: ${record.typing.streamingWhenStarted}, finished while streaming: ${record.typing.streamingWhenFinished})`,
+      );
+    }
     // Wait for every turn to finish, checking each thread in turn.
     const deadline = performance.now() + timeoutSeconds * 1000;
     for (const route of [...routes].reverse()) {
