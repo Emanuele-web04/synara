@@ -426,7 +426,6 @@ export async function measureLoad({ build, home, threads = 3, timeoutSeconds = 2
     await focusEmulation(session, true);
     const routes = [];
     const streamStartedAt = performance.now();
-    const cpuDuringStream = cpuOverWindow(app, 20);
     for (let index = 0; index < threads; index += 1) {
       const project = `proj-${String(index + 1).padStart(2, "0")}`;
       await clickSelector(
@@ -453,6 +452,10 @@ export async function measureLoad({ build, home, threads = 3, timeoutSeconds = 2
       });
       routes.push((await session.evaluate("location.href")).split("#/")[1]);
     }
+    // The CPU window opens only once every session has started, so slow provider
+    // start-up cannot be reported as streaming load. The check after the readings
+    // confirms they were all still answering when it closed.
+    const cpuDuringStream = cpuOverWindow(app, 15);
     // Typing while all sessions stream: 60 keys, 100 ms apart, in the visible thread.
     await waitFor(
       () =>

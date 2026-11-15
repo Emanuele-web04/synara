@@ -315,7 +315,7 @@ if (only.includes("backend-memory")) {
 }
 
 // Node's on-disk compile cache for the main process and the backend: alternating
-// relaunches with and without NODE_COMPILE_CACHE. The cache is filled by a first launch
+// relaunches with NODE_COMPILE_CACHE and with the cache disabled. The cache is filled by a first launch
 // that is not counted.
 if (only.includes("compile-cache")) {
   const cacheDir = join(BENCH_ROOT, "homes", "compile-cache");
@@ -350,7 +350,13 @@ if (only.includes("compile-cache")) {
   for (let index = 0; index < runs; index += 1) {
     const order = index % 2 === 0 ? ["without", "with"] : ["with", "without"];
     for (const kind of order)
-      samples[kind].push(await one(kind === "with" ? { NODE_COMPILE_CACHE: cacheDir } : {}));
+      // The control must really be uncached: a build that sets its own backend compile
+      // cache would otherwise use it. NODE_DISABLE_COMPILE_CACHE turns Node's cache off.
+      samples[kind].push(
+        await one(
+          kind === "with" ? { NODE_COMPILE_CACHE: cacheDir } : { NODE_DISABLE_COMPILE_CACHE: "1" },
+        ),
+      );
   }
   const { readdirSync, statSync } = await import("node:fs");
   const walk = (dir) =>
