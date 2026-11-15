@@ -1770,10 +1770,12 @@ describe("ProviderRuntimeIngestion", () => {
         (entry) => entry.kind === "tool.updated",
       );
       expect(activities).toHaveLength(1);
+      // The row stays anchored at the first update and records when the
+      // latest one arrived, so live timing reads from the latest update.
       expect(activities[0]).toMatchObject({
         createdAt: firstAt,
         sequence: first.sequence,
-        payload: { data: { elapsedSeconds: 2 } },
+        payload: { data: { elapsedSeconds: 2 }, lastActivityAt: "2026-10-06T12:00:02.000Z" },
       });
       // A replacement runtime can reuse IDs and an identical snapshot. Neither
       // row identity nor the dedupe fingerprint may suppress its first update.

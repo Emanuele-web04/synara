@@ -1162,7 +1162,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown ol,
 .chat-markdown blockquote,
 .chat-markdown pre,
-.chat-markdown table {
+.chat-markdown .chat-markdown-table {
   margin: 0.65rem 0;
 }
 
@@ -1408,7 +1408,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown--user ol,
 .chat-markdown--user blockquote,
 .chat-markdown--user pre,
-.chat-markdown--user table {
+.chat-markdown--user .chat-markdown-table {
   margin: 0.45rem 0;
 }
 
@@ -1936,7 +1936,7 @@ label:has(> select#reasoning-effort) select {
 .editor-markdown-preview .chat-markdown ol,
 .editor-markdown-preview .chat-markdown blockquote,
 .editor-markdown-preview .chat-markdown pre,
-.editor-markdown-preview .chat-markdown table {
+.editor-markdown-preview .chat-markdown .chat-markdown-table {
   margin: 0.85rem 0;
 }
 
@@ -3081,6 +3081,41 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
+/* Markdown tables: hairline rows, no grid. lib/markdownTableLayout.ts marks each column:
+   numbers and short values keep their natural width, text columns wrap in what is left, and
+   the table scrolls sideways only when the short columns alone are wider than the chat. */
+.chat-markdown .chat-markdown-table__actions {
+  display: flex;
+  justify-content: flex-end;
+  height: 1.5rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-markdown .chat-markdown-table:hover .chat-markdown-table__actions,
+.chat-markdown .chat-markdown-table:focus-within .chat-markdown-table__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-markdown .chat-markdown-table__actions {
+    opacity: 1;
+  }
+}
+
+.chat-markdown .chat-markdown-table__action {
+  color: var(--muted-foreground);
+}
+
+.chat-markdown .chat-markdown-table__action:hover {
+  color: var(--foreground);
+}
+
+.chat-markdown .chat-markdown-table__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;
@@ -3088,9 +3123,54 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown th,
 .chat-markdown td {
-  border: 1px solid var(--border);
-  padding: 0.35rem 0.45rem;
-  text-align: left;
+  padding: 0.45rem 0;
+  padding-inline-start: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  text-align: start;
+  vertical-align: top;
+  /* Break between words; only a text column may also break inside one (below). */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.chat-markdown :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+
+.chat-markdown th {
+  padding-top: 0;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 20%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--text-chat-sm);
+  font-weight: 500;
+  vertical-align: bottom;
+}
+
+.chat-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Text columns give up width first; the floor stops them collapsing to a letter per line. */
+.chat-markdown td[data-table-column="text"] {
+  min-width: 6em;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown td:is([data-table-column="numeric"], [data-table-column="short"]),
+.chat-markdown
+  th:is([data-table-column="numeric"], [data-table-column="short"]):not(
+    [data-table-header="wrap"]
+  ) {
+  white-space: nowrap;
+}
+
+.chat-markdown :is(th, td)[data-table-column="numeric"] {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-markdown td[data-table-cell="empty"] {
+  color: var(--muted-foreground);
 }
 
 /* A visual placed in a reply sits inside that reply's markdown. Its components style

@@ -248,7 +248,8 @@ const make = Effect.gen(function* () {
         ? applyProviderStartOptions(
             resolved,
             providerStartOptionsFromInstance(instance),
-            parsed.instanceId !== undefined,
+            // Pi loads the selected SDK in-process, so always use host settings.
+            parsed.instanceId !== undefined || instance.driver === "pi",
           )
         : resolved;
     });

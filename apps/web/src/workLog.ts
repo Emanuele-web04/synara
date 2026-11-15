@@ -2393,11 +2393,16 @@ function deriveWorkLogLiveActivity(
         : null);
   const progress = deriveWorkLogLiveActivityProgress(payload, data);
   const elapsedSeconds = firstFiniteNumber(payload?.elapsedSeconds, data?.elapsedSeconds);
+  // Updated-in-place rows keep their first createdAt; the server stamps when
+  // the latest update arrived.
+  const updatedAt = asTrimmedString(payload?.lastActivityAt);
+  const lastActivityAt =
+    updatedAt !== null && !Number.isNaN(Date.parse(updatedAt)) ? updatedAt : activity.createdAt;
 
   return {
     state,
     label: entry.toolTitle ?? entry.label,
-    lastActivityAt: activity.createdAt,
+    lastActivityAt,
     ...(activity.kind === "tool.started" ? { startedAt: activity.createdAt } : {}),
     ...(detail ? { detail } : {}),
     ...(progress !== undefined ? { progress } : {}),
@@ -2771,12 +2776,17 @@ function mergeDerivedWorkLogEntries(
   const command = next.command ?? previous.command;
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const preview = next.preview ?? previous.preview;
-  const toolTitle = mergeWorkLogToolTitle(previous, next);
+  // A progress update (projected as a generic MCP tool call that only names the
+  // tool) refreshes a command, subagent or other tool row's live state; it must
+  // not replace what that row says it is doing ("Running …", the task title).
   const preservePreviousToolSemantics =
     next.activityKind === "tool.updated" &&
     next.itemType === "mcp_tool_call" &&
     previous.itemType !== undefined &&
     previous.itemType !== "mcp_tool_call";
+  const toolTitle = preservePreviousToolSemantics
+    ? (previous.toolTitle ?? next.toolTitle)
+    : mergeWorkLogToolTitle(previous, next);
   const itemType = preservePreviousToolSemantics
     ? previous.itemType
     : (next.itemType ?? previous.itemType);
@@ -2806,7 +2816,10 @@ function mergeDerivedWorkLogEntries(
   return {
     ...previous,
     ...next,
-    labelTranslation: next.labelTranslation,
+    label: preservePreviousToolSemantics ? previous.label : next.label,
+    labelTranslation: preservePreviousToolSemantics
+      ? previous.labelTranslation
+      : next.labelTranslation,
     toolTitlePresentation:
       toolTitle === next.toolTitle ? next.toolTitlePresentation : previous.toolTitlePresentation,
     id: previous.id,
@@ -3845,9 +3858,18 @@ function parseHistoricalToolParamsDisplay(value: unknown): Record<string, unknow
   return Object.keys(result).length > 0 ? result : null;
 }
 
+// Older servers stored each Claude tool heartbeat under its synthetic
+// `<tool id>-heartbeat-<n>` id, so every 30 s of a long command became its own
+// row that never settled. Fold those back onto the tool they report on.
+const LEGACY_TOOL_HEARTBEAT_ID = /^(.+)-heartbeat-\d+$/u;
+
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
+  const progressToolUseId = data?.toolCallId == null ? asTrimmedString(data?.toolUseId) : null;
+  if (progressToolUseId !== null) {
+    return LEGACY_TOOL_HEARTBEAT_ID.exec(progressToolUseId)?.[1] ?? progressToolUseId;
+  }
   return asTrimmedString(
     data?.toolCallId ?? data?.toolUseId ?? data?.callID ?? data?.callId ?? item?.id,
   );

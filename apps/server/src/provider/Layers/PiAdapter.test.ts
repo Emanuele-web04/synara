@@ -31,16 +31,17 @@ import {
   resolvePiStartInstanceId,
   resolvePiExtensionMode,
 } from "./PiAdapter";
+import { importTestPiPackage } from "../testing/piSdkFixture.ts";
 import { makePiStoragePaths } from "../piStoragePaths.ts";
 
-const createTestPiModelRuntime: typeof createPiModelRuntime = (
-  agentDir,
-  sdk,
-  signal,
-  environment,
-  instanceId,
+const createTestPiModelRuntime = (
+  agentDir: string,
+  sdk: Parameters<typeof createPiModelRuntime>[1],
+  signal?: AbortSignal,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
 ) =>
-  createPiModelRuntime(agentDir, sdk, signal, environment, instanceId, {
+  createPiModelRuntime(agentDir, sdk, importTestPiPackage, signal, environment, instanceId, {
     stateDir: path.join(agentDir, "state"),
     homeDir: agentDir,
   });

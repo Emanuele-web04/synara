@@ -48,6 +48,19 @@ async function settleSelection() {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+/** Text extents of a draft paragraph or the placeholder, measured against its own box. */
+function textExtents(element: HTMLElement) {
+  const paragraph = element.querySelector<HTMLElement>("p") ?? element;
+  const box = paragraph.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(paragraph);
+  const line = range.getBoundingClientRect();
+  return {
+    leading: line.left - box.left,
+    trailing: box.right - line.right,
+  };
+}
+
 function focusParentFrame() {
   expect(window.parent).not.toBe(window);
   const body = window.parent.document.body;
@@ -362,5 +375,45 @@ describe("ComposerPromptEditor prediction overlay", () => {
         expect(mounted.editor.getAttribute("aria-placeholder")).toBe(longSuggestion);
       },
     );
+  });
+});
+
+describe("ComposerPromptEditor text direction", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("anchors a right-to-left draft to the right edge", async () => {
+    const mounted = await mountEditor();
+    const draft = "مرحبا بالعالم";
+
+    await mounted.update({ value: draft, cursor: draft.length });
+    await settleSelection();
+
+    const extents = textExtents(mounted.editor);
+    expect(extents.trailing).toBeLessThan(1);
+    expect(extents.leading).toBeGreaterThan(8);
+  });
+
+  it("resolves the placeholder from its own first strong character", async () => {
+    const mounted = await mountEditor();
+    const placeholder = () =>
+      mounted.editor.parentElement!.querySelector<HTMLElement>(
+        '[data-testid="composer-placeholder"]',
+      )!;
+
+    await mounted.update({ value: "", cursor: 0, placeholder: "پیام خود را بنویسید" });
+    await settleSelection();
+
+    const rtl = textExtents(placeholder());
+    expect(rtl.trailing).toBeLessThan(1);
+    expect(rtl.leading).toBeGreaterThan(8);
+
+    await mounted.update({ placeholder: "Write a message" });
+    await settleSelection();
+
+    const ltr = textExtents(placeholder());
+    expect(ltr.leading).toBeLessThan(1);
+    expect(ltr.trailing).toBeGreaterThan(8);
   });
 });
