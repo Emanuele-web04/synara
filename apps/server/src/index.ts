@@ -12,7 +12,10 @@ import { NetService } from "@synara/shared/Net";
 import { FetchHttpClient } from "effect/unstable/http";
 import { consumeDesktopParentInput, withDesktopParentLifetime } from "./desktopParentLifetime";
 import { initializeDesktopUpdateBridge } from "./desktopUpdateBridge";
+import { releaseBackendCompileCacheEnvironment } from "./backendCompileCache";
 
+// First, before anything can start a child process.
+releaseBackendCompileCacheEnvironment(process.env);
 const desktopParentInput = consumeDesktopParentInput(process.env, () => process.stdin);
 initializeDesktopUpdateBridge();
 

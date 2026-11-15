@@ -10,6 +10,11 @@ import { t } from "./i18n";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDriversInBackground } from "./cuaDriverHost";
+import {
+  backendCompileCacheEnv,
+  pruneBackendCompileCaches,
+  resolveBackendCompileCacheDir,
+} from "./backendCompileCache";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
@@ -4137,6 +4142,11 @@ function configureAutoUpdater(): void {
 
   scheduleUpdatePoll();
 }
+
+function backendCompileCacheDir(): string {
+  return resolveBackendCompileCacheDir(STATE_DIR, app.getVersion());
+}
+
 // Builds process-local Node args so provider/tool children do not inherit Synara's heap guard.
 function backendNodeArgs(): string[] {
   const configuredMaxOldSpaceMb =
@@ -4925,6 +4935,8 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     env: {
       ...backendEnv(),
+      // Most of a backend boot is compiling its modules; Node keeps the result on disk.
+      ...backendCompileCacheEnv(process.env, backendCompileCacheDir()),
       // A file read stuck behind a macOS privacy prompt holds a libuv worker. More
       // workers keep DNS and crypto, and so remote authorization, moving meanwhile.
       UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || "16",
@@ -6588,6 +6600,7 @@ async function bootstrap(browserNetworkGuardReady: Promise<void>): Promise<void>
   await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
+  void pruneBackendCompileCaches(backendCompileCacheDir());
   if (process.platform === "darwin" || process.platform === "linux") {
     // Reaps drivers left by a host that died. It feeds nothing above, so it no longer
     // holds the backend's start behind a synchronous process listing.
