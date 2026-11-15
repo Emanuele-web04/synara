@@ -1,17 +1,23 @@
-name: Verify published Synara 1.6.0 on Windows
+name: Verify published Synara 1.6.0 on Windows 11 ARM64
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   startup:
-    runs-on: windows-2025
+    runs-on: windows-11-arm
     timeout-minutes: 10
     steps:
       - name: Install and launch the published x64 installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $os = Get-CimInstance Win32_OperatingSystem
+          $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          Write-Host "OS: $($os.Caption), version $($os.Version), build $($os.BuildNumber), architecture $arch"
+          if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or $arch -ne 'Arm64') {
+              throw 'Expected Windows 11 ARM64 client.'
+          }
           $root = Join-Path $env:RUNNER_TEMP 'synara-install-verification'
           $null = New-Item -ItemType Directory -Path $root
           $installer = Join-Path $root 'Synara-1.6.0-x64.exe'
@@ -45,7 +51,7 @@ jobs:
                       $logText -match 'app ready' -and
                       $logText -match 'bootstrap main window created' -and
                       $logText -match 'bootstrap backend ready source=' -and
-                      $logText -notmatch 'render-process-gone') {
+                      $logText -notmatch 'renderer process gone') {
                       if ($null -eq $readySince) { $readySince = [DateTime]::UtcNow }
                       if (([DateTime]::UtcNow - $readySince).TotalSeconds -ge 5) {
                           Write-Host 'PASS: published installer installed, Synara window opened and backend became ready.'
