@@ -75,6 +75,7 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
+import { cancelProviderUsageScans } from "./providerUsageSnapshot";
 import {
   claudeCredentialKeepaliveTargets,
   createClaudeCredentialKeepaliveController,
@@ -519,6 +520,9 @@ const makeServerProgram = (input: CliInput) =>
       yield* Effect.addFinalizer(() => Effect.promise(() => policy.stop()));
     }
     yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
+    // Usage snapshots read local archives in promises that no request owns. Stop them on
+    // shutdown so they do not hold the process open after the server has closed.
+    yield* Effect.addFinalizer(() => Effect.sync(cancelProviderUsageScans));
 
     if (!config.devUrl && !config.staticDir) {
       yield* Effect.logWarning(

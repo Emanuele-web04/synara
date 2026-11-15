@@ -302,6 +302,30 @@ describe("readRecentClaudeUsageSamples", () => {
     expect(second).toEqual(first);
   });
 
+  it("stops a cancelled read without caching its partial result", async () => {
+    const { root, projectDir } = await makeProjectsRoot();
+    // Several read chunks, so the scan has more to read after the cancel.
+    const records = Array.from({ length: 2_000 }, (_, index) => line(2, 1, `m${index}`)).join("");
+    await fs.writeFile(path.join(projectDir, "a.jsonl"), records);
+    const controller = new AbortController();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      controller.abort();
+      return handle;
+    });
+
+    await expect(
+      readRecentClaudeUsageSamples(root, Date.now(), controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // A scan that ran to the end would have cached the transcript; this one stopped.
+    vi.restoreAllMocks();
+    const reopen = vi.spyOn(fs, "open");
+    expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(2_000);
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps deduping appended records across the verified cache boundary", async () => {
     const { root, projectDir } = await makeProjectsRoot();
     const file = path.join(projectDir, "a.jsonl");

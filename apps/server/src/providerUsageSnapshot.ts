@@ -95,6 +95,19 @@ const usageSnapshotCache = new Map<string, CachedUsageSnapshot>();
 // Entries are replaced, never mutated, so overlapping refreshes cannot corrupt them.
 const claudeTranscriptCache = new Map<string, ClaudeTranscriptCacheEntry>();
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
+// Archive reads are plain promises that outlive the request that started them. A first
+// snapshot on a heavy user's machine reads for several seconds, and those reads kept a
+// backend that was asked to quit alive until they finished.
+let usageScanController = new AbortController();
+
+/**
+ * Abandons in-flight usage archive reads, as on server shutdown. Their partial results
+ * are neither cached nor returned; a later snapshot reads afresh.
+ */
+export function cancelProviderUsageScans(): void {
+  usageScanController.abort();
+  usageScanController = new AbortController();
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -169,6 +182,7 @@ export async function mapWithConcurrency<T, R>(
   items: ReadonlyArray<T>,
   concurrency: number,
   mapper: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: Array<{ index: number; value: R }> = [];
   let nextIndex = 0;
@@ -177,6 +191,7 @@ export async function mapWithConcurrency<T, R>(
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (true) {
+        signal?.throwIfAborted();
         const index = nextIndex;
         nextIndex += 1;
         if (index >= items.length) {
@@ -539,12 +554,14 @@ export function resolveClaudeProjectsRoot(homeDir: string): string {
 async function listRecentClaudeTranscriptFiles(
   projectsRoot: string,
   nowMs: number,
+  signal?: AbortSignal,
   maxFiles: number = MAX_RECENT_USAGE_FILES,
 ): Promise<ReadonlyArray<ClaudeTranscriptFile>> {
   const candidates: string[] = [];
   const projectEntries = await safeReadDir(projectsRoot);
 
   for (const projectEntry of projectEntries) {
+    signal?.throwIfAborted();
     if (!projectEntry.isDirectory()) {
       continue;
     }
@@ -570,6 +587,7 @@ async function listRecentClaudeTranscriptFiles(
         ? { path, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
         : null;
     },
+    signal,
   );
 
   return files
@@ -613,6 +631,7 @@ async function scanClaudeTranscript(input: {
   readonly lineIndex: number;
   readonly seenKeys: ReadonlySet<string>;
   readonly prefixHash?: Hash;
+  readonly signal?: AbortSignal | undefined;
 }): Promise<ClaudeTranscriptScan> {
   const samples: ClaudeUsageSample[] = [];
   const tailSamples: ClaudeUsageSample[] = [];
@@ -723,6 +742,10 @@ async function scanClaudeTranscript(input: {
     let position = input.start;
     try {
       while (position < input.end) {
+        if (input.signal?.aborted) {
+          complete = false;
+          break;
+        }
         const { bytesRead } = await input.handle.read(
           buffer,
           0,
@@ -759,7 +782,7 @@ async function scanClaudeTranscript(input: {
       }
 
       // Match readFile/split behavior for a final record that has not been newline-terminated.
-      if (lineBytes > 0 && !skippingOversizedLine) {
+      if (complete && lineBytes > 0 && !skippingOversizedLine) {
         collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex, false);
       }
     } catch {
@@ -790,11 +813,13 @@ function cachedClaudeSamples(entry: ClaudeTranscriptCacheEntry): ReadonlyArray<C
 async function hashClaudeTranscriptPrefix(
   handle: FileHandle,
   offset: number,
+  signal?: AbortSignal,
 ): Promise<Hash | null> {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(Math.min(CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES, offset));
   let position = 0;
   while (position < offset) {
+    if (signal?.aborted) return null;
     const { bytesRead } = await handle.read(
       buffer,
       0,
@@ -842,6 +867,7 @@ export async function readClaudeUsageSamples(
  */
 async function readCachedClaudeUsageSamples(
   file: ClaudeTranscriptFile,
+  signal?: AbortSignal,
 ): Promise<ReadonlyArray<ClaudeUsageSample>> {
   const cached = claudeTranscriptCache.get(file.path);
   if (
@@ -866,7 +892,7 @@ async function readCachedClaudeUsageSamples(
     let base: ClaudeTranscriptCacheEntry | null = null;
     let prefixHash: Hash | undefined;
     if (cached && cached.ino === stats.ino && stats.size > cached.size) {
-      const candidateHash = await hashClaudeTranscriptPrefix(handle, cached.offset);
+      const candidateHash = await hashClaudeTranscriptPrefix(handle, cached.offset, signal);
       if (candidateHash?.copy().digest("hex") === cached.prefixDigest) {
         base = cached;
         prefixHash = candidateHash;
@@ -880,6 +906,7 @@ async function readCachedClaudeUsageSamples(
       lineIndex: base?.lineCount ?? 0,
       seenKeys: base?.seenKeys ?? EMPTY_KEYS,
       ...(prefixHash ? { prefixHash } : {}),
+      signal,
     });
 
     let seenKeys: ReadonlySet<string> = new Set(scan.dedupeKeys);
@@ -943,13 +970,17 @@ function pruneClaudeTranscriptCache(files: ReadonlyArray<ClaudeTranscriptFile>):
 export async function readRecentClaudeUsageSamples(
   projectsRoot: string,
   nowMs: number = Date.now(),
+  signal?: AbortSignal,
 ): Promise<ReadonlyArray<ClaudeUsageSample>> {
-  const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot, nowMs);
+  const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot, nowMs, signal);
   const samplesByFile = await mapWithConcurrency(
     transcriptFiles,
     PROVIDER_USAGE_FILE_READ_CONCURRENCY,
-    readCachedClaudeUsageSamples,
+    (file) => readCachedClaudeUsageSamples(file, signal),
+    signal,
   );
+  // A cancelled read is partial: report nothing rather than undercount.
+  signal?.throwIfAborted();
   pruneClaudeTranscriptCache(transcriptFiles);
   return samplesByFile.flat();
 }
@@ -957,6 +988,7 @@ export async function readRecentClaudeUsageSamples(
 async function loadCodexUsageSnapshot(input: {
   homeDir: string;
   homePath?: string;
+  signal?: AbortSignal;
 }): Promise<UsageSnapshot | null> {
   const codexHomeDir =
     input.homePath?.trim() || process.env.CODEX_HOME || nodePath.join(input.homeDir, ".codex");
@@ -971,6 +1003,7 @@ async function loadCodexUsageSnapshot(input: {
       sessionFiles,
       PROVIDER_USAGE_FILE_READ_CONCURRENCY,
       readCodexSessionSummary,
+      input.signal,
     )
   ).filter((summary): summary is CodexSessionSummary => summary !== null);
 
@@ -1006,8 +1039,15 @@ async function loadCodexUsageSnapshot(input: {
   };
 }
 
-async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const usageSamples = await readRecentClaudeUsageSamples(resolveClaudeProjectsRoot(input.homeDir));
+async function loadClaudeUsageSnapshot(input: {
+  homeDir: string;
+  signal?: AbortSignal;
+}): Promise<UsageSnapshot | null> {
+  const usageSamples = await readRecentClaudeUsageSamples(
+    resolveClaudeProjectsRoot(input.homeDir),
+    Date.now(),
+    input.signal,
+  );
   if (usageSamples.length === 0) {
     return null;
   }
@@ -1043,15 +1083,17 @@ async function loadProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  signal: AbortSignal;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   switch (input.provider) {
     case "codex":
       return loadCodexUsageSnapshot({
         homeDir: input.homeDir,
         ...(input.homePath ? { homePath: input.homePath } : {}),
+        signal: input.signal,
       });
     case "claudeAgent":
-      return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
+      return loadClaudeUsageSnapshot({ homeDir: input.homeDir, signal: input.signal });
     default:
       return null;
   }
@@ -1073,9 +1115,24 @@ async function getCachedProviderUsageSnapshot(input: {
     return existing.pending;
   }
 
-  const pending = loadProviderUsageSnapshot(input)
+  const { signal } = usageScanController;
+  const pending: Promise<ServerGetProviderUsageSnapshotResult> = loadProviderUsageSnapshot({
+    ...input,
+    signal,
+  })
     .catch(() => null)
     .then((value) => {
+      if (signal.aborted) {
+        // Keep what was cached before this read instead of a partial result.
+        if (usageSnapshotCache.get(cacheKey)?.pending === pending) {
+          usageSnapshotCache.set(cacheKey, {
+            expiresAtMs: existing?.expiresAtMs ?? 0,
+            value: existing?.value ?? null,
+            pending: null,
+          });
+        }
+        return existing?.value ?? null;
+      }
       usageSnapshotCache.set(cacheKey, {
         expiresAtMs: Date.now() + USAGE_CACHE_TTL_MS,
         value,
