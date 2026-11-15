@@ -4,9 +4,9 @@
 //          asks the chat's own provider instance for one predicted next user message
 //          through the isolated text-generation path. Decisions live in
 //          `composerPrediction.ts`.
-// Layer: Server service (Beta only; refused on Stable)
+// Layer: Server service
 
-import { WsRpcError, type ThreadId, type TurnId } from "@synara/contracts";
+import type { ThreadId, TurnId } from "@synara/contracts";
 import { Cause, Clock, Deferred, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -21,7 +21,6 @@ import {
   resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
 } from "../composerPrediction.ts";
-import { isServerComposerPredictionsEnabled } from "../composerPredictionGate.ts";
 import {
   ComposerPredictionService,
   type ComposerPredictionServiceShape,
@@ -219,18 +218,8 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
     );
 
   const generate: ComposerPredictionServiceShape["generate"] = (input) =>
-    Effect.suspend(() =>
-      isServerComposerPredictionsEnabled()
-        ? generateShared(input.threadId, input.expectedTurnId).pipe(
-            Effect.map((suggestion) => ({ suggestion })),
-          )
-        : Effect.fail(
-            new WsRpcError({
-              message: "Composer suggestions are available in Synara Beta.",
-              code: "FEATURE_UNAVAILABLE",
-              retryable: false,
-            }),
-          ),
+    generateShared(input.threadId, input.expectedTurnId).pipe(
+      Effect.map((suggestion) => ({ suggestion })),
     );
 
   return { generate } satisfies ComposerPredictionServiceShape;

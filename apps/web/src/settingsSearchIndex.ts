@@ -4,7 +4,6 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
-import { COMPOSER_PREDICTIONS_ON } from "~/betaFeatures";
 import { isElectron } from "~/env";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
@@ -196,8 +195,6 @@ export const ROW_APPLIES: Readonly<Record<string, (context: SettingsSearchContex
     const platform = getNavigatorPlatform();
     return isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
   },
-  // Beta only: Stable renders no row to land on.
-  "setting-composer-suggestions": () => COMPOSER_PREDICTIONS_ON,
   "setting-keep-computer-awake": ({ keepAwakeAvailable }) => keepAwakeAvailable === true,
   // Only the desktop app can keep the machine awake for remote access.
   "setting-stay-awake-for-remote-access": () =>

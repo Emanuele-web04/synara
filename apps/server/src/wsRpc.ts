@@ -2927,8 +2927,8 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to generate thread recap",
           ),
-        // Thread-scoped like the other thread reads: any authenticated connection,
-        // ids only. The service refuses it on Stable and derives everything else.
+        // Thread-scoped like the other thread reads. The service derives the
+        // conversation and provider settings from the supplied IDs.
         [WS_METHODS.serverGenerateComposerPrediction]: (input) =>
           rpcEffect(composerPrediction.generate(input), "Failed to generate a composer suggestion"),
         [WS_METHODS.serverGenerateAutomationIntent]: (input) =>

@@ -495,7 +495,7 @@ export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapRe
 /** Longest composer suggestion the server returns; longer output is cut at a word boundary. */
 export const COMPOSER_PREDICTION_MAX_CHARS = 320;
 
-// Composer predictions (Beta): one predicted next user message for the thread's
+// Composer predictions: one predicted next user message for the thread's
 // settled latest turn. The client sends only ids; the server derives the
 // conversation, provider, and account from the read model. A stale turn, an
 // unavailable provider, or any generation failure returns `suggestion: null`.

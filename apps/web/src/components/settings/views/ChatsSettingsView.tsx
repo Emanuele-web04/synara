@@ -10,7 +10,6 @@ import {
   type GitHubLinkOpenTarget,
   type VoiceEnterBehavior,
 } from "~/appSettings";
-import { COMPOSER_PREDICTIONS_ON } from "~/betaFeatures";
 import { BooleanSettingRow } from "~/components/settings/BooleanSettingRow";
 import {
   SettingResetButton,
@@ -183,17 +182,15 @@ export function ChatsSettingsView(binding: AppSettingsBinding) {
           ariaLabel="settings:showEffortSliderInTheComposer"
         />
 
-        {COMPOSER_PREDICTIONS_ON ? (
-          <BooleanSettingRow
-            {...binding}
-            id="setting-composer-suggestions"
-            settingKey="showComposerSuggestions"
-            title="settings:showSuggestions"
-            description="settings:afterAReplyFinishesShowAPredictedNextMessage"
-            resetLabel="settings:showSuggestions2"
-            ariaLabel="settings:showPredictedNextMessagesInTheComposer"
-          />
-        ) : null}
+        <BooleanSettingRow
+          {...binding}
+          id="setting-composer-suggestions"
+          settingKey="showComposerSuggestions"
+          title="settings:showSuggestions"
+          description="settings:afterAReplyFinishesShowAPredictedNextMessage"
+          resetLabel="settings:showSuggestions2"
+          ariaLabel="settings:showPredictedNextMessagesInTheComposer"
+        />
       </SettingsSection>
 
       <SettingsSection title="chat:review">

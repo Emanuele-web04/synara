@@ -9,7 +9,7 @@ import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { useState } from "react";
 
 import { type AppSettings, isGitTextGenerationSettingsDirty } from "~/appSettings";
-import { COMPOSER_PREDICTIONS_ON, GROUPS_ON } from "~/betaFeatures";
+import { GROUPS_ON } from "~/betaFeatures";
 import { isProviderInstallSettingsDirty } from "~/components/settings/providers/providerInstallSettings";
 import {
   DEFAULT_DIFF_RENDER_MODE,
@@ -139,8 +139,7 @@ export function useSettingsRestoreDefaults({
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider
       ? ["settings:effortSlider"]
       : []),
-    ...(COMPOSER_PREDICTIONS_ON &&
-    settings.showComposerSuggestions !== defaults.showComposerSuggestions
+    ...(settings.showComposerSuggestions !== defaults.showComposerSuggestions
       ? ["settings:showSuggestions"]
       : []),
     ...(settings.showRateLimitWarnings !== defaults.showRateLimitWarnings

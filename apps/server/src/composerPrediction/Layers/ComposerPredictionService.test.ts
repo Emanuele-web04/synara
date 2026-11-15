@@ -9,9 +9,8 @@ import {
 } from "@synara/contracts";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Scope } from "effect";
 import { TestClock } from "effect/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import {
@@ -24,8 +23,6 @@ import {
   COMPOSER_PREDICTION_START_DELAY,
   makeComposerPredictionServiceLive,
 } from "./ComposerPredictionService.ts";
-
-vi.mock("../../betaFeatureGate.ts", () => ({ isServerBetaFeatureEnabled: vi.fn(() => true) }));
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const TURN_ID = TurnId.makeUnsafe("turn-2");
@@ -140,10 +137,6 @@ function makeHarness(
 }
 
 describe("ComposerPredictionServiceLive", () => {
-  beforeEach(() => {
-    vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(true);
-  });
-
   it("predicts from the settled turn on the chat's own instance at its lowest effort", async () => {
     const harness = makeHarness();
 
@@ -164,16 +157,6 @@ describe("ComposerPredictionServiceLive", () => {
         }),
       }),
     );
-  });
-
-  it("refuses the request when the Beta feature is off", async () => {
-    vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(false);
-    const harness = makeHarness();
-
-    await expect(harness.run(harness.generate)).rejects.toMatchObject({
-      code: "FEATURE_UNAVAILABLE",
-    });
-    expect(harness.generateComposerPrediction).not.toHaveBeenCalled();
   });
 
   it("returns null without generating when the expected turn is no longer the latest", async () => {

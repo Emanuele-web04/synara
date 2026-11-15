@@ -43,19 +43,14 @@ describe("ServerEnvironmentLive", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped, Effect.runPromise);
   });
 
-  it.each([
-    [SYNARA_PRODUCTION_BUNDLE_ID, false],
-    [SYNARA_BETA_BUNDLE_ID, true],
-  ] as const)(
-    "advertises composer predictions exactly where the RPC serves them (%s)",
-    async (bundleId, enabled) => {
+  it.each([SYNARA_PRODUCTION_BUNDLE_ID, SYNARA_BETA_BUNDLE_ID])(
+    "advertises composer predictions in the desktop app (%s)",
+    async (bundleId) => {
       vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, bundleId);
       vi.resetModules();
       const environmentModule = await import("./ServerEnvironment");
       const servicesModule = await import("../Services/ServerEnvironment");
       const configModule = await import("../../config");
-      const { isServerComposerPredictionsEnabled } =
-        await import("../../composerPrediction/composerPredictionGate");
 
       const descriptor = await Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -74,9 +69,7 @@ describe("ServerEnvironmentLive", () => {
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped, Effect.runPromise);
 
-      // The RPC refuses on exactly this gate, so the flag and the RPC cannot disagree.
-      expect(isServerComposerPredictionsEnabled()).toBe(enabled);
-      expect(descriptor.capabilities.composerPredictions).toBe(enabled);
+      expect(descriptor.capabilities.composerPredictions).toBe(true);
     },
   );
 });

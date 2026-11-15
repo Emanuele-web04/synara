@@ -143,7 +143,7 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { COMPOSER_PREDICTIONS_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
+import { MCP_CONNECTORS_ON } from "../betaFeatures";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -3692,12 +3692,11 @@ export default function ChatView({
     // between them replaces the node the observer watches.
     isCenteredEmptyLanding,
   ]);
-  // Composer predictions (Beta): only the chat in the main view, on its own account, once
+  // Predict for the chat in the main view, on its own account, once
   // the latest turn settled; the ghost text shows only in an empty, idle, writable composer.
   const composerPrediction = useComposerPrediction({
     target: resolveComposerPredictionTarget({
       enabled:
-        COMPOSER_PREDICTIONS_ON &&
         settings.showComposerSuggestions &&
         isServerThread &&
         !isEditorRail &&
