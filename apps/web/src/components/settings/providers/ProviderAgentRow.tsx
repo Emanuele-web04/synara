@@ -87,6 +87,7 @@ export function ProviderAgentRow(props: {
   updateSettings: (patch: Partial<AppSettings>) => void;
   /** Extra classes merged onto the row's root element (e.g. tile chrome in the grid layout). */
   className?: string;
+  index?: number;
 }) {
   const { t } = useTranslation();
 
@@ -233,6 +234,14 @@ export function ProviderAgentRow(props: {
             }
           />
         </div>
+        {props.index !== undefined && !props.open ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-1 right-2 text-[9px] leading-none text-muted-foreground/50"
+          >
+            {props.index + 1}
+          </span>
+        ) : null}
 
         <CollapsiblePanel>
           <div className="mt-2.5 space-y-3 border-t border-border/70 pt-3">

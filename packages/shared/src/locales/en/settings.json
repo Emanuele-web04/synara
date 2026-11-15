@@ -1266,6 +1266,7 @@
   "keepAwake_remoteFailed": "Could not change keep awake",
   "keepAwake_remoteTryAgain": "Try again.",
   "providers_agentsList": "Agents",
+  "providers_agentsDragHint": "Drag tiles to reorder — the order reads left to right, top to bottom.",
   "providers_agentsResetLabel": "agents",
   "providers_showInModelPicker": "Show in model picker",
   "providers_agentOptions": "{{provider}} options",
