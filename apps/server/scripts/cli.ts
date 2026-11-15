@@ -236,7 +236,7 @@ const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function*
     path.join(stagedPackageDir, "package.json"),
     `${JSON.stringify(pkg, null, 2)}\n`,
   );
-  const stagedRootEntries = (yield* fs.readDirectory(stagedPackageDir)).sort();
+  const stagedRootEntries = (yield* fs.readDirectory(stagedPackageDir)).toSorted();
   if (
     stagedRootEntries.length !== 2 ||
     stagedRootEntries[0] !== "dist" ||

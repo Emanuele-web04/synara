@@ -44,6 +44,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   devin: new Set<ModelSlug>(),
   omp: new Set<ModelSlug>(),
   cline: new Set<ModelSlug>(),
+  commandCode: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -397,12 +398,7 @@ function legacyCapabilityDescriptors(
       id: reasoningDescriptorId(provider),
       label: provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
-      options: primaryOptions.map((option) => ({
-        id: option.value,
-        label: option.label,
-        ...(option.description ? { description: option.description } : {}),
-        ...(option.isDefault ? { isDefault: true as const } : {}),
-      })),
+      options: primaryOptions.map((option) => (Object.assign({id:option.value,label:option.label}, option.description?{description:option.description}:{}, option.isDefault?{isDefault:true as const}:{}))),
       ...(defaultPrimaryOption ? { currentValue: defaultPrimaryOption.value } : {}),
       ...(caps.promptInjectedEffortLevels.length > 0
         ? { promptInjectedValues: [...caps.promptInjectedEffortLevels] }
@@ -728,7 +724,8 @@ export function resolveModelSlug(
     provider === "devin" ||
     provider === "pi" ||
     provider === "omp" ||
-    provider === "cline"
+    provider === "cline" ||
+    provider === "commandCode"
   ) {
     return normalized;
   }

@@ -20,6 +20,122 @@ type CodexTransportErrorInput = {
   readonly maxBytes: number;
   readonly observedBytes: number;
   readonly cause?: unknown;
+
+  constructor(input: {
+    readonly reason: CodexAppServerTransportErrorReason;
+    readonly maxBytes: number;
+    readonly observedBytes: number;
+    readonly cause?: unknown;
+  }) {
+    super(transportErrorMessage(input), (input.cause !== undefined ? { cause: input.cause } : {}));
+    this.name = "CodexAppServerTransportError";
+    this.reason = input.reason;
+    this.maxBytes = input.maxBytes;
+    this.observedBytes = input.observedBytes;
+  }
+}
+
+/** Raw-byte JSONL framing so split UTF-8 sequences never decode prematurely. */
+export class CodexJsonlFramer {
+  private readonly chunks: Buffer[] = [];
+  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
+  private frameBytes = 0;
+  private ended = false;
+
+  constructor(readonly maxFrameBytes = CODEX_APP_SERVER_MAX_FRAME_BYTES) {
+    if (!Number.isSafeInteger(maxFrameBytes) || maxFrameBytes <= 0) {
+      throw new RangeError("Codex JSONL frame budget must be a positive safe integer");
+    }
+  }
+
+  push(chunk: Buffer | Uint8Array | string): ReadonlyArray<string> {
+    if (this.ended) {
+      throw new CodexAppServerTransportError({
+        reason: "unterminated-frame",
+        maxBytes: this.maxFrameBytes,
+        observedBytes: this.frameBytes,
+      });
+    }
+
+    const bytes =
+      typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : Buffer.isBuffer(chunk)
+          ? chunk
+          : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    const frames: string[] = [];
+    let start = 0;
+
+    while (start < bytes.length) {
+      const newline = bytes.indexOf(0x0a, start);
+      const end = newline === -1 ? bytes.length : newline;
+      this.append(bytes.subarray(start, end));
+      if (newline === -1) break;
+      frames.push(this.takeFrame());
+      start = newline + 1;
+    }
+
+    return frames;
+  }
+
+  finish(): void {
+    this.ended = true;
+    if (this.frameBytes > 0) {
+      throw new CodexAppServerTransportError({
+        reason: "unterminated-frame",
+        maxBytes: this.maxFrameBytes,
+        observedBytes: this.frameBytes,
+      });
+    }
+  }
+
+  reset(): void {
+    this.chunks.length = 0;
+    this.frameBytes = 0;
+    this.ended = true;
+  }
+
+  get bufferedBytes(): number {
+    return this.frameBytes;
+  }
+
+  private append(chunk: Buffer): void {
+    if (chunk.length === 0) return;
+    const observedBytes = this.frameBytes + chunk.length;
+    if (observedBytes > this.maxFrameBytes) {
+      throw new CodexAppServerTransportError({
+        reason: "frame-too-large",
+        maxBytes: this.maxFrameBytes,
+        observedBytes,
+      });
+    }
+    // Do not retain a large source chunk through one small trailing slice.
+    this.chunks.push(Buffer.from(chunk));
+    this.frameBytes = observedBytes;
+  }
+
+  private takeFrame(): string {
+    let frame = Buffer.concat(this.chunks, this.frameBytes);
+    if (frame.at(-1) === 0x0d) frame = frame.subarray(0, -1);
+    this.chunks.length = 0;
+    this.frameBytes = 0;
+    try {
+      return this.decoder.decode(frame);
+    } catch (cause) {
+      throw new CodexAppServerTransportError({
+        reason: "invalid-utf8",
+        maxBytes: this.maxFrameBytes,
+        observedBytes: frame.length,
+        cause,
+      });
+    }
+  }
+}
+
+type PendingWrite = {
+  readonly frame: Buffer;
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
 };
 
 export class CodexAppServerTransportError extends JsonRpcStdioTransportError {

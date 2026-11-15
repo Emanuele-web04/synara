@@ -67,7 +67,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
           const recoveryErrors: string[] = [];
           const projectionDeferredThreadIds = new Set<string>();
           yield* Effect.forEach(
-            [...plan].reverse(),
+            [...plan].toReversed(),
             (entry) =>
               Effect.gen(function* () {
                 const projected = yield* input.snapshotQuery.getThreadShellById(
@@ -103,7 +103,7 @@ export function recoverInterruptedAgentGatewayOperations(input: {
             { discard: true },
           );
           yield* Effect.forEach(
-            [...plan].reverse(),
+            [...plan].toReversed(),
             (entry) =>
               projectionDeferredThreadIds.has(entry.ids.threadId)
                 ? Effect.void

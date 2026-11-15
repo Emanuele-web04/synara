@@ -176,7 +176,7 @@ export function buildSettingsSkillGroups(
       } satisfies SettingsSkillGroup;
     })
     .filter((group): group is SettingsSkillGroup => group !== null)
-    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+    .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 /** Sections from already-built groups, so callers that need both do not run the grouping twice. */
@@ -194,5 +194,5 @@ export function buildSettingsSkillSectionsFromGroups(
       title: sectionTitle(key),
       groups,
     }))
-    .sort((left, right) => sectionRank(left.key) - sectionRank(right.key));
+    .toSorted((left, right) => sectionRank(left.key) - sectionRank(right.key));
 }

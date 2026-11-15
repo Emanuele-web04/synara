@@ -185,39 +185,6 @@ export function collapseCursorModelVariants(
       ...variants.flatMap((variant) => variant.contextWindowOptions ?? []),
     ]);
 
-    return {
-      slug: baseSlug,
-      name: removeVariantNameSuffix(preferredName),
-      ...(variants[0]?.upstreamProviderId
-        ? { upstreamProviderId: variants[0].upstreamProviderId }
-        : {}),
-      ...(variants[0]?.upstreamProviderName
-        ? { upstreamProviderName: variants[0].upstreamProviderName }
-        : {}),
-      ...(efforts.length > 0
-        ? {
-            supportedReasoningEfforts: efforts.map((effort) => ({
-              value: effort.value,
-              label: effort.label,
-              ...(effort.value === defaultEffort ? { isDefault: true as const } : {}),
-            })),
-            ...(defaultEffort ? { defaultReasoningEffort: defaultEffort } : {}),
-          }
-        : {}),
-      ...(variants.some((variant) => variant.supportsFastMode === true)
-        ? { supportsFastMode: true as const }
-        : {}),
-      ...(variants.some((variant) => variant.supportsThinkingToggle === true)
-        ? { supportsThinkingToggle: true as const }
-        : {}),
-      ...(contextWindowOptions.length > 0
-        ? {
-            contextWindowOptions,
-            defaultContextWindow:
-              contextWindowOptions.find((option) => option.isDefault === true)?.value ??
-              contextWindowOptions[0]?.value,
-          }
-        : {}),
-    };
+    return Object.assign({slug:baseSlug,name:removeVariantNameSuffix(preferredName)}, variants[0]?.upstreamProviderId?{upstreamProviderId:variants[0].upstreamProviderId}:{}, variants[0]?.upstreamProviderName?{upstreamProviderName:variants[0].upstreamProviderName}:{}, efforts.length>0?{supportedReasoningEfforts:efforts.map(effort=>({value:effort.value,label:effort.label,...effort.value===defaultEffort?{isDefault:true as const}:{}})),...defaultEffort?{defaultReasoningEffort:defaultEffort}:{}}:{}, variants.some(variant=>variant.supportsFastMode===true)?{supportsFastMode:true as const}:{}, variants.some(variant=>variant.supportsThinkingToggle===true)?{supportsThinkingToggle:true as const}:{}, contextWindowOptions.length>0?{contextWindowOptions,defaultContextWindow:contextWindowOptions.find(option=>option.isDefault===true)?.value??contextWindowOptions[0]?.value}:{});
   });
 }

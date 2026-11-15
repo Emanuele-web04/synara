@@ -420,7 +420,7 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
       }));
       const declarative = declarativeTools();
       return [...imperative, ...declarative]
-        .sort((left, right) => left.name.localeCompare(right.name))
+        .toSorted((left, right) => left.name.localeCompare(right.name))
         .slice(0, MAX_TOOLS);
     }
 

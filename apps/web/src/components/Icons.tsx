@@ -18,6 +18,7 @@ import {
 } from "react-icons/si";
 
 export { ClineIcon } from "./ClineIcon";
+export { CommandCodeIcon } from "./CommandCodeIcon";
 
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
 

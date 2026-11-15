@@ -47,25 +47,7 @@ export function buildExternalMcpOverviewProjects(input: {
     .filter((project) => input.allowedProjectIds.has(project.id))
     .map((project) => {
       const summary = threadsByProject.get(project.id);
-      return {
-        projectId: project.id,
-        title: project.title,
-        path: project.workspaceRoot,
-        threads: { total: summary?.total ?? 0, active: summary?.active ?? 0 },
-        ...(input.includeThreadMetadata
-          ? {
-              recentThreads: [...(summary?.threads ?? [])]
-                .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-                .slice(0, MAX_RECENT_THREADS)
-                .map((thread) => ({
-                  threadId: thread.id,
-                  title: thread.title,
-                  state: thread.latestTurn?.state ?? "idle",
-                  updatedAt: thread.updatedAt,
-                })),
-            }
-          : {}),
-      };
+      return Object.assign({projectId:project.id,title:project.title,path:project.workspaceRoot,threads:{total:summary?.total??0,active:summary?.active??0}}, input.includeThreadMetadata?{recentThreads:[...summary?.threads??[]].sort((left,right)=>right.updatedAt.localeCompare(left.updatedAt)).slice(0,MAX_RECENT_THREADS).map(thread=>({threadId:thread.id,title:thread.title,state:thread.latestTurn?.state??`idle`,updatedAt:thread.updatedAt}))}:{});
     });
 }
 

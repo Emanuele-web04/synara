@@ -66,7 +66,7 @@ void (async () => {
       partitionKey?: { topLevelSite: string; hasCrossSiteAncestor: boolean };
     }>;
     const partitioned = received.filter((cookie) => cookie.name === "partitioned");
-    assert.deepEqual(partitioned.map((cookie) => cookie.partitionKey?.topLevelSite).sort(), [
+    assert.deepEqual(partitioned.map((cookie) => cookie.partitionKey?.topLevelSite).toSorted(), [
       "https://first.test",
       "https://second.test",
     ]);

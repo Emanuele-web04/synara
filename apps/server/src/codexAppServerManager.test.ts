@@ -684,7 +684,7 @@ describe("Codex Synara harness policy", () => {
       for (const name of BROWSER_TOOL_NAMES) {
         expect(instructions, name).toContain(`\`${name.slice("browser_".length)}\``);
       }
-      expect(instructions).toContain("Do not search or filter \`ALL_TOOLS\`");
+      expect(instructions).toContain("Do not search or filter `ALL_TOOLS`");
       expect(instructions).not.toContain("Use separate tool calls for browser steps");
       expect(instructions).toContain("Independent tool calls may run concurrently");
       expect(instructions).toContain("Batch related reads/actions in one browser_run script");

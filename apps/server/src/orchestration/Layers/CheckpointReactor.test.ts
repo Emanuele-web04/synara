@@ -5275,12 +5275,12 @@ describe("CheckpointReactor", () => {
           checkpoint.status === "ready" &&
           checkpoint.files
             ?.map((file) => file.path)
-            .sort()
+            .toSorted()
             .join(",") === "early.txt,late.txt",
       ),
     );
 
-    expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       "early.txt",
       "late.txt",
     ]);

@@ -37,6 +37,7 @@ const EMPTY_MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<Provid
   codex: [],
   cursor: [],
   devin: [],
+  commandCode: [],
   cline: [],
   antigravity: [],
   grok: [],
@@ -50,6 +51,7 @@ const EMPTY_CUSTOM_MODELS_BY_PROVIDER: Record<ProviderKind, never[]> = {
   codex: [],
   cursor: [],
   devin: [],
+  commandCode: [],
   cline: [],
   antigravity: [],
   grok: [],
@@ -497,6 +499,7 @@ describe("ComposerModelEffortPicker (effort slider)", () => {
         providers: [CODEX_PROVIDER_STATUS, { ...CODEX_PROVIDER_STATUS, provider: "cline" }],
         modelOptionsByProvider: {
           ...HARNESS_MODEL_OPTIONS,
+          commandCode: [],
           cline: Array.from({ length: 20 }, (_, index) => ({
             slug: `long-model-${index}`,
             name: `A very long model display name ${index}`,

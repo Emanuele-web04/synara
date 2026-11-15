@@ -107,7 +107,7 @@ describe("exportThreadArchive", () => {
       return acc;
     }, {});
 
-    expect(Object.keys(entries).sort()).toEqual(["thread.json", "transcript.md"]);
+    expect(Object.keys(entries).toSorted()).toEqual(["thread.json", "transcript.md"]);
 
     const threadJson = JSON.parse(entries["thread.json"]!.toString("utf8"));
     expect(threadJson.threadId).toBe("thread-abc");
@@ -177,6 +177,19 @@ describe("exportThreadArchive", () => {
     ]);
     expect(threadJson.messages[0].skills).toEqual([{ name: "review" }]);
     expect(threadJson.messages[0].mentions).toEqual([{ path: "src/index.ts" }]);
+  });
+
+  it("streams the archive as multiple chunks that reassemble into a valid zip", async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of threadArchiveChunks(sampleThread())) {
+      chunks.push(chunk);
+    }
+
+    // One chunk per entry, then central directory, then end record.
+    expect(chunks.length).toBe(4);
+
+    const entries = readZip(Buffer.concat(chunks));
+    expect(entries.map((entry) => entry.name).toSorted()).toEqual(["thread.json", "transcript.md"]);
   });
 
   it("slugifies the title and stamps the date bucket into the filename", () => {

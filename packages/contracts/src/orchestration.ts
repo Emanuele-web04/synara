@@ -14,6 +14,7 @@ import {
   CursorModelOptions,
   DevinModelOptions,
   ClineModelOptions,
+  CommandCodeModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -97,6 +98,7 @@ export const ProviderKind = Schema.Literals([
   "devin",
   "omp",
   "cline",
+  "commandCode",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -339,11 +341,20 @@ export const ClineModelSelection = Schema.Struct({
 export type ClineModelSelection = typeof ClineModelSelection.Type;
 
 const ModelSelectionByProvider = Schema.Union([
+export const CommandCodeModelSelection = Schema.Struct({
+  provider: Schema.Literal("commandCode"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(CommandCodeModelOptions),
+});
+export type CommandCodeModelSelection = typeof CommandCodeModelSelection.Type;
+
+export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
   DevinModelSelection,
   ClineModelSelection,
+  CommandCodeModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
@@ -472,12 +483,17 @@ export const ClineProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const CommandCodeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   devin: Schema.optional(DevinProviderStartOptions),
   cline: Schema.optional(ClineProviderStartOptions),
+  commandCode: Schema.optional(CommandCodeProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),

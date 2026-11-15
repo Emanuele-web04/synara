@@ -603,12 +603,7 @@ export function flattenOpenCodeAgents(
       const displayName = trimNonEmptyString(
         "displayName" in agent ? agent.displayName : undefined,
       );
-      return {
-        name: agent.name,
-        displayName: displayName ?? formatOpenCodeIdentifier(agent.name),
-        ...(agent.description ? { description: agent.description } : {}),
-        ...(agent.model ? { model: `${agent.model.providerID}/${agent.model.modelID}` } : {}),
-      };
+      return Object.assign({name:agent.name,displayName:displayName??formatOpenCodeIdentifier(agent.name)}, agent.description?{description:agent.description}:{}, agent.model?{model:`${agent.model.providerID}/${agent.model.modelID}`}:{});
     })
     .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
 }
@@ -624,10 +619,7 @@ export function flattenOpenCodeCommands(
 ): ProviderListCommandsResult["commands"] {
   return commands
     .filter((command) => command.name.trim().length > 0)
-    .map((command) => ({
-      name: command.name.trim(),
-      ...(command.description?.trim() ? { description: command.description.trim() } : {}),
-    }))
+    .map((command) => (Object.assign({name:command.name.trim()}, command.description?.trim()?{description:command.description.trim()}:{})))
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 

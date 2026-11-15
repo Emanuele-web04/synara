@@ -10,6 +10,7 @@ export type ProviderChildKind =
   | "cursor"
   | "devin"
   | "cline"
+  | "commandCode"
   | "droid"
   | "grok"
   | "opencode"
@@ -33,6 +34,7 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "CURSOR_API_KEY",
   "DEVIN_API_KEY",
   "CLINE_API_KEY",
+  "COMMAND_CODE_API_KEY",
   "WINDSURF_API_KEY",
   "DOCKER_AUTH_CONFIG",
 ]);
@@ -71,6 +73,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   cline: "all",
+  commandCode: "all",
   codex: "all",
   opencode: "all",
   pi: "all",

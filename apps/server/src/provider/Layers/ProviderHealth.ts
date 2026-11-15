@@ -148,6 +148,7 @@ const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
 const CLINE_PROVIDER = "cline" as const;
+const COMMAND_CODE_PROVIDER = "commandCode" as const;
 const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -281,6 +282,13 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
     provider: CLINE_PROVIDER,
     binaryName: "cline",
     npmPackageName: "cline",
+    homebrew: null,
+    nativeUpdate: null,
+  },
+  commandCode: {
+    provider: COMMAND_CODE_PROVIDER,
+    binaryName: "cmd",
+    npmPackageName: "command-code",
     homebrew: null,
     nativeUpdate: null,
   },
@@ -2640,6 +2648,48 @@ export const makeCheckClineProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+/** A version probe proves installation, never authentication. Command Code restores auth on session/new. */
+export const makeCheckCommandCodeProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probe = yield* probeProviderCliVersion(
+      runProviderCommand(
+        binaryPath?.trim() || "cmd",
+        ["--version"],
+        providerCommandEnv(COMMAND_CODE_PROVIDER),
+      ),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (probe.outcome !== "success") {
+      return {
+        provider: COMMAND_CODE_PROVIDER,
+        checkedAt,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        message:
+          probe.outcome === "missing"
+            ? "Command Code CLI is not installed. Run `npm install -g command-code`, then `cmd login` or set COMMAND_CODE_API_KEY."
+            : probe.outcome === "timeout"
+              ? "Command Code CLI health check timed out."
+              : "Command Code CLI failed its version check. Check the binary path or reinstall Command Code.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: COMMAND_CODE_PROVIDER,
+      checkedAt,
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: parseGenericCliVersion(`${probe.result.stdout}
+${probe.result.stderr}`),
+      message:
+        "Command Code CLI is installed. Authenticate with `cmd login` or COMMAND_CODE_API_KEY; credentials are checked when starting a session.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -3519,6 +3569,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return checkProviderInstanceWhenEnabled(
               instance,
               makeCheckClineProviderStatus(binaryPath),
+            );
+          case "commandCode":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckCommandCodeProviderStatus(binaryPath),
             );
         }
       };

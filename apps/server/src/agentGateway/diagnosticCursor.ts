@@ -17,8 +17,8 @@ export function diagnosticFilterFingerprint(
   filters: Readonly<Record<string, DiagnosticFilterValue>>,
 ): string {
   const normalized = Object.entries(filters)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => [key, Array.isArray(value) ? [...new Set(value)].sort() : value]);
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => [key, Array.isArray(value) ? [...new Set(value)].toSorted() : value]);
   return JSON.stringify(normalized);
 }
 

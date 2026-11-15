@@ -364,7 +364,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const requestedIds = claim.attachments
         .filter((attachment) => attachment.type === "image" || attachment.type === "file")
         .map((attachment) => attachment.id)
-        .sort();
+        .toSorted();
       const claimed = yield* Effect.forEach(
         requestedIds,
         (attachmentId) => managedAttachments.findClaimedById({ attachmentId }),

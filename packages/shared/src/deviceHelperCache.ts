@@ -70,7 +70,7 @@ export function deviceHelperSourceRevision(files: readonly DeviceHelperSourceFil
   // Name and contents both, so a rename is a change; sorted so directory order
   // cannot make the same tree hash two different ways.
   const canonical = [...files]
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map((file) => `${file.name}\0${file.contents}`)
     .join("\0");
 

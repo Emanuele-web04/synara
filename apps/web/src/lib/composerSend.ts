@@ -181,7 +181,7 @@ export function readFileAsDataUrl(file: File): Promise<string> {
       ) {
         reject(
           new Error(
-            `Could not read '${file.name || "item"}'. Paths with spaces or special characters may need a path mention (@\"…\") instead of a file attachment.`,
+            `Could not read '${file.name || "item"}'. Paths with spaces or special characters may need a path mention (@"…") instead of a file attachment.`,
           ),
         );
         return;
@@ -240,6 +240,7 @@ export function resolvePromptEffortFromModelSelection(
       );
     case "opencode":
     case "cline":
+    case "commandCode":
       return null;
   }
 }

@@ -312,13 +312,13 @@ export class DesktopBrowserAutomationHost {
     if (this.disposal) return this.disposal;
     this.disposed = true;
     this.disposal = (async () => {
-      await Promise.allSettled([...this.activeOperations]);
+      await Promise.allSettled(this.activeOperations);
     })();
     return this.disposal;
   }
 
   async waitForIdle(): Promise<void> {
-    while (this.activeOperations.size > 0) await Promise.allSettled([...this.activeOperations]);
+    while (this.activeOperations.size > 0) await Promise.allSettled(this.activeOperations);
   }
 
   async executeTool(request: BrowserAutomationToolRequest): Promise<unknown> {

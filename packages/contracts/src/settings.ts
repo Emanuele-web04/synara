@@ -130,6 +130,12 @@ export const ClineServerProviderSettings = Schema.Struct({
 });
 export type ClineServerProviderSettings = typeof ClineServerProviderSettings.Type;
 
+export const CommandCodeServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cmd")),
+});
+export type CommandCodeServerProviderSettings = typeof CommandCodeServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -195,6 +201,7 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     devin: DevinServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cline: ClineServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    commandCode: CommandCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -300,6 +307,7 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       cline: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      commandCode: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
     }),
   ),
   providerInstances: Schema.optionalKey(ProviderInstanceConfigMap),

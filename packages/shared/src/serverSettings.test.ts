@@ -66,6 +66,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           agentDir: "",
         },
         cline: { ...DEFAULT_SERVER_SETTINGS.providers.cline, binaryPath: "" },
+        commandCode: { ...DEFAULT_SERVER_SETTINGS.providers.commandCode, binaryPath: "" },
       },
     };
 

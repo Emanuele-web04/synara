@@ -22,6 +22,8 @@ import {
   type DevinModelSelection,
   type ClineModelOptions,
   type ClineModelSelection,
+  type CommandCodeModelOptions,
+  type CommandCodeModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
@@ -452,6 +454,7 @@ export function buildNextProviderOptions(
   patch: Record<string, unknown>,
 ): ProviderOptions {
   if (provider === "cline") return {};
+  if (provider === "commandCode") return {};
   if (provider === "codex") {
     return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
   }
@@ -566,6 +569,11 @@ export function buildModelSelection(
   options?: ClineModelOptions | null | undefined,
 ): ClineModelSelection;
 export function buildModelSelection(
+  provider: "commandCode",
+  model: string,
+  options?: CommandCodeModelOptions | null | undefined,
+): CommandCodeModelSelection;
+export function buildModelSelection(
   provider: "devin",
   model: string,
   options?: DevinModelOptions | null | undefined,
@@ -655,6 +663,13 @@ export function buildModelSelection(
     case "omp":
       return attachModelSelectionMetadata(
         options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
+        metadata,
+      );
+    case "commandCode":
+      return attachModelSelectionMetadata(
+        options
+          ? { provider, model, options: options as CommandCodeModelOptions }
+          : { provider, model },
         metadata,
       );
   }

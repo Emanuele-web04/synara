@@ -45,6 +45,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "cursor",
   "devin",
   "cline",
+  "commandCode",
   "antigravity",
   "grok",
   "droid",
@@ -265,6 +266,8 @@ export function makeModelSelection(
           : {}),
       };
     case "cline":
+      return { provider, model };
+    case "commandCode":
       return { provider, model };
     case "devin":
       return {

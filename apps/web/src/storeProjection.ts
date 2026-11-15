@@ -684,7 +684,7 @@ function writeThreadDetailSyncState(
   return {
     ...state,
     threadDetailSyncById: {
-      ...(state.threadDetailSyncById ?? {}),
+      ...state.threadDetailSyncById,
       [threadId]: syncState,
     },
   };
@@ -1123,7 +1123,7 @@ export function removeDeletedThreadFromClientState(
     state.deletedThreadIdsById?.[threadId] === sequence
       ? state.deletedThreadIdsById
       : {
-          ...(state.deletedThreadIdsById ?? {}),
+          ...state.deletedThreadIdsById,
           [threadId]: sequence,
         };
   const nextState = removeThreadState(state, threadId);
@@ -1182,7 +1182,7 @@ export function removeDeletedProjectFromClientState(
     state.deletedProjectIdsById?.[projectId] === sequence
       ? state.deletedProjectIdsById
       : {
-          ...(state.deletedProjectIdsById ?? {}),
+          ...state.deletedProjectIdsById,
           [projectId]: sequence,
         };
   const nextState = removeProjectState(state, projectId);

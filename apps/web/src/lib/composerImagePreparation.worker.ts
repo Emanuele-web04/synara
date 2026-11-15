@@ -121,4 +121,4 @@ workerScope.addEventListener("message", (event) => {
   });
 });
 
-export {};
+

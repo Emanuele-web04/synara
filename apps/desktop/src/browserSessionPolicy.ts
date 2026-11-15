@@ -124,7 +124,7 @@ export class BrowserSessionPolicy {
         const requestHeaders = replaceRequestHeadersCaseInsensitive(details.requestHeaders, {
           "User-Agent": userAgent,
           ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
-          ...(clientHints ?? {}),
+          ...clientHints,
         });
         callback({ requestHeaders });
       });

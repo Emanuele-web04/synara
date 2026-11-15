@@ -116,7 +116,7 @@ export function negotiateStaticEncodingPreference(
   return {
     candidates: ranked
       .filter((entry) => entry.weight > 0)
-      .sort((a, b) => b.weight - a.weight || a.preference - b.preference)
+      .toSorted((a, b) => b.weight - a.weight || a.preference - b.preference)
       .map((entry) => entry.candidate),
     identityAcceptable: identityWeight > 0,
   };

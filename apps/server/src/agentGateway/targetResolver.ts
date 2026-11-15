@@ -245,6 +245,8 @@ const PROVIDER_TARGET_OPTION_RULES = {
   }),
   // Cline advertises models, but no Synara reasoning/effort option controls.
   cline: { primaryOptionKey: "", options: {} },
+  // Command Code advertises models, but no Synara reasoning/effort option controls.
+  commandCode: { primaryOptionKey: "", options: {} },
   devin: defineProviderOptionConfig<"devin">({
     primaryOptionKey: "modelVariant",
     options: {
@@ -353,13 +355,7 @@ function providerTargetOptionRules(
 ): ReadonlyArray<AgentGatewayTargetOptionRule> {
   return Object.entries(providerTargetOptionConfig(provider).options)
     .filter(([, option]) => option.advertised === true)
-    .map(([key, { valueType, allowedValues, allowedValuesSource, allowsCustomValue }]) => ({
-      key,
-      valueType,
-      allowedValues,
-      allowedValuesSource,
-      ...(allowsCustomValue ? { allowsCustomValue: true } : {}),
-    }));
+    .map(([key, { valueType, allowedValues, allowedValuesSource, allowsCustomValue }]) => (Object.assign({key,valueType,allowedValues,allowedValuesSource}, allowsCustomValue?{allowsCustomValue:true}:{})));
 }
 
 function providerPrimaryOptionKey(provider: ProviderKind): string {
@@ -385,13 +381,7 @@ function modelTargetOptionRules(
   model: ProviderModelDescriptor,
 ): ReadonlyArray<AgentGatewayTargetOptionRule> {
   const rules = providerTargetOptionRules(provider).map(
-    ({ key, valueType, allowedValues, allowedValuesSource, allowsCustomValue }) => ({
-      key,
-      valueType,
-      allowedValues,
-      allowedValuesSource,
-      ...(allowsCustomValue === undefined ? {} : { allowsCustomValue }),
-    }),
+    ({ key, valueType, allowedValues, allowedValuesSource, allowsCustomValue }) => (Object.assign({key,valueType,allowedValues,allowedValuesSource}, allowsCustomValue===undefined?{}:{allowsCustomValue})),
   );
   const replaceAllowedValues = (
     key: string,

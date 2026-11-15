@@ -4436,7 +4436,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const eventPayload = gatewayTurnAuthorityRetired
       ? {
-          ...(this.readObject(notification.params) ?? {}),
+          ...this.readObject(notification.params),
           [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
         }
       : notification.params;

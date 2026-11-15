@@ -1021,7 +1021,7 @@ layer("AutomationRepository", (it) => {
       );
 
       assert.deepStrictEqual(
-        values.map((value) => value.consecutiveFailureCount).sort((left, right) => left - right),
+        values.map((value) => value.consecutiveFailureCount).toSorted((left, right) => left - right),
         [1, 2, 3],
       );
       assert.strictEqual(values.filter((value) => value.autoDisabled).length, 1);

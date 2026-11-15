@@ -74,7 +74,7 @@ export class BrowserVault {
       text = await readFile(join(this.home, "preferences.json"), "utf8");
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
-      throw new Error("Browser vault settings could not be read.");
+      throw new Error("Browser vault settings could not be read.", { cause: error });
     }
     const preferences = Schema.decodeUnknownSync(Preferences)(JSON.parse(text));
     this.settings = preferences.settings;

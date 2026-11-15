@@ -442,7 +442,7 @@ describe("composerSend attachment builders", () => {
     const cancelledIds = fetchMock.mock.calls
       .slice(2)
       .map(([, options]) => JSON.parse(String(options?.body)).attachmentId)
-      .sort();
+      .toSorted();
     expect(cancelledIds).toEqual(ids.toSorted());
   });
 

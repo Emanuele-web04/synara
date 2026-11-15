@@ -49,7 +49,7 @@ export function encodeWindowsShellIco(images: readonly ShellIcoBitmap[]): Buffer
     if (image.bgra.length !== image.width * image.height * 4) continue;
     unique.set(image.width, image);
   }
-  const ordered = [...unique.values()].sort((a, b) => a.width - b.width);
+  const ordered = [...unique.values()].toSorted((a, b) => a.width - b.width);
   if (ordered.length === 0) {
     throw new Error("No valid bitmaps to encode as a Windows shell ICO");
   }

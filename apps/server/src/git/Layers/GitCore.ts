@@ -3488,7 +3488,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               readOptions,
             ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
           : [];
-        return [...new Set([...untracked, ...included])].sort();
+        return [...new Set([...untracked, ...included])].toSorted();
       });
 
     const readWorktreeStateHash = (cwd: string) =>

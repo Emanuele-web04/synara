@@ -67,6 +67,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
     case "cline":
       return normalizeCustomBinaryPath(providerOptions?.cline?.binaryPath);
+    case "commandCode":
+      return normalizeCustomBinaryPath(providerOptions?.commandCode?.binaryPath);
     case "devin":
       return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
     case "pi":

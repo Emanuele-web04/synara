@@ -148,6 +148,14 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     supportsNativeTurnSteering: false,
     usage: null,
   },
+  {
+    kind: "commandCode",
+    displayName: PROVIDER_DISPLAY_NAMES.commandCode,
+    available: true,
+    setupDocsHref: "https://commandcode.ai/docs",
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
 ] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(

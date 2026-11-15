@@ -1072,7 +1072,7 @@ const restoreSqliteMigrationBackup = (input: {
         () => undefined,
       );
       let rollbackSucceeded = true;
-      for (const [source, destination] of moved.reverse()) {
+      for (const [source, destination] of moved.toReversed()) {
         await fs.rename(destination, source).catch(() => {
           rollbackSucceeded = false;
         });

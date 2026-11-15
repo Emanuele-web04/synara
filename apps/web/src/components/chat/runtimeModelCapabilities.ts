@@ -218,12 +218,7 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   const runtimeOptions: EffortOption[] = runtimeEfforts.map((effort) => {
     const description = trimOrNull(effort.description);
-    return {
-      value: effort.value,
-      label: trimOrNull(effort.label) ?? runtimeEffortLabel(effort.value),
-      ...(description ? { description } : {}),
-      ...(effort.value === runtimeDefaultEffort ? { isDefault: true as const } : {}),
-    };
+    return Object.assign({value:effort.value,label:trimOrNull(effort.label)??runtimeEffortLabel(effort.value)}, description?{description}:{}, effort.value===runtimeDefaultEffort?{isDefault:true as const}:{});
   });
 
   if (input.provider === "opencode") {

@@ -307,7 +307,7 @@ function canonicalize(value: unknown, seen: Set<object>): CanonicalJson {
     const record = value as Record<string, unknown>;
     return Object.fromEntries(
       Object.keys(value)
-        .sort()
+        .toSorted()
         .map((key) => [key, canonicalize(record[key], seen)]),
     );
   } finally {

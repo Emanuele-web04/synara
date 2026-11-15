@@ -32,7 +32,7 @@ describe("browser CI partitions", () => {
     for (const file of stableFiles) {
       const owners = partitions.filter((partition) => partition.file === file);
       if (file.endsWith("/ChatView.browser.tsx")) {
-        expect(owners.map(({ project }) => project).sort()).toEqual([
+        expect(owners.map(({ project }) => project).toSorted()).toEqual([
           "chat-follow (chromium)",
           "chat-projects (chromium)",
           "chat-workflows (chromium)",

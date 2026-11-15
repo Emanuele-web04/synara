@@ -117,7 +117,7 @@ function findFiles(root: string, predicate: (path: string) => boolean): string[]
       }
     }
   }
-  return matches.sort((left, right) => left.localeCompare(right));
+  return matches.toSorted((left, right) => left.localeCompare(right));
 }
 
 function requireSingleAsset(directory: string, suffix: string): string {

@@ -444,9 +444,9 @@ export const makeDevinAcpRuntime = (
         ),
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
+          resolveDevinAcpAuthMethodId(initializeResult, (apiKey ? { apiKey } : {})),
         validateInitializeResult: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }).pipe(
+          resolveDevinAcpAuthMethodId(initializeResult, (apiKey ? { apiKey } : {})).pipe(
             Effect.asVoid,
           ),
         authenticateMeta,

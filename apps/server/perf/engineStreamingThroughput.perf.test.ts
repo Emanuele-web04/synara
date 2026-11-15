@@ -57,7 +57,7 @@ describe.skipIf(!ENABLED)("engine streaming throughput", () => {
   it("measures ms per delta for 1/5/10 concurrently streaming threads", async () => {
     const report: Record<string, unknown>[] = [];
     for (let repeat = -1; repeat < 3; repeat += 1) {
-      for (const threadCount of repeat % 2 === 0 ? [...THREAD_COUNTS].reverse() : THREAD_COUNTS) {
+      for (const threadCount of repeat % 2 === 0 ? [...THREAD_COUNTS].toReversed() : THREAD_COUNTS) {
         const directory = mkdtempSync(join(tmpdir(), "synara-engine-measure-"));
         const dbPath = join(directory, "state.sqlite");
         const { engine, runtime } = await createSystem(dbPath);

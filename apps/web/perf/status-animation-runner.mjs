@@ -14,7 +14,7 @@ const electronPath = createRequire(join(root, "apps/desktop/package.json"))("ele
 const assets = join(artifacts, "baseline-dist/assets");
 const css = readdirSync(assets)
   .filter((file) => file.endsWith(".css"))
-  .sort((a, b) => statSync(join(assets, b)).size - statSync(join(assets, a)).size)[0];
+  .toSorted((a, b) => statSync(join(assets, b)).size - statSync(join(assets, a)).size)[0];
 const fixture = join(artifacts, "status.html");
 writeFileSync(
   fixture,
@@ -63,7 +63,7 @@ try {
         const finalAssets = join(artifacts, "status-dist/assets");
         const finalCss = readdirSync(finalAssets)
           .filter((f) => f.endsWith(".css"))
-          .sort(
+          .toSorted(
             (a, b) => statSync(join(finalAssets, b)).size - statSync(join(finalAssets, a)).size,
           )[0];
         await page.evaluate(
@@ -88,7 +88,7 @@ try {
           computedTiming: getComputedStyle(el).animationTimingFunction,
           animations: el
             .getAnimations()
-            .map((a) => ({ startTime: a.startTime, ...a.effect.getTiming() })),
+            .map((a) => (Object.assign({startTime:a.startTime}, a.effect.getTiming()))),
         }));
       }, variant);
       if (timing.some((t) => t.animations.length !== 1)) throw Error("Missing fixture animation");

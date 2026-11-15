@@ -510,7 +510,7 @@ function joinedBufferedReasoningSummary(
   if (!summary) return undefined;
   return readableReasoningDetail(
     Array.from(summary.parts.entries())
-      .sort(([left], [right]) => left - right)
+      .toSorted(([left], [right]) => left - right)
       .map(([, text]) => text.trim())
       .filter((text) => text.length > 0)
       .join("\n\n"),

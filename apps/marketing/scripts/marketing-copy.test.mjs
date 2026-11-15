@@ -23,7 +23,7 @@ function readFlat(relativePath) {
 }
 
 function exportedString(source, name) {
-  const match = new RegExp(`export const ${name} =\\s*\"([^\"]+)\";`).exec(source);
+  const match = new RegExp(`export const ${name} =\\s*"([^"]+)";`).exec(source);
   assert.ok(match, `${name} is not a direct string export`);
   return match[1];
 }
@@ -127,7 +127,7 @@ test("provider cards use stable runtime capabilities instead of volatile model m
     "Pi",
     "Factory Droid",
   ]) {
-    assert.ok(features.includes(`name: \"${provider}\"`), `missing provider card for ${provider}`);
+    assert.ok(features.includes(`name: "${provider}"`), `missing provider card for ${provider}`);
   }
 
   for (const volatileLabel of ["Opus 4.8", "GPT-5.5", "Composer 2.5", "500+ models", "Zen + Go"]) {

@@ -123,7 +123,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
 
   const listSessions: AuthControlPlaneShape["listSessions"] = () =>
     sessions.listActive().pipe(
-      Effect.map((activeSessions) => [...activeSessions].sort(bySessionPriority)),
+      Effect.map((activeSessions) => [...activeSessions].toSorted(bySessionPriority)),
       Effect.mapError(toAuthControlPlaneError("Failed to list sessions.")),
     );
 

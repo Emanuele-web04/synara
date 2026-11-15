@@ -10,15 +10,8 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
-<<<<<<< HEAD
 import * as Schema from "effect/Schema";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-import * as Schema from "effect/Schema";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
-=======
-import { useDeferredValue, useEffect, useRef, useState } from "react";
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
 import {
@@ -49,7 +42,6 @@ import {
 } from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-<<<<<<< HEAD
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -65,24 +57,7 @@ import {
   supportsModelFavorites,
   type FavoriteModelProvider,
 } from "../../lib/modelFavorites";
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-import {
-  groupProviderModelOptions,
-  groupProviderModelOptionsWithFavorites,
-  shouldUseCollapsibleModelGroups,
-  type ProviderModelOption,
-} from "../../providerModelOptions";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import {
-  FAVORITE_MODEL_STORAGE_KEYS,
-  supportsModelFavorites,
-  type FavoriteModelProvider,
-} from "../../lib/modelFavorites";
-=======
-import { type ProviderModelOption } from "../../providerModelOptions";
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 import { Skeleton } from "../ui/skeleton";
-<<<<<<< HEAD
 import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
 import {
@@ -91,11 +66,6 @@ import {
 } from "../../lib/providerInstancePresentation";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { t, useTranslation } from "~/i18n";
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-import { PlusIcon } from "~/lib/icons";
-=======
-import { CheckIcon, ChevronRightIcon, PlusIcon, SearchIcon } from "~/lib/icons";
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -217,7 +187,6 @@ function providerIconClassName(
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
-<<<<<<< HEAD
 const FavoriteModelSlugs = Schema.Array(Schema.String);
 const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
 
@@ -282,20 +251,6 @@ function toggleFavoriteModelKey(
     : [...normalizedCurrent, key];
 }
 
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-const FavoriteModelSlugs = Schema.Array(Schema.String);
-const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
-
-// Keeps persisted favorite slugs compact and stable while preserving the user's order.
-function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
-  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
-  return normalizedCurrent.includes(slug)
-    ? normalizedCurrent.filter((entry) => entry !== slug)
-    : [...normalizedCurrent, slug];
-}
-
-=======
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 function stripParameterizedModelSuffix(model: string): string {
   return model.trim().replace(/\[[^\]]*\]$/u, "");
 }
@@ -358,23 +313,11 @@ type ProviderModelMenuItemsProps = {
   selectedProviderInstanceId?: ProviderInstanceId;
   showProviderInstanceChoices?: boolean;
   disabled?: boolean;
-<<<<<<< HEAD
   onProviderModelChange: (
     provider: ProviderKind,
     model: ModelSlug,
     instanceId?: ProviderInstanceId,
   ) => void;
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
-=======
-  // The combined picker browses within its existing popup instead of stacking
-  // provider/model submenus over the configuration panel.
-  navigation?: {
-    provider: ProviderKind | null;
-    onProviderBrowse: (provider: ProviderKind) => void;
-  };
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
@@ -404,7 +347,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     () => (props.providers ?? []).filter(isUnsupportedProviderInstanceStatus),
     [props.providers],
   );
-<<<<<<< HEAD
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
@@ -534,19 +476,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     value: string,
     instanceId = getSelectedInstanceIdForProvider(provider),
   ) => {
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-  const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
-  const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
-  const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
-  const favoriteModelSlugSets = {
-    cursor: cursorFavoriteModelSlugSet,
-    opencode: openCodeFavoriteModelSlugSet,
-    pi: piFavoriteModelSlugSet,
-  };
-  const handleModelChange = (provider: ProviderKind, value: string) => {
-=======
-  const handleModelChange = (provider: ProviderKind, value: string) => {
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
     if (props.disabled) return;
     if (!value) return;
     const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
@@ -556,7 +485,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     props.onProviderModelChange(provider, resolvedModel, instanceId);
     onAfterSelection?.();
   };
-<<<<<<< HEAD
 
   const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
     if (props.disabled || !instanceId) return;
@@ -676,39 +604,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     }
 
     const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-  const toggleFavoriteModel = (provider: FavoriteModelProvider, slug: string) => {
-    const setFavoriteModelSlugs =
-      provider === "cursor"
-        ? setCursorFavoriteModelSlugs
-        : provider === "pi"
-          ? setPiFavoriteModelSlugs
-          : setOpenCodeFavoriteModelSlugs;
-    setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
-  };
-
-  const renderModelRadioGroup = (provider: ProviderKind) => {
-    if (props.loadingModelProviders?.[provider]) {
-      return (
-        <div className="space-y-2 px-2 py-2" aria-label="Loading models">
-          {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-              <Skeleton className="size-3.5 rounded-full" />
-              <Skeleton className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")} />
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    const providerOptions = props.modelOptionsByProvider[provider];
-=======
-  const renderModelRadioGroup = (provider: ProviderKind) => {
-    const providerOptions = props.modelOptionsByProvider[provider];
-    const isLoading = props.loadingModelProviders?.[provider] ?? false;
-    const providerLabel =
-      PROVIDER_OPTIONS.find((option) => option.value === provider)?.label ?? provider;
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
     const shouldShowSearch =
       !isLoading &&
       (provider === "opencode" ||
@@ -725,7 +620,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
-<<<<<<< HEAD
     const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
     const selectedInstanceId = instanceId;
     const isActiveAccount =
@@ -743,26 +637,12 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             favoriteSlugs: favoriteModelSlugSet,
           })
         : groupProviderModelOptions(filteredOptions);
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-    const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
-    const favoriteModelSlugSet =
-      favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
-    const groupedOptions =
-      favoriteModelSlugSet !== undefined
-        ? groupProviderModelOptionsWithFavorites({
-            options: filteredOptions,
-            favoriteSlugs: favoriteModelSlugSet,
-          })
-        : groupProviderModelOptions(filteredOptions);
-=======
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 
     const modelSelectionIssue =
       provider === "omp" && isActiveAccount
         ? getOmpModelSelectionIssue(props.model, providerOptions)
         : null;
     const discoveryError = props.discoveryErrorsByProvider?.[provider];
-<<<<<<< HEAD
     const discoveryErrorElement = (
       <>
         {modelSelectionIssue ? (
@@ -779,19 +659,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     const activeModelSlug = isActiveAccount
       ? (resolveSelectableModel(provider, props.model, providerOptions) ?? props.model)
       : props.model;
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-    const discoveryErrorElement = discoveryError ? (
-      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
-    ) : null;
-=======
-    const discoveryErrorElement = discoveryError ? (
-      <div role="status" className="px-3 py-2 text-xs text-destructive">
-        {discoveryError}
-      </div>
-    ) : null;
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 
-<<<<<<< HEAD
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
@@ -823,61 +691,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         </div>
       ) : (
         <div className="px-2 py-2 text-muted-foreground text-ui leading-snug">
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-    const content =
-      groupedOptions.length > 0 ? (
-        <MenuRadioGroup
-          value={activeProvider === provider ? props.model : ""}
-          onValueChange={(value) => handleModelChange(provider, value)}
-        >
-          <ProviderModelOptionGroupList
-            groupedOptions={groupedOptions}
-            provider={provider}
-            activeModel={props.model}
-            isSearching={normalizedModelSearchQuery.length > 0}
-            favoriteProvider={favoriteProvider}
-            favoriteModelSlugSet={favoriteModelSlugSet}
-            onToggleFavorite={toggleFavoriteModel}
-            {...(onAfterSelection ? { onAfterSelection } : {})}
-          />
-        </MenuRadioGroup>
-      ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">
-=======
-    const content = isLoading ? (
-      <div className="space-y-2 px-2 py-2" role="status" aria-label="Loading models">
-        {Array.from({ length: 6 }, (_, index) => (
-          <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-            <Skeleton className="size-3.5 rounded-full" />
-            <Skeleton className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")} />
-          </div>
-        ))}
-      </div>
-    ) : filteredOptions.length > 0 ? (
-      <MenuRadioGroup
-        aria-label={`${providerLabel} models`}
-        value={activeProvider === provider ? props.model : ""}
-        onValueChange={(value) => handleModelChange(provider, value)}
-      >
-        <ProviderModelOptionGroupList
-          key={provider}
-          options={filteredOptions}
-          provider={provider}
-          activeModel={props.model}
-          isSearching={normalizedModelSearchQuery.length > 0}
-          {...(onAfterSelection ? { onAfterSelection } : {})}
-        />
-      </MenuRadioGroup>
-    ) : (
-      <div
-        role="status"
-        className="flex flex-col items-center gap-2 px-4 py-6 text-center text-muted-foreground"
-      >
-        <SearchIcon aria-hidden="true" className="size-5 opacity-60" />
-        <span className="text-[length:var(--app-font-size-ui,12px)] text-foreground">
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
           {provider === "pi" && normalizedModelSearchQuery.length === 0
-<<<<<<< HEAD
             ? t("chat:providerModelPicker_noPiModels")
             : t("workspace:providerModelPicker_noMatches")}
         </div>
@@ -910,54 +724,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         </>
       );
     }
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-            ? "No Pi models found"
-            : "No matches"}
-        </div>
-      );
-
-    if (!shouldShowSearch) {
-      const needsScrollContainer =
-        filteredOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD ||
-        shouldUseCollapsibleModelGroups(groupedOptions.length, false);
-      if (needsScrollContainer) {
-        return (
-          <>
-            {discoveryErrorElement}
-            <div
-              className={cn(
-                "overflow-y-auto overscroll-contain py-0.5",
-                COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-                COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-              )}
-            >
-              {content}
-            </div>
-          </>
-        );
-      }
-      return (
-        <>
-          {discoveryErrorElement}
-          {content}
-        </>
-      );
-    }
-=======
-            ? "No Pi models found"
-            : "No matches"}
-        </span>
-        {normalizedModelSearchQuery.length > 0 ? (
-          <span className="text-[length:var(--app-font-size-ui-sm,11px)]">
-            Try a different model or provider name.
-          </span>
-        ) : null}
-      </div>
-    );
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 
     return (
-<<<<<<< HEAD
       <PickerPanelShell
         searchPlaceholder={t("chat:providerModelPicker_searchModels")}
         query={modelSearchQuery}
@@ -971,42 +739,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         {discoveryErrorElement}
         {content}
       </PickerPanelShell>
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-      <PickerPanelShell
-        searchPlaceholder="Search models or providers"
-        query={modelSearchQuery}
-        onQueryChange={setModelSearchQuery}
-        stopSearchKeyPropagation
-        autoFocusSearch
-        widthClassName="w-full"
-        bleedParentPadding
-        listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
-      >
-        {discoveryErrorElement}
-        {content}
-      </PickerPanelShell>
-=======
-      <>
-        {!shouldShowSearch ? (
-          <div className="shrink-0 px-2 pb-1.5 pt-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
-            Select model
-          </div>
-        ) : null}
-        <PickerPanelShell
-          searchPlaceholder="Search models"
-          query={modelSearchQuery}
-          {...(shouldShowSearch ? { onQueryChange: setModelSearchQuery } : {})}
-          stopSearchKeyPropagation
-          autoFocusSearch
-          widthClassName="w-full"
-          variant="plain"
-          listMaxHeightClassName="max-h-[min(16rem,55dvh)]"
-        >
-          {discoveryErrorElement}
-          {content}
-        </PickerPanelShell>
-      </>
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
     );
   };
 
@@ -1166,37 +898,12 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 }
               }}
             >
-<<<<<<< HEAD
               {renderProviderInstanceRadioGroup(option.value)}
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-=======
-              {providerContent}
-              <ChevronRightIcon aria-hidden="true" className="-me-0.5 shrink-0" />
-            </MenuItem>
-          );
-        }
-        return (
-          <MenuSub
-            key={option.value}
-            onOpenChange={(nextOpen) => {
-              if (nextOpen) setModelSearchQuery("");
-            }}
-          >
-            <MenuSubTrigger
-              aria-label={option.label}
-              data-current-provider={activeProvider === option.value ? "" : undefined}
-              className="data-current-provider:bg-[var(--color-background-button-secondary)]"
-            >
-              {providerContent}
-            </MenuSubTrigger>
-            <ComposerPickerMenuSubPopup className={COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME}>
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
         );
       })}
-<<<<<<< HEAD
       {visibleUnsupportedProviderInstances.length > 0 ? <MenuSeparator /> : null}
       {visibleUnsupportedProviderInstances.map((providerStatus) => (
         <MenuItem
@@ -1219,16 +926,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         <MenuSeparator />
       ) : null}
       <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-      {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
-      <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
-=======
-      {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
-      <MenuItem
-        className="text-muted-foreground"
-        onClick={() => appHistory.push("/settings?section=providers")}
-      >
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
         <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
         <span>{t("chat:addProviders")}</span>
       </MenuItem>

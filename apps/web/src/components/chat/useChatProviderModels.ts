@@ -229,6 +229,7 @@ export function useChatProviderModels({
       devin: resolveHint("devin"),
       omp: resolveHint("omp"),
       cline: resolveHint("cline"),
+      commandCode: resolveHint("commandCode"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -420,6 +421,8 @@ export function useChatProviderModels({
     selectedProvider === "devin" ||
     selectedProvider === "omp" ||
     selectedProvider === "cline";
+    selectedProvider === "cline" ||
+    selectedProvider === "commandCode";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,

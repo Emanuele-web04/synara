@@ -655,8 +655,7 @@ function makeProviderServiceLayer(
       : {}),
     ...(providers?.codexDidResumeSession
       ? { didResumeSession: providers.codexDidResumeSession }
-      : {}),
-  });
+      : {}));
   const claude = makeFakeCodexAdapter("claudeAgent");
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });

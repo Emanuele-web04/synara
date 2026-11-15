@@ -1124,10 +1124,10 @@ function verifyDesktopStageLockAuthority(): void {
   if (packagesSectionOffset < 0) {
     throw new Error("Expected bun.lock to contain a packages section.");
   }
-  const workspaceImporters = lockfile.slice(0, packagesSectionOffset);
+  const workspaceImporters = new Set(lockfile.slice(0, packagesSectionOffset));
   for (const manifestPath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
     const workspacePath = manifestPath === "package.json" ? "" : dirname(manifestPath);
-    if (!workspaceImporters.includes(`${JSON.stringify(workspacePath)}: {`)) {
+    if (!workspaceImporters.has(`${JSON.stringify(workspacePath)}: {`)) {
       throw new Error(`Expected ${manifestPath} to have a matching importer in bun.lock.`);
     }
   }

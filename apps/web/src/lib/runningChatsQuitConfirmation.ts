@@ -64,7 +64,7 @@ export function listRunningChatsForQuit(
     seen.add(thread.id);
     chats.push({ id: thread.id, title: runningChatDisplayTitle(thread.title) });
   }
-  return chats.sort(compareRunningChatSummaries);
+  return chats.toSorted(compareRunningChatSummaries);
 }
 
 export function listRunningChatsFromDesktopStore(

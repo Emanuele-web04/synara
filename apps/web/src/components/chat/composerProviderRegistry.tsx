@@ -146,6 +146,9 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "cline":
       normalizedOptions = undefined;
       break;
+    case "commandCode":
+      normalizedOptions = undefined;
+      break;
     case "devin": {
       const providerOptions = modelOptions?.devin;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);

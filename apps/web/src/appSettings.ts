@@ -262,6 +262,7 @@ type CustomModelSettingsKey =
   | "customDroidModels"
   | "customDevinModels"
   | "customClineModels"
+  | "customCommandCodeModels"
   | "customOpenCodeModels"
   | "customPiModels"
   | "customOmpModels";
@@ -281,6 +282,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   devin: new Set(getModelOptions("devin").map((option) => option.slug)),
   cline: new Set(getModelOptions("cline").map((option) => option.slug)),
+  commandCode: new Set(getModelOptions("commandCode").map((option) => option.slug)),
   antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
@@ -308,6 +310,7 @@ const PersistedProviderKind = Schema.Literals([
   "cursor",
   "devin",
   "cline",
+  "commandCode",
   "antigravity",
   "gemini",
   "grok",
@@ -399,6 +402,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   clineBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  commandCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
   geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
@@ -609,6 +613,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDevinModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClineModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customCommandCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -733,6 +738,16 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Cline model slugs for the picker and provider runtime.",
     placeholder: "provider/model-id",
     example: "adaptive",
+  },
+  commandCode: {
+    provider: "commandCode",
+    settingsKey: "customCommandCodeModels",
+    defaultSettingsKey: "customCommandCodeModels",
+    title: "Command Code",
+    description:
+      "Save additional Command Code model slugs for the picker and provider runtime.",
+    placeholder: "provider/model-id",
+    example: "deepseek/deepseek-v4.1-flash",
   },
   antigravity: {
     provider: "antigravity",
@@ -2283,6 +2298,7 @@ export function getCustomModelsByProvider(
     cursor: getCustomModelsForProvider(settings, "cursor"),
     devin: getCustomModelsForProvider(settings, "devin"),
     cline: getCustomModelsForProvider(settings, "cline"),
+    commandCode: getCustomModelsForProvider(settings, "commandCode"),
     antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
@@ -2508,6 +2524,9 @@ function mergeProviderStartOptionsForApp(
     ...(base.cursor || overlay.cursor ? { cursor: { ...base.cursor, ...overlay.cursor } } : {}),
     ...(base.devin || overlay.devin ? { devin: { ...base.devin, ...overlay.devin } } : {}),
     ...(base.cline || overlay.cline ? { cline: { ...base.cline, ...overlay.cline } } : {}),
+    ...(base.commandCode || overlay.commandCode
+      ? { commandCode: { ...base.commandCode, ...overlay.commandCode } }
+      : {}),
     ...(base.antigravity || overlay.antigravity
       ? { antigravity: { ...base.antigravity, ...overlay.antigravity } }
       : {}),
@@ -2781,6 +2800,7 @@ export function getCustomBinaryPathForProvider(
     | "cursorBinaryPath"
     | "devinBinaryPath"
     | "clineBinaryPath"
+    | "commandCodeBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -2801,6 +2821,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.devinBinaryPath);
     case "cline":
       return normalizeProviderBinaryPathOverride(provider, settings.clineBinaryPath);
+    case "commandCode":
+      return normalizeProviderBinaryPathOverride(provider, settings.commandCodeBinaryPath);
     case "antigravity":
       return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":

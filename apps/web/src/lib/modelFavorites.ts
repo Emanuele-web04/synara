@@ -13,6 +13,7 @@ export const FAVORITE_MODEL_STORAGE_KEYS = {
   droid: "synara:droid-favourite-models:v1",
   opencode: "synara:opencode-favourite-models:v1",
   cline: "synara:cline-favourite-models:v1",
+  commandCode: "synara:command-code-favourite-models:v1",
   devin: "synara:devin-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
   antigravity: "synara:antigravity-favourite-models:v1",

@@ -23,6 +23,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "droid",
   "devin",
   "cline",
+  "commandCode",
   "opencode",
   "pi",
   "omp",

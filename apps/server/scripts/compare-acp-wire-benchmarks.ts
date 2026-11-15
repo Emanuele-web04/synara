@@ -18,7 +18,7 @@ interface EngineResult {
   }>;
 }
 
-export {};
+
 
 function argument(name: string): string {
   const value = process.argv

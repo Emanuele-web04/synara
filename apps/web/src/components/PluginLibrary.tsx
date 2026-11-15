@@ -379,6 +379,9 @@ export function PluginLibrary(props?: {
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
   const clineCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cline"));
+  const commandCodeCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("commandCode"),
+  );
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const ompCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("omp"));
 
@@ -398,6 +401,10 @@ export function PluginLibrary(props?: {
     cline: {
       plugins: supportsPluginDiscovery(clineCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(clineCapabilitiesQuery.data),
+    },
+    commandCode: {
+      plugins: supportsPluginDiscovery(commandCodeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(commandCodeCapabilitiesQuery.data),
     },
     devin: {
       plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),

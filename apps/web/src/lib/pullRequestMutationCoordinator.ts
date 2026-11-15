@@ -313,7 +313,7 @@ export function activePullRequestActionPatch(
   }
 
   const activePatch: PullRequestActionListPatch = {};
-  for (const protection of [...protections.values()].sort(
+  for (const protection of [...protections.values()].toSorted(
     (left, right) => left.protectionId - right.protectionId,
   )) {
     if (protection.outcome === "failed") continue;
