@@ -1980,6 +1980,47 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("creates worktrees on disks where checkout-sized Git work outlasts a deadline", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# slow disk edit\n");
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "slow disk note\n");
+        const realCore = yield* GitCore;
+        // An external drive can make checkout-sized commands take minutes, so any
+        // finite deadline on them fails; fixed-cost lookups keep theirs.
+        const checkoutSized = new Set(["worktree", "diff", "ls-files", "apply"]);
+        const core = yield* makeIsolatedGitCore((input) =>
+          checkoutSized.has(input.args[0] ?? "") && input.timeoutMs !== null
+            ? Effect.succeed({ code: 124, stdout: "", stderr: "simulated slow disk timeout" })
+            : realCore.execute(input),
+        );
+
+        const copiedPath = path.join(tmp, "wt-slow-disk-copy");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: copiedPath,
+          newBranch: "synara/slow-disk",
+          copyChangesFrom: tmp,
+        });
+        expect(yield* readTextFile(path.join(copiedPath, "README.md"))).toBe("# slow disk edit\n");
+        expect(yield* readTextFile(path.join(copiedPath, "notes.txt"))).toBe("slow disk note\n");
+
+        const namedPath = path.join(tmp, "wt-slow-disk-named");
+        yield* core.createWorktree({
+          cwd: tmp,
+          branch: initialBranch,
+          newBranch: "synara/slow-disk-named",
+          path: namedPath,
+        });
+        expect(existsSync(path.join(namedPath, "README.md"))).toBe(true);
+
+        yield* realCore.removeWorktree({ cwd: tmp, path: copiedPath, force: true });
+        yield* realCore.removeWorktree({ cwd: tmp, path: namedPath, force: true });
+      }),
+    );
+
     it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
