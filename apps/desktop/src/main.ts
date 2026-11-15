@@ -6592,8 +6592,15 @@ async function bootstrap(browserNetworkGuardReady: Promise<void>): Promise<void>
   });
   app.once("will-quit", disposeRemoteResources);
   writeDesktopLogHeader("bootstrap ipc handlers registered");
+  // Browser tools from the backend must not navigate before the network guard's proxy is
+  // installed or before saved cookies are back. If the guard fails, startup is fatal and
+  // the app quits, so tools stay held rather than run unguarded.
+  const browserToolsReady = browserNetworkGuardReady.then(
+    () => browserSessionRestored,
+    () => new Promise<void>(() => undefined),
+  );
   try {
-    await ensureBrowserHostPipeServer(browserSessionRestored);
+    await ensureBrowserHostPipeServer(browserToolsReady);
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
