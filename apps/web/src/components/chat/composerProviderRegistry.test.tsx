@@ -315,6 +315,33 @@ describe("getComposerProviderState", () => {
     ).toContain('aria-label="Change effort, context, and speed"');
   });
 
+  it("preserves a stored Antigravity effort for dispatch before discovery resolves", () => {
+    const state = getComposerProviderState({
+      provider: "antigravity",
+      model: "Gemini 3.7 Flash",
+      prompt: "",
+      modelOptions: { antigravity: { reasoningEffort: "low" } },
+    });
+
+    expect(state).toEqual({
+      provider: "antigravity",
+      promptEffort: "low",
+      modelOptionsForDispatch: { reasoningEffort: "low" },
+    });
+  });
+
+  it("drops a stored Antigravity effort the resolved model does not support", () => {
+    const state = getComposerProviderState({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
+      prompt: "",
+      modelOptions: { antigravity: { reasoningEffort: "ultra" } },
+    });
+
+    expect(state.modelOptionsForDispatch).toBeUndefined();
+  });
+
   it("hides Antigravity effort controls when the selected model has only one effort", () => {
     const selection = getComposerTraitSelection(
       "antigravity",
