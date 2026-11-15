@@ -1199,6 +1199,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "devin", label: "Devin", available: true },
       { value: "omp", label: "Oh My Pi", available: true },
       { value: "cline", label: "Cline", available: true },
+      { value: "commandCode", label: "Command Code", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",

@@ -1811,6 +1811,7 @@ describe("provider-indexed custom model settings", () => {
       "cursor",
       "devin",
       "cline",
+      "commandCode",
       "antigravity",
       "grok",
       "droid",
