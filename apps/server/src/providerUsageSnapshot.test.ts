@@ -9,9 +9,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  loadLocalProviderUsageLines,
   readClaudeUsageSamples,
   readCodexSessionSummary,
   readRecentClaudeUsageSamples,
+  resumeProviderUsageScans,
+  stopProviderUsageScans,
 } from "./providerUsageSnapshot";
 
 const tempDirs: string[] = [];
@@ -154,6 +157,68 @@ describe("readClaudeUsageSamples", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it("parses only the records that carry a usage key", async () => {
+    const file = await makeSessionFile(
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-14T09:00:00.000Z",
+          message: { content: "x".repeat(64 * 1024) },
+        }),
+        assistantLine({ timestamp: "2026-08-14T10:00:00.000Z", totalTokens: 40 }),
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-14T10:30:00.000Z",
+          toolUseResult: { usage: { input_tokens: 5, output_tokens: 7 } },
+        }),
+      ].join("\n"),
+      "transcript.jsonl",
+    );
+    const parse = vi.spyOn(JSON, "parse");
+
+    await expect(readClaudeUsageSamples(file)).resolves.toEqual([
+      {
+        sessionId: `${file}:1`,
+        timestampMs: Date.parse("2026-08-14T10:00:00.000Z"),
+        totalTokens: 40,
+        model: "claude-opus-4-5",
+      },
+      {
+        sessionId: `${file}:2`,
+        timestampMs: Date.parse("2026-08-14T10:30:00.000Z"),
+        totalTokens: 12,
+        model: null,
+      },
+    ]);
+    // The 64 KiB prompt record has no usage key, so it is never decoded or parsed.
+    const transcriptParses = parse.mock.calls.filter(
+      ([text]) => typeof text === "string" && text.includes("2026-08-14T"),
+    );
+    expect(transcriptParses).toHaveLength(2);
+  });
+
+  it("parses records that span reads of the shared read buffer", async () => {
+    // The first record ends just before the 64 KiB read boundary, so each assistant
+    // record that follows starts in one read and ends in the next.
+    const filler = JSON.stringify({ type: "user", message: { content: "" } });
+    const first = filler.replace('""', `"${"x".repeat(65_500 - filler.length)}"`);
+    const assistant = (index: number) =>
+      assistantLine({
+        timestamp: "2026-08-14T10:00:00.000Z",
+        totalTokens: 10 + index,
+        sessionId: "session-a",
+        messageId: `message-${index}`,
+      });
+    const records = [first, ...Array.from({ length: 800 }, (_, index) => assistant(index))];
+    const file = await makeSessionFile(records.join("\n"), "transcript.jsonl");
+
+    const samples = await readClaudeUsageSamples(file);
+    expect(samples).toHaveLength(800);
+    expect(samples.map((sample) => sample.totalTokens)).toEqual(
+      Array.from({ length: 800 }, (_, index) => 10 + index),
+    );
+  });
+
   it("returns no samples for a missing transcript", async () => {
     const file = await makeSessionFile("", "transcript.jsonl");
 
@@ -240,6 +305,30 @@ describe("readRecentClaudeUsageSamples", () => {
     expect(second).toEqual(first);
   });
 
+  it("stops a cancelled read without caching its partial result", async () => {
+    const { root, projectDir } = await makeProjectsRoot();
+    // Several read chunks, so the scan has more to read after the cancel.
+    const records = Array.from({ length: 2_000 }, (_, index) => line(2, 1, `m${index}`)).join("");
+    await fs.writeFile(path.join(projectDir, "a.jsonl"), records);
+    const controller = new AbortController();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      controller.abort();
+      return handle;
+    });
+
+    await expect(
+      readRecentClaudeUsageSamples(root, Date.now(), controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // A scan that ran to the end would have cached the transcript; this one stopped.
+    vi.restoreAllMocks();
+    const reopen = vi.spyOn(fs, "open");
+    expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(2_000);
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps deduping appended records across the verified cache boundary", async () => {
     const { root, projectDir } = await makeProjectsRoot();
     const file = path.join(projectDir, "a.jsonl");
@@ -311,5 +400,34 @@ describe("readRecentClaudeUsageSamples", () => {
     const open = vi.spyOn(fs, "open");
     expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(5);
     expect(open.mock.calls.map(([file]) => path.basename(String(file)))).toEqual(["fresh.jsonl"]);
+  });
+});
+
+describe("usage reads around server shutdown", () => {
+  afterEach(() => {
+    resumeProviderUsageScans();
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses a read that arrives after shutdown and reads again once a server starts", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "");
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "synara-usage-shutdown-"));
+    tempDirs.push(homeDir);
+    const projectDir = path.join(homeDir, ".claude", "projects", "project-a");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "a.jsonl"), line(2, 7, "m1"));
+
+    stopProviderUsageScans();
+    const open = vi.spyOn(fs, "open");
+    const readdir = vi.spyOn(fs, "readdir");
+    expect(await loadLocalProviderUsageLines({ provider: "claudeAgent", homeDir })).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(readdir).not.toHaveBeenCalled();
+
+    // Nothing was cached for the refused read, so a restarted server reads the archive.
+    resumeProviderUsageScans();
+    const lines = await loadLocalProviderUsageLines({ provider: "claudeAgent", homeDir });
+    expect(lines.length).toBeGreaterThan(0);
+    expect(open).toHaveBeenCalled();
   });
 });
