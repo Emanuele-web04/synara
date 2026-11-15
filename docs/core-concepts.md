@@ -95,10 +95,18 @@ decoration pauses while its chat is hidden.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
   recovery; a ready connection does not mean the task finished or is being retried. An explicitly
-  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
-  a new instruction in the same conversation to verify prior operations and resume remaining work;
-  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
-  in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** starts
+  a new turn in the same conversation that asks the agent to verify prior operations and resume
+  remaining work; that instruction goes to the provider only, so the chat gains no message.
+  **Change model** opens the existing composer picker before continuing. Earlier failure notices
+  stay in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  After an interruption (Stop, quitting the app, a crash, or a restart), an empty composer's send
+  button becomes **Resume task** (filled play icon), and Enter does the same. It continues the
+  interrupted turn the same way, or sends the newest message again as written when it never
+  reached the provider (for example after **Unblock** abandoned a failed send). A resent message
+  keeps the plan it implements and its `/computer` access; the click counts as fresh consent, so
+  Resume from a remote device resends without computer access. A Stop double-click cannot
+  trigger it.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -120,7 +128,8 @@ asking.
 
 After an unexpected server shutdown, Synara automatically continues ordinary chats that
 were actively running, using their saved conversation and provider selection. The continuation
-asks the agent to verify existing operations before repeating them. Chats waiting for approval
+asks the agent to verify existing operations before repeating them. It goes to the provider
+only, without a chat message; chats resumed after a confirmed quit continue the same way. Chats waiting for approval
 or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
 and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
 still apply. This starts a guarded continuation, not a replay of an in-flight tool call.

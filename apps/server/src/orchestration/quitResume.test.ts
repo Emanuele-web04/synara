@@ -193,8 +193,8 @@ describe("crash recovery", () => {
     });
     expect(plan.commands).toHaveLength(1);
     expect(plan.commands[0]).toMatchObject({
+      type: "thread.turn.resume",
       threadId: "running",
-      dispatchOrigin: "automation",
       resumePrecondition: { recordedTurnId: "running-turn" },
     });
   });
@@ -295,7 +295,7 @@ describe("buildQuitInterruptCommand", () => {
 });
 
 describe("planQuitResumeTurns", () => {
-  it("queues an automatic continuation using each unchanged thread's runtime settings", () => {
+  it("plans a hidden continuation for each unchanged thread", () => {
     const plan = planQuitResumeTurns({
       record: makeRecord([{ threadId: "a", turnId: "a-turn" }]),
       threads: [makeThread("a", { runtimeMode: "approval-required", interactionMode: "plan" })],
@@ -306,26 +306,16 @@ describe("planQuitResumeTurns", () => {
     expect(plan.skipped).toEqual([]);
     expect(plan.commands).toEqual([
       {
-        type: "thread.turn.start",
+        // A hidden continuation: the prompt reaches the provider, not the chat.
+        type: "thread.turn.resume",
         commandId: `quit-resume:${RECORD_ID}:a`,
         threadId: threadId("a"),
-        message: {
-          messageId: `quit-resume:${RECORD_ID}:a`,
-          role: "user",
-          text: PROMPT,
-          attachments: [],
-        },
-        dispatchMode: "queue",
-        dispatchOrigin: "automation",
-        runtimeMode: "approval-required",
-        interactionMode: "plan",
+        continuationPrompt: PROMPT,
         // Re-checked by the decider inside the serialized dispatch.
         resumePrecondition: { recordedTurnId: turnId("a-turn"), recordedAt: RECORDED_AT },
         createdAt: NOW,
       },
     ]);
-    // Model selection is intentionally omitted so the thread's current selection is used.
-    expect(plan.commands[0]).not.toHaveProperty("modelSelection");
   });
 
   it("resumes turns that ended as interrupted or error, not ones that completed on their own", () => {

@@ -10,6 +10,26 @@ import { Effect, Schedule } from "effect";
 import { createAttachmentId } from "../attachmentStore";
 import { slugifyGroupTitle } from "../groupWorkspaceScaffold";
 
+/**
+ * A remote device cannot grant computer access (the dispatch handler refuses its
+ * computer-enabling commands). Its Resume still resends, just without the
+ * consent that would restore a resent message's computer access.
+ */
+export function withoutRemoteResumeComputerGrant(
+  command: ClientOrchestrationCommand,
+  principalOwnerId: string,
+): ClientOrchestrationCommand {
+  if (
+    command.type !== "thread.turn.resume" ||
+    command.computerControlGeneration === undefined ||
+    !principalOwnerId.startsWith("remote-device:")
+  ) {
+    return command;
+  }
+  const { computerControlGeneration: _grant, ...withoutGrant } = command;
+  return withoutGrant;
+}
+
 export interface DispatchCommandNormalizerResult<E> {
   readonly command: OrchestrationCommand;
   /**

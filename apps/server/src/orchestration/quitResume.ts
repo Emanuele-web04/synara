@@ -21,8 +21,9 @@
  * before commands are admitted (so no new quit can race it; atomic rename then
  * delete — a crash in between loses the resume rather than doubling it), then
  * `resumeQuitInterruptedChats` filters out threads that moved on since the record
- * was written and dispatches one ordinary user turn per remaining thread with the
- * recorded continuation prompt. Each turn carries a `resumePrecondition` so the
+ * was written and dispatches one `thread.turn.resume` per remaining thread: the
+ * recorded continuation prompt goes to the provider without a chat message (an
+ * undelivered request is resent instead). Each carries a `resumePrecondition` so the
  * decider re-checks the same conditions atomically inside the serialized
  * dispatch — a client command landing between the plan and the dispatch cannot
  * slip a stale continuation through. No record → one `exists` check and nothing
@@ -46,7 +47,6 @@ import type {
 import {
   CommandId,
   IsoDateTime,
-  MessageId,
   QUIT_RESUME_MAX_PROMPT_CHARS,
   QUIT_RESUME_MAX_THREADS,
   ThreadId,
@@ -105,7 +105,10 @@ export type QuitResumeRecord = typeof QuitResumeRecord.Type;
 
 const decodeQuitResumeRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(QuitResumeRecord));
 
-type ThreadTurnStartCommand = Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }>;
+type ThreadTurnResumeCommand = Extract<
+  OrchestrationCommand,
+  { readonly type: "thread.turn.resume" }
+>;
 type ThreadTurnInterruptCommand = Extract<
   OrchestrationCommand,
   { readonly type: "thread.turn.interrupt" }
@@ -138,7 +141,7 @@ export type QuitResumeSkipReason =
   | ThreadResumePreconditionViolation;
 
 export interface QuitResumePlan {
-  readonly commands: ReadonlyArray<ThreadTurnStartCommand>;
+  readonly commands: ReadonlyArray<ThreadTurnResumeCommand>;
   readonly skipped: ReadonlyArray<{
     readonly threadId: ThreadId;
     readonly reason: QuitResumeSkipReason;
@@ -304,13 +307,12 @@ export function buildQuitInterruptCommand(input: {
  * only when it still exists, is not deleted, its project exists, and
  * `threadResumePreconditionViolation` is clear (not archived, nothing in flight,
  * no replacement moved it on or turn completed on its own since the record).
- * The automatic continuation
- * uses the thread's own runtime/interaction settings (model omitted → provider
- * reactor uses the thread's current selection) and carries
- * the same precondition for the decider to enforce atomically.
+ * The automatic continuation is a `thread.turn.resume` (no chat message) that
+ * uses the thread's own settings and current model selection and carries the
+ * same precondition for the decider to enforce atomically.
  *
- * Command and message ids derive from the record so an accidental re-run
- * collides with the engine's receipt dedup instead of starting a second turn.
+ * Command ids derive from the record so an accidental re-run collides with the
+ * engine's receipt dedup instead of starting a second turn.
  */
 export function planQuitResumeTurns(input: {
   readonly record: QuitResumeRecord;
@@ -322,7 +324,7 @@ export function planQuitResumeTurns(input: {
   const liveProjectIds = new Set(
     input.projects.filter((project) => project.deletedAt === null).map((project) => project.id),
   );
-  const commands: ThreadTurnStartCommand[] = [];
+  const commands: ThreadTurnResumeCommand[] = [];
   const skipped: Array<{ threadId: ThreadId; reason: QuitResumeSkipReason }> = [];
   const skip = (threadId: ThreadId, reason: QuitResumeSkipReason) => {
     skipped.push({ threadId, reason });
@@ -352,20 +354,13 @@ export function planQuitResumeTurns(input: {
       continue;
     }
     const key = `quit-resume:${input.record.recordId}:${entry.threadId}`;
+    // Same hidden continuation as the composer's Resume: no chat message, and a
+    // request that never reached the provider is delivered again instead.
     commands.push({
-      type: "thread.turn.start",
+      type: "thread.turn.resume",
       commandId: CommandId.makeUnsafe(key),
       threadId: entry.threadId,
-      message: {
-        messageId: MessageId.makeUnsafe(key),
-        role: "user",
-        text: input.record.continuationPrompt,
-        attachments: [],
-      },
-      dispatchMode: "queue",
-      dispatchOrigin: "automation",
-      runtimeMode: thread.runtimeMode,
-      interactionMode: thread.interactionMode,
+      continuationPrompt: input.record.continuationPrompt,
       resumePrecondition,
       createdAt: input.now,
     });

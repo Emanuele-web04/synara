@@ -1028,6 +1028,9 @@ export const ThreadGoalContinuationTrigger = Schema.Literals([
   "interaction-mode-updated",
   "turn-completed",
   "startup-recovery",
+  // `thread.turn.resume`: continue an interrupted or failed turn (Resume,
+  // Continue task, quit resume) without adding a chat message. No goal needed.
+  "manual-resume",
 ]);
 export type ThreadGoalContinuationTrigger = typeof ThreadGoalContinuationTrigger.Type;
 /**
@@ -1768,6 +1771,17 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 export const ComputerControlMode = Schema.Literals(["off", "request", "chat"]);
 export type ComputerControlMode = typeof ComputerControlMode.Type;
 
+export const TURN_RESUME_MAX_PROMPT_CHARS = 2_000;
+const TurnResumePrompt = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(TURN_RESUME_MAX_PROMPT_CHARS),
+);
+
+const ThreadResumePreconditionSchema = Schema.Struct({
+  /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+  recordedTurnId: Schema.NullOr(TurnId),
+  recordedAt: IsoDateTime,
+});
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   asyncUserInputResponse: Schema.optional(AsyncUserInputResponse),
@@ -1803,13 +1817,38 @@ export const ThreadTurnStartCommand = Schema.Struct({
   // has nothing in flight, and no turn finished on its own since the record was
   // taken (the recorded turn itself, or any later one). Clients cannot set it:
   // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
-  resumePrecondition: Schema.optional(
-    Schema.Struct({
-      /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
-      recordedTurnId: Schema.NullOr(TurnId),
-      recordedAt: IsoDateTime,
-    }),
-  ),
+  resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Continues the thread's interrupted work without adding a chat message: the
+ * newest request is delivered again when it never reached the provider,
+ * otherwise an interrupted or failed latest turn continues from the
+ * conversation (t3code and Codex do the same).
+ */
+const ThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  computerControlGeneration: Schema.optional(NonNegativeInt),
+  // Server-only (quit resume), stripped from clients by ClientThreadTurnResumeCommand:
+  // the same atomic re-check `thread.turn.start` applies, and the recorded prompt.
+  resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  continuationPrompt: Schema.optional(TurnResumePrompt),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  /**
+   * The resuming person's current computer-control generation: their consent
+   * to restore the computer access a resent message asked for. Without it (a
+   * remote device, an automatic resume) the resend runs without computer access.
+   */
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 
@@ -2023,6 +2062,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadTurnResumeCommand,
   ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
@@ -2062,6 +2102,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ClientThreadTurnResumeCommand,
   ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
@@ -2690,6 +2731,10 @@ export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
   goalStartedAt: Schema.NullOr(IsoDateTime),
   trigger: ThreadGoalContinuationTrigger,
   sourceTurnId: Schema.optional(TurnId),
+  /** "manual-resume" only: provider input for the continuation; a default otherwise. */
+  resumePrompt: Schema.optional(TurnResumePrompt),
+  /** "manual-resume" only: consent to restore a resent message's computer access. */
+  resumeComputerControlGeneration: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 
@@ -3265,7 +3310,7 @@ export type OrchestrationReconcileProviderDeliveryResult =
  * the renderer can reply to the quit request only after the record exists.
  */
 export const QUIT_RESUME_MAX_THREADS = 256;
-export const QUIT_RESUME_MAX_PROMPT_CHARS = 2_000;
+export const QUIT_RESUME_MAX_PROMPT_CHARS = TURN_RESUME_MAX_PROMPT_CHARS;
 
 export const OrchestrationPrepareQuitResumeInput = Schema.Struct({
   threadIds: Schema.Array(ThreadId).check(
