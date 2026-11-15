@@ -25,7 +25,7 @@ export function SpaceEmptyState(props: {
   // would open a picker with nothing in it.
   if (!props.hasProjectsElsewhere) {
     return (
-      <p className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
+      <p className="px-2 pt-4 text-center text-ui text-muted-foreground">
         {t("common:emptyStates_noProjects")}
       </p>
     );

@@ -7,7 +7,7 @@ import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import {
   SafariAccessOnboarding,
-  SafariAccessSetupButton,
+  SafariAccessSettingsSection,
   SAFARI_ACCESS_STORAGE_KEY,
 } from "./SafariAccessOnboarding";
 
@@ -48,7 +48,7 @@ function Harness() {
       <SafariAccessOnboarding startup>
         <p>Next welcome</p>
       </SafariAccessOnboarding>
-      <SafariAccessSetupButton />
+      <SafariAccessSettingsSection />
     </>
   );
 }

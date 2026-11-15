@@ -245,6 +245,20 @@ export function providerModelsPrefetchQueryOptions(input: {
         cwd,
         priority,
       });
+    case "cline":
+      return providerModelsQueryOptions({
+        provider: "cline",
+        binaryPath: settings.clineBinaryPath || null,
+        cwd,
+        priority,
+      });
+    case "commandCode":
+      return providerModelsQueryOptions({
+        provider: "commandCode",
+        binaryPath: settings.commandCodeBinaryPath || null,
+        cwd,
+        priority,
+      });
     case "devin":
       return providerModelsQueryOptions({
         provider: "devin",

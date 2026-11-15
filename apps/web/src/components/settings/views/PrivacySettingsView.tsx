@@ -4,13 +4,13 @@
 // Layer: Settings view
 // Exports: PrivacySettingsView
 
-import { SafariAccessSetupButton } from "~/components/SafariAccessOnboarding";
+import { SafariAccessSettingsSection } from "~/components/SafariAccessOnboarding";
 import { ProductAnalyticsSettingsPanel } from "~/components/settings/ProductAnalyticsSettingsPanel";
 
 export function PrivacySettingsView() {
   return (
     <div className="space-y-6">
-      <SafariAccessSetupButton />
+      <SafariAccessSettingsSection />
       <ProductAnalyticsSettingsPanel />
     </div>
   );

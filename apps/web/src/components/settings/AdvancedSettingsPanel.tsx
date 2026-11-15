@@ -265,7 +265,7 @@ export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: numb
           status={
             shouldOfferRecoveryTools
               ? "Visible because projects exist but no chat history is currently available."
-              : "Shown automatically only when recovery actions are relevant."
+              : "No issues detected."
           }
           control={
             <Button

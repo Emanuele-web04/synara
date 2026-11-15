@@ -140,7 +140,7 @@ interface OpenInPickerFrameProps {
 // Quiet square ghost button shared by both compact controls so the pair reads as
 // one unit; `data-popup-open` keeps the menu trigger highlighted while its menu is up.
 const COMPACT_ACTION_BUTTON_CLASS_NAME =
-  "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-foreground";
+  "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-foreground";
 
 function OpenInPickerFrame(props: OpenInPickerFrameProps) {
   const { t } = useTranslation();

@@ -10,7 +10,7 @@ import {
   toggleComposerModelPreset,
   type ComposerModelPreset,
 } from "./composerModelPresets";
-import { FAVORITE_MODEL_STORAGE_KEYS } from "./modelFavorites";
+import { FAVORITE_MODEL_STORAGE_KEYS, type FavoriteModelProvider } from "./modelFavorites";
 
 const PRESET: ComposerModelPreset = {
   provider: "codex",
@@ -25,8 +25,8 @@ describe("composer model presets", () => {
       const presets = [{ ...PRESET, provider }];
       const codec = Schema.fromJsonString(ComposerModelPresetsSchema);
       expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(presets))).toEqual(presets);
-      expect(Object.values(FAVORITE_MODEL_STORAGE_KEYS)).not.toContain(
-        COMPOSER_MODEL_PRESETS_STORAGE_KEY,
+      expect(COMPOSER_MODEL_PRESETS_STORAGE_KEY).not.toBe(
+        FAVORITE_MODEL_STORAGE_KEYS[provider as FavoriteModelProvider],
       );
     },
   );

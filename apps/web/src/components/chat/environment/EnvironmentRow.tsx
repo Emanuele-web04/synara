@@ -31,6 +31,7 @@ export const ENVIRONMENT_ROW_CLASS_NAME = cn(
   "outline-none",
   ELEVATED_HOVER_SURFACE_CLASS_NAME,
   "focus-visible:bg-[var(--color-background-elevated-secondary)]",
+  "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--color-border-focus)]",
   "disabled:pointer-events-none disabled:opacity-50",
 );
 

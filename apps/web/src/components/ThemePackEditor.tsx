@@ -64,7 +64,9 @@ const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 /** Borderless text action in the editor's header chrome (Copy, Import). */
 const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
-  "rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)]",
+  "relative rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)] outline-none",
+  "focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
+  "pointer-coarse:after:absolute pointer-coarse:after:-inset-y-3 pointer-coarse:after:-inset-x-2.5 pointer-coarse:after:content-['']",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
 );
 
@@ -293,12 +295,12 @@ export function ThemePackEditor({
           />
         </ThemeRow>
 
-        <ThemeRow label={t("common:theme_uiFont")}>
+        <ThemeRow label={t("common:theme_uiFont")} labelId={`theme-row-${variant}-ui-font`}>
           <div className="flex flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.ui ?? ""}
               placeholder={t("common:theme_systemDefault")}
-              ariaLabel={t("common:uIFont", { value0: titleLabel })}
+              ariaLabelledBy={`theme-row-${variant}-ui-font`}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
             {systemUiFont ? (
@@ -309,12 +311,12 @@ export function ThemePackEditor({
           </div>
         </ThemeRow>
 
-        <ThemeRow label={t("common:theme_codeFont")}>
+        <ThemeRow label={t("common:theme_codeFont")} labelId={`theme-row-${variant}-code-font`}>
           <div className="flex flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.code ?? ""}
               placeholder={t("common:jetBrainsMono")}
-              ariaLabel={t("common:codeFont", { value0: titleLabel })}
+              ariaLabelledBy={`theme-row-${variant}-code-font`}
               mono
               onChange={(next) =>
                 updateThemeFonts(variant, { code: next.length > 0 ? next : null })
@@ -350,17 +352,17 @@ export function ThemePackEditor({
                   aria-label={t("common:translucentSidebarOnly", { value0: titleLabel })}
                 />
               </ThemeRow>
-              <ThemeRow label={t("common:opacity")}>
+              <ThemeRow label={t("common:opacity")} labelId={`theme-row-${variant}-opacity`}>
                 <ThemeSlider
                   value={translucency.opacity}
                   min={WINDOW_TRANSLUCENCY_OPACITY_MIN}
                   max={100}
                   suffix="%"
                   onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
-                  ariaLabel={t("common:translucencyOpacity", { value0: titleLabel })}
+                  ariaLabelledBy={`theme-row-${variant}-opacity`}
                 />
               </ThemeRow>
-              <ThemeRow label={t("common:blur")}>
+              <ThemeRow label={t("common:blur")} labelId={`theme-row-${variant}-blur`}>
                 {readDesktopWindowTranslucency() === "compositor" ? (
                   // Hyprland blurs the transparent window with its own `decoration:blur`
                   // settings; there is no per-window radius for the app to set.
@@ -389,7 +391,7 @@ export function ThemePackEditor({
                       min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
                       max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
                       onChange={(next) => setWindowTranslucency(variant, { blur: next })}
-                      ariaLabel={t("common:backgroundBlur", { value0: titleLabel })}
+                      ariaLabelledBy={`theme-row-${variant}-blur`}
                     />
                   </>
                 )}
@@ -398,12 +400,12 @@ export function ThemePackEditor({
           </DisclosureRegion>
         </div>
 
-        <ThemeRow label={t("common:theme_contrast")}>
+        <ThemeRow label={t("common:theme_contrast")} labelId={`theme-row-${variant}-contrast`}>
           <ThemeSlider
             value={theme.contrast}
             max={100}
             onChange={(next) => updateThemePack(variant, { contrast: next })}
-            ariaLabel={t("common:contrast", { value0: titleLabel })}
+            ariaLabelledBy={`theme-row-${variant}-contrast`}
           />
         </ThemeRow>
       </div>
@@ -413,7 +415,15 @@ export function ThemePackEditor({
 
 // ── Row primitive ─────────────────────────────────────────────────────────
 
-function ThemeRow({ label, children }: { label: string; children: React.ReactNode }) {
+function ThemeRow({
+  label,
+  labelId,
+  children,
+}: {
+  label: string;
+  labelId?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div
       className={cn(
@@ -421,7 +431,9 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
         "flex min-h-12 items-center justify-between gap-3",
       )}
     >
-      <span className="text-ui leading-snug text-foreground/90">{label}</span>
+      <span id={labelId} className="text-ui leading-snug text-foreground/90">
+        {label}
+      </span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>
   );
@@ -543,7 +555,7 @@ export function ColorPill({
               type="button"
               className={cn(
                 SETTINGS_CONTROL_RADIUS_CLASS_NAME,
-                "group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden border px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                "group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden border px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
               )}
               // borderColor rides the readable color so a near-white fill still shows
               // a crisp edge against the (also near-white) settings card.
@@ -630,13 +642,13 @@ function CodeThemeSelectOption({ label, theme }: { label: string; theme: ChromeT
 function FontInput({
   value,
   placeholder,
-  ariaLabel,
+  ariaLabelledBy,
   mono: monoProp,
   onChange,
 }: {
   value: string;
   placeholder: string;
-  ariaLabel: string;
+  ariaLabelledBy: string;
   mono?: boolean;
   onChange: (next: string) => void;
 }) {
@@ -653,7 +665,7 @@ function FontInput({
       }}
       onBlur={() => setDraft(null)}
       spellCheck={false}
-      aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
       className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "w-56", mono && "font-chat-code")}
     />
   );
@@ -668,7 +680,7 @@ function ThemeSlider({
   suffix = "",
   valueLabel,
   onChange,
-  ariaLabel,
+  ariaLabelledBy,
 }: {
   value: number;
   min?: number;
@@ -677,7 +689,7 @@ function ThemeSlider({
   /** Shown instead of the number, e.g. while the value is still the automatic default. */
   valueLabel?: string;
   onChange: (next: number) => void;
-  ariaLabel: string;
+  ariaLabelledBy: string;
 }) {
   const { t } = useTranslation();
 
@@ -693,8 +705,8 @@ function ThemeSlider({
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        aria-label={ariaLabel}
-        className="theme-slider h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-transparent focus-visible:outline-none"
+        aria-labelledby={ariaLabelledBy}
+        className="theme-slider h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         style={{
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${fillPct}%, var(--input) ${fillPct}%, var(--input) 100%)`,
         }}

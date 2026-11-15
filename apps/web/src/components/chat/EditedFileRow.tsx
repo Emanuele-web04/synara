@@ -64,7 +64,7 @@ export function EditedFileRow(props: EditedFileRowProps) {
       <button
         type="button"
         aria-label={t("chat:reviewChangesTo", { value0: props.filePath })}
-        className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={props.onReview}
       >
         <FileEntryIcon

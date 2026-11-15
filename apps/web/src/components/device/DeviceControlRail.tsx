@@ -128,7 +128,7 @@ export function DeviceControlRail(props: {
                         "flex size-7 cursor-pointer items-center justify-center rounded-md outline-none",
                         "transition-colors duration-220 motion-reduce:transition-none",
                         "hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
-                        "focus-visible:ring-1 focus-visible:ring-ring/60",
+                        "focus-visible:ring-1 focus-visible:ring-ring",
                         "disabled:pointer-events-none disabled:opacity-40",
                         // A recording in progress is the one state worth
                         // colouring: it keeps costing disk until it is stopped.

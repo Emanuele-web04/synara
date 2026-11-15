@@ -106,13 +106,15 @@ const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
 const TOAST_ACTION_BUTTON_SIZE = "xs";
 const TOAST_ACTION_BUTTON_VARIANT = "ghost";
 const TOAST_ACTION_BUTTON_CLASS_NAME =
-  "self-start rounded-md px-2 font-sans font-medium text-ui text-[var(--notification-fg)]/80 sm:text-ui [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35";
+  "self-start rounded-md px-2 font-sans font-medium text-ui text-[var(--notification-fg)]/80 sm:text-ui [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]";
 
 const ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME =
-  "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)]/35 disabled:pointer-events-none disabled:opacity-55";
+  "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)] disabled:pointer-events-none disabled:opacity-55";
 
 function toastTone(type: ToastObject<ThreadToastData>["type"]): NotificationTone {
-  return type === "error" ? "error" : "default";
+  if (type === "error") return "error";
+  if (type === "warning") return "warning";
+  return "default";
 }
 
 function toastRootClassName(
@@ -126,8 +128,19 @@ function toastRootClassName(
   );
 }
 
+// Success and info carry their own icon color (like the preview mock's green
+// check); error/warning are tinted by their notification surface tone instead.
+const TOAST_ICON_TYPE_CLASS_NAME: Partial<Record<keyof typeof TOAST_ICONS, string>> = {
+  success: "text-[var(--success)]/92",
+  info: "text-[var(--info)]/92",
+};
+
 function toastIconClassName(type: ToastObject<ThreadToastData>["type"]): string {
-  return cn(NOTIFICATION_ICON_CLASS_NAME, type === "loading" && "animate-spin opacity-90");
+  return cn(
+    NOTIFICATION_ICON_CLASS_NAME,
+    type && TOAST_ICON_TYPE_CLASS_NAME[type as keyof typeof TOAST_ICONS],
+    type === "loading" && "animate-spin opacity-90",
+  );
 }
 
 type ToastPosition =
@@ -383,7 +396,7 @@ function ToastCloseButton({
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
         // toast still gates its content with pointer-events-none.
-        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35 disabled:pointer-events-none disabled:opacity-55",
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)] disabled:pointer-events-none disabled:opacity-55",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
@@ -557,7 +570,7 @@ function ToastSurface({
               ? "truncate whitespace-nowrap"
               : compactContextual
                 ? "truncate whitespace-nowrap font-medium"
-                : "break-words",
+                : "break-words font-medium",
           )}
           data-slot="toast-title"
         />
@@ -584,7 +597,7 @@ function ToastSurface({
       {compactContextual && toast.actionProps ? (
         <Toast.Action
           className={cn(
-            "mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-[var(--notification-fg)]/76 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+            "mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-[var(--notification-fg)]/76 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]",
             toast.actionProps.className,
           )}
           data-slot="toast-action"
@@ -671,7 +684,7 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
           return (
             <Toast.Root
               className={cn(
-                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
+                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none outline-none [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s] focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)] focus-visible:ring-offset-1 focus-visible:ring-offset-transparent",
                 archiveUndoToast
                   ? cn(
                       ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME,

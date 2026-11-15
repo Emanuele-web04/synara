@@ -92,7 +92,7 @@ export function PullRequestStackPopover({
                   type="button"
                   aria-current={current ? "page" : undefined}
                   className={cn(
-                    "group relative flex w-full items-start gap-3 rounded-md px-2 py-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+                    "group relative flex w-full items-start gap-3 rounded-md px-2 py-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring",
                     current
                       ? "bg-[var(--color-background-elevated-secondary)]"
                       : "hover:bg-[var(--color-background-elevated-secondary)]",

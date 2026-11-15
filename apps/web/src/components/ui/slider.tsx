@@ -115,7 +115,7 @@ function Slider({
       className={cn(
         "group/slider relative flex w-full touch-none select-none items-center data-disabled:cursor-not-allowed data-disabled:opacity-64",
         size === "large"
-          ? "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(7)] [--slider-track-size:--spacing(6)]"
+          ? "[--slider-mark-size:--spacing(1.25)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3.5)]"
           : "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3)]",
         className,
       )}
@@ -170,7 +170,7 @@ function Slider({
               ? { getAriaValueText: (_formatted: string, next: number) => getAriaValueText(next) }
               : {})}
             className={cn(
-              "size-[var(--slider-thumb-size)] cursor-grab rounded-full outline-none transition-[box-shadow] duration-150 ease-out has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)]/60 has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing",
+              "size-[var(--slider-thumb-size)] cursor-grab rounded-full outline-none transition-[box-shadow] duration-150 ease-out has-focus-visible:ring-2 has-focus-visible:ring-[color:var(--color-border-focus)] has-focus-visible:ring-offset-1 has-focus-visible:ring-offset-background group-data-pressed/slider:cursor-grabbing",
               magnetic && MAGNETIC_MOTION_CLASS,
             )}
             data-slot="slider-thumb"

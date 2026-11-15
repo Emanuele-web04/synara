@@ -82,7 +82,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-ui-lg font-medium text-[var(--color-text-foreground)] outline-none focus-visible:ring-1 focus-visible:ring-ring/60 " +
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-ui-lg font-medium text-[var(--color-text-foreground)] outline-none focus-visible:ring-1 focus-visible:ring-ring " +
       ELEVATED_HOVER_SURFACE_CLASS_NAME;
     cancelBtn.addEventListener("click", () => cleanup(false));
 
@@ -91,7 +91,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
     confirmBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-ui-lg font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-ui-lg font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring";
 
     confirmBtn.addEventListener("click", () => cleanup(true));
 

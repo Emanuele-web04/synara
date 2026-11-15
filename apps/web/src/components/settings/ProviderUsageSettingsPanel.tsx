@@ -65,7 +65,7 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
     case "needs-auth":
       return {
         label: t("settings:providerUsage_needsAuth"),
-        className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
+        className: "bg-amber-500/12 text-amber-700 dark:text-amber-400",
       };
     case "unsupported":
       return {

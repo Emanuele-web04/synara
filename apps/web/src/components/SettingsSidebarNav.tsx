@@ -131,8 +131,12 @@ export function SettingsSidebarNav(props: {
   return (
     <div className="px-1.5 py-1.5">
       <div className="mb-3 px-1">
+        <label htmlFor="settings-search" className={SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME}>
+          Search
+        </label>
         <SearchInput
           shape="capsule"
+          id="settings-search"
           value={query}
           spellCheck={false}
           autoCorrect="off"

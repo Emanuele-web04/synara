@@ -110,7 +110,7 @@ function MockupSurface({ variant }: { variant: ThemeVariant }) {
           />
         </div>
         <div
-          className="min-h-0 flex-1 rounded-t-md"
+          className="min-h-0 flex-1 overflow-hidden rounded-t-md"
           style={{
             marginLeft: MOCKUP_LAYOUT.cardInsetX,
             marginRight: MOCKUP_LAYOUT.cardInsetX,
@@ -151,9 +151,14 @@ function MockupSurface({ variant }: { variant: ThemeVariant }) {
  *  a mirrored dark rendering on the right half, so both halves keep visible skeleton
  *  rows after the split. */
 function ThemeModeMockup({ mode }: { mode: ThemeMode }) {
-  if (mode !== "system") return <MockupSurface variant={mode} />;
+  if (mode !== "system")
+    return (
+      <div role="img" aria-label={`${mode} theme preview`} className="absolute inset-0">
+        <MockupSurface variant={mode} />
+      </div>
+    );
   return (
-    <div aria-hidden className="absolute inset-0">
+    <div role="img" aria-label="System theme preview" className="absolute inset-0">
       <MockupSurface variant="light" />
       <div className="absolute inset-0" style={{ clipPath: "inset(0 0 0 50%)" }}>
         <div className="absolute inset-0 -scale-x-100">
@@ -191,14 +196,13 @@ export function ThemeModePicker({
             type="button"
             role="radio"
             aria-checked={isActive}
-            className="group flex min-w-0 flex-col items-center gap-1.5 focus-visible:outline-none"
+            className="group flex min-w-0 flex-col items-center gap-1.5 rounded-[16px] outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             onClick={() => onValueChange(choice.value)}
             {...radioItemProps(choice.value)}
           >
             <div
               className={cn(
                 "w-full rounded-[14px] border-2 p-[3px] transition-colors motion-reduce:transition-none",
-                "group-focus-visible:ring-2 group-focus-visible:ring-ring/50",
                 isActive
                   ? "border-foreground"
                   : "border-transparent group-hover:border-foreground/25",
