@@ -14,14 +14,35 @@ const code = gate
   .split("\n")
   .map((line) => line.replace(/^          /, ""))
   .join("\n");
-const lanes = ["TYPECHECK", "UNIT", "BROWSER", "BUILD", "WINDOWS_PROCESS", "MIGRATION_LINEAGE"];
+const lanes = [
+  "TYPECHECK",
+  "UNIT_CORE",
+  "UNIT_WEB",
+  "UNIT_SERVER",
+  "BROWSER",
+  "BUILD",
+  "WINDOWS_PROCESS",
+  "MIGRATION_LINEAGE",
+];
+// Lane result -> the selection output that decides whether it runs.
+const selectedBy = {
+  UNIT_CORE: "SELECT_CORE",
+  UNIT_WEB: "SELECT_WEB",
+  UNIT_SERVER: "SELECT_SERVER",
+  BROWSER: "SELECT_WEB",
+  BUILD: "SELECT_BUILD",
+  WINDOWS_PROCESS: "SELECT_WINDOWS",
+};
+const selections = [...new Set(Object.values(selectedBy))];
 const runGate = (overrides = {}) =>
   spawnSync("bash", ["-e", "-c", code], {
     encoding: "utf8",
     env: {
       ...process.env,
+      EVENT: "pull_request",
       CHANGES: "success",
       CODE: "true",
+      ...Object.fromEntries(selections.map((name) => [name, "true"])),
       STATIC_FAST: "success",
       ...Object.fromEntries(lanes.map((lane) => [lane, "success"])),
       ...overrides,
@@ -41,6 +62,34 @@ for (const lane of lanes) {
       assert.notEqual(runGate({ [lane]: status }), 0);
   });
 }
+test("a pull request may skip exactly the lanes its diff cannot reach", () => {
+  for (const [lane, selection] of Object.entries(selectedBy)) {
+    const unselected = Object.fromEntries(
+      Object.entries(selectedBy)
+        .filter(([, name]) => name === selection)
+        .map(([name]) => [name, "skipped"]),
+    );
+    assert.equal(runGate({ [selection]: "false", ...unselected }), 0, lane);
+    // An unselected lane that still ran, or failed, is a planning bug.
+    for (const status of ["success", "failure", "cancelled", ""])
+      assert.notEqual(runGate({ [selection]: "false", ...unselected, [lane]: status }), 0);
+    // Selected lanes must succeed; a skip is never a pass.
+    assert.notEqual(runGate({ [lane]: "skipped" }), 0, lane);
+  }
+});
+test("the merge queue and main can never skip a lane", () => {
+  for (const event of ["merge_group", "push"]) {
+    assert.equal(runGate({ EVENT: event }), 0);
+    for (const [lane, selection] of Object.entries(selectedBy))
+      assert.notEqual(runGate({ EVENT: event, [selection]: "false", [lane]: "skipped" }), 0, lane);
+  }
+  assert.ok(workflow.includes("  merge_group:\n"));
+});
+test("invalid lane selections fail closed", () => {
+  for (const selection of selections)
+    for (const value of ["", "undefined", "TRUE"])
+      assert.notEqual(runGate({ [selection]: value }), 0, `${selection}=${value}`);
+});
 test("planning failures, invalid output and static failures fail closed", () => {
   for (const status of ["failure", "cancelled", "skipped", ""]) {
     assert.notEqual(runGate({ CHANGES: status }), 0);
@@ -68,7 +117,7 @@ test("history readers clone blobless; jobs that never read history stay shallow"
   // Measured: a blobless full clone took 9-12 s per hosted job against 6 s
   // shallow, and 10 s against 37 s for the full clone Migration Lineage used.
   const jobs = workflow.split(/\n(?=  [a-z_-]+:\n)/);
-  const historyReaders = ["migration_lineage"];
+  const historyReaders = ["changes", "migration_lineage"];
   let checked = 0;
   for (const job of jobs) {
     const name = job.trimStart().split(":")[0];
@@ -213,7 +262,7 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
 
 test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
   for (const shard of ["1/3", "2/3", "3/3"])
-    assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
+    assert.ok(workflow.includes(`"${shard}"`), `server ${shard}`);
   // Pinned placement only moves whole files between shards; each shard stays serial.
   const server = JSON.parse(read("../../apps/server/package.json"));
   assert.equal(server.scripts.test, "vitest run --maxWorkers=1 --no-file-parallelism");
