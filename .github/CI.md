@@ -310,6 +310,23 @@ nothing. The miss path (one designated saver, every other lane restore-only)
 follows from the step conditions guarded by `ci-contracts.test.mjs`. It was not
 exercised on hosted runners, because this branch does not change `bun.lock`.
 
+### Server shards use every core
+
+The serial server setting (`--maxWorkers=1 --no-file-parallelism`) dates from
+v0.2.2, when parallel worker forks kept a root `bun run test` from exiting under
+Turbo. It left three of a hosted runner's four cores idle. The server config now
+sets `maxWorkers` to `os.availableParallelism()` and keeps file parallelism on;
+every file still runs in its own worker process with its own temp directories
+and SQLite databases. Shard placement (`vitest.shards.ts`) is unchanged.
+
+A local 4-worker run of the whole server suite (macOS, 694 files) took 414 s of
+wall time for 978 s of test time. Its only failures were four files that also
+fail serially on macOS (`accountSession`, `hostConnectivity.integration`,
+`remotePairing/management.accountScope`, `DatabaseLifecycleLock`), so none was
+caused by parallel execution. A shard's wall time is now bounded by its slowest
+file (`ProviderCommandReactor.test.ts`, about 150–167 s serially on hosted
+Linux), not by the sum of its files.
+
 ## Release pipeline: November 2026
 
 An audit of 20 tag runs (`v1.0.6-remote.31` to `v1.5.2`, October 25 to
