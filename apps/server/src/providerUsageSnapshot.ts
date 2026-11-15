@@ -101,12 +101,21 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
 let usageScanController = new AbortController();
 
 /**
- * Abandons in-flight usage archive reads, as on server shutdown. Their partial results
- * are neither cached nor returned; a later snapshot reads afresh.
+ * Server shutdown: abandons in-flight usage archive reads and refuses new ones. Their
+ * partial results are neither cached nor returned. The controller stays aborted on
+ * purpose: a usage request that reaches the server while it is shutting down would
+ * otherwise start a fresh multi-second read that holds the process open, which is what
+ * the cancellation exists to prevent.
  */
-export function cancelProviderUsageScans(): void {
+export function stopProviderUsageScans(): void {
   usageScanController.abort();
-  usageScanController = new AbortController();
+}
+
+/** Server start: allows reads again in a process where an earlier server stopped them. */
+export function resumeProviderUsageScans(): void {
+  if (usageScanController.signal.aborted) {
+    usageScanController = new AbortController();
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1116,6 +1125,10 @@ async function getCachedProviderUsageSnapshot(input: {
   }
 
   const { signal } = usageScanController;
+  if (signal.aborted) {
+    // The server is shutting down: answer from what is cached and start nothing.
+    return existing?.value ?? null;
+  }
   const pending: Promise<ServerGetProviderUsageSnapshotResult> = loadProviderUsageSnapshot({
     ...input,
     signal,

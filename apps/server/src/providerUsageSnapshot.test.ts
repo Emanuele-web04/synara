@@ -9,9 +9,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  loadLocalProviderUsageLines,
   readClaudeUsageSamples,
   readCodexSessionSummary,
   readRecentClaudeUsageSamples,
+  resumeProviderUsageScans,
+  stopProviderUsageScans,
 } from "./providerUsageSnapshot";
 
 const tempDirs: string[] = [];
@@ -397,5 +400,34 @@ describe("readRecentClaudeUsageSamples", () => {
     const open = vi.spyOn(fs, "open");
     expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(5);
     expect(open.mock.calls.map(([file]) => path.basename(String(file)))).toEqual(["fresh.jsonl"]);
+  });
+});
+
+describe("usage reads around server shutdown", () => {
+  afterEach(() => {
+    resumeProviderUsageScans();
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses a read that arrives after shutdown and reads again once a server starts", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "");
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "synara-usage-shutdown-"));
+    tempDirs.push(homeDir);
+    const projectDir = path.join(homeDir, ".claude", "projects", "project-a");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "a.jsonl"), line(2, 7, "m1"));
+
+    stopProviderUsageScans();
+    const open = vi.spyOn(fs, "open");
+    const readdir = vi.spyOn(fs, "readdir");
+    expect(await loadLocalProviderUsageLines({ provider: "claudeAgent", homeDir })).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(readdir).not.toHaveBeenCalled();
+
+    // Nothing was cached for the refused read, so a restarted server reads the archive.
+    resumeProviderUsageScans();
+    const lines = await loadLocalProviderUsageLines({ provider: "claudeAgent", homeDir });
+    expect(lines.length).toBeGreaterThan(0);
+    expect(open).toHaveBeenCalled();
   });
 });
