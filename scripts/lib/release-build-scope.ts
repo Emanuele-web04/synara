@@ -40,7 +40,7 @@ const platforms = [
   {
     id: "win-x64",
     label: "Windows x64",
-    runner: "windows-2022",
+    runner: "windows-2025",
     platform: "win",
     target: "nsis",
     arch: "x64",
