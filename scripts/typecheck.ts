@@ -13,27 +13,15 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Every tsconfig the per-package `typecheck` scripts checked before this
- * script replaced them. scripts/typecheck.test.ts fails when a workspace
- * tsconfig.json is missing here.
+ * Every project the per-package `typecheck` scripts checked, as references of
+ * the root tsconfig.check.json. scripts/typecheck.test.ts fails when a
+ * workspace tsconfig.json is missing from it.
  */
-export const TYPECHECK_PROJECTS = [
-  "apps/analytics",
-  "apps/api",
-  "apps/api/cloudflare/tsconfig.json",
-  "apps/desktop",
-  "apps/desktop/tsconfig.fixtures.json",
-  "apps/e2e",
-  "apps/marketing",
-  "apps/profiles",
-  "apps/server",
-  "apps/web",
-  "packages/contracts",
-  "packages/profile-ui",
-  "packages/shared",
-  "scripts",
-  "scripts/tsconfig.computer-measurement.json",
-] as const;
+export const TYPECHECK_PROJECTS: readonly string[] = (
+  JSON.parse(readFileSync(join(root, "tsconfig.check.json"), "utf8")) as {
+    references: { path: string }[];
+  }
+).references.map((reference) => reference.path);
 
 const tsconfigPath = (project: string) =>
   join(root, project.endsWith(".json") ? project : join(project, "tsconfig.json"));
@@ -61,22 +49,19 @@ function run(label: string, command: string, args: readonly string[]): Promise<R
   });
 }
 
-/** One `bun check` per project, in order: each run already uses every core. */
+/** One `bun check -b` pass over every project shares parsing of common dependencies. */
 async function checkTypes(): Promise<Result[]> {
-  const results: Result[] = [];
-  for (const project of TYPECHECK_PROJECTS) {
-    results.push(
-      await run(`bun check ${project}`, "bun", [
-        "check",
-        "--no-script",
-        "--noEmit",
-        "--no-pretty",
-        "-p",
-        project,
-      ]),
-    );
-  }
-  return results;
+  return [
+    await run("bun check", "bun", [
+      "check",
+      "--no-script",
+      "--noEmit",
+      "--no-pretty",
+      "-b",
+      "-p",
+      "tsconfig.check.json",
+    ]),
+  ];
 }
 
 /** The patched TypeScript 7 compiler reports Effect diagnostics alongside type errors. */

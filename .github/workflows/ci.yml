@@ -121,15 +121,15 @@ jobs:
         with:
           save-modules: "true"
 
-      # `bun check` type-checks every project; only the patched TypeScript 7
-      # compiler reports the Effect language-service diagnostics, so those run
-      # beside it. `bun run typecheck` runs both locally.
-      - parallel:
-          - name: Typecheck
-            run: node scripts/typecheck.ts --only=types
+      # `bun check` type-checks every project in one pass. Only the patched
+      # TypeScript 7 compiler reports the Effect language-service diagnostics,
+      # so they run next, in their own step: running both at once made them
+      # compete for the runner's cores. `bun run typecheck` runs both.
+      - name: Typecheck
+        run: node scripts/typecheck.ts --only=types
 
-          - name: Effect diagnostics
-            run: node scripts/typecheck.ts --only=effect
+      - name: Effect diagnostics
+        run: node scripts/typecheck.ts --only=effect
 
   # Keep each server shard serial internally, but use three independent runners.
   # The measured native 3-way split lowers the slowest shard without changing
