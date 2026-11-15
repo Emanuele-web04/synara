@@ -2,9 +2,9 @@
 // Purpose: Verifies CLI identity and dependency resolution for user-installed Pi SDKs.
 // Layer: Provider unit tests
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 
@@ -46,6 +46,60 @@ it("keeps the selected CLI and its nested SDK dependencies together across Pi in
     expect(ai.version).toBe(agent.version);
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "uses the active Pi release behind the official managed launcher",
+  async () => {
+    const root = directory();
+    const launcher = join(root, "agent", "bin", "pi");
+    const binaryPath = join(root, "global", "bin", "pi");
+    const install = join(root, "agent", "install");
+    const version = "1.4.0";
+    const release = join(install, "releases", version);
+    writePiInstallFixture(release, version, "npm-cmd");
+    const releaseBin = join(release, "node_modules", ".bin", "pi");
+    mkdirSync(dirname(releaseBin), { recursive: true });
+    symlinkSync("../@earendil-works/pi-coding-agent/cli.js", releaseBin);
+    mkdirSync(dirname(launcher), { recursive: true });
+    mkdirSync(dirname(binaryPath), { recursive: true });
+    writeFileSync(
+      launcher,
+      [
+        "#!/bin/sh",
+        "pi_agent_dir=${0%/bin/pi}",
+        "pi_current_file=$pi_agent_dir/install/current-version",
+        'IFS= read -r pi_current_version < "$pi_current_file" || exit 1',
+        "pi_release_dir=$pi_agent_dir/install/releases/$pi_current_version",
+        "pi_release_bin=$pi_release_dir/node_modules/.bin/pi",
+        'exec "$pi_release_bin" "$@"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    symlinkSync(relative(dirname(binaryPath), launcher), binaryPath);
+    writeFileSync(
+      join(install, "managed-install.json"),
+      JSON.stringify({
+        kind: "pi-managed-install",
+        schemaVersion: 1,
+        layout: "releases-v1",
+        entrypoint: { type: "symlink", path: binaryPath },
+      }),
+    );
+    const versionFile = join(install, "current-version");
+    writeFileSync(versionFile, `${version}\n`);
+
+    const installation = await resolvePiInstallation({ binaryPath });
+    expect(installation.binaryPath).toBe(binaryPath);
+    const sdk = await installation.importPackage<{ version: string }>(
+      "@earendil-works/pi-coding-agent",
+    );
+    expect(sdk.version).toBe(version);
+
+    writeFileSync(versionFile, `../releases/${version}\n`);
+    await expect(resolvePiInstallation({ binaryPath })).rejects.toThrow("compatible Pi SDK");
+  },
+);
 
 it("resolves npm's Windows command shim against the SDK it executes", async () => {
   const binaryPath = writePiInstallFixture(directory(), "windows-shim", "npm-cmd");

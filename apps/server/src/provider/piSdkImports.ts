@@ -76,6 +76,40 @@ async function readBunShimTarget(binaryPath: string): Promise<string | undefined
   return resolve(dirname(binaryPath), "..", target);
 }
 
+// The official POSIX launcher selects a release through current-version.
+// Read that same metadata without running a wrapper or guessing an SDK root.
+async function findManagedPiPackageDir(launcher: string): Promise<string | undefined> {
+  const installDir = join(dirname(dirname(launcher)), "install");
+  const marker = JSON.parse(await readFile(join(installDir, "managed-install.json"), "utf8")) as {
+    kind?: unknown;
+    schemaVersion?: unknown;
+    layout?: unknown;
+    entrypoint?: { type?: unknown; path?: unknown };
+  } | null;
+  if (
+    marker?.kind !== "pi-managed-install" ||
+    marker.schemaVersion !== 1 ||
+    marker.layout !== "releases-v1" ||
+    (marker.entrypoint?.type !== "script" && marker.entrypoint?.type !== "symlink") ||
+    typeof marker.entrypoint.path !== "string" ||
+    !isAbsolute(marker.entrypoint.path) ||
+    (await realpath(marker.entrypoint.path)) !== launcher
+  ) {
+    return undefined;
+  }
+
+  const current = await readFile(join(installDir, "current-version"), "utf8");
+  // The installer's release metadata requires a version, not an arbitrary path.
+  const version = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\n/u.exec(current)?.[1];
+  if (!version) return undefined;
+  const modules = join(installDir, "releases", version, "node_modules");
+  const releaseBin = resolveExecutable(join(modules, ".bin", "pi"));
+  if (!releaseBin) return undefined;
+
+  const packageDir = await findDeclaredPiPackage(await realpath(releaseBin));
+  return packageDir === join(modules, PI_AGENT_PACKAGE) ? packageDir : undefined;
+}
+
 async function findPiPackageDir(binaryPath: string): Promise<string | undefined> {
   const realBinaryPath = await realpath(binaryPath);
   // npm and Bun on Unix normally link directly to the package's declared bin.
@@ -87,9 +121,22 @@ async function findPiPackageDir(binaryPath: string): Promise<string | undefined>
   const packageDir = await findDeclaredPiPackage(realBinaryPath);
   if (packageDir) return packageDir;
 
-  // npm's Windows .cmd and text shims refer to their target relative to the bin directory.
   if ((await stat(realBinaryPath)).size > 16 * 1024) return undefined;
-  const shim = (await readFile(realBinaryPath, "utf8")).replaceAll("\\", "/");
+  const script = await readFile(realBinaryPath, "utf8");
+  if (
+    process.platform !== "win32" &&
+    realBinaryPath.endsWith("/bin/pi") &&
+    script.startsWith("#!/bin/sh\n") &&
+    script.includes("\npi_current_file=$pi_agent_dir/install/current-version\n") &&
+    script.includes("\npi_release_dir=$pi_agent_dir/install/releases/$pi_current_version\n") &&
+    script.includes("\npi_release_bin=$pi_release_dir/node_modules/.bin/pi\n") &&
+    script.endsWith('exec "$pi_release_bin" "$@"\n')
+  ) {
+    return findManagedPiPackageDir(realBinaryPath);
+  }
+
+  // npm's Windows .cmd and text shims refer to their target relative to the bin directory.
+  const shim = script.replaceAll("\\", "/");
   const binaryDir = dirname(realBinaryPath);
   for (const root of [
     join(binaryDir, "node_modules"),
