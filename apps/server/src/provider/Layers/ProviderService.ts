@@ -525,14 +525,17 @@ function readPersistedContinuationResetRequested(
   return runtimePayloadRecord(runtimePayload).continuationResetRequested === true;
 }
 
-// Claude launch options that only change how the runtime behaves. They never
-// decide which native session store or account owns a resume cursor, so
-// changing one in Settings (Artifacts, for example) must keep existing threads
-// resumable. Home, binary, and environment still have to match.
+// Compare the launch options that affect native session ownership. Claude
+// behavior-only settings and the location of the Pi installation can change
+// while the same profile still owns a saved session.
 function continuationOwningProviderOptions(
   provider: ProviderKind,
   options: ProviderStartOptions | undefined,
 ): unknown {
+  if (provider === "pi" && options?.pi !== undefined) {
+    const { binaryPath: _binaryPath, ...owning } = options.pi;
+    return Object.keys(owning).length > 0 ? owning : undefined;
+  }
   if (provider !== "claudeAgent" || options?.claudeAgent === undefined) {
     return options?.[provider];
   }

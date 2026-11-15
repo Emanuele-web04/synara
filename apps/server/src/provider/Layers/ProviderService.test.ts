@@ -2221,6 +2221,58 @@ it.effect("starts Pi using only the host provider's configured installation and 
   );
 });
 
+it.effect("resumes a saved Pi session after selecting a CLI, within the same profile", () => {
+  const pi = makeFakeCodexAdapter("pi");
+  const settings = ServerSettingsService.layerTest({
+    providerInstances: { pi: { driver: "pi", enabled: true } },
+  });
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService;
+    const serverSettings = yield* ServerSettingsService;
+    const threadId = asThreadId("pi-bundled-session");
+    const startInput = { provider: "pi", threadId, runtimeMode: "full-access" } as const;
+    const saved = yield* provider.startSession(threadId, startInput);
+    assert.isDefined(saved.resumeCursor);
+    yield* provider.stopRuntimeSession!({ threadId });
+
+    const binaryPath = "/host/bin/pi";
+    yield* serverSettings.updateSettings({
+      providerInstances: { pi: { driver: "pi", enabled: true, config: { binaryPath } } },
+    });
+    yield* provider.startSession(threadId, startInput);
+    assert.deepEqual(pi.startSession.mock.lastCall?.[0].resumeCursor, saved.resumeCursor);
+    assert.equal(pi.startSession.mock.lastCall?.[0].providerOptions?.pi?.binaryPath, binaryPath);
+    yield* provider.stopRuntimeSession!({ threadId });
+
+    const agentDir = "/other/pi/account";
+    yield* serverSettings.updateSettings({
+      providerInstances: {
+        pi: { driver: "pi", enabled: true, config: { binaryPath, agentDir } },
+      },
+    });
+    yield* provider.startSession(threadId, startInput);
+    assert.isUndefined(pi.startSession.mock.lastCall?.[0].resumeCursor);
+    yield* provider.stopRuntimeSession!({ threadId });
+
+    yield* serverSettings.updateSettings({
+      providerInstances: {
+        pi: {
+          driver: "pi",
+          enabled: true,
+          config: { binaryPath, agentDir },
+          environment: [{ name: "PI_CODING_AGENT_SESSION_DIR", value: "/other/pi/sessions" }],
+        },
+      },
+    });
+    yield* provider.startSession(threadId, startInput);
+    assert.isUndefined(pi.startSession.mock.lastCall?.[0].resumeCursor);
+  }).pipe(
+    Effect.provide(
+      makeRegistrySwitchLayer("pi", pi.adapter, makeFakeCodexAdapter("droid").adapter, settings),
+    ),
+  );
+});
+
 it.effect("stops a retained pi context without a binding after a failed startup", () =>
   Effect.gen(function* () {
     const source = makeFakeCodexAdapter("pi");
