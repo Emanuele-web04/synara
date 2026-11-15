@@ -303,6 +303,7 @@ import {
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { PullRequestAutoFixService } from "./pullRequestAutoFix/Services/PullRequestAutoFixService";
+import { ComposerPredictionService } from "./composerPrediction/Services/ComposerPredictionService";
 import {
   GitHubInboxRateLimitedError,
   GitHubInboxService,
@@ -555,6 +556,7 @@ const makeWsRpcHandlersLayer = () =>
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
       const pullRequestAutoFix = yield* PullRequestAutoFixService;
+      const composerPrediction = yield* ComposerPredictionService;
       const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
@@ -2925,6 +2927,10 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to generate thread recap",
           ),
+        // Thread-scoped like the other thread reads. The service derives the
+        // conversation and provider settings from the supplied IDs.
+        [WS_METHODS.serverGenerateComposerPrediction]: (input) =>
+          rpcEffect(composerPrediction.generate(input), "Failed to generate a composer suggestion"),
         [WS_METHODS.serverGenerateAutomationIntent]: (input) =>
           rpcEffect(
             Effect.gen(function* () {

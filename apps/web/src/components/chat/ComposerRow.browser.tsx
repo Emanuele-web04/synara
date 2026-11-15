@@ -5,6 +5,7 @@ import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import { ChatComposerFooter } from "./ChatComposerFooter";
 import { useComposerSingleRow } from "./useComposerSingleRow";
+import { ComposerPredictionGhost } from "../ComposerPredictionGhost";
 import { useComposerOverlayHeight } from "./composerOverlay";
 import {
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
@@ -107,4 +108,53 @@ it("keeps the plan accessible in the compact row even without a task capsule", a
   await render(<ComposerRow onOpenPlan={openPlan} />);
   await page.getByRole("button", { name: "Show plan sidebar" }).click();
   expect(openPlan).toHaveBeenCalledOnce();
+});
+
+function PredictionRow({ prediction }: { prediction: string | null }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const row = useComposerSingleRow({ formRef, eligible: true, prompt: "", prediction });
+  return (
+    <div style={{ width: 600 }}>
+      <form ref={formRef} data-testid="prediction-form" data-layout={row ? "row" : "block"}>
+        <div
+          data-chat-composer-surface=""
+          className={`${COMPOSER_INPUT_SURFACE_CLASS_NAME} ${row ? COMPOSER_SINGLE_ROW_SURFACE_CLASS_NAME : ""}`}
+        >
+          <div className={row ? COMPOSER_SINGLE_ROW_EDITOR_CLASS_NAME : ""}>
+            <div className={prediction ? "grid" : undefined}>
+              <div
+                data-testid="composer-editor"
+                className="col-start-1 row-start-1 leading-relaxed"
+              >
+                <p />
+              </div>
+              {prediction ? (
+                <ComposerPredictionGhost
+                  suggestion={prediction}
+                  layoutKey={row ? "row" : "block"}
+                  className="col-start-1 row-start-1 self-start"
+                />
+              ) : null}
+            </div>
+          </div>
+          <button type="button" className={row ? "col-start-3 row-start-1" : ""}>
+            Send
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+it("keeps the row for a suggestion that fits it and gives a wrapping one the block", async () => {
+  const screen = await render(<PredictionRow prediction="Rerun that test." />);
+  await expect.element(page.getByTestId("prediction-form")).toHaveAttribute("data-layout", "row");
+
+  await screen.rerender(
+    <PredictionRow prediction="ok go ahead with the first two steps, but leave the third out for now, I do not want to touch the production table until we have a backup. tell me when both are done so I can check" />,
+  );
+  await expect.element(page.getByTestId("prediction-form")).toHaveAttribute("data-layout", "block");
+
+  await screen.rerender(<PredictionRow prediction={null} />);
+  await expect.element(page.getByTestId("prediction-form")).toHaveAttribute("data-layout", "row");
 });

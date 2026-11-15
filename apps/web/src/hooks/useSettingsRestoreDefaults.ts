@@ -139,6 +139,9 @@ export function useSettingsRestoreDefaults({
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider
       ? ["settings:effortSlider"]
       : []),
+    ...(settings.showComposerSuggestions !== defaults.showComposerSuggestions
+      ? ["settings:showSuggestions"]
+      : []),
     ...(settings.showRateLimitWarnings !== defaults.showRateLimitWarnings
       ? ["settings:rateLimitWarnings"]
       : []),

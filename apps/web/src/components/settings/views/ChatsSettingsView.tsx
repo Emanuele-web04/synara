@@ -181,6 +181,16 @@ export function ChatsSettingsView(binding: AppSettingsBinding) {
           resetLabel="settings:effortSlider2"
           ariaLabel="settings:showEffortSliderInTheComposer"
         />
+
+        <BooleanSettingRow
+          {...binding}
+          id="setting-composer-suggestions"
+          settingKey="showComposerSuggestions"
+          title="settings:showSuggestions"
+          description="settings:afterAReplyFinishesShowAPredictedNextMessage"
+          resetLabel="settings:showSuggestions2"
+          ariaLabel="settings:showPredictedNextMessagesInTheComposer"
+        />
       </SettingsSection>
 
       <SettingsSection title="chat:review">

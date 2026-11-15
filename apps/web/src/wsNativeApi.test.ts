@@ -15,6 +15,7 @@ import {
   type OrchestrationEvent,
   ProjectId,
   ThreadId,
+  TurnId,
   type WsPushChannel,
   type WsPushData,
   type WsPushMessage,
@@ -283,6 +284,26 @@ describe("wsNativeApi", () => {
     unsubscribe();
     reportShellFailure!(failure);
     expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("sends only ids for a composer prediction and forwards its abort signal", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({ suggestion: "Rerun that test" });
+    const controller = new AbortController();
+    const input = {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      expectedTurnId: TurnId.makeUnsafe("turn-1"),
+    };
+
+    await expect(
+      api.server.generateComposerPrediction(input, { signal: controller.signal }),
+    ).resolves.toEqual({ suggestion: "Rerun that test" });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith(
+      WS_METHODS.serverGenerateComposerPrediction,
+      input,
+      { signal: controller.signal },
+    );
   });
 
   it("gives a slow provider refresh a bounded deadline beyond the generic RPC timeout", async () => {

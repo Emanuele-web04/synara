@@ -139,9 +139,13 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         ),
       );
 
-      const fallbackModelSelection = Selection.hasDedicatedTextGenerationProvider(requestedProvider)
-        ? undefined
-        : settings.textGenerationModelSelection;
+      // Composer predictions must stay on the chat's own provider instance, so
+      // they never borrow the configured Git-writing fallback.
+      const fallbackModelSelection =
+        Selection.hasDedicatedTextGenerationProvider(requestedProvider) ||
+        operation === "generateComposerPrediction"
+          ? undefined
+          : settings.textGenerationModelSelection;
       const selectedProvider = fallbackModelSelection?.provider ?? requestedProvider;
       if (!Selection.hasDedicatedTextGenerationProvider(selectedProvider)) {
         return yield* new TextGenerationError({
@@ -249,6 +253,10 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     generateThreadRecap: (input) =>
       dispatch("generateThreadRecap", input, (service, routedInput) =>
         service.generateThreadRecap(routedInput),
+      ),
+    generateComposerPrediction: (input) =>
+      dispatch("generateComposerPrediction", input, (service, routedInput) =>
+        service.generateComposerPrediction(routedInput),
       ),
     generateProjectDigest: (input) =>
       dispatch("generateProjectDigest", input, (service, routedInput) =>

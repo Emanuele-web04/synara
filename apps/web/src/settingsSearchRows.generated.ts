@@ -277,6 +277,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:showEffortAsASliderAtTheBottomOf",
   },
   {
+    target: "setting-composer-suggestions",
+    section: "behavior",
+    title: "settings:showSuggestions",
+    description: "settings:afterAReplyFinishesShowAPredictedNextMessage",
+  },
+  {
     target: "setting-diff-layout",
     section: "behavior",
     title: "settings:diffLayout",

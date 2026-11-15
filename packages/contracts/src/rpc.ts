@@ -371,6 +371,8 @@ import {
   ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
+  ServerGenerateComposerPredictionInput,
+  ServerGenerateComposerPredictionResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -1660,6 +1662,15 @@ export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerate
   error: WsRpcError,
 });
 
+export const WsServerGenerateComposerPredictionRpc = Rpc.make(
+  WS_METHODS.serverGenerateComposerPrediction,
+  {
+    payload: ServerGenerateComposerPredictionInput,
+    success: ServerGenerateComposerPredictionResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerGenerateAutomationIntentRpc = Rpc.make(
   WS_METHODS.serverGenerateAutomationIntent,
   {
@@ -2460,6 +2471,7 @@ export type WsFeatureRpc =
   | typeof WsServerPrewarmVoiceRpc
   | typeof WsServerTranscribeVoiceRpc
   | typeof WsServerGenerateThreadRecapRpc
+  | typeof WsServerGenerateComposerPredictionRpc
   | typeof WsServerGenerateAutomationIntentRpc
   | typeof WsServerUpsertKeybindingRpc
   | typeof WsServerEditKeybindingsRpc
@@ -2666,6 +2678,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
+  WsServerGenerateComposerPredictionRpc,
   WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
   WsServerEditKeybindingsRpc,

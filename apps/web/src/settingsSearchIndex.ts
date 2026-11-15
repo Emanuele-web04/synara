@@ -157,6 +157,7 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "setting-assistant-output": ["settings:showTokenByTokenOutputWhileAResponseIs2"],
   "setting-fold-finished-turns": ["settings:hideAFinishedTurnSToolCallsAndIntermediate"],
   "setting-effort-slider": ["settings:showReasoningEffortAsASliderInTheComposer"],
+  "setting-composer-suggestions": ["settings:showAPredictedNextMessageInTheEmptyComposerAfter"],
   "setting-automatically-open-simulator": [
     "settings:disableAutomaticIOSSimulatorDevicePaneOpeningUseSimulator",
   ],

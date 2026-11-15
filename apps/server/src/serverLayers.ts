@@ -77,6 +77,7 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { PullRequestAutoFixRepositoryLive } from "./persistence/Layers/PullRequestAutoFixRepository";
 import { PullRequestAutoFixServiceLive } from "./pullRequestAutoFix/Layers/PullRequestAutoFixService";
+import { ComposerPredictionServiceLive } from "./composerPrediction/Layers/ComposerPredictionService";
 import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
@@ -315,6 +316,11 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const composerPredictionLayer = ComposerPredictionServiceLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(serverSettingsLayer),
+  );
   const keepAwakeLayer = KeepAwakeLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ServerSettingsLive),
@@ -342,6 +348,7 @@ export function makeServerRuntimeServicesLayer(
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     pullRequestAutoFixLayer,
+    composerPredictionLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
     sidechatExpiryReactorLayer,
