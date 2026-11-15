@@ -17,6 +17,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Time budgets (scripts/ci-budget.ts): setup 30 s, format 5 s, lint 5 s,
+# typecheck 5 s, each test shard 60 s. A step that exceeds its budget is
+# stopped and fails the job, so CI cannot slowly regress.
 # Single heap ceiling for every Node lane (typecheck OOM fix): set once here
 # instead of per job so a future bump cannot miss a lane.
 env:
@@ -72,6 +75,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -79,6 +86,10 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           scope: "static"
+
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
 
       - name: Verify CI contracts
         run: node --test .github/scripts/ci-contracts.test.mjs
@@ -96,10 +107,10 @@ jobs:
             run: bun run i18n:check && bun run i18n:extract
 
           - name: Format
-            run: bun run fmt:check
+            run: node scripts/ci-budget.ts run 5 -- bun run fmt:check
 
           - name: Lint
-            run: bun run lint
+            run: node scripts/ci-budget.ts run 5 -- bun run lint
 
           - name: Exercise release-only workflow steps
             run: node scripts/release-smoke.ts
@@ -111,6 +122,10 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -121,8 +136,12 @@ jobs:
         with:
           save-modules: "true"
 
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
+
       - name: Typecheck
-        run: bun run typecheck
+        run: node scripts/ci-budget.ts run 5 -- bun run typecheck
 
   # Keep each server shard serial internally, but use three independent runners.
   # The measured native 3-way split lowers the slowest shard without changing
@@ -157,18 +176,26 @@ jobs:
             filters: "--filter=@synara/cli"
             test-args: "--shard=3/3"
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
 
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
+
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+        run: node scripts/ci-budget.ts run 60 -- bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
   # ChatView is one large file, so split it by complementary test-name groups.
   # Other browser files use native 3-way file sharding. Every runner keeps serial
@@ -198,6 +225,10 @@ jobs:
           - project: components
             shard: 3/3
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -221,9 +252,13 @@ jobs:
           cd apps/web
           ./node_modules/.bin/playwright install chromium
 
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
+
       - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
+        run: node scripts/ci-budget.ts run 60 -- bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
 
   build:
     name: Desktop Build
@@ -232,6 +267,10 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -242,6 +281,10 @@ jobs:
           turbo: "true"
           # Sole consumer of the electron:true node_modules key.
           save-modules: "true"
+
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -343,6 +386,10 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -350,6 +397,10 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           scope: "runtime"
+
+      - name: Setup budget (30 s)
+        shell: bash
+        run: node scripts/ci-budget.ts since 30 setup
 
       - name: Test Defender qualification guard contracts
         shell: pwsh
@@ -409,6 +460,10 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      - name: Start budget clock
+        shell: bash
+        run: echo "CI_BUDGET_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
