@@ -454,9 +454,27 @@ $$
     );
 
     expect(markup).toContain("<table>");
-    expect(markup).toContain("<th>Studio</th>");
-    expect(markup).toContain("<td>Purpose</td>");
+    expect(markup).toContain('<th data-table-column="text">Studio</th>');
+    expect(markup).toContain('<td data-table-column="short">Purpose</td>');
     expect(markup).not.toContain("|---|");
+  });
+
+  it("marks table columns by content and offers a copy button", async () => {
+    const markup = await renderMarkdown(
+      [
+        "| | Peak memory | Time |",
+        "|---|---|---|",
+        "| Reading the transcript for the prediction (largest seeded thread) | 290 MB | 3.1–4.9 s |",
+        "| Opening a chat | – | 0.7 s |",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain('class="chat-markdown-table"');
+    expect(markup).toContain('aria-label="Copy table"');
+    expect(markup).toContain('<th data-table-column="numeric">Time</th>');
+    expect(markup).toContain('<td data-table-column="numeric">3.1–4.9\u00A0s</td>');
+    expect(markup).toContain('<td data-table-cell="empty" data-table-column="numeric">–</td>');
+    expect(markup).toMatch(/<td data-table-column="text">Reading the transcript/);
   });
 
   it("keeps pipe-and-dash lines inside code fences out of table repair", async () => {
