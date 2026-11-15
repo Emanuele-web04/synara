@@ -17,8 +17,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import { azureProvider } from "@earendil-works/pi-ai/providers/azure";
-import { isModelType } from "@earendil-works/pi-ai/utils/model-operations";
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -73,6 +71,7 @@ import {
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { lazyModule } from "../../lazyModule.ts";
+import { importPiPackage } from "../piSdkImports.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   ProviderAdapterRequestError,
@@ -92,7 +91,6 @@ import { makeKeyedLock } from "../keyedLock.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
-import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   buildProviderProcessEnv,
   MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
@@ -393,8 +391,8 @@ export function makePiBashProcessSupervisor(
 // Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
 // a native clipboard module, so importing it during Synara startup can bloat the
 // desktop backend before any Pi session exists.
-const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
-  () => import("@earendil-works/pi-coding-agent"),
+const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(() =>
+  importPiPackage<PiCodingAgentModule>("@earendil-works/pi-coding-agent"),
 );
 
 // Only an isolated Pi account resets the API registry, and this entrypoint pulls in
@@ -402,7 +400,23 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 // it on first use keeps that out of every backend start. Pi's SDK imports the same
 // module, so the registry it resets is the one the SDK reads.
 const loadPiAiCompatModule: () => Promise<typeof import("@earendil-works/pi-ai/compat")> =
-  lazyModule(() => import("@earendil-works/pi-ai/compat"));
+  lazyModule(() => importPiPackage("@earendil-works/pi-ai/compat"));
+
+const loadPiAiAzureModule = lazyModule(() =>
+  importPiPackage<typeof import("@earendil-works/pi-ai/providers/azure")>(
+    "@earendil-works/pi-ai/providers/azure",
+  ),
+);
+const loadPiAiModelOpsModule = lazyModule(() =>
+  importPiPackage<typeof import("@earendil-works/pi-ai/utils/model-operations")>(
+    "@earendil-works/pi-ai/utils/model-operations",
+  ),
+);
+const loadPiAiOpenRouterModule = lazyModule(() =>
+  importPiPackage<typeof import("@earendil-works/pi-ai/providers/openrouter")>(
+    "@earendil-works/pi-ai/providers/openrouter",
+  ),
+);
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
@@ -1819,6 +1833,7 @@ export async function createPiModelRuntime(
 
   // Pi renamed Azure in 1.0.3. Keep saved profiles, credentials and session model IDs
   // working under their original key; models.json and extensions still compose on top.
+  const { azureProvider } = await loadPiAiAzureModule();
   const azure = azureProvider();
   const legacyAzureModels = azure
     .getModels()
@@ -1857,6 +1872,10 @@ export async function refreshPiOpenRouterModels(
     return;
   const live = await fetchOpenRouterModels();
   if (live.length === 0) return;
+  const [{ openrouterProvider }, { isModelType }] = await Promise.all([
+    loadPiAiOpenRouterModule(),
+    loadPiAiModelOpsModule(),
+  ]);
   const base = openrouterProvider();
   const models = new Map(base.getModels().map((model) => [model.id, model]));
   for (const model of live) models.set(model.id, model);

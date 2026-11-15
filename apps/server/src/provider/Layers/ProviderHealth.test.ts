@@ -1434,7 +1434,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         authStatus: "unknown",
         checkedAt: "2026-09-04T01:04:00.000Z",
         message:
-          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+          "Pi is installed, but the CLI health check timed out before Synara could verify the installed version.",
       } satisfies ServerProviderStatus;
 
       assert.deepStrictEqual(
@@ -3169,7 +3169,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(status.authStatus, "unknown");
           assert.strictEqual(
             status.message,
-            "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
+            "Pi SDK is available, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
           );
         } finally {
           rmSync(agentDir, { recursive: true, force: true });

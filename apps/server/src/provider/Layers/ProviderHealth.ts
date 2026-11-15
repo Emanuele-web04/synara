@@ -2121,11 +2121,20 @@ export const checkPiProviderStatus = (
       PI_HEALTH_TIMEOUT_MS,
     );
 
-    // Pi itself is SDK-backed in Synara, and health refreshes must not import the
-    // SDK (it initializes a native clipboard module). A CLI that is absent or
-    // fails only makes Pi unavailable when nothing shows an SDK-only setup;
-    // otherwise the probe stays advisory. A timeout stays advisory regardless so a
-    // slow CLI cannot flip Pi off.
+    // Pi is SDK-backed and health refreshes must not import the SDK (it
+    // initializes a native clipboard module). The SDK is no longer bundled
+    // into packaged builds — the adapter resolves it from the user's `pi`
+    // CLI install — so a broken or absent CLI leaves the provider unusable
+    // unless the SDK still resolves in-process (development installs).
+    // A timeout stays advisory regardless so a slow CLI cannot flip Pi off.
+    const sdkResolvableInProcess = (() => {
+      try {
+        import.meta.resolve("@earendil-works/pi-coding-agent");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
     if (
       versionProbe.outcome === "missing" ||
       versionProbe.outcome === "failure" ||
@@ -2138,7 +2147,7 @@ export const checkPiProviderStatus = (
         instanceId,
         paths,
       });
-      if (!sdkSetup.found) {
+      if (!sdkSetup.found || !sdkResolvableInProcess) {
         return {
           provider: PI_PROVIDER,
           instanceId: PI_PROVIDER,
@@ -2147,7 +2156,9 @@ export const checkPiProviderStatus = (
           available: false,
           authStatus: "unknown" as const,
           checkedAt,
-          message: `Pi is not set up. Install the Pi CLI (\`pi\`) or add Pi credentials to ${sdkSetup.agentDir} to use the Pi provider.`,
+          message: sdkResolvableInProcess
+            ? `Pi is not set up. Install the Pi CLI (\`pi\`) or add Pi credentials to ${sdkSetup.agentDir} to use the Pi provider.`
+            : "Pi is not installed. Install the Pi CLI with `npm install -g @earendil-works/pi-coding-agent` or `bun install -g @earendil-works/pi-coding-agent`, then restart Synara.",
         } satisfies ServerProviderStatus;
       }
     }
@@ -2164,8 +2175,8 @@ export const checkPiProviderStatus = (
         checkedAt,
         message:
           versionProbe.outcome === "missing"
-            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
-            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+            ? "Pi SDK is available, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
+            : `Pi SDK is available, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -2179,7 +2190,7 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message:
-          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+          "Pi is installed, but the CLI health check timed out before Synara could verify the installed version.",
       } satisfies ServerProviderStatus;
     }
 
@@ -2195,8 +2206,8 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message: detail
-          ? `Pi SDK is bundled, but the CLI health check failed. ${detail}`
-          : "Pi SDK is bundled, but the CLI health check failed.",
+          ? `Pi is installed, but the CLI health check failed. ${detail}`
+          : "Pi is installed, but the CLI health check failed.",
       } satisfies ServerProviderStatus;
     }
 

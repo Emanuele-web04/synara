@@ -112,97 +112,109 @@ const originalTransport = {
 const denyNetwork = (): never => {
   throw new Error("Real network access is forbidden in the Pi runtime smoke.");
 };
-const root = await mkdtemp(join(tmpdir(), "synara-pi-runtime-smoke-"));
+// The Pi SDK is external in packaged builds and resolves through the user's
+// `pi` CLI install; when neither is present there is nothing to smoke.
+let ModelRuntime: (typeof import("@earendil-works/pi-coding-agent"))["ModelRuntime"] | undefined;
 try {
-  globalThis.fetch = Object.assign(denyNetwork, { preconnect: denyNetwork });
-  http.request = denyNetwork;
-  http.get = denyNetwork;
-  https.request = denyNetwork;
-  https.get = denyNetwork;
-  net.Socket.prototype.connect = denyNetwork;
-  tls.connect = denyNetwork;
-  syncBuiltinESMExports();
+  ({ ModelRuntime } = await import("@earendil-works/pi-coding-agent"));
+} catch {
+  console.log("Pi SDK not resolvable in-process (expected in packaged builds).");
+}
+if (ModelRuntime !== undefined) {
+  const root = await mkdtemp(join(tmpdir(), "synara-pi-runtime-smoke-"));
+  try {
+    globalThis.fetch = Object.assign(denyNetwork, { preconnect: denyNetwork });
+    http.request = denyNetwork;
+    http.get = denyNetwork;
+    https.request = denyNetwork;
+    https.get = denyNetwork;
+    net.Socket.prototype.connect = denyNetwork;
+    tls.connect = denyNetwork;
+    syncBuiltinESMExports();
 
-  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-  const token = "synthetic-packaged-smoke-token";
-  const authPath = join(root, "auth.json");
-  await writeFile(
-    authPath,
-    JSON.stringify({
-      openai: {
-        type: "oauth",
-        access: token,
-        refresh: "synthetic-packaged-smoke-refresh",
-        expires: 4102444800000,
-        clientId: "synthetic-client",
-        scopes: ["chatgpt.tokens.use.direct", "resource.invoke"],
-      },
-    }),
-    { mode: 0o600 },
-  );
-  const runtime = await ModelRuntime.create({
-    authPath,
-    modelsPath: null,
-    allowModelNetwork: false,
-    // Do not enumerate ambient credentials or refresh any provider on startup.
-    refreshOnCreate: false,
-  });
-  const model = runtime.getModel("openai", "gpt-5.4");
-  assert(model, "Missing packaged OpenAI smoke model.");
-  let requests = 0;
-  const sentinel = "synthetic packaged smoke stop";
-  const completed = await runtime.complete(
-    model,
-    { messages: [{ role: "user", content: "offline smoke", timestamp: 0 }] },
-    {
-      apiKey: token,
-      env: {},
-      maxRetries: 0,
-      signal: AbortSignal.timeout(5_000),
-      fetch: Object.assign(
-        async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-          requests++;
-          const request =
-            typeof input === "string"
-              ? new Request(input, init)
-              : input instanceof URL
-                ? new Request(input.href, init)
-                : new Request(input, init);
-          const body = (await request.json()) as { model?: string; stream?: boolean };
-          assert(
-            request.url === "https://api.openai.com/v1/responses",
-            "Unexpected smoke endpoint.",
-          );
-          // Boolean assertions cannot include an unexpected credential in a diff.
-          assert(
-            request.headers.get("authorization") === `Bearer ${token}`,
-            "Unexpected smoke auth.",
-          );
-          assert(body.model === model.id && body.stream === true, "Unexpected smoke request body.");
-          return Response.json(
-            { error: { message: sentinel, type: "invalid_request_error" } },
-            { status: 400 },
-          );
+    const token = "synthetic-packaged-smoke-token";
+    const authPath = join(root, "auth.json");
+    await writeFile(
+      authPath,
+      JSON.stringify({
+        openai: {
+          type: "oauth",
+          access: token,
+          refresh: "synthetic-packaged-smoke-refresh",
+          expires: 4102444800000,
+          clientId: "synthetic-client",
+          scopes: ["chatgpt.tokens.use.direct", "resource.invoke"],
         },
-        { preconnect: denyNetwork },
-      ),
-    },
-  );
-  assert.equal(requests, 1, "The packaged OpenAI client must dispatch once without retrying.");
-  assert(
-    completed.stopReason === "error" && completed.errorMessage?.includes(sentinel),
-    "The packaged OpenAI client must propagate the synthetic response.",
-  );
-} finally {
-  globalThis.fetch = originalTransport.fetch;
-  http.request = originalTransport.httpRequest;
-  http.get = originalTransport.httpGet;
-  https.request = originalTransport.httpsRequest;
-  https.get = originalTransport.httpsGet;
-  net.Socket.prototype.connect = originalTransport.socketConnect;
-  tls.connect = originalTransport.tlsConnect;
-  syncBuiltinESMExports();
-  await rm(root, { recursive: true, force: true });
+      }),
+      { mode: 0o600 },
+    );
+    const runtime = await ModelRuntime.create({
+      authPath,
+      modelsPath: null,
+      allowModelNetwork: false,
+      // Do not enumerate ambient credentials or refresh any provider on startup.
+      refreshOnCreate: false,
+    });
+    const model = runtime.getModel("openai", "gpt-5.4");
+    assert(model, "Missing packaged OpenAI smoke model.");
+    let requests = 0;
+    const sentinel = "synthetic packaged smoke stop";
+    const completed = await runtime.complete(
+      model,
+      { messages: [{ role: "user", content: "offline smoke", timestamp: 0 }] },
+      {
+        apiKey: token,
+        env: {},
+        maxRetries: 0,
+        signal: AbortSignal.timeout(5_000),
+        fetch: Object.assign(
+          async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+            requests++;
+            const request =
+              typeof input === "string"
+                ? new Request(input, init)
+                : input instanceof URL
+                  ? new Request(input.href, init)
+                  : new Request(input, init);
+            const body = (await request.json()) as { model?: string; stream?: boolean };
+            assert(
+              request.url === "https://api.openai.com/v1/responses",
+              "Unexpected smoke endpoint.",
+            );
+            // Boolean assertions cannot include an unexpected credential in a diff.
+            assert(
+              request.headers.get("authorization") === `Bearer ${token}`,
+              "Unexpected smoke auth.",
+            );
+            assert(
+              body.model === model.id && body.stream === true,
+              "Unexpected smoke request body.",
+            );
+            return Response.json(
+              { error: { message: sentinel, type: "invalid_request_error" } },
+              { status: 400 },
+            );
+          },
+          { preconnect: denyNetwork },
+        ),
+      },
+    );
+    assert.equal(requests, 1, "The packaged OpenAI client must dispatch once without retrying.");
+    assert(
+      completed.stopReason === "error" && completed.errorMessage?.includes(sentinel),
+      "The packaged OpenAI client must propagate the synthetic response.",
+    );
+  } finally {
+    globalThis.fetch = originalTransport.fetch;
+    http.request = originalTransport.httpRequest;
+    http.get = originalTransport.httpGet;
+    https.request = originalTransport.httpsRequest;
+    https.get = originalTransport.httpsGet;
+    net.Socket.prototype.connect = originalTransport.socketConnect;
+    tls.connect = originalTransport.tlsConnect;
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
 }
 await import("open");
 await import("node-pty");
