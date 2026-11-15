@@ -169,7 +169,7 @@ export function ProviderAgentRow(props: {
             type="button"
             ref={setActivatorNodeRef}
             className={cn(
-              "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground active:cursor-grabbing",
+              "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
               ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
               SETTINGS_INSET_RADIUS_CLASS_NAME,
             )}
@@ -182,7 +182,7 @@ export function ProviderAgentRow(props: {
           <ProviderIcon provider={provider} className="size-4 shrink-0" />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
-            <div className="truncate text-ui-sm text-muted-foreground">
+            <div className="break-words text-ui-sm text-muted-foreground">
               {providerSetupStatusLabel(
                 {
                   status: props.setupStatus,
