@@ -15,6 +15,7 @@ import { verifyEditorLanguageRuntime } from "./editor/runtimeSmoke";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
+import { resolvePiInstallation } from "./provider/piSdkImports.ts";
 
 // Exercise the actual sibling entry and its owned child, not an in-process import.
 async function verifyOfflineCompactorRuntime(): Promise<void> {
@@ -86,13 +87,17 @@ async function verifyOfflineCompactorRuntime(): Promise<void> {
   }
 }
 
-await verifyRemoteTlsRuntime();
-if (process.env.SYNARA_RUNTIME_SMOKE === "remote-tls") process.exit(0);
+const smokeMode = process.env.SYNARA_RUNTIME_SMOKE;
+const piOnly = smokeMode === "pi-absent" || smokeMode === "pi-installed";
+if (!piOnly) {
+  await verifyRemoteTlsRuntime();
+  if (smokeMode === "remote-tls") process.exit(0);
 
-// Keep these imports external, just like the server. Running this entrypoint
-// from app.asar exposes missing peers that the development install can hide.
-await loadAcpSdk();
-await loadClaudeAgentSdk();
+  // Running these external imports from app.asar exposes peers that the
+  // development install can hide.
+  await loadAcpSdk();
+  await loadClaudeAgentSdk();
+}
 // An import alone misses Pi's lazy OpenAI client and its transitive peers.
 // Block real traffic even if the SDK stops honoring its supplied fetch.
 const require = createRequire(import.meta.url);
@@ -112,15 +117,15 @@ const originalTransport = {
 const denyNetwork = (): never => {
   throw new Error("Real network access is forbidden in the Pi runtime smoke.");
 };
-// The Pi SDK is external in packaged builds and resolves through the user's
-// `pi` CLI install; when neither is present there is nothing to smoke.
-let ModelRuntime: (typeof import("@earendil-works/pi-coding-agent"))["ModelRuntime"] | undefined;
-try {
-  ({ ModelRuntime } = await import("@earendil-works/pi-coding-agent"));
-} catch {
-  console.log("Pi SDK not resolvable in-process (expected in packaged builds).");
-}
-if (ModelRuntime !== undefined) {
+// Both published targets must omit Pi. Exercise the actual resolver without
+// inheriting a runner's installed tools; the separate installed mode uses PATH.
+assert.throws(() => import.meta.resolve("@earendil-works/pi-coding-agent"), {
+  code: "ERR_MODULE_NOT_FOUND",
+});
+if (smokeMode !== "pi-installed") {
+  await assert.rejects(() => resolvePiInstallation({ env: { PATH: "" } }), /Pi is not installed/i);
+  console.log("Pi SDK omitted and missing CLI recognized.");
+} else {
   const root = await mkdtemp(join(tmpdir(), "synara-pi-runtime-smoke-"));
   try {
     globalThis.fetch = Object.assign(denyNetwork, { preconnect: denyNetwork });
@@ -132,6 +137,10 @@ if (ModelRuntime !== undefined) {
     tls.connect = denyNetwork;
     syncBuiltinESMExports();
 
+    const installation = await resolvePiInstallation();
+    const { ModelRuntime } = await installation.importPackage<
+      typeof import("@earendil-works/pi-coding-agent")
+    >("@earendil-works/pi-coding-agent");
     const token = "synthetic-packaged-smoke-token";
     const authPath = join(root, "auth.json");
     await writeFile(
@@ -156,7 +165,7 @@ if (ModelRuntime !== undefined) {
       refreshOnCreate: false,
     });
     const model = runtime.getModel("openai", "gpt-5.4");
-    assert(model, "Missing packaged OpenAI smoke model.");
+    assert(model, "Missing OpenAI smoke model in the installed Pi SDK.");
     let requests = 0;
     const sentinel = "synthetic packaged smoke stop";
     const completed = await runtime.complete(
@@ -199,10 +208,10 @@ if (ModelRuntime !== undefined) {
         ),
       },
     );
-    assert.equal(requests, 1, "The packaged OpenAI client must dispatch once without retrying.");
+    assert.equal(requests, 1, "The Pi OpenAI client must dispatch once without retrying.");
     assert(
       completed.stopReason === "error" && completed.errorMessage?.includes(sentinel),
-      "The packaged OpenAI client must propagate the synthetic response.",
+      "The Pi OpenAI client must propagate the synthetic response.",
     );
   } finally {
     globalThis.fetch = originalTransport.fetch;
@@ -215,7 +224,10 @@ if (ModelRuntime !== undefined) {
     syncBuiltinESMExports();
     await rm(root, { recursive: true, force: true });
   }
+  console.log("Pi SDK loaded from the installed CLI and passed offline runtime verification.");
 }
+if (piOnly) process.exit(0);
+
 await import("open");
 await import("node-pty");
 await import("@xterm/headless");
