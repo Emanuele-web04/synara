@@ -143,7 +143,7 @@ export function isTemporaryWorktreeBranch(branch: string): boolean {
 }
 
 export function buildTemporaryWorktreeBranchName(): string {
-  const token = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toLowerCase();
+  const token = crypto.randomUUID().replace(/-/g, "").slice(0, 9).toLowerCase();
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
 }
 
