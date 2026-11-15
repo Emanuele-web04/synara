@@ -1251,6 +1251,8 @@ function ComposerPromptEditorInner({
                   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                   singleLine && "truncate",
                 )}
+                dir="auto"
+                data-testid="composer-placeholder"
               >
                 {placeholder}
               </div>
