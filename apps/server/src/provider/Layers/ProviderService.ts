@@ -1392,19 +1392,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             `Model selection provider '${input.modelSelection.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
           );
         }
+        const configuredOptions = providerStartOptionsFromInstance(instance);
         return {
           instance,
           modelSelection: modelSelectionForInstance(input.modelSelection, instance),
+          // Pi loads an SDK in-process. Session input, including old bindings, cannot select it.
           providerOptions:
-            input.providerOptionsPrecedence === "caller"
-              ? mergeProviderStartOptions(
-                  providerStartOptionsFromInstance(instance),
-                  input.providerOptions,
-                )
-              : mergeProviderStartOptions(
-                  input.providerOptions,
-                  providerStartOptionsFromInstance(instance),
-                ),
+            instance.driver === "pi"
+              ? configuredOptions
+              : input.providerOptionsPrecedence === "caller"
+                ? mergeProviderStartOptions(configuredOptions, input.providerOptions)
+                : mergeProviderStartOptions(input.providerOptions, configuredOptions),
         } as const;
       });
 

@@ -3,7 +3,7 @@
 // Layer: Provider runtime support
 
 import { readFile, realpath, stat } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolve as resolveImport } from "import-meta-resolve";
 
@@ -40,16 +40,52 @@ async function readPiManifest(packageDir: string): Promise<string | undefined> {
   return undefined;
 }
 
-async function findPiPackageDir(binaryPath: string): Promise<string | undefined> {
-  const realBinaryPath = await realpath(binaryPath);
-  // npm and Bun on Unix normally link directly to the package's declared bin.
+async function findDeclaredPiPackage(realBinaryPath: string): Promise<string | undefined> {
   for (let directory = dirname(realBinaryPath); ; directory = dirname(directory)) {
     const declaredBin = await readPiManifest(directory);
     if (declaredBin && (await realpath(declaredBin).catch(() => undefined)) === realBinaryPath) {
       return directory;
     }
-    if (dirname(directory) === directory) break;
+    if (dirname(directory) === directory) return undefined;
   }
+}
+
+async function readBunShimTarget(binaryPath: string): Promise<string | undefined> {
+  const sidecar = binaryPath.replace(/\.exe$/iu, ".bunx");
+  const info = await stat(sidecar).catch(() => undefined);
+  if (!info?.isFile() || info.size < 8 || info.size > 65_536 || info.size % 2 !== 0) return;
+  const data = await readFile(sidecar);
+  if (data.length !== info.size) return;
+  const flags = data.readUInt16LE(data.length - 2);
+  // Bun's v5 .bunx format stores a UTF-16LE path followed by a quoted terminator.
+  if (flags >>> 4 !== 2739) return;
+  const hasShebang = (flags & 4) !== 0;
+  if (hasShebang && data.length < 16) return;
+  const pathLength = hasShebang ? data.readUInt32LE(data.length - 10) : data.length - 6;
+  const argumentLength = hasShebang ? data.readUInt32LE(data.length - 6) : 0;
+  if (
+    pathLength === 0 ||
+    pathLength % 2 !== 0 ||
+    pathLength + argumentLength + (hasShebang ? 14 : 6) !== data.length ||
+    data.readUInt16LE(pathLength) !== 34 ||
+    data.readUInt16LE(pathLength + 2) !== 0
+  )
+    return;
+  const target = data.toString("utf16le", 0, pathLength).replaceAll("\\", sep);
+  if (target.includes("\0") || isAbsolute(target) !== ((flags & 8) !== 0)) return;
+  return resolve(dirname(binaryPath), "..", target);
+}
+
+async function findPiPackageDir(binaryPath: string): Promise<string | undefined> {
+  const realBinaryPath = await realpath(binaryPath);
+  // npm and Bun on Unix normally link directly to the package's declared bin.
+  if (/\.exe$/iu.test(realBinaryPath)) {
+    const target = await readBunShimTarget(realBinaryPath);
+    const resolvedTarget = target && (await realpath(target).catch(() => undefined));
+    return resolvedTarget ? findDeclaredPiPackage(resolvedTarget) : undefined;
+  }
+  const packageDir = await findDeclaredPiPackage(realBinaryPath);
+  if (packageDir) return packageDir;
 
   // npm's Windows .cmd and text shims refer to their target relative to the bin directory.
   if ((await stat(realBinaryPath)).size > 16 * 1024) return undefined;
