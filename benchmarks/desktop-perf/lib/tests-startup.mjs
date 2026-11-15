@@ -48,7 +48,13 @@ export async function measureLaunch({ build, home, expectTranscript, timeoutMs =
     marks.windowTargetMs = since(now());
     await focusEmulation(session, true);
     const deadline = app.spawnedAtEpochMs + timeoutMs;
+    // The seeded relaunch restores the draft the previous launch typed, so a fixed
+    // marker could already be in the composer. Each launch types its own two letters
+    // and they must appear after whatever text was there before.
+    const letters = "cdefghijklmnopqrstuvwxyz";
+    const sentinel = `${letters[Math.floor(Math.random() * letters.length)]}${letters[Math.floor(Math.random() * letters.length)]}`;
     let typed = false;
+    let textBeforeTyping = "";
     while (now() < deadline) {
       let state;
       try {
@@ -67,11 +73,13 @@ export async function measureLaunch({ build, home, expectTranscript, timeoutMs =
       if (state.composerFocused) marks.composerFocusedMs ??= at;
       if (state.composerFocused && !typed) {
         typed = true;
-        await typeCharacter(session, "a");
-        await typeCharacter(session, "b");
+        textBeforeTyping = state.composerText.replace(/\n/g, "");
+        await typeCharacter(session, sentinel[0]);
+        await typeCharacter(session, sentinel[1]);
         continue;
       }
-      if (typed && state.composerText.includes("ab")) {
+      const text = state.composerText.replace(/\n/g, "");
+      if (typed && text.length >= textBeforeTyping.length + 2 && text.includes(sentinel)) {
         marks.typingMs = at;
         if (!expectTranscript || marks.transcriptMs !== undefined) break;
       }
