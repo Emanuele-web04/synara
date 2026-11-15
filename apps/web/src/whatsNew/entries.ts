@@ -22,6 +22,46 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.0",
+    date: "Nov 15",
+    features: [
+      {
+        id: "composer-suggestions",
+        title: "Pick up the conversation faster",
+        description:
+          "After a reply, Synara can suggest a follow-up in the empty composer. Press Tab to insert it as an editable draft; it is never sent automatically.",
+        details:
+          "Suggestions use the current chat's supported provider and can be turned off in Settings → Chat behavior → Show suggestions.",
+      },
+      {
+        id: "desktop-performance",
+        title: "A lighter, faster desktop",
+        description:
+          "Synara starts less work up front, uses less memory in some workloads, and can quit faster after launch.",
+        details:
+          "In source-build tests on one Mac, three streaming Claude threads used 27% less process-tree memory, and a later startup optimization reduced median relaunch-to-typing by 12.8%. Results depend on the workload; packaged apps, Windows and Linux were not measured.",
+      },
+      {
+        id: "chat-tables",
+        title: "Read and copy chat tables",
+        description:
+          "Tables keep short values and numbers together, scroll horizontally when needed, and offer a Copy table action for their Markdown.",
+      },
+      {
+        id: "pi-cli",
+        title: "Install Pi separately",
+        description:
+          "Pi now uses your installed Pi CLI instead of a bundled SDK. Install the CLI to use Pi in Synara.",
+      },
+      {
+        id: "reliability-polish",
+        title: "More reliable work and clearer chats",
+        description:
+          "Long-running Claude commands stay in one activity row, worktree creation can finish on slow disks, and right-to-left questions and composer placeholders display more naturally.",
+      },
+    ],
+  },
+  {
     version: "1.5.4",
     date: "Nov 14",
     features: [
