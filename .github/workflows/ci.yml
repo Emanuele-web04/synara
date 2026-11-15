@@ -39,6 +39,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Filter docs-only changes
         id: filter
@@ -74,6 +77,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -113,6 +119,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # The single saver for the shared full Linux node_modules key: every other
       # full lane restores only, so a miss is archived once instead of per lane.
@@ -159,6 +168,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -200,6 +212,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -234,6 +249,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -345,6 +363,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -413,6 +434,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - name: Setup Node
         uses: actions/setup-node@v6

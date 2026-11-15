@@ -64,6 +64,15 @@ test("required check, independent static lane and full-history lineage stay inta
   assert.ok(workflow.includes("git tag --list 'v[0-9]*'"));
   assert.ok(!workflow.includes("continue-on-error"));
 });
+test("every CI checkout is a blobless full-history clone, never shallow", () => {
+  const checkouts = workflow.split("uses: actions/checkout@v6").slice(1);
+  assert.ok(checkouts.length >= 8);
+  for (const rest of checkouts) {
+    const options = rest.split("\n      - ")[0];
+    assert.ok(options.includes("fetch-depth: 0"), options);
+    assert.ok(options.includes("filter: blob:none"), options);
+  }
+});
 test("filtered scopes preserve lifecycle scripts and the scripts workspace links", () => {
   assert.ok(
     setup.includes(
