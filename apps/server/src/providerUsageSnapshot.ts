@@ -29,6 +29,16 @@ const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
 const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CODEX_SESSION_LINE_BYTES = 1024 * 1024;
 const MAX_CLAUDE_TRANSCRIPT_LINE_BYTES = 1024 * 1024;
+// Reads reuse one buffer of this size per transcript. A month of transcripts can be
+// gigabytes, and a fresh buffer per read left that much garbage behind each snapshot.
+const CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
+// Both Claude samplers read a `usage` object (`message.usage` or `toolUseResult.usage`).
+// Claude Code writes transcripts with JSON.stringify, which emits that key verbatim, so
+// a record without these bytes yields no sample. Most transcript bytes are tool output
+// and prompts (over 90% of a measured 4 GB month). Testing the raw bytes first spares
+// decoding and parsing them only to discard the result, which was most of the backend's
+// allocation in the first minute after launch.
+const CLAUDE_USAGE_KEY_BYTES = Buffer.from('"usage"');
 // Usage samples kept across refreshes in the per-transcript cache. A sample plus its
 // dedupe key costs roughly 200 bytes, so this bounds the cache near 20 MB. Newest
 // transcripts are retained first; transcripts past the cap are re-read on every
@@ -587,13 +597,13 @@ interface ClaudeTranscriptScan {
  * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
  * once. Reading one into a string costs its full size in the heap plus a second copy for
  * the line split, so a few large transcripts are enough to exhaust old space and abort the
- * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
- * recreate the same problem inside a line reader.
+ * backend. Read fixed-size chunks into one reused buffer and cap individual records so
+ * malformed or tool-heavy lines cannot recreate the same problem inside a line reader.
  *
  * Scans bytes [start, end) and reports the offset just past the last newline, the same
  * append-tail contract as `readAppendedLines` in claudeWorkflowRuntime.ts. That helper
  * reads the whole appended range into one string and skips files over 5 MB, so it cannot
- * serve unbounded transcripts; this streams instead.
+ * serve unbounded transcripts; this reads in chunks instead.
  */
 async function scanClaudeTranscript(input: {
   readonly handle: FileHandle;
@@ -627,7 +637,7 @@ async function scanClaudeTranscript(input: {
   let completePrefixHash = hash.copy();
 
   const collectLine = (line: Buffer, index: number, terminated: boolean): void => {
-    if (line.length === 0) {
+    if (line.length === 0 || line.indexOf(CLAUDE_USAGE_KEY_BYTES) === -1) {
       return;
     }
     const contents = line.toString("utf8");
@@ -674,7 +684,9 @@ async function scanClaudeTranscript(input: {
     }
   };
 
-  const appendLineChunk = (chunk: Buffer): void => {
+  // `retain` copies a piece that must outlive the read buffer: the unfinished record at
+  // the end of a read, which the next read overwrites.
+  const appendLineChunk = (chunk: Buffer, retain = false): void => {
     if (skippingOversizedLine || chunk.length === 0) {
       return;
     }
@@ -684,13 +696,19 @@ async function scanClaudeTranscript(input: {
       skippingOversizedLine = true;
       return;
     }
-    lineChunks.push(chunk);
+    lineChunks.push(retain ? Buffer.from(chunk) : chunk);
     lineBytes += chunk.length;
   };
 
   const finishLine = (): void => {
     if (!skippingOversizedLine) {
-      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex, true);
+      // collectLine reads the bytes synchronously, so a line inside one read chunk
+      // can be a view of that chunk instead of a copy.
+      collectLine(
+        lineChunks.length === 1 ? lineChunks[0]! : Buffer.concat(lineChunks, lineBytes),
+        lineIndex,
+        true,
+      );
     }
     lineChunks = [];
     lineBytes = 0;
@@ -699,14 +717,22 @@ async function scanClaudeTranscript(input: {
   };
 
   if (input.end > input.start) {
-    const stream = input.handle.createReadStream({
-      start: input.start,
-      end: input.end - 1,
-      autoClose: false,
-    });
+    const buffer = Buffer.allocUnsafe(
+      Math.min(CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES, input.end - input.start),
+    );
     let position = input.start;
     try {
-      for await (const chunk of stream as AsyncIterable<Buffer>) {
+      while (position < input.end) {
+        const { bytesRead } = await input.handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, input.end - position),
+          position,
+        );
+        if (bytesRead === 0) {
+          break;
+        }
+        const chunk = buffer.subarray(0, bytesRead);
         // Commit a digest only through the last complete record. A partial tail
         // is parsed again later and must not become part of the cached prefix.
         const lastNewline = chunk.lastIndexOf(0x0a);
@@ -728,8 +754,8 @@ async function scanClaudeTranscript(input: {
           lineStart = index + 1;
           nextOffset = position + lineStart;
         }
-        appendLineChunk(chunk.subarray(lineStart));
-        position += chunk.length;
+        appendLineChunk(chunk.subarray(lineStart), true);
+        position += bytesRead;
       }
 
       // Match readFile/split behavior for a final record that has not been newline-terminated.
@@ -740,8 +766,6 @@ async function scanClaudeTranscript(input: {
       // A transcript that vanishes or fails partway through yields what was read by then,
       // which is the same outcome as a truncated archive. It is not cached.
       complete = false;
-    } finally {
-      stream.destroy();
     }
   }
 
@@ -768,12 +792,18 @@ async function hashClaudeTranscriptPrefix(
   offset: number,
 ): Promise<Hash | null> {
   const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(Math.min(CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES, offset));
   let position = 0;
   while (position < offset) {
-    const bytes = await readFileRange(handle, position, Math.min(64 * 1024, offset - position));
-    if (bytes.length === 0) return null;
-    hash.update(bytes);
-    position += bytes.length;
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      Math.min(buffer.length, offset - position),
+      position,
+    );
+    if (bytesRead === 0) return null;
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
   }
   return hash;
 }
