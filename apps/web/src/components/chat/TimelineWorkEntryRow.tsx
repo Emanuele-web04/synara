@@ -752,7 +752,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         : EMPTY_FILE_DIFF_STATS,
     [workEntry],
   );
-  const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
+  const isSubagentTaskRow = workEntry.itemType === "collab_agent_tool_call";
+  // Only a subagent row shows ticking time; other running rows need no clock.
+  const liveActivityNowMs = useLiveActivityNow(
+    isSubagentTaskRow ? workEntry.liveActivity : undefined,
+  );
   // A failed call says so explicitly, with its exit code, instead of the
   // generic lifecycle meta. The output itself stays behind the disclosure.
   const failure =
@@ -763,7 +767,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     ? null
     : workEntry.liveActivity
       ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
-          subagent: workEntry.itemType === "collab_agent_tool_call",
+          subagent: isSubagentTaskRow,
         })
       : null;
   const failureMetaText = failure

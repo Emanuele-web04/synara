@@ -4448,6 +4448,132 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  describe("Claude tool heartbeats", () => {
+    const toolRows = (
+      itemType: string,
+      title: string,
+      toolCallId: string,
+      toolName: string,
+      input: Record<string, string>,
+    ) => [
+      makeActivity({
+        id: `${toolCallId}-start`,
+        createdAt: "2026-11-15T14:52:01.000Z",
+        kind: "tool.started",
+        summary: `${title} started`,
+        payload: { itemType, status: "inProgress", title, data: { toolCallId, toolName } },
+      }),
+      makeActivity({
+        id: `${toolCallId}-input`,
+        createdAt: "2026-11-15T14:52:02.000Z",
+        kind: "tool.updated",
+        summary: title,
+        payload: { itemType, status: "inProgress", title, data: { toolCallId, toolName, input } },
+      }),
+    ];
+    const heartbeat = (
+      id: string,
+      createdAt: string,
+      toolUseId: string,
+      toolName: string,
+      elapsedSeconds: number,
+      lastActivityAt?: string,
+    ) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "tool.updated",
+        summary: toolName,
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: { toolUseId, toolName, elapsedSeconds },
+          ...(lastActivityAt ? { lastActivityAt } : {}),
+        },
+      });
+    const command = () =>
+      toolRows("command_execution", "Command run", "bash-call", "Bash", {
+        command: "until [ -f done ]; do sleep 10; done && gh pr checks 2156",
+      });
+
+    it("keeps a running command's row, title and latest heartbeat time", () => {
+      const [withoutHeartbeat] = deriveWorkLogEntries(command(), undefined);
+      // One progress row updated in place: anchored at the first heartbeat,
+      // stamped with the latest one.
+      const entries = deriveWorkLogEntries(
+        [
+          ...command(),
+          heartbeat(
+            "bash-progress",
+            "2026-11-15T14:52:32.000Z",
+            "bash-call",
+            "Bash",
+            540,
+            "2026-11-15T15:01:02.000Z",
+          ),
+        ],
+        undefined,
+      );
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        itemType: "command_execution",
+        label: withoutHeartbeat?.label,
+        toolTitle: withoutHeartbeat?.toolTitle,
+        command: "until [ -f done ]; do sleep 10; done && gh pr checks 2156",
+        liveActivity: {
+          state: "running_tool",
+          startedAt: "2026-11-15T14:52:01.000Z",
+          lastActivityAt: "2026-11-15T15:01:02.000Z",
+          elapsedSeconds: 540,
+        },
+      });
+    });
+
+    it("folds heartbeat rows stored under per-heartbeat ids into their command", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          ...command(),
+          heartbeat("hb-0", "2026-11-15T14:52:32.000Z", "bash-call-heartbeat-0", "Bash", 30),
+          heartbeat("hb-1", "2026-11-15T14:53:02.000Z", "bash-call-heartbeat-1", "Bash", 60),
+        ],
+        undefined,
+      );
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        itemType: "command_execution",
+        toolCallId: "bash-call",
+        liveActivity: { lastActivityAt: "2026-11-15T14:53:02.000Z", elapsedSeconds: 60 },
+      });
+    });
+
+    it("keeps a subagent task's title when its heartbeat refreshes it", () => {
+      const task = () =>
+        toolRows("collab_agent_tool_call", "Subagent task", "task-call", "Agent", {
+          description: "Study web app renderer",
+          prompt: "Read the renderer",
+          subagent_type: "Explore",
+        });
+      const [withoutHeartbeat] = deriveWorkLogEntries(task(), undefined);
+      const entries = deriveWorkLogEntries(
+        [
+          ...task(),
+          heartbeat("task-progress", "2026-11-15T14:52:32.000Z", "task-call", "Agent", 30),
+        ],
+        undefined,
+      );
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        itemType: "collab_agent_tool_call",
+        label: withoutHeartbeat?.label,
+        toolTitle: withoutHeartbeat?.toolTitle,
+        liveActivity: { elapsedSeconds: 30 },
+      });
+    });
+  });
+
   it("preserves command semantics while a Claude progress placeholder is live", () => {
     const entries = deriveWorkLogEntries(
       [
