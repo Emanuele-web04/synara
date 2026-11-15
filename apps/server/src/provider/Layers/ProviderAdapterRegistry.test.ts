@@ -17,6 +17,10 @@ import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts"
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { ClineAdapter, type ClineAdapterShape } from "../Services/ClineAdapter.ts";
+import {
+  CommandCodeAdapter,
+  type CommandCodeAdapterShape,
+} from "../Services/CommandCodeAdapter.ts";
 import { DevinAdapter, DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
@@ -209,6 +213,10 @@ const fakeAntigravityAdapter: AntigravityAdapterShape = {
 };
 
 const fakeClineAdapter: ClineAdapterShape = { ...fakeCodexAdapter, provider: "cline" };
+const fakeCommandCodeAdapter: CommandCodeAdapterShape = {
+  ...fakeCodexAdapter,
+  provider: "commandCode",
+};
 
 const registryLayer = (codexAdapter = fakeCodexAdapter) =>
   Layer.mergeAll(
@@ -220,6 +228,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
         Layer.succeed(DevinAdapter, fakeDevinAdapter),
         Layer.succeed(ClineAdapter, fakeClineAdapter),
+        Layer.succeed(CommandCodeAdapter, fakeCommandCodeAdapter),
         Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
@@ -283,6 +292,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "cursor",
         "devin",
         "cline",
+        "commandCode",
         "antigravity",
         "grok",
         "droid",

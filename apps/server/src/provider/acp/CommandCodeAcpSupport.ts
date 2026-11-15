@@ -108,7 +108,11 @@ export function mapCommandCodeModels(
   const configured = defaultModel ? models.get(defaultModel) : undefined;
   return configured
     ? [
-        { ...configured, slug: "default", name: `Command Code configured model (${configured.name})` },
+        {
+          ...configured,
+          slug: "default",
+          name: `Command Code configured model (${configured.name})`,
+        },
         ...models.values(),
       ]
     : [...models.values()];
@@ -136,8 +140,20 @@ export function configureCommandCodeSession(input: {
       });
     }
     yield* input.runtime.setConfigOption(modelOption.id, model);
-    // Native Plan is read-only. A failed mode change must prevent dispatch.
-    yield* input.runtime.setMode(input.interactionMode === "plan" ? "plan" : "act");
+    // `cmd` exposes permission modes as spawn flags, not an ACP mode option.
+    // Set a session mode only when the agent advertises one.
+    const modeOption = options.find(
+      (option) => option.type === "select" && (option.category === "mode" || option.id === "mode"),
+    );
+    if (modeOption?.type === "select") {
+      const wanted = input.interactionMode === "plan" ? "plan" : "act";
+      const hasWanted = modeOption.options
+        .flatMap((entry) => ("value" in entry ? [entry] : entry.options))
+        .some((entry) => entry.value === wanted);
+      if (hasWanted) {
+        yield* input.runtime.setMode(wanted);
+      }
+    }
   });
 }
 
