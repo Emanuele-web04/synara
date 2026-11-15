@@ -118,8 +118,17 @@ export function makeThreadDiagnosticTools(input: {
         return mcpToolResultJson({
           threadId,
           activities: page
-            .map((row) => (Object.assign({sequence:row.sequence,activityId:row.activityId,turnId:row.turnId,tone:row.tone,kind:row.kind,summary:row.summary,createdAt:row.createdAt}, includeDetails?{detail:sanitizeDiagnosticValue(row.payload)}:{})))
-            .toReversed(),
+            .map((row) => ({
+              sequence: row.sequence,
+              activityId: row.activityId,
+              turnId: row.turnId,
+              tone: row.tone,
+              kind: row.kind,
+              summary: row.summary,
+              createdAt: row.createdAt,
+              ...(includeDetails ? { detail: sanitizeDiagnosticValue(row.payload) } : {}),
+            }))
+            .reverse(),
           coverage: {
             source: "projection_thread_activities",
             highWaterSequence,
@@ -500,8 +509,18 @@ export function makeThreadDiagnosticPageReaders(input: ThreadDiagnosticPageDepen
         return mcpToolResultJson({
           threadId,
           events: page
-            .map(({ sequence, event }) => (Object.assign({sequence,eventId:event.eventId,type:event.type,provider:event.provider,turnId:event.turnId??null,itemId:event.itemId??null,requestId:event.requestId??null,createdAt:event.createdAt}, includeDetails?{detail:sanitizeDiagnosticValue(event)}:{})))
-            .toReversed(),
+            .map(({ sequence, event }) => ({
+              sequence,
+              eventId: event.eventId,
+              type: event.type,
+              provider: event.provider,
+              turnId: event.turnId ?? null,
+              itemId: event.itemId ?? null,
+              requestId: event.requestId ?? null,
+              createdAt: event.createdAt,
+              ...(includeDetails ? { detail: sanitizeDiagnosticValue(event) } : {}),
+            }))
+            .reverse(),
           coverage: {
             source: "provider_runtime_events",
             highWaterSequence,
@@ -528,161 +547,5 @@ export function makeThreadDiagnosticPageReaders(input: ThreadDiagnosticPageDepen
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   } satisfies ToolEntry;
 
-  const diagnoseThread: ToolEntry = {
-    requiredCapability: "diagnostics:read",
-    definition: {
-      name: "synara_diagnose_thread",
-      description:
-        "Build one bounded forensic snapshot from projected status/messages/activity, durable events, provider delivery blockers, and operational stream incidents.",
-      inputSchema: {
-        type: "object",
-        properties: { threadId: { type: "string" } },
-        required: ["threadId"],
-        additionalProperties: false,
-      },
-      annotations: { title: "Diagnose a Synara thread", ...READ_ONLY_TOOL_ANNOTATIONS },
-    },
-    handler: (args, context) =>
-      Effect.gen(function* () {
-        const threadId = readStringArg(args, "threadId", { required: true })!;
-        yield* input.requireThreadShell(threadId);
-        const detail = yield* input.snapshotQuery
-          .getThreadDetailById(ThreadId.makeUnsafe(threadId))
-          .pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(new ToolInputError(`Thread "${threadId}" was not found.`)),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-        const [activityCoverage, eventHighWater, runtimeCoverage, blockers, incidents] =
-          yield* Effect.all([
-            input.diagnostics.getActivityCoverage(threadId),
-            input.eventStore.getThreadHighWaterSequence(threadId),
-            input.providerRuntimeEvents.getThreadCoverage(threadId),
-            input.eventDeliveries.listBlockingDeliveries({
-              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              threadId,
-              limit: 20,
-            }),
-            input.diagnostics.listOperationalDiagnostics({ threadId, limit: 50 }),
-          ]);
-        const [activities, events, runtimeEvents] = yield* Effect.all([
-          input.diagnostics.listActivities({
-            threadId,
-            throughSequenceInclusive: activityCoverage.highWaterSequence,
-            limit: 50,
-          }),
-          input.eventStore.readThreadEvents({
-            threadId,
-            throughSequenceInclusive: eventHighWater,
-            limit: 100,
-          }),
-          input.providerRuntimeEvents.readThreadEvents({
-            threadId,
-            throughSequenceInclusive: runtimeCoverage.highWaterSequence,
-            limit: 100,
-          }),
-        ]);
-        const findings = [
-          ...(detail.session?.lastError
-            ? [
-                {
-                  severity: "error",
-                  code: "provider_session_error",
-                  detail: detail.session.lastError,
-                },
-              ]
-            : []),
-          ...blockers.map((blocker) => ({
-            severity: "error",
-            code: "provider_delivery_blocked",
-            detail: `Event ${blocker.eventSequence} is ${blocker.state} after ${blocker.attemptCount} attempt(s).`,
-          })),
-          ...incidents
-            .filter((incident) => incident.severity !== "info")
-            .map((incident) => ({
-              severity: incident.severity,
-              code: incident.code ?? incident.kind,
-              detail: incident.detail,
-            })),
-        ];
-        return mcpToolResultJson({
-          thread: summarizeThreadDetail({
-            thread: detail,
-            messageLimit: 20,
-            maxMessageChars: 2_000,
-          }),
-          findings,
-          recentActivity: activities
-            .map((activity) => ({
-              sequence: activity.sequence,
-              turnId: activity.turnId,
-              kind: activity.kind,
-              tone: activity.tone,
-              summary: activity.summary,
-              createdAt: activity.createdAt,
-            }))
-            .toReversed(),
-          recentEvents: shapeDiagnosticEvents(events, "summary"),
-          recentRuntimeEvents: runtimeEvents
-            .map(({ sequence, event }) => ({
-              sequence,
-              eventId: event.eventId,
-              type: event.type,
-              provider: event.provider,
-              turnId: event.turnId ?? null,
-              itemId: event.itemId ?? null,
-              requestId: event.requestId ?? null,
-              createdAt: event.createdAt,
-            }))
-            .toReversed(),
-          providerDeliveryBlockers: blockers.map((blocker) => ({
-            ...blocker,
-            lastError: sanitizeDiagnosticValue(blocker.lastError),
-            lastReconciliationNote: sanitizeDiagnosticValue(blocker.lastReconciliationNote),
-          })),
-          operationalIncidents: incidents.map((incident) => ({
-            ...incident,
-            detail: sanitizeDiagnosticValue(incident.detail),
-          })),
-          coverage: {
-            messages: { source: "projection_thread_messages", boundedToNewest: 2_000 },
-            activity: {
-              source: "projection_thread_activities",
-              highWaterSequence: activityCoverage.highWaterSequence,
-              sourceComplete: activityCoverage.unsequencedCount === 0,
-              unsequencedCount: activityCoverage.unsequencedCount,
-            },
-            events: {
-              source: "orchestration_events",
-              highWaterSequence: eventHighWater,
-              durableSourceComplete: true,
-              returnedNewest: events.length,
-            },
-            operationalIncidents: {
-              source: "operational_diagnostics",
-              retentionDays: 30,
-              globalCap: 10_000,
-            },
-            providerRuntimeRawEvents: {
-              included: true,
-              source: "provider_runtime_events",
-              returnedNewest: runtimeEvents.length,
-              highWaterSequence: runtimeCoverage.highWaterSequence,
-              oldestRetainedSequence: runtimeCoverage.oldestSequence,
-              retainedForThread: runtimeCoverage.retainedCount,
-              globalAcceptedEventCap: PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
-              sourceComplete: false,
-              reason:
-                "Provider runtime events have bounded global retention; absence is not proof that an event never occurred.",
-            },
-          },
-        });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
-  };
-
-  return [readActivity, readEvents, readRuntimeEvents, diagnoseThread];
+  return { readEvents, readRuntimeEvents };
 }

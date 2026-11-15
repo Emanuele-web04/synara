@@ -22,7 +22,6 @@ type ModelProviderKind =
   | "pi"
   | "devin"
   | "omp"
-  | "cline";
   | "cline"
   | "commandCode";
 
@@ -127,7 +126,6 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "pi" ||
     provider === "devin" ||
     provider === "omp" ||
-    provider === "cline"
     provider === "cline" ||
     provider === "commandCode"
   ) {

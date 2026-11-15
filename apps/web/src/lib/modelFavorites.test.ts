@@ -1,11 +1,10 @@
-import { ProviderKind } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAVORITE_MODEL_STORAGE_KEYS, readFavoriteModelSlugs } from "./modelFavorites";
 
 describe("model favourites", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(ProviderKind.literals)(
+  it.each(["cursor", "opencode", "pi"] as const)(
     "reads favourites for %s using its own storage key",
     (provider) => {
       const getItem = vi.fn((key: string) =>
@@ -22,19 +21,19 @@ describe("model favourites", () => {
   it("keeps the same slug independent across providers", () => {
     vi.stubGlobal("localStorage", {
       getItem: (key: string) =>
-        key === FAVORITE_MODEL_STORAGE_KEYS.cline ? JSON.stringify(["default"]) : null,
+        key === FAVORITE_MODEL_STORAGE_KEYS.opencode ? JSON.stringify(["default"]) : null,
     });
-    expect(readFavoriteModelSlugs("cline")).toEqual(["default"]);
-    expect(readFavoriteModelSlugs("codex")).toEqual([]);
+    expect(readFavoriteModelSlugs("opencode")).toEqual(["default"]);
+    expect(readFavoriteModelSlugs("cursor")).toEqual([]);
   });
 
   it.each(["not json", "{}", '["valid", 12]'])("ignores invalid preferences: %s", (raw) => {
     vi.stubGlobal("localStorage", { getItem: () => raw });
-    expect(readFavoriteModelSlugs("cline")).toEqual([]);
+    expect(readFavoriteModelSlugs("pi")).toEqual([]);
   });
 
   it("works when browser storage is unavailable", () => {
     vi.stubGlobal("localStorage", undefined);
-    expect(readFavoriteModelSlugs("cline")).toEqual([]);
+    expect(readFavoriteModelSlugs("pi")).toEqual([]);
   });
 });

@@ -335,20 +335,21 @@ export type DevinModelSelection = typeof DevinModelSelection.Type;
 
 export const ClineModelSelection = Schema.Struct({
   provider: Schema.Literal("cline"),
+  instanceId: ProviderInstanceIdForDriver("cline"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClineModelOptions),
 });
 export type ClineModelSelection = typeof ClineModelSelection.Type;
 
-const ModelSelectionByProvider = Schema.Union([
 export const CommandCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("commandCode"),
+  instanceId: ProviderInstanceIdForDriver("commandCode"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CommandCodeModelOptions),
 });
 export type CommandCodeModelSelection = typeof CommandCodeModelSelection.Type;
 
-export const ModelSelection = Schema.Union([
+const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
@@ -481,10 +482,12 @@ export const DevinProviderStartOptions = Schema.Struct({
 
 export const ClineProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const CommandCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ProviderStartOptions = Schema.Struct({

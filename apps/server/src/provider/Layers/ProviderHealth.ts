@@ -950,6 +950,8 @@ export const makeProviderUpdateEnv = (
     case "opencode":
     case "pi":
     case "omp":
+    case "cline":
+    case "commandCode":
       return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
@@ -2615,16 +2617,16 @@ export const makeCheckClineProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const probe = yield* probeProviderCliVersion(
-      runProviderCommand(
-        binaryPath?.trim() || "cline",
-        ["--version"],
-        providerCommandEnv(CLINE_PROVIDER),
-      ),
+      runProviderCommand(binaryPath?.trim() || "cline", ["--version"], {
+        env: providerCommandEnv(CLINE_PROVIDER),
+      }),
       DEFAULT_TIMEOUT_MS,
     );
     if (probe.outcome !== "success") {
       return {
         provider: CLINE_PROVIDER,
+        instanceId: CLINE_PROVIDER,
+        driver: CLINE_PROVIDER,
         checkedAt,
         status: "error",
         available: false,
@@ -2639,6 +2641,8 @@ export const makeCheckClineProviderStatus = (
     }
     return {
       provider: CLINE_PROVIDER,
+      instanceId: CLINE_PROVIDER,
+      driver: CLINE_PROVIDER,
       checkedAt,
       status: "ready",
       available: true,
@@ -2656,16 +2660,16 @@ export const makeCheckCommandCodeProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const probe = yield* probeProviderCliVersion(
-      runProviderCommand(
-        binaryPath?.trim() || "cmd",
-        ["--version"],
-        providerCommandEnv(COMMAND_CODE_PROVIDER),
-      ),
+      runProviderCommand(binaryPath?.trim() || "cmd", ["--version"], {
+        env: providerCommandEnv(COMMAND_CODE_PROVIDER),
+      }),
       DEFAULT_TIMEOUT_MS,
     );
     if (probe.outcome !== "success") {
       return {
         provider: COMMAND_CODE_PROVIDER,
+        instanceId: COMMAND_CODE_PROVIDER,
+        driver: COMMAND_CODE_PROVIDER,
         checkedAt,
         status: "error",
         available: false,
@@ -2680,6 +2684,8 @@ export const makeCheckCommandCodeProviderStatus = (
     }
     return {
       provider: COMMAND_CODE_PROVIDER,
+      instanceId: COMMAND_CODE_PROVIDER,
+      driver: COMMAND_CODE_PROVIDER,
       checkedAt,
       status: "ready",
       available: true,

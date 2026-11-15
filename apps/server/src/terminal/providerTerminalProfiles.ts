@@ -18,10 +18,13 @@ import { buildCodexProcessEnv } from "../codexProcessEnv.ts";
 import { resolveExecutable } from "../executableLookup.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
 import { buildClaudeInstanceProcessEnv } from "../provider/claudeEnvironment.ts";
-import { buildProviderProcessEnv } from "../provider/providerProcessEnv.ts";
+import {
+  buildProviderProcessEnv,
+  type ProviderProcessEnvDriver,
+} from "../provider/providerProcessEnv.ts";
 import type { ManagedTerminalProfile } from "./managedTerminalWrappers.ts";
 
-const GENERIC_DRIVER_BY_PROVIDER = {
+const GENERIC_DRIVER_BY_PROVIDER: Partial<Record<ProviderKind, ProviderProcessEnvDriver>> = {
   cursor: "cursor",
   antigravity: "gemini",
   grok: "grok",
@@ -197,19 +200,24 @@ export async function deriveManagedTerminalProfiles(input: {
       environment = selectedProfileEnvironment(generated, configured);
     } else if (instance.driver !== "devin") {
       const genericDriver = GENERIC_DRIVER_BY_PROVIDER[instance.driver];
-      const generated = buildProviderProcessEnv({
-        driver: genericDriver,
-        env: input.baseEnv,
-        ...(isolated ? { environment: configuredEnvironment } : {}),
-        ...(instance.isDefault ? {} : { instanceId: instance.instanceId }),
-        homeDir: input.homeDir,
-        isolationRootDir: input.stateDir,
-      });
-      environment = selectedProfileEnvironment(generated, configuredEnvironment);
-      if (instance.driver === "pi" || instance.driver === "omp") {
-        const agentDir = readConfigString(instance.config, "agentDir") ?? profileDir;
-        if (agentDir) {
-          environment.PI_CODING_AGENT_DIR = expandProviderAccountHomePath(agentDir, input.homeDir);
+      if (genericDriver) {
+        const generated = buildProviderProcessEnv({
+          driver: genericDriver,
+          env: input.baseEnv,
+          ...(isolated ? { environment: configuredEnvironment } : {}),
+          ...(instance.isDefault ? {} : { instanceId: instance.instanceId }),
+          homeDir: input.homeDir,
+          isolationRootDir: input.stateDir,
+        });
+        environment = selectedProfileEnvironment(generated, configuredEnvironment);
+        if (instance.driver === "pi" || instance.driver === "omp") {
+          const agentDir = readConfigString(instance.config, "agentDir") ?? profileDir;
+          if (agentDir) {
+            environment.PI_CODING_AGENT_DIR = expandProviderAccountHomePath(
+              agentDir,
+              input.homeDir,
+            );
+          }
         }
       }
     } else if (!instance.isDefault) {

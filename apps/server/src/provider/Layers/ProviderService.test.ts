@@ -84,6 +84,8 @@ import { GrokAdapter } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { OmpAdapter } from "../Services/OmpAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
+import { ClineAdapter } from "../Services/ClineAdapter.ts";
+import { CommandCodeAdapter } from "../Services/CommandCodeAdapter.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import {
@@ -655,7 +657,8 @@ function makeProviderServiceLayer(
       : {}),
     ...(providers?.codexDidResumeSession
       ? { didResumeSession: providers.codexDidResumeSession }
-      : {}));
+      : {}),
+  });
   const claude = makeFakeCodexAdapter("claudeAgent");
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
@@ -1878,6 +1881,8 @@ const makeRegistrySwitchLayer = (
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
+        Layer.succeed(ClineAdapter, adapterFor("cline")),
+        Layer.succeed(CommandCodeAdapter, adapterFor("commandCode")),
         settingsLayer,
       ),
     ),

@@ -37,8 +37,9 @@ import { PickerTriggerButton } from "./PickerTriggerButton";
 import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
-  COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME,
-  COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -333,6 +334,21 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.cursor,
+    EMPTY_FAVORITE_MODEL_SLUGS,
+    FavoriteModelSlugs,
+  );
+  const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.opencode,
+    EMPTY_FAVORITE_MODEL_SLUGS,
+    FavoriteModelSlugs,
+  );
+  const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.pi,
+    EMPTY_FAVORITE_MODEL_SLUGS,
+    FavoriteModelSlugs,
+  );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const selectedProviderInstanceId = props.selectedProviderInstanceId ?? props.provider;
@@ -605,11 +621,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
     const shouldShowSearch =
-      !isLoading &&
       (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
-        provider === "cline" ||
         provider === "pi" ||
         provider === "omp") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
@@ -762,9 +776,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       </>
     );
   }
-  if (props.navigation?.provider) {
-    return <>{renderModelRadioGroup(props.navigation.provider)}</>;
-  }
 
   return (
     <>
@@ -860,43 +871,21 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
             </MenuItem>
           );
         }
-        const providerContent = (
-          <>
-            <OptionIcon
-              aria-hidden="true"
-              className={cn(
-                "size-3.5 shrink-0",
-                providerIconClassName(option.value, "text-muted-foreground/85"),
-              )}
-            />
-            <span className="min-w-0 flex-1">{option.label}</span>
-            {activeProvider === option.value ? (
-              <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : null}
-          </>
-        );
-        const navigation = props.navigation;
-        if (navigation) {
-          const browseProvider = () => {
-            setModelSearchQuery("");
-            navigation.onProviderBrowse(option.value);
-          };
-          return (
-            <MenuItem
-              key={option.value}
-              aria-label={option.label}
-              data-browse-provider={option.value}
-              data-current-provider={activeProvider === option.value ? "" : undefined}
-              className="data-current-provider:bg-[var(--color-background-button-secondary)]"
-              closeOnClick={false}
-              onClick={browseProvider}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowRight") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  browseProvider();
-                }
-              }}
+        return (
+          <MenuSub key={option.value}>
+            <MenuSubTrigger>
+              <OptionIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-3 shrink-0",
+                  providerIconClassName(option.value, "text-muted-foreground/85"),
+                )}
+              />
+              {option.label}
+            </MenuSubTrigger>
+            <ComposerPickerMenuSubPopup
+              fixedWidth
+              className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
             >
               {renderProviderInstanceRadioGroup(option.value)}
               {renderModelRadioGroup(option.value)}
@@ -1076,7 +1065,6 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
   const triggerButton = (
     <PickerTriggerButton
       disabled={props.disabled ?? false}
-      title={selectedModelLabel}
       compact={props.compact ?? false}
       hideLabel={props.hideLabel ?? false}
       className="text-[var(--color-text-foreground)]"
@@ -1134,14 +1122,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           <span className="sr-only">{triggerLabel}</span>
         </MenuTrigger>
       )}
-      <ComposerPickerMenuPopup
-        align="start"
-        className={
-          props.lockedProvider !== null
-            ? COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME
-            : COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME
-        }
-      >
+      <ComposerPickerMenuPopup align="start" fixedWidth>
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}

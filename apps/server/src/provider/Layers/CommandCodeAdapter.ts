@@ -94,7 +94,10 @@ import {
 } from "../acp/CommandCodeAcpSupport.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
-import { CommandCodeAdapter, type CommandCodeAdapterShape } from "../Services/CommandCodeAdapter.ts";
+import {
+  CommandCodeAdapter,
+  type CommandCodeAdapterShape,
+} from "../Services/CommandCodeAdapter.ts";
 import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadTurnSnapshot,
@@ -486,7 +489,10 @@ export function makeCommandCodeAdapter(
             );
           }
           if (input.runtimeMode === "auto")
-            return yield* validation("startSession", "Command Code does not support Auto runtime mode.");
+            return yield* validation(
+              "startSession",
+              "Command Code does not support Auto runtime mode.",
+            );
           const resume = parseCommandCodeResumeCursor(input.resumeCursor);
           if (input.resumeCursor !== undefined && !resume)
             return yield* validation(
@@ -502,7 +508,12 @@ export function makeCommandCodeAdapter(
           });
           if (!cwd) return yield* validation("startSession", "A working directory is required.");
           const scope = yield* Scope.make("sequential");
-          const lease = acquireAgentGatewaySessionLease(credentials, input.threadId, PROVIDER);
+          const lease = acquireAgentGatewaySessionLease(
+            credentials,
+            input.threadId,
+            PROVIDER,
+            input,
+          );
           yield* Scope.addFinalizer(
             scope,
             Effect.sync(() => lease?.release()),
@@ -577,7 +588,9 @@ export function makeCommandCodeAdapter(
             yield* registerInteractions(context);
             yield* Stream.runForEach(acp.getEvents(), (event) => processEvent(context, event)).pipe(
               Effect.catchCause(() =>
-                stopInternal(context, "Command Code event stream failed.", false).pipe(Effect.ignore),
+                stopInternal(context, "Command Code event stream failed.", false).pipe(
+                  Effect.ignore,
+                ),
               ),
               Effect.forkIn(scope),
             );
@@ -666,7 +679,10 @@ export function makeCommandCodeAdapter(
         if (ctx.turnStarting || ctx.activeTurnId || ctx.session.status !== "ready")
           return yield* validation("sendTurn", "Command Code is not ready for another turn.");
         if (input.modelSelection && input.modelSelection.provider !== PROVIDER)
-          return yield* validation("sendTurn", "A Command Code session requires a Command Code model.");
+          return yield* validation(
+            "sendTurn",
+            "A Command Code session requires a Command Code model.",
+          );
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
         return yield* Effect.gen(function* () {
@@ -705,7 +721,10 @@ export function makeCommandCodeAdapter(
           if (!prompt.length)
             return yield* validation("sendTurn", "A turn requires text or attachments.");
           if (ctx.stopped || ctx.pendingTurnInterrupted)
-            return yield* validation("sendTurn", "Command Code turn was cancelled before dispatch.");
+            return yield* validation(
+              "sendTurn",
+              "Command Code turn was cancelled before dispatch.",
+            );
           const policy = takeSynaraHarnessPolicyTextPartForProviderSession(ctx, {
             provider: PROVIDER,
             scopedGatewayConnectionAvailable: ctx.gatewaySessionLease !== undefined,
@@ -743,7 +762,8 @@ export function makeCommandCodeAdapter(
                 Effect.gen(function* () {
                   yield* drain(ctx);
                   const redacted = redactAcpLogSecrets(error.message);
-                  const detail = typeof redacted === "string" ? redacted : "Command Code prompt failed.";
+                  const detail =
+                    typeof redacted === "string" ? redacted : "Command Code prompt failed.";
                   yield* finishTurn(ctx, turnId, {
                     state: "failed",
                     stopReason: null,

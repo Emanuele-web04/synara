@@ -26,7 +26,6 @@ describe("resolveRuntimeModelDescriptor", () => {
       }),
     ).toBe(runtimeModels[0]);
   });
-<<<<<<< HEAD
 
   it.each([
     ["opus", true],
@@ -129,8 +128,6 @@ describe("Claude runtime effort default", () => {
     expect(selection(modelOptionsForDispatch).effort).toBe("high");
     expect(selection({ effort: "medium" }).effort).toBe("medium");
   });
-||||||| parent of d68c1c701 (feat(web): add provider model favourites and catalog navigation)
-=======
 
   it("falls back to the bare model identifier when the upstream prefix is stale", () => {
     const runtimeModels: ReadonlyArray<ProviderModelDescriptor> = [
@@ -177,5 +174,4 @@ describe("Claude runtime effort default", () => {
       }),
     ).toBe(zoned[0]);
   });
->>>>>>> d68c1c701 (feat(web): add provider model favourites and catalog navigation)
 });

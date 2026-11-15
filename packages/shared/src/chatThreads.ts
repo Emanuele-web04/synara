@@ -51,7 +51,7 @@ function firstGeneratedTitleLine(value: string): string {
   const lines = removeReasoningWrappers(value)
     .split(/\r?\n/)
     .map((line) => line.trim());
-  return lines.find((line) => line.length > 0 && !line.startsWith('```')) ?? "";
+  return lines.find((line) => line.length > 0 && !line.startsWith("```")) ?? "";
 }
 
 function truncateConversationMessage(value: string): string {

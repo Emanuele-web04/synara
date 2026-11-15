@@ -25,7 +25,9 @@ describe("composer model presets", () => {
       const presets = [{ ...PRESET, provider }];
       const codec = Schema.fromJsonString(ComposerModelPresetsSchema);
       expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(presets))).toEqual(presets);
-      expect(COMPOSER_MODEL_PRESETS_STORAGE_KEY).not.toBe(FAVORITE_MODEL_STORAGE_KEYS[provider]);
+      expect(Object.values(FAVORITE_MODEL_STORAGE_KEYS)).not.toContain(
+        COMPOSER_MODEL_PRESETS_STORAGE_KEY,
+      );
     },
   );
 

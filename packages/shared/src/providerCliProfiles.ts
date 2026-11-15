@@ -15,6 +15,8 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
+  cline: "cline",
+  commandCode: "cmd",
 } as const satisfies Record<ProviderKind, string>;
 
 const CLI_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -104,6 +106,16 @@ export const PROVIDER_AUTHENTICATION = {
     instructions:
       "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
     interactiveCommand: "/login",
+  },
+  cline: {
+    args: ["auth"],
+    instructions:
+      "Complete the Cline sign-in shown in the terminal, then Synara will check the account.",
+  },
+  commandCode: {
+    args: ["auth"],
+    instructions:
+      "Complete the Command Code sign-in shown in the terminal, then Synara will check the account.",
   },
 } as const satisfies Record<
   ProviderKind,

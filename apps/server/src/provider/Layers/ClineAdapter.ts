@@ -502,7 +502,12 @@ export function makeClineAdapter(
           });
           if (!cwd) return yield* validation("startSession", "A working directory is required.");
           const scope = yield* Scope.make("sequential");
-          const lease = acquireAgentGatewaySessionLease(credentials, input.threadId, PROVIDER);
+          const lease = acquireAgentGatewaySessionLease(
+            credentials,
+            input.threadId,
+            PROVIDER,
+            input,
+          );
           yield* Scope.addFinalizer(
             scope,
             Effect.sync(() => lease?.release()),

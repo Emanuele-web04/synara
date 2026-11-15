@@ -222,7 +222,8 @@ export function repairBrowserProfileFromBridgeManifest(
           if (rollbackErrors.length > 0) {
             throw new AggregateError(
               [installError, ...rollbackErrors],
-              "Browser profile bridge repair and rollback failed", { cause: installError },
+              "Browser profile bridge repair and rollback failed",
+              { cause: installError },
             );
           }
           throw installError;

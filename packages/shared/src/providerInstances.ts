@@ -27,6 +27,8 @@ export const BUILT_IN_PROVIDER_KINDS = [
   "opencode",
   "pi",
   "omp",
+  "cline",
+  "commandCode",
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 export interface ResolvedProviderInstance {
@@ -125,6 +127,10 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "pi" ? "" : trimmed;
     case "omp":
       return trimmed === "omp" ? "" : trimmed;
+    case "cline":
+      return trimmed === "cline" ? "" : trimmed;
+    case "commandCode":
+      return trimmed === "cmd" || trimmed === "command-code" ? "" : trimmed;
   }
 }
 

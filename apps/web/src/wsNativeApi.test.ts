@@ -461,7 +461,7 @@ describe("wsNativeApi", () => {
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
           cline: { enabled: true, binaryPath: "cline", customModels: [] },
-      commandCode: { binaryPath: "", customModels: [], enabled: true },
+          commandCode: { binaryPath: "", customModels: [], enabled: true },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },

@@ -99,7 +99,26 @@ export function shapeDiagnosticEvents(
   return groupDiagnosticEvents(eventsNewestFirst)
     .map(({ event, coalescedEventCount }) => {
       const messageId = diagnosticEventMessageId(event);
-      return Object.assign({sequence:event.sequence,eventId:event.eventId,type:event.type,occurredAt:event.occurredAt,commandId:event.commandId,causationEventId:event.causationEventId,correlationId:event.correlationId}, messageId&&coalescedEventCount>1?{coalescedEventCount}:{}, payloadMode===`none`?{}:{payload:payloadMode===`full`?sanitizeDiagnosticValue(event.payload):summarizeEventPayload(event)});
+      return Object.assign(
+        {
+          sequence: event.sequence,
+          eventId: event.eventId,
+          type: event.type,
+          occurredAt: event.occurredAt,
+          commandId: event.commandId,
+          causationEventId: event.causationEventId,
+          correlationId: event.correlationId,
+        },
+        messageId && coalescedEventCount > 1 ? { coalescedEventCount } : {},
+        payloadMode === `none`
+          ? {}
+          : {
+              payload:
+                payloadMode === `full`
+                  ? sanitizeDiagnosticValue(event.payload)
+                  : summarizeEventPayload(event),
+            },
+      );
     })
     .toReversed();
 }

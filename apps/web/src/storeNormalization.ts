@@ -2376,7 +2376,6 @@ export function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "pi" ||
     providerName === "devin" ||
     providerName === "omp" ||
-    providerName === "cline"
     providerName === "cline" ||
     providerName === "commandCode"
   ) {

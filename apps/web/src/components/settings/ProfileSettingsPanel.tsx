@@ -704,67 +704,6 @@ function formatMostWorkedProjectLabel(
     value1: formatNumber(project.promptCount, formatLocale),
     value2: promptLabel,
   });
-  const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
-  return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
-}
-
-function formatProviderLabel(provider: ProviderKind): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claudeAgent":
-      return "Claude";
-    case "cursor":
-      return "Cursor";
-    case "cline":
-      return "Cline";
-    case "commandCode":
-      return "Command Code";
-    case "devin":
-      return "Devin";
-    case "antigravity":
-      return "Antigravity";
-    case "grok":
-      return "Grok";
-    case "droid":
-      return "Droid";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "Pi";
-  }
-}
-
-function ModelUsageRow({
-  provider,
-  model,
-  percent,
-}: {
-  provider: ProviderKind | "unknown";
-  model: string;
-  percent: number;
-}) {
-  return (
-    <li className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="flex min-w-0 items-center gap-2">
-          {provider !== "unknown" ? (
-            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
-          ) : (
-            <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{model}</span>
-        </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-[var(--info)]"
-          style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
-        />
-      </div>
-    </li>
-  );
 }
 
 function ProfileSkeleton() {

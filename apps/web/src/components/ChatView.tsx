@@ -390,29 +390,11 @@ import {
 import { NewChatComputerPicker } from "./hosts/ComputerPicker";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
-<<<<<<< HEAD
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
 import { RateLimitBanner } from "./chat/RateLimitBanner";
 import { isMissingCheckpointBaselineActivity } from "../workLog";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-import { ProviderModelPicker, resolveProviderModelLabel } from "./chat/ProviderModelPicker";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
-=======
-import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
-import type { ComposerModelPreset } from "../lib/composerModelPresets";
-import { planComposerModelPreset } from "./chat/composerModelPresetSelection";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
@@ -3120,7 +3102,6 @@ export default function ChatView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-<<<<<<< HEAD
   }, [pendingComposerFocusRef, focusComposer, threadId]);
   useEffect(() => {
     let pendingFrame: number | null = null;
@@ -3152,13 +3133,6 @@ export default function ChatView({
     };
   }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-  }, [pendingComposerFocusRef, focusComposer, secondaryChromeReady, secondaryChromeThreadId]);
-  // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
-=======
-  }, [pendingComposerFocusRef, focusComposer, secondaryChromeReady, secondaryChromeThreadId]);
-  // Keep the model and traits shortcut intents mutually exclusive; both open the shared panel.
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
   const handleModelPickerOpenChange = useCallback(
     (open: boolean) => {
       dismissEffortPreview();
@@ -4078,7 +4052,6 @@ export default function ChatView({
     markWorkflowRunDismissed(activeThreadId, workflowTaskId);
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
 
-<<<<<<< HEAD
   const onProviderModelSelect = useCallback(
     async (
       provider: ProviderKind,
@@ -4086,20 +4059,9 @@ export default function ChatView({
       selectionOptions?: ComposerModelSelectionOptions,
     ) => {
       if (!activeThread) return;
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-  const onProviderModelSelect = useCallback(
-    async (provider: ProviderKind, model: ModelSlug) => {
-      if (!activeThread) return;
-=======
-  const modelSelectionRequestRef = useRef(0);
-  const onProviderModelOrPresetSelect = useCallback(
-    async (provider: ProviderKind, model: ModelSlug, preset?: ComposerModelPreset) => {
-      if (!activeThread) return false;
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       if (lockedProvider !== null && provider !== lockedProvider) {
-        return false;
+        return;
       }
-<<<<<<< HEAD
       const resolvedInstanceId =
         selectionOptions?.instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
       // Picking another provider is a handoff, but the bound provider stays on
@@ -4123,22 +4085,6 @@ export default function ChatView({
           modelOptionsByProviderInstance[resolvedInstanceId] ?? modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-      const resolvedModel = resolveCommittedProviderModel({
-        selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
-        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-      });
-=======
-      const selectionRequest = ++modelSelectionRequestRef.current;
-      const resolvedModel = preset
-        ? preset.model
-        : resolveCommittedProviderModel({
-            selectedModel: model,
-            availableOptions: modelOptionsByProvider[provider],
-            fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-          });
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model: resolvedModel,
@@ -4146,7 +4092,6 @@ export default function ChatView({
         runtimeModels:
           runtimeModelsByProviderInstance[resolvedInstanceId] ?? runtimeModelsByProvider[provider],
       });
-<<<<<<< HEAD
       const nextModelSelection = buildModelSelection(
         provider,
         resolvedModel,
@@ -4156,35 +4101,6 @@ export default function ChatView({
         { instanceId: resolvedInstanceId },
       );
       const providerStatus = findProviderStatus(providerStatuses, provider, resolvedInstanceId);
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-      const nextModelSelection = buildModelSelection(
-        provider,
-        resolvedModel,
-        undefined,
-        provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
-      );
-      const providerStatus = findProviderStatus(providerStatuses, provider);
-=======
-      const planPreset = () =>
-        preset
-          ? planComposerModelPreset({
-              preset,
-              lockedProvider,
-              availableModels: modelOptionsByProvider[provider],
-              providerAvailable:
-                preset.provider === provider &&
-                preset.model === model &&
-                (lockedProvider === provider || !settings.hiddenProviders.includes(provider)) &&
-                findProviderStatus(providerStatuses, provider)?.available === true,
-              loading: loadingModelProviders[provider] ?? false,
-              runtimeModel,
-              prompt: promptRef.current,
-            })
-          : null;
-      let presetPlan = planPreset();
-      if (presetPlan?.kind === "unavailable") return false;
-      const providerStatus = findProviderStatus(providerStatuses, provider);
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       const nextRuntimeMode =
         runtimeMode === "auto" &&
         !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
@@ -4196,31 +4112,8 @@ export default function ChatView({
         currentRuntimeMode: runtimeMode,
         nextRuntimeMode,
         persistRuntimeMode: persistRuntimeModeChange,
-        canCommit: () => {
-          if (
-            activeThreadIdRef.current !== activeThread.id ||
-            modelSelectionRequestRef.current !== selectionRequest
-          )
-            return false;
-          // The user can edit or switch chats while access-mode persistence is pending.
-          // Re-plan against the current prompt so Ultrathink never overwrites newer text.
-          presetPlan = planPreset();
-          return presetPlan?.kind !== "unavailable";
-        },
         commit: () => {
-          const currentOptions =
-            useComposerDraftStore.getState().draftsByThreadId[activeThread.id]
-              ?.modelSelectionByProvider[provider]?.options ?? composerModelOptions?.[provider];
-          const nextModelSelection = buildModelSelection(
-            provider,
-            resolvedModel,
-            presetPlan?.kind === "ready" && presetPlan.patch
-              ? buildNextProviderOptions(provider, currentOptions, presetPlan.patch)
-              : undefined,
-            provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
-          );
           setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
-<<<<<<< HEAD
           if (provider === "cursor" && !selectionOptions?.modelOptions) {
             setComposerDraftProviderModelOptions(
               activeThread.id,
@@ -4237,44 +4130,18 @@ export default function ChatView({
                 instanceId: resolvedInstanceId,
               },
             );
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-          if (provider === "cursor") {
-            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-              persistSticky: true,
-              model: resolvedModel,
-            });
-=======
-          if (provider === "cursor" && !preset) {
-            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-              persistSticky: true,
-              model: resolvedModel,
-            });
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
-          }
-          if (presetPlan?.kind === "ready" && presetPlan.prompt !== undefined) {
-            promptRef.current = presetPlan.prompt;
-            setPrompt(presetPlan.prompt);
-            setComposerCursor(
-              collapseExpandedComposerCursor(presetPlan.prompt, presetPlan.prompt.length),
-            );
-            setComposerTrigger(detectComposerTrigger(presetPlan.prompt, presetPlan.prompt.length));
           }
         },
       });
       if (!didCommitSelection) {
-        return false;
+        scheduleComposerFocus();
+        return;
       }
-      return true;
+      scheduleComposerFocus();
     },
     [
       activeThread,
-<<<<<<< HEAD
       boundProvider,
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-=======
-      activeThreadIdRef,
-      composerModelOptions,
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       customModelsByProvider,
       lockedProvider,
       loadingModelProviders,
@@ -4285,30 +4152,16 @@ export default function ChatView({
       promptRef,
       runtimeMode,
       runtimeModelsByProvider,
-<<<<<<< HEAD
       runtimeModelsByProviderInstance,
       scheduleComposerFocus,
       selectedProviderInstanceId,
       settings,
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-      scheduleComposerFocus,
-=======
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
-<<<<<<< HEAD
       showExpandedCursorModelVariants,
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-=======
-      setComposerCursor,
-      setComposerTrigger,
-      setPrompt,
-      settings.hiddenProviders,
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
     ],
   );
 
-<<<<<<< HEAD
   const onProviderInstanceSelect = useCallback(
     (instanceId: ProviderInstanceId) => {
       void onProviderModelSelect(selectedProvider, selectedModelForPickerWithCustomFallback, {
@@ -4327,17 +4180,6 @@ export default function ChatView({
     });
   }, [navigate, selectedProvider]);
 
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-=======
-  const onProviderModelSelect = useCallback(
-    async (provider: ProviderKind, model: ModelSlug) => {
-      await onProviderModelOrPresetSelect(provider, model);
-      scheduleComposerFocus();
-    },
-    [onProviderModelOrPresetSelect, scheduleComposerFocus],
-  );
-
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
   const handleCycleEffort = useCallback(() => {
@@ -5249,29 +5091,12 @@ export default function ChatView({
       handleModelPickerOpenChange,
     ],
   );
-<<<<<<< HEAD
   // Event handlers handed to children below. Their closures read live thread and draft
   // state, so they are recreated with every streamed token and keystroke; one identity
   // keeps those children from re-rendering (and re-registering editor commands) for it.
   const handleProviderModelChange = useStableCallback(onProviderModelSelect);
   const composerModelAndTraitsControls = showComposerModelBootstrapSkeleton ? (
     selectedProviderRuntimeModelDiscoveryPending ? (
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
-    useSplitComposerPickerControls ? (
-      <>
-        {selectedProviderRuntimeModelDiscoveryPending ? (
-          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
-        ) : (
-          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-        )}
-        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
-      </>
-    ) : selectedProviderRuntimeModelDiscoveryPending ? (
-=======
-  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
-    selectedProviderRuntimeModelDiscoveryPending ? (
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
       <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
@@ -5303,25 +5128,12 @@ export default function ChatView({
       selectedProviderInstanceId={selectedProviderInstanceId}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
-<<<<<<< HEAD
       runtimeModelsByProvider={runtimeModelsByProvider}
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-      runtimeModels={runtimeModelsByProvider[selectedProvider]}
-=======
-      runtimeModels={runtimeModelsByProvider[selectedProvider]}
-      runtimeModelsByProvider={runtimeModelsByProvider}
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       runtimeAgents={dynamicAgents}
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
-<<<<<<< HEAD
       onProviderModelChange={handleProviderModelChange}
-||||||| parent of b5bf3af71 (feat(web): add composer model presets)
-      onProviderModelChange={onProviderModelSelect}
-=======
-      onProviderModelChange={onProviderModelOrPresetSelect}
->>>>>>> b5bf3af71 (feat(web): add composer model presets)
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}

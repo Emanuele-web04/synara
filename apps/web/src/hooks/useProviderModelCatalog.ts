@@ -677,7 +677,7 @@ export function useProviderModelCatalog(input: {
       piModelDiscoveryPending,
       devinModelDiscoveryPending,
       ompModelDiscoveryPending,
-    clineModelDiscoveryPending,
+      clineModelDiscoveryPending,
       commandCodeModelDiscoveryPending,
     ],
   );
@@ -710,7 +710,7 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
       ompDynamicModelsQuery.data?.models,
-    clineDynamicModelsQuery.data?.models,
+      clineDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -831,9 +831,11 @@ export function useProviderModelCatalog(input: {
                     ? piDynamicModelsQuery
                     : selectedProvider === "omp"
                       ? ompDynamicModelsQuery
-                      : devinDynamicModelsQuery;
-                    : selectedProvider === "cline"
-                      ? clineDynamicModelsQuery
+                      : selectedProvider === "cline"
+                        ? clineDynamicModelsQuery
+                        : selectedProvider === "commandCode"
+                          ? commandCodeDynamicModelsQuery
+                          : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

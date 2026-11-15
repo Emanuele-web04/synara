@@ -360,7 +360,12 @@ function cursorCapabilities(input?: {
   const defaultEffort =
     input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
   return {
-    reasoningEffortLevels: efforts.map((value) => (Object.assign({value,label:CURSOR_EFFORT_LABELS[value]}, value===defaultEffort?{isDefault:true as const}:{}))),
+    reasoningEffortLevels: efforts.map((value) =>
+      Object.assign(
+        { value, label: CURSOR_EFFORT_LABELS[value] },
+        value === defaultEffort ? { isDefault: true as const } : {},
+      ),
+    ),
     supportsFastMode: input?.fast ?? false,
     supportsThinkingToggle: input?.thinking ?? false,
     promptInjectedEffortLevels: [],
@@ -1149,7 +1154,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   // Command Code selects its model at process start (`cmd acp`); the ACP
   // session may expose a live model list. Static fallback when unreachable.
   commandCode: [
-    { slug: "default", name: "Command Code configured model", capabilities: EMPTY_MODEL_CAPABILITIES },
+    {
+      slug: "default",
+      name: "Command Code configured model",
+      capabilities: EMPTY_MODEL_CAPABILITIES,
+    },
   ],
   devin: [
     {

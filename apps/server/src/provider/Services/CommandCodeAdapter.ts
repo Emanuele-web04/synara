@@ -6,6 +6,7 @@ export interface CommandCodeAdapterShape extends ProviderAdapterShape<ProviderAd
   readonly provider: "commandCode";
 }
 
-export class CommandCodeAdapter extends ServiceMap.Service<CommandCodeAdapter, CommandCodeAdapterShape>()(
-  "synara/provider/Services/CommandCodeAdapter",
-) {}
+export class CommandCodeAdapter extends ServiceMap.Service<
+  CommandCodeAdapter,
+  CommandCodeAdapterShape
+>()("synara/provider/Services/CommandCodeAdapter") {}

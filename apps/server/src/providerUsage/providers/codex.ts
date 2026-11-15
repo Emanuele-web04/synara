@@ -324,7 +324,10 @@ async function refreshCodexAuth(
       return { kind: "needs-auth" };
     }
     // Transport failure / 5xx / WAF page: nothing wrong with the stored credential per se.
-    log.warn("codex token refresh unavailable; continuing with the stored access token", (refreshed.status !== undefined ? { status: refreshed.status } : {}));
+    log.warn(
+      "codex token refresh unavailable; continuing with the stored access token",
+      refreshed.status !== undefined ? { status: refreshed.status } : {},
+    );
     return { kind: "unavailable" };
   });
 }

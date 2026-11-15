@@ -114,6 +114,8 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],
   omp: ["binaryPath", "agentDir", "environment"],
+  cline: ["binaryPath", "environment"],
+  commandCode: ["binaryPath", "environment"],
 } as const satisfies Record<ProviderKind, readonly string[]>;
 
 const make = Effect.gen(function* () {

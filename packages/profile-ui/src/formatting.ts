@@ -121,6 +121,8 @@ export function formatProviderLabel(provider: ProviderKind): string {
       return "Oh My Pi";
     case "cline":
       return "Cline";
+    case "commandCode":
+      return "Command Code";
   }
 }
 

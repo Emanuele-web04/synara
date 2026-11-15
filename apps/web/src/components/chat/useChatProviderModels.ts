@@ -421,8 +421,7 @@ export function useChatProviderModels({
     selectedProvider === "devin" ||
     selectedProvider === "omp" ||
     selectedProvider === "cline";
-    selectedProvider === "cline" ||
-    selectedProvider === "commandCode";
+  selectedProvider === "cline" || selectedProvider === "commandCode";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,

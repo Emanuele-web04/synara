@@ -138,9 +138,11 @@ export function providerStartOptionsFromServerSettings(
       ...(providers.cursor.binaryPath ? { binaryPath: providers.cursor.binaryPath } : {}),
       ...(providers.cursor.apiEndpoint ? { apiEndpoint: providers.cursor.apiEndpoint } : {}),
     },
-    antigravity: (providers.antigravity.binaryPath ? { binaryPath: providers.antigravity.binaryPath } : {}),
-    grok: (providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
-    droid: (providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
+    antigravity: providers.antigravity.binaryPath
+      ? { binaryPath: providers.antigravity.binaryPath }
+      : {},
+    grok: providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {},
+    droid: providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {},
     opencode: {
       ...(providers.opencode.binaryPath ? { binaryPath: providers.opencode.binaryPath } : {}),
       ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),

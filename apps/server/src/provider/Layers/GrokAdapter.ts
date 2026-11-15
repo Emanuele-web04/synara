@@ -624,7 +624,12 @@ export function mergeGrokModelDescriptors(
       models.push({
         slug,
         name: model.name.trim() || formatGrokModelName(slug),
-        supportedReasoningEfforts: capabilities.reasoningEffortLevels.map((level) => (Object.assign({value:level.value,label:level.label}, level.description?{description:level.description}:{}))),
+        supportedReasoningEfforts: capabilities.reasoningEffortLevels.map((level) =>
+          Object.assign(
+            { value: level.value, label: level.label },
+            level.description ? { description: level.description } : {},
+          ),
+        ),
         ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       });
     }
@@ -1989,7 +1994,7 @@ export function makeGrokAdapter(
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: (model ? { model } : {}),
+          payload: model ? { model } : {},
         });
 
         const runPrompt = Effect.suspend(() =>

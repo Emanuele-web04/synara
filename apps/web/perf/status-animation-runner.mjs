@@ -88,7 +88,7 @@ try {
           computedTiming: getComputedStyle(el).animationTimingFunction,
           animations: el
             .getAnimations()
-            .map((a) => (Object.assign({startTime:a.startTime}, a.effect.getTiming()))),
+            .map((a) => Object.assign({ startTime: a.startTime }, a.effect.getTiming())),
         }));
       }, variant);
       if (timing.some((t) => t.animations.length !== 1)) throw Error("Missing fixture animation");

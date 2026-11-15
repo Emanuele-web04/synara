@@ -744,8 +744,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     settingsKey: "customCommandCodeModels",
     defaultSettingsKey: "customCommandCodeModels",
     title: "Command Code",
-    description:
-      "Save additional Command Code model slugs for the picker and provider runtime.",
+    description: "Save additional Command Code model slugs for the picker and provider runtime.",
     placeholder: "provider/model-id",
     example: "deepseek/deepseek-v4.1-flash",
   },
@@ -1033,6 +1032,8 @@ const PROVIDER_INSTANCE_PROVIDER_ORDER = [
   "opencode",
   "pi",
   "omp",
+  "cline",
+  "commandCode",
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 function providerInstanceIdForCodexAccount(accountId: string): ProviderInstanceId {
