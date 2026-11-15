@@ -1980,6 +1980,250 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    /** A repo whose `.env` is copied and whose `vendor/` is linked into new worktrees. */
+    const initRepoWithLinkedVendor = (tmp: string, includePatterns = ".env\n") =>
+      Effect.gen(function* () {
+        yield* initRepoWithCommit(tmp);
+        // Patterns for a linked directory carry no trailing slash: on POSIX the
+        // link is a symlink, which a `vendor/` pattern would not match.
+        yield* writeTextFile(path.join(tmp, ".gitignore"), ".env\nvendor\n");
+        yield* writeTextFile(path.join(tmp, ".worktreeinclude"), includePatterns);
+        yield* writeTextFile(path.join(tmp, ".worktreelink"), "vendor\n");
+        yield* git(tmp, ["add", ".gitignore", ".worktreeinclude", ".worktreelink"]);
+        yield* git(tmp, ["commit", "-m", "configure worktree files"]);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "vendor")));
+        yield* writeTextFile(path.join(tmp, "vendor", "sdk.txt"), "sdk\n");
+        yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+      });
+
+    const lstatIsLink = (target: string) =>
+      Effect.promise(() => fs.lstat(target).then((entry) => entry.isSymbolicLink()));
+
+    it.effect(
+      "links .worktreelink directories into a detached worktree and keeps .worktreeinclude copies",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-linked");
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+
+          expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+          expect(yield* lstatIsLink(path.join(wtPath, ".env"))).toBe(false);
+          expect(yield* readTextFile(path.join(wtPath, ".env"))).toBe("LOCAL_ONLY=yes\n");
+          const [linkTarget, sourceVendor] = yield* Effect.promise(() =>
+            Promise.all([
+              fs.realpath(path.join(wtPath, "vendor")),
+              fs.realpath(path.join(tmp, "vendor")),
+            ]),
+          );
+          expect(linkTarget).toBe(sourceVendor);
+          expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+
+          yield* writeTextFile(path.join(tmp, "vendor", "later.txt"), "later\n");
+          expect(yield* readTextFile(path.join(wtPath, "vendor", "later.txt"))).toBe("later\n");
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect("copies a path listed in both .worktreeinclude and .worktreelink", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp, ".env\nvendor\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-both");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(false);
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor", "sdk.txt"))).toBe(false);
+        expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("snapshots linked paths by name without copying through them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-snapshot-links");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        const snapshotRoot = yield* makeTmpDir("linked-worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "snapshot");
+        yield* core.snapshotWorktree({ cwd: wtPath, outputPath });
+        const manifest = JSON.parse(
+          yield* readTextFile(path.join(outputPath, "snapshot.json")),
+        ) as {
+          copiedPaths: string[];
+          linkedPaths: string[];
+        };
+        expect(manifest.linkedPaths).toEqual(["vendor"]);
+        expect(manifest.copiedPaths).toEqual([".env"]);
+        expect(existsSync(path.join(outputPath, "files", ".env"))).toBe(true);
+        expect(existsSync(path.join(outputPath, "files", "vendor"))).toBe(false);
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("removing a worktree with a linked directory leaves the link target intact", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-remove-linked");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+      }),
+    );
+
+    it.effect("ownership verification fails when a linked path is retargeted", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-retarget-link");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "linked-state-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+
+        const otherVendor = path.join(tmp, "other-vendor");
+        yield* Effect.promise(async () => {
+          await fs.mkdir(otherVendor);
+          await fs.rm(path.join(wtPath, "vendor"), { recursive: true, force: true });
+          await fs.symlink(
+            otherVendor,
+            path.join(wtPath, "vendor"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        });
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    /** A repo with copied `.env`, linked `vendor`, and generated `build/` plus `*.log`. */
+    const initRepoWithGeneratedFiles = (tmp: string, includePatterns = ".env\n") =>
+      Effect.gen(function* () {
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "build/\n.env\nvendor\n*.log\n");
+        yield* writeTextFile(path.join(tmp, ".worktreeinclude"), includePatterns);
+        yield* writeTextFile(path.join(tmp, ".worktreelink"), "vendor\n");
+        yield* git(tmp, ["add", ".gitignore", ".worktreeinclude", ".worktreelink"]);
+        yield* git(tmp, ["commit", "-m", "configure worktree files"]);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "build")));
+        yield* writeTextFile(path.join(tmp, "build", "out.bin"), "out\n");
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "vendor")));
+        yield* writeTextFile(path.join(tmp, "vendor", "sdk.txt"), "sdk\n");
+        yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+        yield* writeTextFile(path.join(tmp, "debug.log"), "log\n");
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+      });
+
+    it.effect("reclaims ignored files that no worktree file claims", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithGeneratedFiles(tmp);
+        const core = yield* GitCore;
+
+        const result = yield* core.reclaimGeneratedFiles({ cwd: tmp });
+
+        expect(result.removedPaths).toEqual(["build", "debug.log"]);
+        expect(result.protectedPaths).toEqual([".env", "vendor"]);
+        expect(existsSync(path.join(tmp, "build"))).toBe(false);
+        expect(existsSync(path.join(tmp, "debug.log"))).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, ".env"))).toBe("LOCAL_ONLY=yes\n");
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        expect(yield* readTextFile(path.join(tmp, "notes.txt"))).toBe("untracked note\n");
+
+        const again = yield* core.reclaimGeneratedFiles({ cwd: tmp });
+        expect(again.removedPaths).toEqual([]);
+        expect(again.protectedPaths).toEqual([".env", "vendor"]);
+      }),
+    );
+
+    it.effect("never follows or deletes a link while reclaiming", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithGeneratedFiles(tmp);
+        const outside = yield* makeTmpDir("reclaim-link-target-");
+        yield* writeTextFile(path.join(outside, "keep.txt"), "keep\n");
+        yield* Effect.promise(async () => {
+          await fs.rm(path.join(tmp, "build"), { recursive: true, force: true });
+          await fs.symlink(
+            outside,
+            path.join(tmp, "build"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        });
+        const core = yield* GitCore;
+
+        const result = yield* core.reclaimGeneratedFiles({ cwd: tmp });
+
+        expect(result.removedPaths).toEqual(["debug.log"]);
+        expect(result.protectedPaths).toEqual([".env", "build", "vendor"]);
+        expect(yield* readTextFile(path.join(outside, "keep.txt"))).toBe("keep\n");
+        expect(yield* lstatIsLink(path.join(tmp, "build"))).toBe(true);
+      }),
+    );
+
+    it.effect("protects a generated directory that holds a claimed file", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithGeneratedFiles(tmp, ".env\nbuild/config.local\n");
+        yield* writeTextFile(path.join(tmp, "build", "config.local"), "local\n");
+        const core = yield* GitCore;
+
+        const result = yield* core.reclaimGeneratedFiles({ cwd: tmp });
+
+        expect(result.removedPaths).toEqual(["debug.log"]);
+        expect(result.protectedPaths).toEqual([".env", "build", "vendor"]);
+        expect(yield* readTextFile(path.join(tmp, "build", "config.local"))).toBe("local\n");
+        expect(yield* readTextFile(path.join(tmp, "build", "out.bin"))).toBe("out\n");
+      }),
+    );
+
     it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
