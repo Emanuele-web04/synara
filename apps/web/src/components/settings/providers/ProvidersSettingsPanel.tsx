@@ -19,8 +19,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { arrayMove, rectSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -53,6 +52,7 @@ import {
 } from "~/providerUpdates";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
+  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
@@ -428,21 +428,25 @@ export function ProvidersSettingsPanel({
             </div>
           }
         >
-          <SettingsCard>
-            {enabledProviderOptions.length > 0 ? (
-              <DndContext
-                sensors={providerVisibilitySensors}
-                collisionDetection={closestCenter}
-                modifiers={[restrictToVerticalAxis]}
-                onDragEnd={handleProviderOrderDragEnd}
+          {enabledProviderOptions.length > 0 ? (
+            <DndContext
+              sensors={providerVisibilitySensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleProviderOrderDragEnd}
+            >
+              <SortableContext
+                items={enabledProviderOptions.map((option) => option.provider)}
+                strategy={rectSortingStrategy}
               >
-                <SortableContext
-                  items={enabledProviderOptions.map((option) => option.provider)}
-                  strategy={verticalListSortingStrategy}
-                >
+                <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
                   {enabledProviderOptions.map((option) => (
                     <ProviderAgentRow
                       key={option.provider}
+                      className={cn(
+                        SETTINGS_CARD_CLASS_NAME,
+                        "h-full",
+                        openInstallProviders[option.provider] && "sm:col-span-2",
+                      )}
                       option={option}
                       config={providerInstallSettingsByProvider.get(option.provider)}
                       open={openInstallProviders[option.provider] ?? false}
@@ -485,14 +489,16 @@ export function ProvidersSettingsPanel({
                       updateSettings={updateSettings}
                     />
                   ))}
-                </SortableContext>
-              </DndContext>
-            ) : (
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <SettingsCard>
               <p className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "text-ui text-muted-foreground")}>
                 {t("settings:noProvidersEnabledOpenDisabledProvidersBelowToEnable")}
               </p>
-            )}
-          </SettingsCard>
+            </SettingsCard>
+          )}
           {disabledProviderOptions.length > 0 ? (
             <Collapsible open={disabledProvidersOpen} onOpenChange={setDisabledProvidersOpen}>
               <CollapsibleTrigger className="flex w-full items-center gap-2 px-2 py-2 text-left text-ui text-muted-foreground">
