@@ -83,6 +83,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
+    "tsrs": "0.25.0-ts7.1.0-beta",
     "turbo": "^2.9.14",
     "vitest": "catalog:"
   },
