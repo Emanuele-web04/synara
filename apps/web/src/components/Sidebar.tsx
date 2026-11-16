@@ -8679,7 +8679,7 @@ export default function Sidebar() {
                       }}
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
+                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground">
                           {t("workspace:general_chats")}
                         </span>
                         <DisclosureChevron

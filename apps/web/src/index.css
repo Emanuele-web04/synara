@@ -3222,7 +3222,8 @@ diffs-container {
    dropdown/control token derived from the active chrome theme. */
 :root {
   --composer-surface: color-mix(in oklab, var(--color-background-control) 90%, transparent);
-  --runtime-full-access-accent: #e25505;
+  /* Same hue as before, darkened until it reads 4.5:1 on the light composer surface. */
+  --runtime-full-access-accent: #c24904;
 }
 
 .dark {
