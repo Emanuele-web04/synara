@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,7 @@ type Recovery = ReturnType<typeof makeUsageLimitRecovery>;
 interface SceneProps {
   rateLimitStatus?: RateLimitStatus | null;
   recovery?: Recovery | null;
+  instanceId?: string;
   showWarning?: boolean;
   onCancelRecovery?: () => void;
   onDismissWarning?: () => void;
@@ -42,6 +43,7 @@ interface SceneProps {
 function Scene({
   rateLimitStatus = null,
   recovery = null,
+  instanceId = "claudeAgent",
   showWarning = true,
   onCancelRecovery = () => undefined,
   onDismissWarning = () => undefined,
@@ -67,7 +69,7 @@ function Scene({
         <ComposerUsageLimitCard
           {...inputs}
           provider="claudeAgent"
-          instanceId="claudeAgent"
+          instanceId={instanceId}
           onCollapse={() => setCollapsedKey(key)}
           onCancelRecovery={onCancelRecovery}
           onChangeModel={onChangeModel}
@@ -78,11 +80,15 @@ function Scene({
 }
 
 const clients: QueryClient[] = [];
-function mount(props: SceneProps = {}, settings = DEFAULT_SERVER_SETTINGS_VIEW) {
+function mount(
+  props: SceneProps = {},
+  settings = DEFAULT_SERVER_SETTINGS_VIEW,
+  usage: ReadonlyArray<ServerProviderUsageSnapshot> = [],
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
   client.setQueryData(serverQueryKeys.settings(), settings);
-  client.setQueryData(serverQueryKeys.allProviderUsage(), []);
+  client.setQueryData(serverQueryKeys.allProviderUsage(), usage);
   return render(
     <QueryClientProvider client={client}>
       <Scene {...props} />
@@ -117,6 +123,24 @@ describe("usage-limit card", () => {
     await expect.element(limitCapsule()).toHaveTextContent("Limit reached");
     await limitCapsule().click();
     await expect.element(card()).toBeVisible();
+  });
+
+  it("uses the limited account's usage windows while its settings are unavailable", async () => {
+    const usage = (instanceId: string, window: string): ServerProviderUsageSnapshot => ({
+      provider: "claudeAgent",
+      instanceId,
+      updatedAt: new Date().toISOString(),
+      limits: [{ window, usedPercent: 64, resetsAt: inOneHour() }],
+      usageLines: [],
+      source: "test",
+    });
+    const instanceId = "claude-alternate";
+    await mount({ rateLimitStatus: limited(), instanceId }, DEFAULT_SERVER_SETTINGS_VIEW, [
+      usage("claudeAgent", "Default Account Window"),
+      usage(instanceId, "Limited Account Window"),
+    ]);
+    await expect.element(card()).toHaveTextContent("Limited Account Window");
+    await expect.element(card()).not.toHaveTextContent("Default Account Window");
   });
 
   it("shows an armed wait and cancels it only when asked", async () => {

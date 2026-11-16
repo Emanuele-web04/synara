@@ -8,12 +8,10 @@
 // Exports: ComposerUsageLimitCapsules, ComposerUsageLimitCard, usageLimitCardKey
 
 import {
-  DEFAULT_SERVER_SETTINGS_VIEW,
   PROVIDER_DISPLAY_NAMES,
   type OrchestrationThread,
   type ProviderKind,
 } from "@synara/contracts";
-import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
@@ -34,10 +32,7 @@ import {
 } from "~/lib/icons";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { formatRateLimitResetCountdown } from "~/lib/rateLimits";
-import {
-  serverAllProviderUsageQueryOptions,
-  serverSettingsQueryOptions,
-} from "~/lib/serverReactQuery";
+import { serverAllProviderUsageQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { formatShortTimestamp } from "~/timestampFormat";
 import { useProviderUsageMenuModel } from "../ProviderUsageMenuControl";
@@ -488,18 +483,15 @@ function UsageLimitWindows({
   instanceId: string | undefined;
 }): ReactNode {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
-  const settingsQuery = useQuery(serverSettingsQueryOptions());
-  const instance = deriveProviderInstances(settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW).find(
-    (candidate) =>
-      candidate.driver === provider && candidate.instanceId === (instanceId ?? provider),
-  );
+  // The thread can outlive its settings entry. Keep its quota scoped to the
+  // original account while settings load or after an account is removed.
+  const usageInstanceId = instanceId ?? provider;
   const snapshot = usageQuery.data?.find(
     (entry) =>
-      entry.provider === provider &&
-      (entry.instanceId ?? entry.provider) === (instance?.instanceId ?? provider),
+      entry.provider === provider && (entry.instanceId ?? entry.provider) === usageInstanceId,
   );
   const model = useProviderUsageMenuModel(provider, {
-    instanceId: instance?.instanceId,
+    instanceId: usageInstanceId,
     providerSnapshot: snapshot,
   });
   if (model.rows.length === 0) return null;
