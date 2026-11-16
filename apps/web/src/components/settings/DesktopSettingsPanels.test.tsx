@@ -107,12 +107,12 @@ describe("NotificationsSettingsPanel", () => {
     expect(renderPanel(false)).toBe("");
   });
 
-  it("renders the intro card, alert rows, and toast preview", () => {
+  it("renders the intro card and alert rows", () => {
     const html = renderPanel();
 
     expect(html).toContain("Get notified when work finishes or waits on you");
     expect(html).toContain("Activity toasts");
     expect(html).toContain("Desktop notifications");
-    expect(html).toContain("Chat finished");
+    expect(html).toContain("Wait for subagents");
   });
 });

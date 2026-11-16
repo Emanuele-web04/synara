@@ -56,7 +56,6 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
-import { CircleCheckIcon, XIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useTranslation, t } from "~/i18n";
 
@@ -313,29 +312,6 @@ export function NotificationsSettingsPanel({
             />
           }
         />
-      </SettingsSection>
-
-      <SettingsSection title="Preview">
-        <SettingsCard divided={false} className="px-4 py-3.5">
-          <div
-            role="img"
-            aria-label="Example of an in-app activity toast"
-            className="flex w-full max-w-sm items-start gap-2.5 rounded-2xl border border-[color:var(--color-border)] bg-popover p-3 shadow-lg"
-          >
-            <CircleCheckIcon className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-500" />
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <p className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "text-popover-foreground")}>
-                Chat finished
-              </p>
-              <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-                Docs polish draft is ready to review
-              </p>
-            </div>
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--notification-fg,theme(colors.foreground))]/65">
-              <XIcon className="size-3.5" />
-            </span>
-          </div>
-        </SettingsCard>
       </SettingsSection>
     </div>
   );
