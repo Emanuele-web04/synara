@@ -20,12 +20,17 @@ const unavailable = (reason: string, permanent = false): JobListing => ({
   permanent,
 });
 
-function harness(listings: readonly JobListing[], timeoutMs = 600_000) {
+function harness(
+  listings: readonly JobListing[],
+  timeoutMs = 600_000,
+  acceptedConclusions?: ReadonlySet<"success" | "skipped">,
+) {
   let clock = 0;
   let calls = 0;
   const log: string[] = [];
   const result = waitForReleaseJob({
     jobName: JOB,
+    ...(acceptedConclusions ? { acceptedConclusions } : {}),
     listJobs: async () => listings[Math.min(calls++, listings.length - 1)]!,
     timeoutMs,
     pollIntervalMs: 10_000,
@@ -73,6 +78,22 @@ describe("waitForReleaseJob", () => {
       await expect(run.result).rejects.toThrow("not success");
     },
   );
+
+  it("accepts a skip only when the caller says the job may be skipped", async () => {
+    const skipOrSuccess = new Set(["success", "skipped"] as const);
+    await harness([jobs(job("completed", "skipped"))], 600_000, skipOrSuccess).result;
+    await harness([jobs(job("completed", "success"))], 600_000, skipOrSuccess).result;
+    for (const conclusion of ["failure", "cancelled", "timed_out", null])
+      await expect(
+        harness([jobs(job("completed", conclusion))], 600_000, skipOrSuccess).result,
+      ).rejects.toThrow("not success or skipped");
+    await expect(harness([jobs(job("completed", "skipped"))]).result).rejects.toThrow(
+      "not success",
+    );
+    await expect(harness([jobs(job("queued"))], 600_000, new Set()).result).rejects.toThrow(
+      "At least one conclusion",
+    );
+  });
 
   it("never treats another job's success as this job's", async () => {
     const run = harness(

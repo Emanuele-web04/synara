@@ -53,6 +53,12 @@ env:
   VITE_SYNARA_BILLING_ENABLED: ${{ inputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
 
 jobs:
+  # This job starts with the portable build, the Cua jobs and the icon jobs,
+  # not after them: checkout and the dependency install (27 s on macOS, about
+  # two minutes on Windows) no longer follow the portable build. Before a step
+  # consumes one of those jobs' artifacts, scripts/wait-for-release-job.ts waits
+  # for exactly that job of this run attempt. A prerequisite that fails, is
+  # cancelled or is unexpectedly skipped fails this leg at the wait.
   build:
     name: Package and qualify
     runs-on: ${{ inputs.runner }}
@@ -143,6 +149,18 @@ jobs:
             --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
             --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
 
+      # The catalog comes from exactly one source. A verified exact restore
+      # uploads it and skips the compile; a miss leaves the upload to the
+      # compile. Either way the restore must succeed, and the compile job's own
+      # condition only skips it after a successful restore reported a hit.
+      - name: Wait for the macOS icon catalog
+        if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/wait-for-release-job.ts --job "Restore macOS icon" --timeout-minutes 30
+          node scripts/wait-for-release-job.ts --job "Compile macOS icon" --timeout-minutes 30 --accept success,skipped
+
       - name: Download macOS icon catalog
         if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
         uses: actions/download-artifact@v8
@@ -169,12 +187,25 @@ jobs:
         if: steps.restore_checkpoint.outcome != 'success'
         run: node scripts/report-build-runner.ts
 
+      - name: Wait for this platform's prepared Cua
+        if: (inputs.platform == 'mac' || inputs.platform == 'linux') && steps.restore_checkpoint.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUA_JOB: Prepare Cua ${{ inputs.label }}
+        run: node scripts/wait-for-release-job.ts --job "$CUA_JOB" --timeout-minutes 45
+
       - name: Import this candidate's verified Cua
         if: (inputs.platform == 'mac' || inputs.platform == 'linux') && steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/provision-cua
         with:
           arch: ${{ inputs.arch }}
           prepared-artifact: prepared-cua-${{ inputs.platform }}-${{ inputs.arch }}
+
+      - name: Wait for the portable JavaScript build
+        if: steps.restore_checkpoint.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-release-job.ts --job "Build portable JavaScript" --timeout-minutes 30
 
       - name: Restore portable outputs
         if: steps.restore_checkpoint.outcome != 'success'
