@@ -204,7 +204,12 @@ export function ThemeModePicker({
                   : "border-transparent group-hover:border-foreground/25",
               )}
             >
-              <div className="relative aspect-[10/7] w-full overflow-hidden rounded-lg">
+              {/* Drawn thumbnail; the radio carries the same name, so it is not read twice. */}
+              <div
+                role="img"
+                aria-label={t(choice.label)}
+                className="relative aspect-[10/7] w-full overflow-hidden rounded-lg"
+              >
                 <ThemeModeMockup mode={choice.value} />
               </div>
             </div>
