@@ -168,7 +168,7 @@ export function ThemePackEditor({
             </button>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-full min-w-0 items-center gap-1 sm:w-auto">
           <ImportThemeDialog variant={variant} onImport={handleImport} />
           <button
             type="button"
@@ -186,7 +186,10 @@ export function ThemePackEditor({
           >
             <SelectTrigger
               size="sm"
-              className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "ml-1 min-w-52 gap-2")}
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "ml-1 min-w-0 flex-1 gap-2 sm:min-w-52 sm:flex-none",
+              )}
               aria-label={t("common:codeTheme", { value0: titleLabel })}
             >
               <SelectValue className="flex-1 text-left">
