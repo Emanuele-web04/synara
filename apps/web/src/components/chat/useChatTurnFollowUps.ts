@@ -30,7 +30,7 @@ import {
   buildPlanImplementationThreadTitle,
 } from "../../proposedPlan";
 import type { LatestProposedPlanState } from "../../session-logic";
-import { buildSourceProposedPlanReference } from "../../session-logic";
+import { buildSourceProposedPlanReference, runningSessionActiveTurnId } from "../../session-logic";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
 import { truncateTitle } from "../../truncateTitle";
@@ -389,10 +389,7 @@ export function useChatTurnFollowUps({
       const editTarget = resolveTailUserMessageEditTarget({
         messages: activeThread.messages,
         messageId,
-        activeTurnId:
-          activeThread.session?.orchestrationStatus === "running"
-            ? (activeThread.session.activeTurnId ?? null)
-            : null,
+        activeTurnId: runningSessionActiveTurnId(activeThread.session),
       });
       if (!editTarget.editable) {
         setThreadError(activeThread.id, "Only the latest rollbackable user message can be edited.");

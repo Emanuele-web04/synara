@@ -32,6 +32,7 @@ import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
   hasLiveTurnTailWork,
+  isSessionOrLatestTurnRunning,
 } from "./session-logic";
 import { getRememberedProjectUiState, projectCwdKey } from "./storePersistence";
 import { resolveInitialLastVisitedAt } from "./threadVisitedPersistence";
@@ -747,8 +748,9 @@ function shouldRetainLiveUserMessageForHotPath(
 ): boolean {
   const latestTurn = previousThread.latestTurn;
   if (latestTurn && message.turnId != null && message.turnId === latestTurn.turnId) {
-    return (
-      latestTurn.state === "running" || previousThread.session?.orchestrationStatus === "running"
+    return isSessionOrLatestTurnRunning(
+      previousThread.session?.orchestrationStatus,
+      latestTurn.state,
     );
   }
   const createdAtMs = Date.parse(message.createdAt);

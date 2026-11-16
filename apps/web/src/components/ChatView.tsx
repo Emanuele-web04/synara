@@ -234,6 +234,7 @@ import {
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   isSessionAliveForSubagents,
+  runningSessionActiveTurnId,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -1872,10 +1873,7 @@ export default function ChatView({
     }
     const editTarget = resolveLatestTailUserMessageEditTarget({
       messages: activeThread.messages,
-      activeTurnId:
-        activeThread.session?.orchestrationStatus === "running"
-          ? (activeThread.session.activeTurnId ?? null)
-          : null,
+      activeTurnId: runningSessionActiveTurnId(activeThread.session),
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeThread, isServerThread]);
