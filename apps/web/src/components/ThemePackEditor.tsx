@@ -532,6 +532,9 @@ export function ColorPill({
           className={cn(
             "rounded-md p-1 text-[var(--color-text-foreground-tertiary)]",
             ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+            FOCUS_RING_CLASS_NAME,
+            COARSE_HIT_AREA_TALL_CLASS_NAME,
+            "pointer-coarse:after:-inset-x-1",
           )}
           aria-label={t("common:reset", { value0: ariaLabel })}
           title={t("common:theme_resetToDefault")}
