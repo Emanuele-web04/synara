@@ -41,6 +41,9 @@ import {
   resolveProviderModelCatalogCachePath,
   writeProviderModelCatalogCache,
 } from "../providerModelCatalogCache.ts";
+import { openCodeCompatibleConfigFingerprint } from "../openCodeConfigPaths.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
+import { OPENCODE_CLI_SPEC } from "../opencodeRuntime.ts";
 import {
   discoverSkillsCatalog,
   filterDisabledSkills,
@@ -474,8 +477,35 @@ const make = Effect.gen(function* () {
                 status.provider === "claudeAgent" && status.instanceId === resolved.instanceId,
             )?.version ?? null)
           : undefined;
+      // OpenCode-family discovery shells out to the CLI, which reads its own
+      // config file. Editing that file (for example renaming a model) changes
+      // nothing else in the key, so fold in a fingerprint of the file the CLI
+      // will actually read. Without this, the fresh window and the persisted
+      // snapshot keep serving the old names across restarts.
+      const configFingerprint =
+        resolved.provider === "opencode"
+          ? yield* Effect.promise(() =>
+              openCodeCompatibleConfigFingerprint({
+                homeDir: serverConfig.homeDir,
+                dataDirectoryName: OPENCODE_CLI_SPEC.dataDirectoryName,
+                env: buildProviderProcessEnv({
+                  driver: "opencode",
+                  instanceId: resolved.instanceId,
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
+                  ...(resolved.environment !== undefined
+                    ? { environment: resolved.environment }
+                    : {}),
+                }),
+              }),
+            )
+          : undefined;
       return yield* modelDiscoveryCache.lookup(
-        { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },
+        {
+          ...cacheKey,
+          ...(runtimeVersion !== undefined ? { runtimeVersion } : {}),
+          ...(configFingerprint !== undefined ? { configFingerprint } : {}),
+        },
         discover,
         parsed.refresh,
       );

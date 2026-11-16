@@ -53,6 +53,13 @@ export interface ProviderModelDiscoveryCacheKey {
   readonly cwd: string | null;
   /** Claude catalogs depend on the installed CLI version, even at the same path. */
   readonly runtimeVersion?: string | null;
+  /**
+   * Fingerprint of a provider's own config files (size + mtime). Editing the
+   * config changes the key, so a renamed or added model is rediscovered instead
+   * of being served from the fresh/stale windows. Only OpenCode-family providers
+   * set this today.
+   */
+  readonly configFingerprint?: string | null;
 }
 
 function hashCacheComponent(value: string): string {
@@ -150,6 +157,7 @@ export const serializeProviderModelDiscoveryCacheKey = (
     key.environmentKey,
     key.cwd,
     ...(key.runtimeVersion !== undefined ? [key.runtimeVersion] : []),
+    ...(key.configFingerprint !== undefined ? [key.configFingerprint] : []),
   ]);
 
 /**
