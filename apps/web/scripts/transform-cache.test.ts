@@ -92,6 +92,18 @@ describe("withTransformCache", () => {
     expect(second.calls).toEqual(["/src/a.tsx"]);
   });
 
+  it("still compiles when the cache path is unavailable", async () => {
+    const { root } = await fixture();
+    const unavailable = path.join(root, "not-a-directory");
+    await fs.writeFile(unavailable, "an existing file");
+    const { run } = await fixture("salt-a", unavailable);
+
+    expect(await run("const a = 1")).toEqual({
+      code: "compiled(const a = 1)",
+      map: { mappings: 11 },
+    });
+  });
+
   it("does not store a transform that left the module unchanged", async () => {
     const { root, run, calls } = await fixture();
     expect(await run("untouched")).toBeUndefined();

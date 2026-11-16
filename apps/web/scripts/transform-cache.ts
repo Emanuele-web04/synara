@@ -50,7 +50,6 @@ export function withTransformCache<T extends { readonly name: string; transform?
     throw new Error(`Plugin ${plugin.name} has no object transform hook to cache.`);
   }
   const handler = hook.handler as TransformHandler;
-  fs.mkdirSync(options.directory, { recursive: true });
   let writeSequence = 0;
 
   const cachedHandler: TransformHandler = async function (code, id, hookOptions) {
@@ -80,12 +79,17 @@ export function withTransformCache<T extends { readonly name: string; transform?
       // write, so two transforms of one module cannot share a partial file.
       writeSequence += 1;
       const temporaryPath = `${entryPath}.${process.pid}.${writeSequence}.tmp`;
-      await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
-      await fs.promises.writeFile(
-        temporaryPath,
-        JSON.stringify({ code: result.code, map: result.map ?? null }),
-      );
-      await fs.promises.rename(temporaryPath, entryPath);
+      try {
+        await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
+        await fs.promises.writeFile(
+          temporaryPath,
+          JSON.stringify({ code: result.code, map: result.map ?? null }),
+        );
+        await fs.promises.rename(temporaryPath, entryPath);
+      } catch {
+        // The browser lane can use the compiled module even if disk caching fails.
+        await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
+      }
     }
     return result;
   };
