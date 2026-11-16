@@ -354,8 +354,11 @@ jobs:
           if-no-files-found: error
 
       # The Intel app is cross-built here and launched by qualify_intel below.
+      # The smoke passes in under a minute and its own proof deadline is 60 s; a
+      # step that runs longer is hung and must fail here, not at the job timeout.
       - name: Smoke packaged desktop startup
         if: inputs.platform != 'mac' || inputs.arch != 'x64'
+        timeout-minutes: 10
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
@@ -457,6 +460,7 @@ jobs:
           path: release-publish
 
       - name: Smoke packaged desktop startup on Intel
+        timeout-minutes: 10
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
