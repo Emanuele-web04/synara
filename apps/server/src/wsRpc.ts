@@ -209,7 +209,10 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
   ProviderDeliveryRecoveryError,
 } from "./orchestration/Errors";
-import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import {
+  makeDispatchCommandNormalizer,
+  withoutRemoteResumeComputerGrant,
+} from "./orchestration/dispatchCommandNormalization";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -1637,10 +1640,15 @@ const makeWsRpcHandlersLayer = () =>
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
               const { command: normalizedCommand, prepareWorkspaceRoot } =
-                yield* normalizeDispatchCommand({ command });
+                yield* normalizeDispatchCommand({
+                  command: withoutRemoteResumeComputerGrant(command, principal.ownerId),
+                });
               // A paused/archived group's coordinator must not run turns —
               // the picker filters them out, but the server enforces it.
-              if (normalizedCommand.type === "thread.turn.start") {
+              if (
+                normalizedCommand.type === "thread.turn.start" ||
+                normalizedCommand.type === "thread.turn.resume"
+              ) {
                 yield* projectAgentService.assertGroupCoordinatorTurnAllowed({
                   threadId: normalizedCommand.threadId,
                 });

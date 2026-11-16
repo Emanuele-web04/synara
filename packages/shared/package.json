@@ -20,6 +20,10 @@
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
     },
+    "./turnResume": {
+      "types": "./src/turnResume.ts",
+      "import": "./src/turnResume.ts"
+    },
     "./inboxDay": {
       "types": "./src/inboxDay.ts",
       "import": "./src/inboxDay.ts"

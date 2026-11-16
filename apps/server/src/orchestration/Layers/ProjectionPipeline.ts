@@ -1512,8 +1512,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "thread.session-set": {
-          const turnId = event.payload.session.activeTurnId;
-          if (event.payload.session.status !== "running" || turnId === null) {
+          const { threadId, session, pendingResumeMessageId } = event.payload;
+          if (session.status === "starting" && pendingResumeMessageId !== undefined) {
+            // Link the prepared baseline to the next provider turn without projecting a chat message.
+            yield* projectionTurnRepository.replacePendingTurnStart({
+              threadId,
+              messageId: pendingResumeMessageId,
+              sourceProposedPlanThreadId: null,
+              sourceProposedPlanId: null,
+              requestedAt: session.updatedAt,
+            });
+          }
+          const turnId = session.activeTurnId;
+          if (session.status !== "running" || turnId === null) {
             const settledState = settleTurnStateFromSession(event.payload.session, "running");
             if (settledState !== null) {
               // Close the newest still-open turn when the runtime reports that

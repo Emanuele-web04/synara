@@ -3218,6 +3218,65 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       };
     }
 
+    case "thread.turn.resume": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* validateSidechatExecutionAvailable(command, thread);
+      if (command.resumePrecondition !== undefined) {
+        const violation = threadResumePreconditionViolation(thread, command.resumePrecondition);
+        if (violation !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: threadResumePreconditionDetail(command.threadId, violation),
+          });
+        }
+      }
+      const refusal = threadHasInFlightTurn(thread)
+        ? `Thread '${command.threadId}' already has a turn in flight.`
+        : threadHasCheckpointRevertInProgress(thread)
+          ? checkpointRevertInProgressDetail(command.threadId)
+          : thread.hasPendingApprovals || thread.hasPendingUserInput
+            ? `Thread '${command.threadId}' is waiting for an answer.`
+            : thread.usageLimitRecovery != null
+              ? `Thread '${command.threadId}' resumes on its own after the usage limit.`
+              : thread.creationSource === "provider_native" || thread.id.startsWith("subagent:")
+                ? `Subagent '${command.threadId}' cannot be resumed.`
+                : null;
+      if (refusal !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: refusal,
+        });
+      }
+      // The provider reactor reads the linked transcript and picks the target:
+      // resend a request that never started a turn, or continue the latest one.
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-continuation-requested",
+        payload: {
+          threadId: command.threadId,
+          goalStartedAt: null,
+          trigger: "manual-resume",
+          ...(thread.latestTurn !== null ? { sourceTurnId: thread.latestTurn.turnId } : {}),
+          ...(command.continuationPrompt !== undefined
+            ? { resumePrompt: command.continuationPrompt }
+            : {}),
+          ...(command.computerControlGeneration !== undefined
+            ? { resumeComputerControlGeneration: command.computerControlGeneration }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,
@@ -3247,6 +3306,9 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         payload: {
           threadId: command.threadId,
           session: command.session,
+          ...(command.session.status === "starting" && command.pendingResumeMessageId !== undefined
+            ? { pendingResumeMessageId: command.pendingResumeMessageId }
+            : {}),
         },
       };
     }

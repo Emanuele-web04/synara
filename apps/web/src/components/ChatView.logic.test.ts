@@ -27,6 +27,7 @@ import {
   commitAfterRuntimeModePersistence,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
+  shouldOfferComposerResume,
   createLocalDispatchSnapshot,
   createWorktreeSetupResolution,
   createWorktreeSetupSnapshot,
@@ -1448,6 +1449,58 @@ describe("resolveCycledModelSlug", () => {
         direction: "next",
       }),
     ).toBe("a");
+  });
+});
+
+describe("shouldOfferComposerResume", () => {
+  const turnId = TurnId.makeUnsafe("turn-latest");
+  const deliveredRequest = {
+    id: MessageId.makeUnsafe("request"),
+    role: "user" as const,
+    turnId,
+  };
+  const offer = {
+    isServerThread: true,
+    messages: [deliveredRequest],
+    latestTurn: { turnId, state: "interrupted" as const },
+    hasLiveWork: false,
+    hasPendingRequests: false,
+    hasUsageLimitRecovery: false,
+    hasQueuedTurns: false,
+    hasCacheReview: false,
+    deliveryBlocked: false,
+  };
+
+  it("offers Resume for an interrupted turn", () => {
+    expect(shouldOfferComposerResume(offer)).toBe(true);
+  });
+
+  it("offers Resume for a request that never reached the provider", () => {
+    expect(
+      shouldOfferComposerResume({
+        ...offer,
+        messages: [{ ...deliveredRequest, turnId: null }],
+        latestTurn: { turnId, state: "completed" },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "the turn failed (its banner offers Continue task)",
+      { latestTurn: { turnId, state: "error" as const } },
+    ],
+    ["the turn completed", { latestTurn: { turnId, state: "completed" as const } }],
+    ["the thread is a local draft", { isServerThread: false }],
+    ["the thread has no messages", { messages: [] }],
+    ["work is live", { hasLiveWork: true }],
+    ["a request is pending", { hasPendingRequests: true }],
+    ["a usage-limit wait owns the resume", { hasUsageLimitRecovery: true }],
+    ["queued follow-ups run next", { hasQueuedTurns: true }],
+    ["a cache review holds the send", { hasCacheReview: true }],
+    ["deliveries are quarantined", { deliveryBlocked: true }],
+  ])("offers nothing when %s", (_case, patch) => {
+    expect(shouldOfferComposerResume({ ...offer, ...patch })).toBe(false);
   });
 });
 

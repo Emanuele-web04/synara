@@ -89,6 +89,7 @@ import {
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
+import { resolveTurnResumeTarget, TURN_RESUME_MESSAGE_ID_PREFIX } from "@synara/shared/turnResume";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 import {
   buildProjectFoldersPreamble,
@@ -178,6 +179,8 @@ import { ProjectionThreadActivityRepository } from "../../persistence/Services/P
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
 import {
   OrchestrationEventDeliveryRepository,
@@ -518,6 +521,11 @@ function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
   }
   return attachment.text.trim();
 }
+
+// Provider input for a resumed turn. The old provider process is gone, so the
+// agent re-checks the workspace instead of assuming its last command finished.
+const TURN_RESUME_INPUT =
+  "Continue the interrupted task from the existing conversation and working state. First verify which operations have already completed; avoid repeating them and resume the remaining work.";
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
@@ -1126,6 +1134,7 @@ const make = Effect.gen(function* () {
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
+  const projectionTurns = yield* ProjectionTurnRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
   const hubOutputReactor = yield* HubOutputReactor;
@@ -1950,6 +1959,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
+    readonly pendingResumeMessageId?: MessageId;
     readonly createdAt: string;
   }) =>
     orchestrationEngine.dispatch({
@@ -1957,6 +1967,9 @@ const make = Effect.gen(function* () {
       commandId: serverCommandId("provider-session-set"),
       threadId: input.threadId,
       session: input.session,
+      ...(input.pendingResumeMessageId !== undefined
+        ? { pendingResumeMessageId: input.pendingResumeMessageId }
+        : {}),
       ...(input.expectedSession !== undefined
         ? {
             expectedSessionStatus: input.expectedSession.status,
@@ -6901,6 +6914,195 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // `thread.turn.resume` (Resume, Continue task, quit resume). The decider only
+  // saw the command model, which lacks the linked transcript, so the target is
+  // picked here, under the session lease, after the same live-work checks as a
+  // goal continuation. A stale request (work moved on) does nothing.
+  const processManualResume = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) {
+    const threadId = event.payload.threadId;
+    const messageId = MessageId.makeUnsafe(`${TURN_RESUME_MESSAGE_ID_PREFIX}${event.eventId}`);
+    const thread = yield* resolveThreadShell(threadId);
+    if (
+      !thread ||
+      thread.archivedAt != null ||
+      thread.claudeCacheReview != null ||
+      thread.usageLimitRecovery != null ||
+      (event.payload.sourceTurnId !== undefined &&
+        thread.latestTurn?.turnId !== event.payload.sourceTurnId)
+    ) {
+      return;
+    }
+    const pendingInteractionCounts = yield* pendingInteractions.getPendingCountsByThreadId({
+      threadId,
+    });
+    // A retryable persistence failure can leave this delivery's own durable start in place.
+    const pendingStart =
+      thread.session?.status === "starting"
+        ? yield* projectionTurns.getPendingTurnStartByThreadId({ threadId })
+        : Option.none();
+    if (
+      pendingInteractionCounts.pendingApprovalCount > 0 ||
+      pendingInteractionCounts.pendingUserInputCount > 0 ||
+      (thread.session?.status === "starting" &&
+        Option.getOrUndefined(pendingStart)?.messageId !== messageId) ||
+      thread.session?.status === "running" ||
+      (yield* hasLiveProviderTurn(threadId))
+    ) {
+      return;
+    }
+    // Queued user work always wins over a continuation.
+    yield* drainQueuedTurnsForSession(threadId);
+    if (yield* hasPendingQueuedTurnForSession(threadId)) {
+      return;
+    }
+    const detail = yield* projectionSnapshotQuery.getThreadDetailSnapshotById(threadId);
+    if (Option.isNone(detail)) {
+      return;
+    }
+    const target = resolveTurnResumeTarget(detail.value.thread);
+    if (target === null) {
+      return;
+    }
+    if (target.kind === "resend") {
+      // Re-request the turn for the stored message: the normal send path
+      // delivers it and links it to the turn it starts, so it is never resent
+      // twice and the chat gains no new message.
+      const message = detail.value.thread.messages.find(
+        (candidate) => candidate.id === target.messageId,
+      );
+      // The newest request for the message carries what the stored row does not:
+      // the plan it implements, a native review target, and its computer access.
+      const original = yield* orchestrationEngine
+        .readThreadEventsThrough(threadId, 0, event.sequence, [
+          "thread.turn-start-requested",
+          "thread.turn-queued",
+        ])
+        .pipe(
+          Stream.filter(
+            (candidate) =>
+              (candidate.type === "thread.turn-start-requested" ||
+                candidate.type === "thread.turn-queued") &&
+              candidate.payload.messageId === target.messageId,
+          ),
+          Stream.runLast,
+          Effect.map((last) =>
+            Option.isSome(last) &&
+            (last.value.type === "thread.turn-start-requested" ||
+              last.value.type === "thread.turn-queued")
+              ? last.value.payload
+              : undefined,
+          ),
+        );
+      // Computer access needs the resuming person's current generation, the
+      // same consent a fresh send gives (Stop bumps it, so a stale grant from
+      // the original request cannot revive control). No consent: off.
+      const originalComputerMode = original?.computerControlMode ?? "off";
+      const consentGeneration = event.payload.resumeComputerControlGeneration;
+      const computerFields =
+        originalComputerMode !== "off" && consentGeneration !== undefined
+          ? {
+              enableComputerControl: true,
+              computerControlMode: originalComputerMode,
+              computerControlGeneration: consentGeneration,
+            }
+          : {};
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.turn.dispatch-queued",
+          // Keyed by the session state it saw: a doubled Resume that reaches this
+          // point before the first request is projected hits the same command id
+          // and is dropped instead of sending the message twice. A later retry
+          // sees a newer session, so it gets a new id.
+          commandId: CommandId.makeUnsafe(
+            `server:turn-resume-resend:${threadId}:${target.messageId}:${thread.session?.updatedAt ?? "none"}`,
+          ),
+          threadId,
+          messageId: target.messageId,
+          ...computerFields,
+          ...(original?.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: original.sourceProposedPlan }
+            : {}),
+          ...(original?.reviewTarget !== undefined ? { reviewTarget: original.reviewTarget } : {}),
+          ...(original?.assistantDeliveryMode !== undefined
+            ? { assistantDeliveryMode: original.assistantDeliveryMode }
+            : {}),
+          dispatchMode: "queue",
+          dispatchOrigin: original?.dispatchOrigin ?? message?.dispatchOrigin ?? "user",
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: event.payload.createdAt,
+        })
+        .pipe(Effect.catchTag("OrchestrationCommandIdentityCollisionError", () => Effect.void));
+      return;
+    }
+    const createdAt = event.payload.createdAt;
+    const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
+    const turnStartSession = deriveTurnStartSession({
+      threadId,
+      currentSession: thread.session,
+      providerName,
+      providerInstanceId:
+        thread.session?.providerInstanceId ?? thread.modelSelection.instanceId ?? providerName,
+      requestedRuntimeMode: thread.runtimeMode,
+      requestedAt: createdAt,
+    });
+    if (turnStartSession !== null) {
+      yield* setThreadSession({
+        threadId,
+        session: turnStartSession,
+        pendingResumeMessageId: messageId,
+        createdAt,
+      });
+    }
+    yield* dispatchTurnForThread({
+      threadId,
+      sourceEventSequence: event.sequence,
+      messageId,
+      messageText: event.payload.resumePrompt ?? TURN_RESUME_INPUT,
+      dispatchOrigin: "user",
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      dispatchMode: "queue",
+      // No chat message: same transcript and skill handling as a goal turn.
+      turnKind: "goal-continuation",
+      createdAt,
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        const outcome = classifyProviderAttemptOutcome(Exit.failCause(cause));
+        if (outcome._tag === "safe_retry") return Effect.failCause(cause);
+        const detail = Cause.pretty(cause);
+        const session = turnStartSession ?? thread.session;
+        // Reporting is best-effort. Keep the original failure for the durable delivery worker.
+        return appendProviderFailureActivity({
+          threadId,
+          kind: "provider.turn.start.failed",
+          summary: "Resume failed",
+          detail,
+          turnId: null,
+          createdAt,
+          ...(outcome._tag === "uncertain" ? { settlementStatus: "uncertain" } : {}),
+        }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            session?.status === "starting"
+              ? setThreadSessionError({
+                  threadId,
+                  runtimeMode: thread.runtimeMode,
+                  expectedSession: session,
+                  detail,
+                  createdAt,
+                }).pipe(Effect.ignore)
+              : Effect.void,
+          ),
+          Effect.andThen(Effect.failCause(cause)),
+        );
+      }),
+    );
+  });
+
   const processGoalContinuationRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
   ) =>
@@ -6909,6 +7111,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (event.payload.usageLimitRecovery) {
           yield* processUsageLimitContinuation(event);
+          return;
+        }
+        if (event.payload.trigger === "manual-resume") {
+          yield* processManualResume(event);
           return;
         }
         // A soft-deleted thread reads as missing.
@@ -8811,19 +9017,22 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
+    const manualResume = event.payload.trigger === "manual-resume";
     yield* appendProviderFailureActivity({
       threadId: event.payload.threadId,
       kind: "provider.turn.start.failed",
-      summary: "Goal continuation timed out",
+      summary: manualResume ? "Resume timed out" : "Goal continuation timed out",
       detail,
       turnId: null,
       createdAt,
       settlementStatus: "uncertain",
     });
-    yield* pauseActiveThreadGoal({
-      threadId: event.payload.threadId,
-      expectedGoalStartedAt: event.payload.goalStartedAt,
-    });
+    if (!manualResume) {
+      yield* pauseActiveThreadGoal({
+        threadId: event.payload.threadId,
+        expectedGoalStartedAt: event.payload.goalStartedAt,
+      });
+    }
   });
 
   const processDomainEvent = (event: ProviderIntentEvent) =>
@@ -11392,6 +11601,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
   return Layer.effect(ProviderCommandReactor, make).pipe(
     Layer.provide(ProjectionThreadActivityRepositoryLive),
     Layer.provide(ProjectionThreadMessageRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,

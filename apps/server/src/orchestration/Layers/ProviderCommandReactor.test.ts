@@ -12393,6 +12393,326 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  const sendUserTurn = (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    text: string,
+    options?: {
+      readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: string };
+    },
+  ) =>
+    Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        commandId: CommandId.makeUnsafe(`cmd-send-${id}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: { messageId: MessageId.makeUnsafe(id), role: "user", text, attachments: [] },
+        enableComputerControl: false,
+        computerControlGeneration: 0,
+        ...(options?.sourceProposedPlan ? { sourceProposedPlan: options.sourceProposedPlan } : {}),
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  const resumeThread = (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    options?: { readonly continuationPrompt?: string; readonly computerControlGeneration?: number },
+  ) =>
+    Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.resume",
+        commandId: CommandId.makeUnsafe(id),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        ...(options?.continuationPrompt ? { continuationPrompt: options.continuationPrompt } : {}),
+        ...(options?.computerControlGeneration !== undefined
+          ? { computerControlGeneration: options.computerControlGeneration }
+          : {}),
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  // A refused send quarantines the thread; Unblock abandons that delivery and
+  // never retries it, which leaves exactly the message Resume should resend.
+  const failThenUnblockSend = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    send: () => Promise<unknown>,
+  ) => {
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Provider refused the turn.",
+        }),
+      ),
+    );
+    await send();
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    await harness.drain();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const blocker = (
+      await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId,
+        }),
+      )
+    ).pipe(Option.getOrThrow);
+    await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: blocker.eventSequence,
+        threadId,
+        expectedState: blocker.state === "dead" ? "dead" : "uncertain",
+        outcome: "abandon",
+        reconciledBy: "local-loopback:local-loopback",
+        note: "Unblocked from the thread error banner.",
+      }),
+    );
+    await harness.drain();
+  };
+  // The turn requests the stored message has had, oldest first.
+  const turnRequestsFor = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    messageId: string,
+  ) =>
+    (
+      await Effect.runPromise(
+        harness.engine
+          .readThreadEventsThrough("thread-1", 0, Number.MAX_SAFE_INTEGER, [
+            "thread.turn-start-requested",
+          ])
+          .pipe(Stream.runCollect),
+      )
+    ).flatMap((event) =>
+      event.type === "thread.turn-start-requested" && event.payload.messageId === messageId
+        ? [event.payload]
+        : [],
+    );
+  // The provider accepted turn-1 and ran it; it then stopped (Stop, quit or
+  // restart) or finished on its own.
+  const runThenSettleTurn = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    settled: "interrupted" | "ready" = "interrupted",
+  ) => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    for (const [status, activeTurnId] of [
+      ["running", asTurnId("turn-1")],
+      [settled, null],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`${id}-${status}`),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId,
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.latestTurn?.state ===
+        (settled === "ready" ? "completed" : "interrupted"),
+    );
+  };
+  const userMessages = async (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    ((await readHarnessThread(harness))?.messages ?? []).filter(
+      (message) => message.role === "user",
+    );
+
+  it("resends a request that never reached the provider without adding a chat message", async () => {
+    const harness = await createHarness();
+    await failThenUnblockSend(harness, () =>
+      sendUserTurn(harness, "resume-unsent", "Refactor the settings page"),
+    );
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    // Unblocked and idle: the composer offers Resume for the unsent message.
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "stopped",
+      lastError: null,
+    });
+
+    await resumeThread(harness, "cmd-turn-resume-unsent");
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("Refactor the settings page");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).not.toContain(
+      "Continue the interrupted task",
+    );
+    expect((await userMessages(harness)).map((message) => message.id)).toEqual(["resume-unsent"]);
+  });
+
+  it("keeps the plan a resent message implements", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.proposed-plan.upsert",
+        commandId: CommandId.makeUnsafe("cmd-resume-plan"),
+        threadId,
+        proposedPlan: {
+          id: "plan-resume",
+          turnId: null,
+          planMarkdown: "1. Refactor the settings page",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const sourceProposedPlan = { threadId, planId: "plan-resume" };
+    await failThenUnblockSend(harness, () =>
+      sendUserTurn(harness, "resume-plan-message", "Implement the plan", { sourceProposedPlan }),
+    );
+
+    await resumeThread(harness, "cmd-turn-resume-plan");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const requests = await turnRequestsFor(harness, "resume-plan-message");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({ sourceProposedPlan });
+  });
+
+  it.each([
+    ["restores /computer access with the resuming person's consent", 0, true],
+    ["resends without computer access when nobody granted it", undefined, false],
+  ] as const)("%s", async (_case, consentGeneration, computerAccess) => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
+    try {
+      await failThenUnblockSend(harness, () =>
+        sendUserTurn(harness, "resume-computer-message", "/computer-use open Calculator"),
+      );
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
+
+      await resumeThread(
+        harness,
+        "cmd-turn-resume-computer",
+        consentGeneration !== undefined ? { computerControlGeneration: consentGeneration } : {},
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      await harness.drain();
+
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("open Calculator");
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(
+        computerAccess,
+      );
+      const requests = await turnRequestsFor(harness, "resume-computer-message");
+      expect(requests.at(-1)?.computerControlMode).toBe(computerAccess ? "request" : "off");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("continues an interrupted turn with a provider-only prompt", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-delivered", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-interrupt-session");
+
+    await resumeThread(harness, "cmd-resume-delivered");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const input = harness.sendTurn.mock.calls[1]?.[0].input;
+    expect(input).toContain("Continue the interrupted task");
+    expect(input).not.toContain("Refactor the settings page");
+    expect((await userMessages(harness)).map((message) => message.id)).toEqual([
+      "resume-delivered",
+    ]);
+  });
+
+  it("quarantines a resume whose provider acknowledgement was lost", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-before-ack-loss", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-before-ack-loss");
+
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Transport closed while awaiting turn acceptance.",
+        }),
+      ),
+    );
+    const resume = await resumeThread(harness, "cmd-resume-without-ack");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: resume.sequence,
+      }),
+    );
+    expect(Option.getOrThrow(delivery)).toMatchObject({ state: "uncertain", attemptCount: 1 });
+    const restarted = await harness.restartReactor();
+    await restarted.start();
+    await resumeThread(harness, "cmd-second-resume-without-ack").catch(() => undefined);
+    await Effect.runPromise(restarted.reactor.drain);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+    expect(await userMessages(harness)).toHaveLength(1);
+  });
+
+  it("sends the recorded quit prompt when the app resumes a chat", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-quit", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-quit-session");
+
+    await resumeThread(harness, "cmd-resume-quit", {
+      continuationPrompt: "Synara was closed. Continue where you left off.",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain(
+      "Synara was closed. Continue where you left off.",
+    );
+    expect(await userMessages(harness)).toHaveLength(1);
+  });
+
+  it("does nothing when there is nothing to resume", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-settled", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-settled-session", "ready");
+
+    await resumeThread(harness, "cmd-resume-settled").catch(() => undefined);
+    await harness.drain();
+
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses a failed visible first goal turn and does not recover it until resumed", async () => {
     const harness = await createHarness();
     harness.sendTurn.mockImplementationOnce(() =>

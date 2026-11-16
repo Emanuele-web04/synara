@@ -272,6 +272,7 @@
   "planDetails": "Plan details",
   "queuePaused": "Queue paused",
   "composer_sendMessage": "Send message",
+  "composer_resumeTask": "Resume task",
   "showDetails": "Show details",
   "switchingTo": "Switching to",
   "thisAccount": "This account",
