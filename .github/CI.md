@@ -688,6 +688,45 @@ A clean forced local build (`turbo run build --filter=@synara/desktop
 --filter=@synara/cli --force`) produced the same four tasks in 70 s, with the
 contracts build (9.6 s) inside the web bundle's 57 s.
 
+### macOS signing skips per-file signatures on `.pak` data
+
+`app-signing-and-preparation` took 73 s (arm64) and 165 s (x64) in the
+[v1.5.4 run](https://github.com/Emanuele-web04/synara/actions/runs/43640497531),
+and 77–161 s across the runs measured earlier. It is not hashing: the shipped
+app has 29 Mach-O files. electron-builder hands the app to `@electron/osx-sign`,
+which signs every file it classifies as binary in a serial loop, one
+`codesign --timestamp` process and one request to Apple's timestamp server per
+file. Its directory walk follows Electron Framework's `Versions/Current` and
+top-level symlinks, so each of Chromium's 223 `.pak` files (220 `locale.pak`
+plus three resource packs) is signed three times.
+
+`mac.signIgnore` is now `["\\.pak$"]`. Signing a pristine Electron 43 app with
+the same `@electron/osx-sign` 1.3.3, ad hoc and without timestamps, while
+logging every `codesign` invocation:
+
+```text
+Variant              codesign --sign calls   Of which .pak   codesign --verify --deep --strict
+Every binary file            724                 669         valid on disk, satisfies its Designated Requirement
+.pak files skipped            55                   0         valid on disk, satisfies its Designated Requirement
+```
+
+A `.pak` is data inside the framework's `Resources`, not code. The enclosing
+framework's signature seals its hash in `CodeResources`, which is what strict
+verification, Gatekeeper and notarization check; its own signature added
+nothing to that. Every Mach-O file, helper app, framework and the app itself is
+signed exactly as before, with the hardened runtime, the same entitlements and
+a secure timestamp. `build-desktop-artifact-mac-config.test.ts` pins the single
+pattern and checks that no executable, library, helper, bundle or the `asar`
+matches it.
+
+A signed build-only [run 43878279502](https://github.com/Emanuele-web04/synara/actions/runs/43878279502)
+tested this change together with other release changes. App signing and
+preparation took 20.6 s on x64 and 28.4 s on arm64, compared with 164.7 s
+and 73.1 s in v1.5.4. Both macOS builds passed signing, notarization,
+stapling, provenance verification and packaged startup on their native
+architectures. This was a combined run, so these timings do not isolate
+the effect of skipping per-file signatures.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
