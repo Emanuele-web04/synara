@@ -3,6 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
+import { COARSE_HIT_AREA_TALL_CLASS_NAME, FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
@@ -66,6 +67,8 @@ const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
   "rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)]",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+  FOCUS_RING_CLASS_NAME,
+  COARSE_HIT_AREA_TALL_CLASS_NAME,
 );
 
 export function ThemePackEditor({
