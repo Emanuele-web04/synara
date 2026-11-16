@@ -130,7 +130,7 @@ export function SidebarShowMoreRow({
 
   if (!canShowMore && !canShowLess) return null;
   const buttonClassName = cn(
-    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground",
+    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground hover:text-foreground",
     SIDEBAR_ROW_FOCUS_CLASS_NAME,
     className,
   );

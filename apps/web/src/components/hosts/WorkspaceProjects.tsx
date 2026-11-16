@@ -644,7 +644,7 @@ export function WorkspaceProjectItem({
                     <SidebarMenuSubButton
                       render={<button type="button" />}
                       size="sm"
-                      className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                      className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setExtraPages(paging.effectiveExtraPages + 1)}
                     >
@@ -656,7 +656,7 @@ export function WorkspaceProjectItem({
                       render={<button type="button" />}
                       size="sm"
                       className={cn(
-                        "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                        "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                         canShowMore ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                       )}
                       onMouseDown={(event) => event.preventDefault()}

@@ -102,7 +102,7 @@ const PALETTE_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-ui";
 const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/70";
 const PALETTE_KBD_CLASS = "h-[17px] min-w-0 text-ui-xs";
-const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
+const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground";
 
 // Actions that live under the "Settings" heading when the palette is idle.
 const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
