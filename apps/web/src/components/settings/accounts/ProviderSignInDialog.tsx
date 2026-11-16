@@ -53,7 +53,7 @@ const OUTPUT_BUFFER_CHARACTERS = 64 * 1024;
 const NO_OUTPUT: ProviderSignInOutput = { url: null, asksForCode: false };
 
 type SignInPhase = "waiting" | "connected" | "stalled" | "ended" | "unverified" | "failed";
-type AuthCheck = "unchecked" | "authenticated" | "unauthenticated" | "unknown";
+type AuthCheck = "unchecked" | "authenticated" | "unauthenticated" | "unavailable" | "unknown";
 
 interface ProviderSignInDialogProps {
   provider: ProviderKind;
@@ -132,9 +132,10 @@ function ProviderSignInAttempt(
   const [optionsSent, setOptionsSent] = useState(false);
   const [closing, setClosing] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [statusProblem, setStatusProblem] = useState<string | null>(null);
   const closingRef = useRef(false);
   const alive = useRef(true);
-  const checkInFlight = useRef(false);
+  const checkInFlight = useRef<Promise<void> | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   // Read the login's output as it streams, independently of the terminal that draws it.
@@ -145,9 +146,10 @@ function ProviderSignInAttempt(
     const read = (chunk: string) => {
       buffer = (buffer + chunk).slice(-OUTPUT_BUFFER_CHARACTERS);
       const next = parseProviderSignInOutput(buffer);
-      // Both facts stay true once seen: a login that repaints must not un-open the tab.
+      // Keep the first link through repaints, but extend it when another PTY chunk completes it.
       setOutput((previous) => {
-        const url = previous.url ?? next.url;
+        const url =
+          previous.url === null || next.url?.startsWith(previous.url) ? next.url : previous.url;
         const asksForCode = previous.asksForCode || next.asksForCode;
         return url === previous.url && asksForCode === previous.asksForCode
           ? previous
@@ -161,25 +163,40 @@ function ProviderSignInAttempt(
     });
   }, [session]);
 
-  const checkStatus = useCallback(async () => {
-    if (checkInFlight.current) return;
-    checkInFlight.current = true;
+  const checkStatus = useCallback(() => {
+    if (checkInFlight.current) return checkInFlight.current;
     setChecking(true);
-    const statuses = await refreshRef.current({ silent: true });
-    checkInFlight.current = false;
-    if (!alive.current) return;
-    setChecking(false);
-    const status = statuses?.find((entry) => (entry.instanceId ?? entry.provider) === instanceId);
-    if (status?.authStatus === "authenticated") setAccount(status.accountEmail ?? null);
-    setAuthCheck(
-      status?.authStatus === "authenticated" || status?.authStatus === "unauthenticated"
-        ? status.authStatus
-        : "unknown",
-    );
-    // Native account preparation can save its isolated roots server-side.
-    void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
-    void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
+    const check = (async () => {
+      const statuses = await refreshRef.current({ silent: true });
+      if (!alive.current) return;
+      const status = statuses?.find((entry) => (entry.instanceId ?? entry.provider) === instanceId);
+      // An account can be signed in and still have no usable models.
+      if (status?.authStatus === "authenticated" && !status.available) {
+        setAuthCheck("unavailable");
+        setStatusProblem(status.unavailableReason ?? status.message ?? null);
+      } else {
+        setAuthCheck(status?.authStatus ?? "unknown");
+        setStatusProblem(null);
+        if (status?.authStatus === "authenticated") setAccount(status.accountEmail ?? null);
+      }
+      // Native account preparation can save its isolated roots server-side.
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
+    })().finally(() => {
+      checkInFlight.current = null;
+      if (alive.current) setChecking(false);
+    });
+    checkInFlight.current = check;
+    return check;
   }, [instanceId, queryClient]);
+
+  const finishSignIn = async () => {
+    // A request started before the CLI exited may have read the old credentials.
+    await checkInFlight.current;
+    if (!alive.current || closingRef.current) return;
+    await checkStatus();
+    if (alive.current) setExited(true);
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -236,7 +253,7 @@ function ProviderSignInAttempt(
   }, [phase]);
 
   const { onClose } = props;
-  const close = async () => {
+  const close = async (retry = false) => {
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
@@ -247,7 +264,10 @@ function ProviderSignInAttempt(
         requireStructuredClose: true,
       });
       await queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
-      if (alive.current) onClose();
+      if (alive.current) {
+        if (retry) props.onRetry();
+        else onClose();
+      }
     } catch (error) {
       if (alive.current) {
         setProblem(error instanceof Error ? error.message : t("settings:signInFlow_unableToClose"));
@@ -479,7 +499,7 @@ function ProviderSignInAttempt(
                 className="flex-1"
                 variant={phase === "unverified" ? "outline" : "default"}
                 disabled={closing}
-                onClick={props.onRetry}
+                onClick={() => void close(true)}
               >
                 {t("settings:signInFlow_tryAgain")}
               </Button>
@@ -498,12 +518,12 @@ function ProviderSignInAttempt(
         </>
       )}
 
-      {problem ? (
+      {problem || statusProblem ? (
         <p
           role="alert"
           className="border-t border-foreground/8 px-8 py-3 text-ui-sm text-destructive"
         >
-          {problem}
+          {problem ?? statusProblem}
         </p>
       ) : null}
 
@@ -559,11 +579,7 @@ function ProviderSignInAttempt(
                 cwd={config.data.cwd}
                 providerAuthInstanceId={instanceId}
                 terminalLabel={`Sign in · ${accountLabel}`}
-                onSessionExited={() => {
-                  void checkStatus().then(() => {
-                    if (alive.current) setExited(true);
-                  });
-                }}
+                onSessionExited={() => void finishSignIn()}
                 onRuntimeStatusChange={setRuntimeStatus}
                 onTerminalMetadataChange={ignoreMetadata}
                 onTerminalActivityChange={ignoreMetadata}
