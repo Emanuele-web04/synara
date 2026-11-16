@@ -929,17 +929,20 @@ type ProviderLockingThread = Pick<
 >;
 
 /**
- * A send whose provider differs from the one an already-running thread uses.
- * It must hand the thread off first: Hand off checks background tasks and
- * records the switch, which a plain settings save would skip.
+ * A send whose provider or account differs from the one an already-running
+ * thread uses. It must hand the thread off first: Hand off checks background
+ * tasks and records the switch, which a plain settings save would skip.
  */
 export function turnNeedsProviderHandoff(input: {
   readonly thread: ProviderLockingThread;
   readonly modelSelection: ModelSelection;
 }): boolean {
+  const current = input.thread.modelSelection;
+  const next = input.modelSelection;
   return (
     threadHasProviderLockingActivity(input.thread) &&
-    input.modelSelection.provider !== input.thread.modelSelection.provider
+    (next.provider !== current.provider ||
+      (next.instanceId ?? next.provider) !== (current.instanceId ?? current.provider))
   );
 }
 
@@ -962,10 +965,10 @@ export function createdAtAfterProviderHandoff(input: {
 }
 
 /**
- * The model selection an access-mode change may save with it. A provider
- * picked in the composer over a thread that already runs on another one is a
- * pending Hand off, which only Send performs; saving it here would switch the
- * thread's provider without one.
+ * The model selection an access-mode change may save with it. A provider or
+ * account picked in the composer over a thread that already runs on another
+ * one is a pending Hand off, which only Send performs; saving it here would
+ * switch the thread's provider without one.
  */
 export function accessModeModelSelectionToPersist(input: {
   readonly thread: ProviderLockingThread;

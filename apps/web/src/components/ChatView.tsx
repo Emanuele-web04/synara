@@ -208,7 +208,6 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
   deriveBlockedProviderHandoff,
   ProviderHandoffBackgroundTasksError,
   resolveAvailableHandoffTargets,
@@ -303,6 +302,7 @@ import {
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
+  turnNeedsProviderHandoff,
   type PendingFileUndo,
 } from "./ChatView.logic";
 import {
@@ -1497,7 +1497,6 @@ export default function ChatView({
     hasThreadStarted,
     lockedProvider,
     boundProvider,
-    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
     providerInstances,
@@ -2761,18 +2760,6 @@ export default function ChatView({
           })
         : [],
     [activeThreadProvider, activeThreadProviderInstanceId, providerInstances, providerStatuses],
-  );
-  const continueHandoffTargets = useMemo(
-    () =>
-      handoffTargets.filter(
-        (target) =>
-          activeThreadProvider !== null &&
-          canContinueThreadHandoff({
-            sourceProvider: activeThreadProvider,
-            targetProvider: target.provider,
-          }),
-      ),
-    [activeThreadProvider, handoffTargets],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
@@ -4086,11 +4073,10 @@ export default function ChatView({
       }
       const resolvedInstanceId =
         selectionOptions?.instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
-      // Picking another provider is a handoff, but the bound provider stays on
-      // its own account either way.
-      const instanceLockedProvider = lockedProvider ?? boundProvider;
+      // Picking another provider or account is a handoff; a thread that cannot
+      // hand off stays on its own account.
       const lockedInstanceId =
-        instanceLockedProvider !== null && provider === instanceLockedProvider
+        lockedProvider !== null
           ? (activeThread.session?.providerInstanceId ??
             activeThread.modelSelection.instanceId ??
             // A thread that never stored an account runs in the one the composer shows.
@@ -4163,7 +4149,6 @@ export default function ChatView({
     },
     [
       activeThread,
-      boundProvider,
       customModelsByProvider,
       lockedProvider,
       modelOptionsByProvider,
@@ -4710,22 +4695,26 @@ export default function ChatView({
     sendPreflightInFlightRef,
   });
 
-  // A provider picked in the composer over the thread's own one hands the
-  // thread off in place before the message is sent (same path as "Continue in
-  // this thread"). The send refuses up front while the thread is busy; once the
-  // message shows, a failed handoff rolls the send back into the composer.
+  // A provider or account picked in the composer over the thread's own one
+  // hands the thread off in place before the message is sent (same path as
+  // "Continue in this thread"). The send refuses up front while the thread is
+  // busy; once the message shows, a failed handoff rolls the send back into
+  // the composer.
   const canSendWithProviderHandoff = useStableCallback(
     (modelSelection?: ModelSelection): boolean => {
-      const targetProvider = modelSelection?.provider ?? selectedProvider;
+      const target = modelSelection ?? selectedModelSelection;
       if (
         !activeThread ||
-        boundProvider === null ||
-        targetProvider === boundProvider ||
-        !handoffDisabled
+        !handoffDisabled ||
+        !turnNeedsProviderHandoff({ thread: activeThread, modelSelection: target })
       ) {
         return true;
       }
-      const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+      const targetName =
+        target.provider === activeThread.modelSelection.provider
+          ? (providerInstances.find((instance) => instance.instanceId === target.instanceId)
+              ?.label ?? target.provider)
+          : (PROVIDER_DISPLAY_NAMES[target.provider] ?? target.provider);
       toastManager.add({
         type: "error",
         title: `Cannot switch to ${targetName} yet`,
@@ -4958,11 +4947,17 @@ export default function ChatView({
     t,
   );
   const runtimeUsageContextWindow = activeContextWindow;
+  const switchesClaudeAccount =
+    selectedProvider === "claudeAgent" &&
+    activeThread?.modelSelection.provider === "claudeAgent" &&
+    (selectedModelSelection.instanceId ?? selectedProvider) !==
+      (activeThread.modelSelection.instanceId ?? selectedProvider);
   const claudeSwitchKey =
     (activeThread?.messages.length ?? 0) > 0 &&
     boundProvider === "claudeAgent" &&
     activeThread?.modelSelection.provider === "claudeAgent" &&
     (selectedProvider !== "claudeAgent" ||
+      switchesClaudeAccount ||
       resolveApiModelId(selectedModelSelection) !== resolveApiModelId(activeThread.modelSelection))
       ? JSON.stringify([
           threadId,
@@ -5161,11 +5156,6 @@ export default function ChatView({
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
       lockedProvider={lockedProvider}
-      boundProviderInstance={
-        lockedProvider === null && boundProvider !== null && boundProviderInstanceId !== null
-          ? { provider: boundProvider, instanceId: boundProviderInstanceId }
-          : null
-      }
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       modelOptionsByProviderInstance={modelOptionsByProviderInstance}
@@ -5201,10 +5191,7 @@ export default function ChatView({
             providerInstances={providerInstances}
             providers={providerStatuses}
             selectedProviderInstanceId={selectedProviderInstanceId}
-            selectionLocked={
-              lockedProvider !== null ||
-              (boundProvider !== null && selectedProvider === boundProvider)
-            }
+            selectionLocked={lockedProvider !== null}
             compact={isComposerFooterCompact}
             hideLabel={!composerFooterControlsPlan.showModelLabel}
             onProviderInstanceChange={onProviderInstanceSelect}
@@ -6506,9 +6493,11 @@ export default function ChatView({
                     />
                   }
                   message={
-                    selectedProvider === "claudeAgent"
-                      ? "Next reply may use more Claude allowance."
-                      : "Chat context uses the new provider’s allowance."
+                    selectedProvider !== "claudeAgent"
+                      ? "Chat context uses the new provider’s allowance."
+                      : switchesClaudeAccount
+                        ? "Chat context uses the new account’s allowance."
+                        : "Next reply may use more Claude allowance."
                   }
                   onDismiss={() => setDismissedClaudeSwitchKey(claudeSwitchKey)}
                   testId="composer-claude-model-switch-note"
@@ -7003,7 +6992,6 @@ export default function ChatView({
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
-          continueHandoffActionTargets={continueHandoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff && settings.showHeaderHandoff}
           showHeaderActions={settings.showHeaderActions}
           gitCwd={threadWorkspaceCwd}

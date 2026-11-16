@@ -1052,7 +1052,7 @@ describe("voice helpers", () => {
     ).toBe("auto");
   });
 
-  it("hands off any send that picks another provider for a thread that already ran", () => {
+  it("hands off any send that picks another provider or account for a thread that already ran", () => {
     expect(
       turnNeedsProviderHandoff({ thread: codexThreadWithTurn, modelSelection: claudeSelection }),
     ).toBe(true);
@@ -1062,6 +1062,18 @@ describe("voice helpers", () => {
         modelSelection: { provider: "codex", model: "gpt-5.5" },
       }),
     ).toBe(false);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: codexThreadWithTurn,
+        modelSelection: { provider: "codex", model: "gpt-5.5", instanceId: "codex" as never },
+      }),
+    ).toBe(false);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: codexThreadWithTurn,
+        modelSelection: { provider: "codex", model: "gpt-5.5", instanceId: "codex_work" as never },
+      }),
+    ).toBe(true);
     expect(
       turnNeedsProviderHandoff({
         thread: { ...codexThreadWithTurn, latestTurn: null },

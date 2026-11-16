@@ -356,7 +356,13 @@ function createRetainingRestartProviderServiceLayer(options?: {
   readonly failFirstTeardown?: boolean;
   readonly keepLiveOnFailedTeardown?: boolean;
   readonly liveTurns?: boolean;
-  readonly failStart?: () => boolean;
+  readonly failStart?: (
+    input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0],
+  ) => boolean;
+  readonly startResumeCursor?: (
+    input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0],
+  ) => unknown;
+  readonly serverSettings?: DeepPartial<ServerSettings>;
   readonly interruptFailure?: boolean;
   readonly onSendTurn?: (input: Parameters<ProviderServiceShape["sendTurn"]>[0]) => void;
 }) {
@@ -394,7 +400,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
       capabilities: { sessionModelSwitch: "in-session" },
       startSession: (input) =>
         Effect.suspend(() =>
-          options?.failStart?.()
+          options?.failStart?.(input)
             ? Effect.fail(
                 new ProviderAdapterRequestError({
                   provider,
@@ -405,6 +411,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
             : teardown(input.threadId, "session/restart").pipe(
                 Effect.map(() => {
                   const now = new Date().toISOString();
+                  const resumeCursor = options?.startResumeCursor?.(input);
                   const session: ProviderSession = {
                     provider,
                     status: "ready",
@@ -414,6 +421,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
                       ? { providerInstanceId: input.providerInstanceId }
                       : {}),
                     ...(input.cwd ? { cwd: input.cwd } : {}),
+                    ...(resumeCursor !== undefined ? { resumeCursor } : {}),
                     createdAt: now,
                     updatedAt: now,
                   };
@@ -464,7 +472,9 @@ function createRetainingRestartProviderServiceLayer(options?: {
       const codexHomePath = path.join(fixtureRoot, "codex");
       fs.mkdirSync(codexHomePath);
       return ServerSettingsService.layerTest({
+        ...options?.serverSettings,
         providerInstances: {
+          ...options?.serverSettings?.providerInstances,
           codex: {
             driver: "codex",
             config: { homePath: codexHomePath },
@@ -685,6 +695,7 @@ describe("ProviderCommandReactor", () => {
       NonNullable<ProviderServiceShape["startSessionWithOutcome"]>
     >((threadId, sessionInput, outcomeOptions) => {
       const persistedCursor =
+        outcomeOptions?.startFreshForAccountHandoff !== true &&
         persistedResumeCursorProviders.get(threadId) === sessionInput.provider
           ? persistedResumeCursors.get(threadId)
           : undefined;
@@ -26125,6 +26136,181 @@ describe("ProviderCommandReactor", () => {
       },
     });
   });
+
+  it("hands a bound thread off to another account of its provider in place", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work",
+            enabled: true,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-account-handoff-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-account-handoff-1"),
+          role: "user",
+          text: "first turn on the default account",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-account-handoff"),
+        threadId,
+        modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
+        providerHandoff: true,
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.handoff",
+        ),
+      ),
+    );
+    // Stop the source runtime while the replacement is still starting.
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.startSession.mock.calls).toHaveLength(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "codex",
+      providerInstanceId: "codex_work",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerInstanceId).toBe("codex_work");
+    expect(thread?.modelSelection).toMatchObject({ provider: "codex", instanceId: "codex_work" });
+    const handoffActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.handoff",
+    );
+    expect(handoffActivity?.payload).toMatchObject({
+      sourceModelSelection: { provider: "codex", instanceId: "codex" },
+      targetModelSelection: { provider: "codex", instanceId: "codex_work" },
+    });
+    // The provider alone would read the same on both sides, so the target names its account.
+    expect(handoffActivity?.summary).toBe(
+      "Handed off from Codex (gpt-5-codex) to Codex · Work (gpt-5.4)",
+    );
+  });
+
+  it.each([false, true])(
+    "keeps the native cursor with the source account during a handoff (target rejects: %s)",
+    async (targetRejects) => {
+      const sourceCursor = { resume: "source-native-session" };
+      const targetAccountId = "claude_work";
+      const serverSettings = {
+        providerInstances: {
+          [targetAccountId]: { driver: "claudeAgent" as const, enabled: true },
+        },
+      };
+      const starts = vi.fn(
+        (input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0]) =>
+          targetRejects && input.providerInstanceId === targetAccountId,
+      );
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "sonnet" },
+        serverSettings,
+        providerServiceLayer: createRetainingRestartProviderServiceLayer({
+          failFirstTeardown: false,
+          serverSettings,
+          failStart: starts,
+          // The target can start before the adapter has a native cursor to persist.
+          startResumeCursor: (input) =>
+            input.providerInstanceId === targetAccountId
+              ? undefined
+              : (input.resumeCursor ?? sourceCursor),
+        }),
+      });
+      const repository = harness.providerRuntimeRepository;
+      if (!repository) throw new Error("Expected real provider persistence");
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const send = async (id: string) => {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(id),
+            threadId,
+            message: {
+              messageId: asMessageId(id),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await harness.drain();
+      };
+      await send("account-handoff-initial-turn");
+      const binding = async () =>
+        Option.getOrThrow(await Effect.runPromise(repository.getByThreadId({ threadId })));
+      expect(await binding()).toMatchObject({
+        providerInstanceId: "claudeAgent",
+        resumeCursor: sourceCursor,
+      });
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("account-handoff-switch"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", instanceId: targetAccountId, model: "sonnet" },
+          providerHandoff: true,
+        }),
+      );
+      await harness.drain();
+      const targetStart = starts.mock.calls.find(
+        ([input]) => input.providerInstanceId === targetAccountId,
+      );
+      expect(targetStart?.[0]).toBeDefined();
+      expect(targetStart?.[0].resumeCursor).toBeUndefined();
+      const thread = await readHarnessThread(harness);
+      expect(thread?.activities.map((activity) => activity.kind)).toContain(
+        targetRejects ? "provider.handoff.failed" : "provider.handoff",
+      );
+
+      if (targetRejects) {
+        expect(thread?.modelSelection.instanceId).toBe("claudeAgent");
+        expect(await binding()).toMatchObject({
+          providerInstanceId: "claudeAgent",
+          resumeCursor: sourceCursor,
+          status: "stopped",
+        });
+        await send("account-handoff-retry-source");
+        expect(starts.mock.lastCall?.[0]).toMatchObject({
+          providerInstanceId: "claudeAgent",
+          resumeCursor: sourceCursor,
+        });
+      } else {
+        expect(await binding()).toMatchObject({
+          providerInstanceId: targetAccountId,
+          resumeCursor: null,
+        });
+      }
+    },
+  );
 
   it("rejects provider changes after a thread is already bound to a session provider", async () => {
     const harness = await createHarness();
