@@ -532,6 +532,7 @@ import {
   SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { AccountFooterControl } from "./account/AccountFooterControl";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
@@ -7121,9 +7122,7 @@ export default function Sidebar() {
             </SidebarMenuItem>
           </SidebarMenu>
           {railSpacesProjectSidebarData.visibleEntries.length === 0 ? (
-            <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {t("workspace:noThreadsYet")}
-            </div>
+            <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>{t("workspace:noThreadsYet")}</div>
           ) : null}
         </SidebarGroup>
       );
@@ -8613,7 +8612,7 @@ export default function Sidebar() {
                           aria-live="polite"
                           aria-label={t("workspace:emptyStates_loadingProjectsAriaLabel")}
                         >
-                          <div className="text-center text-ui text-muted-foreground/58">
+                          <div className="text-center text-ui text-muted-foreground">
                             {t("workspace:emptyStates_loadingProjects")}
                           </div>
                           <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">

@@ -154,7 +154,7 @@ function KindTabs({
           >
             {t(tab.shortKey)}
             {count === undefined ? null : (
-              <span className="text-ui-xs font-normal tabular-nums text-muted-foreground/70">
+              <span className="text-ui-xs font-normal tabular-nums text-muted-foreground">
                 {count}
               </span>
             )}

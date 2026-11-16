@@ -1354,7 +1354,9 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     // for the border, rather than using the raw accent directly.
     textAccent: formatOpaqueRgb(focusBase),
     textButtonPrimary: theme.theme.surface,
-    textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
+    // Full ink, as in the light derivation and the stylesheet default: a mix towards the
+    // surface left secondary button labels near 3:1 on dark themes.
+    textButtonSecondary: theme.theme.ink,
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     textForeground: theme.theme.ink,
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
