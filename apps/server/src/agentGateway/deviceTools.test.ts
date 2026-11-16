@@ -286,6 +286,42 @@ describe("agent gateway device tool handlers", () => {
     expect(result.kind).toBe("boot-limit-reached");
   });
 
+  it("boots a shut-down simulator before installing on it", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("device_install", { udid: "FAKE-0002", appPath: "/tmp/Demo.app" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.calls.map((entry) => `${entry.kind}:${entry.udid}`)).toEqual([
+      `boot:${DEVICE}`,
+      "boot:FAKE-0002",
+      "install:FAKE-0002",
+    ]);
+  });
+
+  it("brings back a simulator Synara powered off while idle when the agent launches again", async () => {
+    const { backend, manager, call } = await setup();
+    await manager.shutdown(DEVICE, true);
+
+    const result = await call("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, DEVICE]);
+    expect(backend.callsOfKind("launch").map((entry) => entry.udid)).toEqual([DEVICE]);
+  });
+
+  it("names the simulators holding the boot cap when a run cannot boot its device", async () => {
+    const { backend, call } = await setup();
+    await call("device_boot", { udid: "FAKE-0002" });
+    await call("device_boot", { udid: "FAKE-0003" });
+
+    const result = await call("device_open_url", { udid: "FAKE-0004", url: "demo://home" });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("Ask the user which one to shut down");
+    expect(backend.callsOfKind("openUrl")).toEqual([]);
+  });
+
   it("reports every backend failure to the agent and only actionable errors to the pane", async () => {
     const { manager, call } = await setup();
 

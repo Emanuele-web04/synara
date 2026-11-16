@@ -483,6 +483,31 @@ export class DeviceManager {
     return { kind: "booted", device: { ...device, bootSource: "synara" } };
   }
 
+  /**
+   * Boot `udid` if it is shut down, so putting an app on a simulator never
+   * stops at the one step the caller skipped.
+   *
+   * Synara powers its own simulators off after `DEVICE_IDLE_SHUTDOWN_MS`, so
+   * the device an agent used last turn is routinely off by the next one, and an
+   * install that failed on it left the user starting the simulator by hand.
+   * Only a shut-down device is booted: a booting one is already on its way, and
+   * an unknown udid is left for the action itself to reject. The boot cap still
+   * applies; with no pane dialog on this path, hitting it is an error naming the
+   * devices that hold the slots.
+   */
+  async ensureBooted(udid: string): Promise<void> {
+    this.assertNotDisposed();
+    const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
+    const device = listed?.find((candidate) => candidate.udid === udid);
+    if (device?.state !== "shutdown") return;
+    const result = await this.boot(udid);
+    if (result.kind === "booted") return;
+    const running = result.synaraBooted.map((candidate) => candidate.name).join(", ");
+    throw new DeviceBackendError(
+      `${device.name} is shut down, and Synara already runs the ${result.limit} simulators it may boot${running ? ` (${running})` : ""}. Ask the user which one to shut down, then retry.`,
+    );
+  }
+
   async shutdown(udid: string, onlyIfIdle = false): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
     await this.stopStream(udid, onlyIfIdle ? this.disposal.signal : undefined);

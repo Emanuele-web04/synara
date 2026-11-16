@@ -605,7 +605,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_install",
         description: builtAppDeviceDescription(
-          "Install a built .app bundle on a booted simulator and pass the resulting bundle path. Reinstalling over an existing copy keeps its data; for a clean first-run state, uninstall from the shell first.",
+          "Install a built .app bundle on a simulator, booting it first if it is shut down, and pass the resulting bundle path. Reinstalling over an existing copy keeps its data; for a clean first-run state, uninstall from the shell first.",
         ),
         inputSchema: {
           type: "object",
@@ -620,6 +620,7 @@ export function makeAgentGatewayDeviceTools(
       },
       handler: handle("device_install", async (args, context) => {
         const udid = readUdid(args);
+        await manager.ensureBooted(udid);
         const result = await manager.install(
           udid,
           readStringArg(args, "appPath", { required: true })!,
@@ -634,7 +635,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_launch",
         description: builtAppDeviceDescription(
-          "Launch an installed app by bundle id and return its first settled screen. restart: true kills a running copy first, which is how to check that state survives a relaunch. environment sets process environment variables (for test flags). Use Logger, NSLog or os_log for output read by device_logs; raw stdout/stderr are not captured. Launch system apps directly by bundle id; Settings is com.apple.Preferences.",
+          "Launch an installed app by bundle id, booting the simulator first if it is shut down, and return its first settled screen. restart: true kills a running copy first, which is how to check that state survives a relaunch. environment sets process environment variables (for test flags). Use Logger, NSLog or os_log for output read by device_logs; raw stdout/stderr are not captured. Launch system apps directly by bundle id; Settings is com.apple.Preferences.",
         ),
         inputSchema: {
           type: "object",
@@ -669,6 +670,7 @@ export function makeAgentGatewayDeviceTools(
           terminateExisting: readBooleanArg(args, "restart") ?? false,
           environment: readEnvironmentArg(args),
         };
+        await manager.ensureBooted(udid);
         let launched: Awaited<ReturnType<typeof manager.launch>> | null = null;
         const observation = await manager.observe(
           udid,
@@ -691,7 +693,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_open_url",
         description: approvalRequiredDeviceDescription(
-          "Open a URL on the device through its deep-link handlers and return the settled screen; this always requires explicit user approval. For Expo Go, boot with device_boot and then use exp://127.0.0.1:8081; if Metro is needed, start it detached in the background so it does not block the turn. Never run expo start --ios, expo run:ios, or npm run ios: they open Simulator.app outside the pane, and on Xcode 27+, where DeviceHub replaced it, they fail outright. For a development build, build the native ios/ project with xcodebuild and use device_install and device_launch. When the user asks to see the app working, finish with it visible in the streamed pane.",
+          "Open a URL on the device through its deep-link handlers, booting it first if it is shut down, and return the settled screen; this always requires explicit user approval. For Expo Go, use exp://127.0.0.1:8081; if Metro is needed, start it detached in the background so it does not block the turn. Never run expo start --ios, expo run:ios, or npm run ios: they open Simulator.app outside the pane, and on Xcode 27+, where DeviceHub replaced it, they fail outright. For a development build, build the native ios/ project with xcodebuild and use device_install and device_launch. When the user asks to see the app working, finish with it visible in the streamed pane.",
         ),
         inputSchema: {
           type: "object",
@@ -711,6 +713,7 @@ export function makeAgentGatewayDeviceTools(
       handler: handleInteraction("device_open_url", async (args, _context, signal) => {
         const udid = readUdid(args);
         const url = readStringArg(args, "url", { required: true })!;
+        await manager.ensureBooted(udid);
         const observation = await manager.observe(udid, () => manager.openUrl(udid, url), {
           timeoutMs: DEVICE_LAUNCH_SETTLE_TIMEOUT_MS,
           signal,
