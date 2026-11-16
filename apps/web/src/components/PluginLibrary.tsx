@@ -553,29 +553,33 @@ export function PluginLibrary(props?: {
         />
       </div>
       <div className="flex-1" />
-      <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {enabledProviderOrder.map((provider) => {
-          const capabilities = providerCapabilities[provider];
-          const label = PROVIDER_DISPLAY_NAMES[provider];
-          return (
-            <ProviderToggleButton
-              key={provider}
-              label={label}
-              provider={provider}
-              active={effectiveProvider === provider}
-              disabled={!capabilities.plugins && !capabilities.skills}
-              onClick={() => {
-                setSelectedProvider(provider);
-                if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                  setSelectedTab("skills");
-                }
-                if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                  setSelectedTab("plugins");
-                }
-              }}
-            />
-          );
-        })}
+      {/* Scrolls sideways when the providers outgrow the bar; the block padding leaves room
+          for the pills' coarse-pointer hit areas inside the scroller. */}
+      <div className="-my-2 min-w-0 overflow-x-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+          {enabledProviderOrder.map((provider) => {
+            const capabilities = providerCapabilities[provider];
+            const label = PROVIDER_DISPLAY_NAMES[provider];
+            return (
+              <ProviderToggleButton
+                key={provider}
+                label={label}
+                provider={provider}
+                active={effectiveProvider === provider}
+                disabled={!capabilities.plugins && !capabilities.skills}
+                onClick={() => {
+                  setSelectedProvider(provider);
+                  if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                    setSelectedTab("skills");
+                  }
+                  if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                    setSelectedTab("plugins");
+                  }
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
     </>
   );

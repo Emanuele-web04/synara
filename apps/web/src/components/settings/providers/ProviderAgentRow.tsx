@@ -181,7 +181,7 @@ export function ProviderAgentRow(props: {
           <ProviderIcon provider={provider} className="size-4 shrink-0" />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
-            <div className="truncate text-ui-sm text-muted-foreground">
+            <div className="break-words text-ui-sm text-muted-foreground">
               {providerSetupStatusLabel(
                 {
                   status: props.setupStatus,

@@ -171,7 +171,7 @@ function ConnectorRowText(props: { title: string; description: ReactNode }) {
       <span className="block truncate text-ui-lg font-medium leading-snug text-foreground">
         {props.title}
       </span>
-      <span className="mt-0.5 block truncate text-ui text-muted-foreground">
+      <span className="mt-0.5 block break-words text-ui text-muted-foreground">
         {props.description}
       </span>
     </span>

@@ -297,7 +297,7 @@ export function ThemePackEditor({
         </ThemeRow>
 
         <ThemeRow label={t("common:theme_uiFont")}>
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex min-w-0 flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.ui ?? ""}
               placeholder={t("common:theme_systemDefault")}
@@ -305,7 +305,7 @@ export function ThemePackEditor({
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
             {systemUiFont ? (
-              <span className="text-ui-sm text-muted-foreground">
+              <span className="max-w-44 text-end text-ui-sm break-words text-muted-foreground">
                 {t("common:useSystemUIFontIsOnThemeFontsAre")}
               </span>
             ) : null}
