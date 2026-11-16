@@ -340,6 +340,10 @@
       "types": "./src/text.ts",
       "import": "./src/text.ts"
     },
+    "./markdownPlainText": {
+      "types": "./src/markdownPlainText.ts",
+      "import": "./src/markdownPlainText.ts"
+    },
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"

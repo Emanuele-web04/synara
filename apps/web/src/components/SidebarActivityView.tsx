@@ -1,6 +1,6 @@
 // FILE: SidebarActivityView.tsx
-// Purpose: Task-feed sidebar surface — every thread is a 2-line task row
-//          (provider + title / project + branch) grouped by status, with settle.
+// Purpose: Task-feed sidebar surface — every thread is a task row (provider + title / a
+//          two-line preview of its latest reply / project + branch) grouped by status, with settle.
 // Layer: Sidebar UI component
 // Exports: SidebarActivityView, ActivityThreadRow, SidebarSnoozedThreadsSection
 
@@ -17,18 +17,18 @@ import {
 } from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
-import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
+import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 
 import {
   AddPlusIcon,
   ClearReadIcon,
   ClockIcon,
+  FolderIcon,
   GitBranchIcon,
   GlobeIcon,
   NewThreadIcon,
   SortIcon,
   WorktreeIcon,
-  FolderIcon,
 } from "~/lib/icons";
 import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
@@ -52,7 +52,7 @@ import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { ProviderIcon } from "./ProviderIcon";
 import { SnoozeCountdown } from "./SnoozeCountdown";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
-import { PrStateChip } from "./pullRequest/PrStateChip";
+import { PrStateChip, PrStateCountChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
   resolveSidebarThreadListPaging,
@@ -77,6 +77,8 @@ import {
   mostUrgentActivityPriorityTier,
   resolveActivityPriority,
   resolveActivityPriorityTier,
+  resolveActivityRowEmphasis,
+  resolveActivityRowPullRequests,
   resolveActivityScope,
   resolveChildThreadsTier,
   resolveChildThreadsTone,
@@ -122,6 +124,13 @@ import {
 import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 import { useTranslation } from "~/i18n";
 
+// The status glyph and hover actions sit at the right of the title line, the row's first.
+const ACTIVITY_ROW_TITLE_SLOT_CLASS_NAME = "absolute top-2 right-1";
+const ACTIVITY_ROW_ACTIONS_REVEAL_CLASS_NAME =
+  "inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100";
+// The project line's PR, its own press target above the row's.
+const ACTIVITY_ROW_PULL_REQUEST_CLASS_NAME =
+  "pointer-events-auto min-h-5 min-w-5 shrink-0 justify-center [&_svg]:size-3";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
@@ -192,20 +201,14 @@ export function ActivityThreadRow({
   renderHoverCard: (anchorId: string) => ReactNode;
   rowRef?: Ref<HTMLButtonElement>;
   /**
-   * A parent of agent-created threads: its count chip takes the meta line's leading slot,
-   * under the provider glyph, and the family's stem drops from it while unfolded.
+   * A parent of agent-created threads: its count chip leads the reply line, under the
+   * provider glyph, and the family's stem drops from it while unfolded.
    */
   childThreads?: ActivityRowChildThreads | undefined;
 }) {
   const { t } = useTranslation();
 
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
-  const branch = resolveThreadDisplayBranch(thread);
-  const isWorktree =
-    resolveThreadEnvironmentMode({
-      envMode: thread.envMode,
-      worktreePath: thread.worktreePath,
-    }) === "worktree";
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -219,7 +222,11 @@ export function ActivityThreadRow({
     isActive: isOpen,
     slotOccupied: Boolean(threadJumpLabel),
   });
-  // Rename/context-menu gestures live on the row wrapper (not the title button) so
+  const emphasis = resolveActivityRowEmphasis(
+    resolveThreadStatusTrailingIndicator({ status, isActive: isOpen }),
+  );
+  const replyPreview = thread.latestReplyPreview;
+  // Rename/context-menu gestures live on the row wrapper (not the row button) so
   // they also fire over the trailing status and hover-action cluster, which are
   // absolutely positioned siblings of the button.
   const rowGestures = external
@@ -230,35 +237,140 @@ export function ActivityThreadRow({
         onRenamePointerUp,
         onContextMenu,
       });
+  // Done rows fade their fill and their content together; the hover actions keep full ink.
+  const settledClassName =
+    isSettled && "opacity-55 transition-opacity group-hover/activity-row:opacity-85";
+  const reply = replyPreview ? (
+    <p
+      className={cn(
+        "line-clamp-2 text-ui-sm leading-snug wrap-break-word",
+        emphasis.replySeen ? "text-muted-foreground/80" : "text-muted-foreground",
+      )}
+    >
+      {replyPreview}
+    </p>
+  ) : null;
+  const snoozeCountdown =
+    thread.snoozedUntil != null ? (
+      <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
+        <span className="truncate">
+          <SnoozeCountdown snoozedUntil={thread.snoozedUntil} />
+        </span>
+      </span>
+    ) : null;
+  // The project line, as it always was: the project, then the worktree, the PR and the branch.
+  const branch = resolveThreadDisplayBranch(thread);
+  // A worktree is marked beside the title, as on the project list's thread rows.
+  const { worktreeBadgeLabel } = resolveThreadEnvironmentPresentation({
+    envMode: thread.envMode,
+    worktreePath: thread.worktreePath,
+  });
+  // Remote rows show no PR; several PRs share one chip that lists them.
+  const [rowPullRequest, ...otherPullRequests] = resolveActivityRowPullRequests(
+    external ? null : pr,
+    thread.pullRequests,
+  );
+  const footer = (
+    <span data-slot="activity-thread-footer" className="flex min-w-0 items-center gap-1.5">
+      <span className="inline-flex shrink-0">
+        {project?.cwd && !external ? (
+          <ProjectSidebarIcon
+            cwd={project.cwd}
+            expanded={false}
+            appearance={project.appearance}
+            glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+          />
+        ) : (
+          <FolderIcon
+            className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+            aria-hidden
+          />
+        )}
+      </span>
+      <span
+        className={cn(
+          "min-w-0 truncate text-ui-sm text-muted-foreground/80",
+          !childThreads?.summary && "mr-auto",
+        )}
+      >
+        {resolveThreadProjectLabel(project)}
+      </span>
+      {childThreads?.summary ? (
+        <span
+          className={cn(
+            "mr-auto shrink-0 text-ui-sm",
+            childThreads.tone === "waiting" ? "text-warning" : "text-muted-foreground/70",
+          )}
+        >
+          {childThreads.summary}
+        </span>
+      ) : null}
+      <span className="flex min-w-0 shrink-[100] items-center gap-1.5">
+        {rowPullRequest && otherPullRequests.length > 0 ? (
+          <PrStateCountChip
+            pullRequests={[rowPullRequest, ...otherPullRequests]}
+            className={ACTIVITY_ROW_PULL_REQUEST_CLASS_NAME}
+            onOpen={onOpenPullRequest}
+          />
+        ) : rowPullRequest ? (
+          <PrStateChip
+            pr={rowPullRequest}
+            className={ACTIVITY_ROW_PULL_REQUEST_CLASS_NAME}
+            onOpen={(event) => onOpenPullRequest(event, rowPullRequest)}
+          />
+        ) : null}
+        {branch ? (
+          <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
+            <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
+            <span className="max-w-36 truncate">{branch}</span>
+          </span>
+        ) : null}
+      </span>
+    </span>
+  );
 
   const rowContent = (
     <>
+      {/* The whole row is one press target, so the PR chip is the only other one. Its content
+          is drawn above it and lets presses through everywhere but the chip. Top to bottom:
+          who and what, the latest reply, then the project line. */}
       <button
         ref={rowRef}
         aria-current={isActive ? "page" : undefined}
         type="button"
         onClick={onOpen}
         title={external ? `${thread.title} — ${external.hostName}` : undefined}
-        aria-label={external ? `${thread.title}, ${external.hostName}` : undefined}
+        aria-label={external ? `${thread.title}, ${external.hostName}` : thread.title}
         // Same native drag as the classic thread rows: drop on a chat pane to
-        // split, or on a composer to @mention the chat.
+        // split, or on a composer to @mention the chat. The visible row is the image.
         draggable={!external}
-        onDragStart={external ? undefined : (event) => beginThreadDrag(event, thread.id)}
+        onDragStart={
+          external
+            ? undefined
+            : (event) =>
+                beginThreadDrag(event, thread.id, event.currentTarget.closest("[data-thread-item]"))
+        }
         onDragEnd={external ? undefined : endThreadDrag}
         data-testid={`activity-thread-${thread.id}`}
         className={cn(
-          "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
+          "absolute inset-0 cursor-pointer rounded-lg select-none",
           SIDEBAR_ROW_FOCUS_CLASS_NAME,
           isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
-          isSettled && "opacity-55 transition-opacity hover:opacity-85",
+          settledClassName,
           // Snoozed rows carry a tint on top of the clock line so they read apart at a glance.
           thread.snoozedUntil != null && !isActive && "bg-info/6",
           status?.label === "Reminder" && !isActive && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
         )}
+      />
+      <div
+        className={cn(
+          "pointer-events-none relative flex min-w-0 flex-col gap-1 px-2.5 py-2 select-none",
+          settledClassName,
+        )}
       >
         <span
           className={cn(
-            "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
+            "flex h-5 min-w-0 items-center gap-1.5 transition-[padding] duration-150 ease-out",
             // Room for the status glyph only when there is one, so a remote row's globe
             // otherwise sits at the edge.
             trailingStatus && !threadJumpLabel && "pr-4",
@@ -274,9 +386,13 @@ export function ActivityThreadRow({
               <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground/40" />
             }
           />
+          {/* The row button already announces the title. */}
           <span
+            aria-hidden="true"
+            data-slot="activity-thread-title"
             className={cn(
-              "min-w-0 flex-1 truncate text-ui leading-5 font-normal",
+              "min-w-0 flex-1 truncate text-ui leading-5",
+              emphasis.titleEmphasized ? "font-medium" : "font-normal",
               isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
             )}
           >
@@ -296,6 +412,12 @@ export function ActivityThreadRow({
               />
             </span>
           ) : null}
+          {worktreeBadgeLabel ? (
+            <WorktreeIcon
+              className={sidebarGlyphClass("meta", "shrink-0 text-muted-foreground/55")}
+              aria-label={worktreeBadgeLabel}
+            />
+          ) : null}
           {thread.snoozedUntil != null ? (
             <ClockIcon
               className={sidebarGlyphClass("meta", "shrink-0 text-info")}
@@ -311,70 +433,25 @@ export function ActivityThreadRow({
             />
           ) : null}
         </span>
-        <span className={cn("flex min-w-0 items-center gap-1.5", childThreads && "min-h-5")}>
-          <span className={cn("inline-flex shrink-0", childThreads && "invisible")}>
-            {project?.cwd && !external ? (
-              <ProjectSidebarIcon
-                cwd={project.cwd}
-                expanded={false}
-                appearance={project.appearance}
-                glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              />
-            ) : (
-              <FolderIcon
-                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                aria-hidden
-              />
-            )}
-          </span>
-          <span
-            className={cn(
-              "min-w-0 truncate text-ui-sm text-muted-foreground/80",
-              !childThreads?.summary && "mr-auto",
-            )}
-          >
-            {resolveThreadProjectLabel(project)}
-          </span>
-          {childThreads?.summary ? (
-            <span
-              className={cn(
-                "mr-auto shrink-0 text-ui-sm",
-                childThreads.tone === "waiting" ? "text-warning" : "text-muted-foreground/70",
-              )}
-            >
-              {childThreads.summary}
-            </span>
-          ) : null}
-          {isWorktree ? (
-            <WorktreeIcon
-              className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              aria-label={t("common:worktreeMode_worktree")}
-            />
-          ) : null}
-          <span className="flex min-w-0 shrink-[100] items-center gap-1.5">
-            {pr && !external ? (
-              <PrStateChip
-                pr={pr}
-                className="min-h-5 min-w-5 shrink-0 justify-center [&_svg]:size-3"
-                onOpen={(event) => onOpenPullRequest(event, pr)}
-              />
-            ) : null}
-            {branch ? (
-              <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
-                <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
-                <span className="max-w-36 truncate">{branch}</span>
-              </span>
-            ) : null}
-          </span>
-        </span>
-        {thread.snoozedUntil != null ? (
-          <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
-            <span className="truncate">
-              <SnoozeCountdown snoozedUntil={thread.snoozedUntil} />
+        {childThreads ? (
+          // The fold chip sits over the leading slot, under the provider glyph, and the
+          // family's stem drops from it beside the lines below while unfolded.
+          <span className="flex min-h-[18px] min-w-0 gap-1.5">
+            <span aria-hidden="true" className="w-[18px] shrink-0" />
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              {reply}
+              {footer}
+              {snoozeCountdown}
             </span>
           </span>
-        ) : null}
-      </button>
+        ) : (
+          <>
+            {reply}
+            {footer}
+            {snoozeCountdown}
+          </>
+        )}
+      </div>
       {childThreads ? (
         <>
           <SidebarChildThreadsChip
@@ -382,12 +459,12 @@ export function ActivityThreadRow({
             collapsed={childThreads.collapsed}
             tone={childThreads.tone}
             onToggle={childThreads.onToggle}
-            className="absolute top-[33px] left-[7px]"
+            className="absolute top-[31px] left-[7px]"
           />
           {childThreads.collapsed ? null : (
             <span
               aria-hidden="true"
-              className={cn(SIDEBAR_CHILD_STEM_CLASS_NAME, "top-[51px] -bottom-px left-4 border-l")}
+              className={cn(SIDEBAR_CHILD_STEM_CLASS_NAME, "top-[49px] -bottom-px left-4 border-l")}
             />
           )}
         </>
@@ -396,7 +473,8 @@ export function ActivityThreadRow({
         <span
           data-slot="activity-completion-status"
           className={cn(
-            "pointer-events-none absolute top-2 right-1 inline-flex size-5 items-center justify-center",
+            "pointer-events-none inline-flex size-5 items-center justify-center",
+            ACTIVITY_ROW_TITLE_SLOT_CLASS_NAME,
             sidebarHoverRevealHideClassName("activity-row"),
           )}
         >
@@ -404,7 +482,9 @@ export function ActivityThreadRow({
         </span>
       ) : null}
       {!external ? (
-        <span className="absolute top-2 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
+        <span
+          className={cn(ACTIVITY_ROW_TITLE_SLOT_CLASS_NAME, ACTIVITY_ROW_ACTIONS_REVEAL_CLASS_NAME)}
+        >
           <ThreadRowQuickActions
             threadId={thread.id}
             isPinned={isPinned}
@@ -448,7 +528,12 @@ export function ActivityThreadRow({
           withHoverCard(
             <>
               {rowContent}
-              <span className="absolute top-2 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
+              <span
+                className={cn(
+                  ACTIVITY_ROW_TITLE_SLOT_CLASS_NAME,
+                  ACTIVITY_ROW_ACTIONS_REVEAL_CLASS_NAME,
+                )}
+              >
                 {quickActions}
               </span>
             </>,

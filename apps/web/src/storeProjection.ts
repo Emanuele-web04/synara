@@ -147,6 +147,9 @@ function toThreadShell(thread: Thread): ThreadShell {
     ...(thread.pendingBackgroundTaskCount !== undefined
       ? { pendingBackgroundTaskCount: thread.pendingBackgroundTaskCount }
       : {}),
+    ...(thread.latestReplyPreview !== undefined
+      ? { latestReplyPreview: thread.latestReplyPreview }
+      : {}),
     ...(thread.pendingInteractions !== undefined
       ? { pendingInteractions: thread.pendingInteractions }
       : {}),
@@ -389,7 +392,8 @@ function sidebarThreadSummariesEqual(
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     deepEqualJson(left.pullRequests ?? [], right.pullRequests ?? []) &&
-    (left.handoff ?? null) === (right.handoff ?? null)
+    (left.handoff ?? null) === (right.handoff ?? null) &&
+    left.latestReplyPreview === right.latestReplyPreview
   );
 }
 
@@ -442,6 +446,9 @@ function buildSidebarThreadSummary(
     lastKnownPr: thread.lastKnownPr ?? null,
     pullRequests: thread.pullRequests ?? [],
     handoff: thread.handoff ?? null,
+    ...(thread.latestReplyPreview !== undefined
+      ? { latestReplyPreview: thread.latestReplyPreview }
+      : {}),
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {
     return previous;
