@@ -41,6 +41,7 @@ import {
   SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
 import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
@@ -1471,7 +1472,7 @@ export function SidebarActivityView({
       </div>
 
       {isEmpty ? (
-        <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
+        <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>
           {threadsHydrated ? emptyLabel : t("workspace:loadingActivity")}
         </div>
       ) : groupMode === "project" ? (

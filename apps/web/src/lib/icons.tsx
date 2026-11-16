@@ -184,8 +184,10 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
+// react-icons marks its brand glyphs role="img"; beside a visible label that is an unnamed
+// picture, so the glyph is hidden from the accessibility tree like the other icons here.
 export const GitHubIcon: LucideIcon = (props) => (
-  <SiGithub className={props.className} style={props.style} />
+  <SiGithub className={props.className} style={props.style} aria-hidden />
 );
 // Issue state glyphs, GitHub's shapes from the same Central outline set: a ring with a dot
 // (open), a checked ring (closed as completed), and a struck ring (closed as not planned).

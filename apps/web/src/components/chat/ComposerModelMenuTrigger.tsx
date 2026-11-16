@@ -25,10 +25,7 @@ import { getProviderIconClassName } from "./ProviderModelPicker";
 import { useTranslation } from "~/i18n";
 
 // Effort and context window ("High", "1M") share one muted tone after the model name.
-const TRIGGER_TRAIT_LABEL_CLASS_NAME = cn(
-  "shrink-0 dark:text-muted-foreground/45",
-  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-);
+const TRIGGER_TRAIT_LABEL_CLASS_NAME = cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME);
 
 // Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
 // degradation steps: the text moves to title/sr-only so assistive tech keeps it.

@@ -5,6 +5,7 @@
 // Exports: AdvancedSettingsPanel, KeybindingsFileSettingsSection, AppTourSettingsRow,
 //          AboutSettingsSection
 
+import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
@@ -284,7 +285,10 @@ export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: numb
             <div className="mt-3 border-t border-border/70 pt-3">
               <button
                 type="button"
-                className="flex w-full items-center justify-between text-left"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-sm text-left",
+                  FOCUS_RING_CLASS_NAME,
+                )}
                 aria-expanded={showRecoveryTools}
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
