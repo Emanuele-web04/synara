@@ -435,9 +435,11 @@ when the user starts typing keeps running. Accepting it, or a new turn, ends it.
 `server.generateComposerPrediction` RPC takes only the thread and turn ids and derives
 everything else from the read model: it reads the latest few exchanges of visible user and
 assistant text and generates through the isolated text-generation path on the chat's own
-provider instance, using the Git-writing model only when it is that same instance and the
-chat's model otherwise, either one at its lowest catalog effort. A chat without a stored
-provider instance id uses its provider's default instance, on the server and in the client.
+provider instance. A Git-writing model on that instance takes precedence. Otherwise, Claude
+uses Sonnet 5.5 and Codex uses the default Git text-generation model. Other providers with
+text generation use the chat's model. The prediction uses the chosen model's lowest catalog
+effort. A chat without a stored provider instance id uses its provider's default instance, on
+the server and in the client.
 The result's `outcome` is `suggested`, `none` (the model had no suggestion), `unavailable`
 (a busy or moved-on thread or no usable route before generation), or `generation-unavailable`
 (generation may already have run without returning a usable result). The server logs one
