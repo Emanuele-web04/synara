@@ -490,6 +490,7 @@ jobs:
     uses: ./.github/workflows/release-platform.yml
     with:
       runner: ${{ matrix.runner }}
+      label: ${{ matrix.label }}
       platform: ${{ matrix.platform }}
       arch: ${{ matrix.arch }}
       target: ${{ matrix.target }}
@@ -620,11 +621,37 @@ jobs:
       - name: Install release script dependencies
         run: bun install --frozen-lockfile --ignore-scripts --filter @synara/scripts --production
 
-      - name: Download all desktop artifacts
+      - name: Download non-Intel desktop artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: desktop-*
+          pattern: desktop-!(mac-x64)
           merge-multiple: true
+          path: release-assets
+
+      - name: Download Intel qualification receipt
+        if: needs.preflight.outputs.desktop_flavor != 'remote'
+        uses: actions/download-artifact@v8
+        with:
+          name: intel-qualification-receipt
+          path: intel-qualification
+
+      - name: Read the qualified Intel artifact ID
+        if: needs.preflight.outputs.desktop_flavor != 'remote'
+        id: intel_qualification
+        shell: bash
+        run: |
+          artifact_id="$(<intel-qualification/desktop-mac-x64.id)"
+          if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Missing or invalid Intel qualification receipt." >&2
+            exit 1
+          fi
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download the qualified Intel desktop artifact
+        if: needs.preflight.outputs.desktop_flavor != 'remote'
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.intel_qualification.outputs.id }}
           path: release-assets
 
       - name: Download server tarball
