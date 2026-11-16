@@ -121,6 +121,14 @@ Download the latest build from [GitHub Releases](https://github.com/Emanuele-web
 
 Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
 
+On Linux, one command installs Synara for the current user without root. It adds Synara to the app menu, starts without FUSE 2, and lets the app update itself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Emanuele-web04/synara/main/scripts/install.sh | sh
+```
+
+Replace `| sh` with `| sh -s -- --beta` to install Synara Beta beside Stable, or with `| sh -s -- --uninstall` to remove the application. Your data in `~/.synara` stays.
+
 Workspace Git features require [Git 2.29 or newer](https://github.com/git/git/blob/v2.29.0/Documentation/RelNotes/2.29.0.txt). Background refreshes preserve the FETCH_HEAD used by explicit fetch workflows. Ahead/behind counts use local refs and can update on the next status poll, up to 60 seconds after a successful background refresh; status reads do not wait for the remote.
 
 ### Provider setup
