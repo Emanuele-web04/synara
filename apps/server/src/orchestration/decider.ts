@@ -3306,6 +3306,9 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         payload: {
           threadId: command.threadId,
           session: command.session,
+          ...(command.session.status === "starting" && command.pendingResumeMessageId !== undefined
+            ? { pendingResumeMessageId: command.pendingResumeMessageId }
+            : {}),
         },
       };
     }

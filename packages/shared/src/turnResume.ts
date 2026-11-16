@@ -1,7 +1,10 @@
 import type { MessageId, OrchestrationLatestTurn, TurnId } from "@synara/contracts";
 
+// The hidden request ID links provider checkpoint and restart recovery to the same turn.
+export const TURN_RESUME_MESSAGE_ID_PREFIX = "turn-resume:";
+
 /**
- * What Resume continues, the same decision t3code makes for its interrupted run:
+ * What Resume continues after an interrupted turn:
  * - `resend`: the newest request never started a turn (its send failed, or the
  *   app stopped while the session was still starting). It is delivered again as
  *   written, and the chat gains no message.

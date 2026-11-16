@@ -4679,6 +4679,59 @@ describe("CheckpointReactor", () => {
     },
   );
 
+  it("aliases a hidden resume baseline after the provider turn was already projected", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("manual-resume-turn");
+    const messageId = MessageId.makeUnsafe("turn-resume:checkpoint-event");
+    const createdAt = new Date().toISOString();
+    const session = {
+      threadId,
+      providerName: "codex" as const,
+      runtimeMode: "approval-required" as const,
+      lastError: null,
+      updatedAt: createdAt,
+    };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-resume-checkpoint-start"),
+        threadId,
+        session: { ...session, status: "starting", activeTurnId: null },
+        pendingResumeMessageId: messageId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadMessageStart(threadId, messageId),
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-resume-checkpoint-running"),
+        threadId,
+        session: { ...session, status: "running", activeTurnId: turnId },
+        createdAt,
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "change after resume\n", "utf8");
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-hidden-resume-started"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+    });
+
+    const alias = checkpointRefForThreadTurnStart(threadId, turnId);
+    await waitForGitRefExists(harness.cwd, alias);
+    expect(gitShowFileAtRef(harness.cwd, alias, "README.md")).not.toContain("change after resume");
+  });
+
   it("aliases a prepared pre-turn baseline on turn.started and captures the post-turn checkpoint on turn.completed", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();

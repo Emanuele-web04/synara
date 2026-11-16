@@ -268,7 +268,7 @@ export async function persistModelSelectionBeforeRuntimeMode(input: {
 }
 
 /**
- * Whether an empty composer's Send becomes Resume, as in t3code: the newest
+ * Whether an empty composer's Send becomes Resume. The newest
  * request never reached the provider, or the latest turn was interrupted (Stop,
  * quit, crash, restart). A failed turn keeps its banner's Continue task. Live
  * work, a pending request, a usage-limit wait, queued follow-ups, a held cache

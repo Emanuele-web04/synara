@@ -12645,6 +12645,41 @@ describe("ProviderCommandReactor", () => {
     ]);
   });
 
+  it("quarantines a resume whose provider acknowledgement was lost", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-before-ack-loss", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-before-ack-loss");
+
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Transport closed while awaiting turn acceptance.",
+        }),
+      ),
+    );
+    const resume = await resumeThread(harness, "cmd-resume-without-ack");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: resume.sequence,
+      }),
+    );
+    expect(Option.getOrThrow(delivery)).toMatchObject({ state: "uncertain", attemptCount: 1 });
+    const restarted = await harness.restartReactor();
+    await restarted.start();
+    await resumeThread(harness, "cmd-second-resume-without-ack").catch(() => undefined);
+    await Effect.runPromise(restarted.reactor.drain);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+    expect(await userMessages(harness)).toHaveLength(1);
+  });
+
   it("sends the recorded quit prompt when the app resumes a chat", async () => {
     const harness = await createHarness();
     await sendUserTurn(harness, "resume-quit", "Refactor the settings page");

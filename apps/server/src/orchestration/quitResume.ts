@@ -53,6 +53,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "@synara/contracts";
+import { TURN_RESUME_MESSAGE_ID_PREFIX } from "@synara/shared/turnResume";
 import { Duration, Effect, FileSystem, Option, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 
@@ -66,6 +67,7 @@ import {
 } from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 
@@ -199,6 +201,7 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const interactions = yield* ProjectionPendingInteractionRepository;
   const snapshots = yield* ProjectionSnapshotQuery;
+  const projectionTurns = yield* ProjectionTurnRepository;
   const providerCommands = yield* ProviderCommandReactor;
   const now = new Date().toISOString();
   const pending = yield* interactions.listUnsettled({});
@@ -213,15 +216,40 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
         thread.latestTurn?.state === "running" &&
         thread.session?.status === "running",
     ),
-    // The stored user request can have a null turnId even after its turn starts.
-    // The detail snapshot links requests to turns through pending_message_id.
-    (thread) =>
-      providerCommands
-        .withRestartOrphanedThread(thread.id, snapshots.getThreadDetailSnapshotById(thread.id))
-        .pipe(Effect.map(Option.flatten)),
+    (candidate) =>
+      providerCommands.withRestartOrphanedThread(
+        candidate.id,
+        Effect.gen(function* () {
+          const detail = yield* snapshots.getThreadDetailSnapshotById(candidate.id);
+          if (Option.isNone(detail)) return undefined;
+          const { thread } = detail.value;
+          const turnId = thread.latestTurn?.turnId;
+          if (turnId === undefined) return undefined;
+          // The detail projection links ordinary user messages to their provider turns.
+          const message = thread.messages.findLast(
+            (message) => message.role === "user" && message.turnId === turnId,
+          );
+          if (message !== undefined) {
+            // Previously shipped quit resumes used a visible automation-origin row.
+            const recoverable =
+              message.dispatchOrigin !== "agent" &&
+              (message.dispatchOrigin !== "automation" || message.id.startsWith("quit-resume:"));
+            return recoverable ? thread : undefined;
+          }
+          // Hidden manual/quit resumes bind the same durable turn request without a chat row.
+          const turn = yield* projectionTurns.getByTurnId({ threadId: thread.id, turnId });
+          return Option.getOrUndefined(turn)?.pendingMessageId?.startsWith(
+            TURN_RESUME_MESSAGE_ID_PREFIX,
+          )
+            ? thread
+            : undefined;
+        }),
+      ),
     { concurrency: 4 },
   );
-  const threads = details.flatMap((detail) => (Option.isSome(detail) ? [detail.value.thread] : []));
+  const threads = details.flatMap((detail) =>
+    Option.isSome(detail) && detail.value !== undefined ? [detail.value] : [],
+  );
   const record = buildCrashResumeRecord({ readModel: { ...readModel, threads }, blocked, now });
   return record.threads.length > 0
     ? ({ kind: "record", record } as const)
@@ -248,15 +276,7 @@ function buildCrashResumeRecord(input: {
       .map((project) => project.id),
   );
   const threads = input.readModel.threads.filter((thread) => {
-    const message = thread.messages.findLast(
-      (message) => message.role === "user" && message.turnId === thread.latestTurn?.turnId,
-    );
-    // Resume turns also use automation origin to preserve human recency. They
-    // remain ordinary chat work when another unexpected shutdown interrupts them.
-    const isScheduledTurn =
-      message?.dispatchOrigin === "automation" && !message.id.startsWith("quit-resume:");
     return (
-      message !== undefined &&
       thread.archivedAt == null &&
       thread.parentThreadId == null &&
       !thread.goal &&
@@ -265,8 +285,6 @@ function buildCrashResumeRecord(input: {
       thread.creationSource !== "provider_native" &&
       thread.creationSource !== "synara_mcp" &&
       thread.creationSource !== "external_mcp" &&
-      !isScheduledTurn &&
-      message.dispatchOrigin !== "agent" &&
       !thread.hasPendingApprovals &&
       !thread.hasPendingUserInput &&
       !input.blocked.has(thread.id) &&

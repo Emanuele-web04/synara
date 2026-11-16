@@ -89,7 +89,7 @@ import {
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
-import { resolveTurnResumeTarget } from "@synara/shared/turnResume";
+import { resolveTurnResumeTarget, TURN_RESUME_MESSAGE_ID_PREFIX } from "@synara/shared/turnResume";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 import {
   buildProjectFoldersPreamble,
@@ -179,6 +179,8 @@ import { ProjectionThreadActivityRepository } from "../../persistence/Services/P
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
 import {
   OrchestrationEventDeliveryRepository,
@@ -1132,6 +1134,7 @@ const make = Effect.gen(function* () {
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
+  const projectionTurns = yield* ProjectionTurnRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
   const hubOutputReactor = yield* HubOutputReactor;
@@ -1956,6 +1959,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
+    readonly pendingResumeMessageId?: MessageId;
     readonly createdAt: string;
   }) =>
     orchestrationEngine.dispatch({
@@ -1963,6 +1967,9 @@ const make = Effect.gen(function* () {
       commandId: serverCommandId("provider-session-set"),
       threadId: input.threadId,
       session: input.session,
+      ...(input.pendingResumeMessageId !== undefined
+        ? { pendingResumeMessageId: input.pendingResumeMessageId }
+        : {}),
       ...(input.expectedSession !== undefined
         ? {
             expectedSessionStatus: input.expectedSession.status,
@@ -6914,22 +6921,31 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
   ) {
     const threadId = event.payload.threadId;
+    const messageId = MessageId.makeUnsafe(`${TURN_RESUME_MESSAGE_ID_PREFIX}${event.eventId}`);
     const thread = yield* resolveThreadShell(threadId);
     if (
       !thread ||
       thread.archivedAt != null ||
       thread.claudeCacheReview != null ||
-      thread.usageLimitRecovery != null
+      thread.usageLimitRecovery != null ||
+      (event.payload.sourceTurnId !== undefined &&
+        thread.latestTurn?.turnId !== event.payload.sourceTurnId)
     ) {
       return;
     }
     const pendingInteractionCounts = yield* pendingInteractions.getPendingCountsByThreadId({
       threadId,
     });
+    // A retryable persistence failure can leave this delivery's own durable start in place.
+    const pendingStart =
+      thread.session?.status === "starting"
+        ? yield* projectionTurns.getPendingTurnStartByThreadId({ threadId })
+        : Option.none();
     if (
       pendingInteractionCounts.pendingApprovalCount > 0 ||
       pendingInteractionCounts.pendingUserInputCount > 0 ||
-      thread.session?.status === "starting" ||
+      (thread.session?.status === "starting" &&
+        Option.getOrUndefined(pendingStart)?.messageId !== messageId) ||
       thread.session?.status === "running" ||
       (yield* hasLiveProviderTurn(threadId))
     ) {
@@ -7032,12 +7048,17 @@ const make = Effect.gen(function* () {
       requestedAt: createdAt,
     });
     if (turnStartSession !== null) {
-      yield* setThreadSession({ threadId, session: turnStartSession, createdAt });
+      yield* setThreadSession({
+        threadId,
+        session: turnStartSession,
+        pendingResumeMessageId: messageId,
+        createdAt,
+      });
     }
     yield* dispatchTurnForThread({
       threadId,
       sourceEventSequence: event.sequence,
-      messageId: MessageId.makeUnsafe(`turn-resume:${event.eventId}`),
+      messageId,
       messageText: event.payload.resumePrompt ?? TURN_RESUME_INPUT,
       dispatchOrigin: "user",
       runtimeMode: thread.runtimeMode,
@@ -7047,27 +7068,37 @@ const make = Effect.gen(function* () {
       turnKind: "goal-continuation",
       createdAt,
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.gen(function* () {
-              const failureDetail = Cause.pretty(cause);
-              yield* appendProviderFailureActivity({
-                threadId,
-                kind: "provider.turn.start.failed",
-                summary: "Resume failed",
-                detail: failureDetail,
-                turnId: null,
-                createdAt,
-              });
-              yield* setThreadSessionError({
-                threadId,
-                runtimeMode: thread.runtimeMode,
-                detail: failureDetail,
-                createdAt,
-              });
-            }),
-      ),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        const outcome = classifyProviderAttemptOutcome(Exit.failCause(cause));
+        if (outcome._tag === "safe_retry") return Effect.failCause(cause);
+        const detail = Cause.pretty(cause);
+        const session = turnStartSession ?? thread.session;
+        // Reporting is best-effort. Keep the original failure for the durable delivery worker.
+        return appendProviderFailureActivity({
+          threadId,
+          kind: "provider.turn.start.failed",
+          summary: "Resume failed",
+          detail,
+          turnId: null,
+          createdAt,
+          ...(outcome._tag === "uncertain" ? { settlementStatus: "uncertain" } : {}),
+        }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            session?.status === "starting"
+              ? setThreadSessionError({
+                  threadId,
+                  runtimeMode: thread.runtimeMode,
+                  expectedSession: session,
+                  detail,
+                  createdAt,
+                }).pipe(Effect.ignore)
+              : Effect.void,
+          ),
+          Effect.andThen(Effect.failCause(cause)),
+        );
+      }),
     );
   });
 
@@ -11569,6 +11600,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
   return Layer.effect(ProviderCommandReactor, make).pipe(
     Layer.provide(ProjectionThreadActivityRepositoryLive),
     Layer.provide(ProjectionThreadMessageRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,

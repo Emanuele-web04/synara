@@ -22,6 +22,7 @@ import {
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 
 const RECORD_ID = "record-1";
 const RECORDED_AT = "2026-06-14T10:00:00.000Z";
@@ -142,6 +143,9 @@ describe("crash recovery", () => {
         Effect.provideService(ProjectionPendingInteractionRepository, {
           listUnsettled: () => Effect.succeed([{ threadId: threadId("durable-callback") }]),
         } as never),
+        Effect.provideService(ProjectionTurnRepository, {
+          getByTurnId: () => Effect.succeed(Option.none()),
+        } as never),
         Effect.provideService(ProjectionSnapshotQuery, {
           getThreadDetailSnapshotById: (id: string) =>
             Effect.succeed(
@@ -212,6 +216,9 @@ describe("crash recovery", () => {
         } as never),
         Effect.provideService(ProjectionPendingInteractionRepository, {
           listUnsettled: () => Effect.fail(new Error("unavailable")),
+        } as never),
+        Effect.provideService(ProjectionTurnRepository, {
+          getByTurnId: () => Effect.succeed(Option.none()),
         } as never),
         Effect.provideService(ProjectionSnapshotQuery, {} as never),
       ),

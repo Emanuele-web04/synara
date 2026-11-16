@@ -1825,7 +1825,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
  * Continues the thread's interrupted work without adding a chat message: the
  * newest request is delivered again when it never reached the provider,
  * otherwise an interrupted or failed latest turn continues from the
- * conversation (t3code and Codex do the same).
+ * conversation.
  */
 const ThreadTurnResumeCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.resume"),
@@ -2122,6 +2122,8 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  // Server-only identity of a starting resume that has no visible user message.
+  pendingResumeMessageId: Schema.optional(MessageId),
   expectedSessionStatus: Schema.optional(OrchestrationSessionStatus),
   expectedSessionUpdatedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
@@ -2832,6 +2834,7 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+  pendingResumeMessageId: Schema.optional(MessageId),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
