@@ -156,7 +156,7 @@ function GitFileSection(props: {
         ) : null}
       </header>
       {props.files.length === 0 ? (
-        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">{props.emptyLabel}</p>
+        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground">{props.emptyLabel}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {props.files.map((file) => {
