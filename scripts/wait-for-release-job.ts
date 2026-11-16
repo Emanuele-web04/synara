@@ -2,7 +2,7 @@
 // Purpose: Blocks a release job until one named job of this run attempt has
 //          completed successfully. Uses only Node built-ins, so it can run
 //          before or after dependency installation.
-// Usage: node scripts/wait-for-release-job.ts --job "<exact job name>" [--timeout-minutes 85]
+// Usage: node scripts/wait-for-release-job.ts --job "<exact job name>" [--timeout-minutes 85] [--accept success,skipped]
 import { parseArgs } from "node:util";
 import { githubRunAttemptJobs, waitForReleaseJob } from "./lib/release-job-wait.ts";
 
@@ -10,6 +10,7 @@ const { values } = parseArgs({
   options: {
     job: { type: "string" },
     "timeout-minutes": { type: "string", default: "85" },
+    accept: { type: "string", default: "success" },
   },
 });
 const jobName = values.job?.trim();
@@ -17,6 +18,15 @@ if (!jobName) throw new Error("--job is required.");
 const timeoutMinutes = Number(values["timeout-minutes"]);
 if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0)
   throw new Error(`Invalid --timeout-minutes: ${values["timeout-minutes"]}`);
+
+const acceptedConclusions = new Set<"success" | "skipped">();
+for (const conclusion of values.accept.split(",")) {
+  if (conclusion !== "success" && conclusion !== "skipped")
+    throw new Error(
+      `Invalid --accept: ${values.accept} (only success and skipped can be accepted).`,
+    );
+  acceptedConclusions.add(conclusion);
+}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -26,6 +36,7 @@ function required(name: string): string {
 
 await waitForReleaseJob({
   jobName,
+  acceptedConclusions,
   listJobs: githubRunAttemptJobs({
     apiUrl: process.env.GITHUB_API_URL?.trim() || "https://api.github.com",
     repository: required("GITHUB_REPOSITORY"),

@@ -15,6 +15,12 @@ export type JobListing =
 
 export interface WaitForReleaseJobOptions {
   readonly jobName: string;
+  /**
+   * Conclusions that count as done. Defaults to success only. A job whose own
+   * condition legitimately skips it (the icon compile after an exact restore)
+   * may also list `skipped`; nothing else is ever accepted.
+   */
+  readonly acceptedConclusions?: ReadonlySet<"success" | "skipped">;
   readonly listJobs: () => Promise<JobListing>;
   readonly timeoutMs: number;
   readonly pollIntervalMs: number;
@@ -27,7 +33,8 @@ export interface WaitForReleaseJobOptions {
 const PERMANENT_FAILURE_LIMIT = 3;
 
 /**
- * Resolves once the named job of this run attempt has completed successfully.
+ * Resolves once the named job of this run attempt has completed with an
+ * accepted conclusion (success unless stated otherwise).
  *
  * It rejects when that job completes with any other conclusion, when two jobs
  * share the name, or when the deadline passes. A job that is not listed yet is
@@ -37,6 +44,9 @@ const PERMANENT_FAILURE_LIMIT = 3;
  * the job that produces this attempt's artifact rather than an older one.
  */
 export async function waitForReleaseJob(options: WaitForReleaseJobOptions): Promise<void> {
+  const accepted: ReadonlySet<string> = options.acceptedConclusions ?? new Set(["success"]);
+  if (accepted.size === 0) throw new Error("At least one conclusion must be accepted.");
+  const expectation = [...accepted].join(" or ");
   const deadline = options.now() + options.timeoutMs;
   let permanentFailures = 0;
   let lastState = "";
@@ -59,12 +69,14 @@ export async function waitForReleaseJob(options: WaitForReleaseJobOptions): Prom
       const job = matches[0];
       if (!job) report("not created yet");
       else if (job.status !== "completed") report(job.status);
-      else if (job.conclusion === "success") {
-        report("completed successfully");
+      else if (job.conclusion !== null && accepted.has(job.conclusion)) {
+        report(
+          job.conclusion === "success" ? "completed successfully" : `completed (${job.conclusion})`,
+        );
         return;
       } else {
         throw new Error(
-          `"${options.jobName}" completed with ${job.conclusion ?? "no conclusion"}, not success.`,
+          `"${options.jobName}" completed with ${job.conclusion ?? "no conclusion"}, not ${expectation}.`,
         );
       }
     }

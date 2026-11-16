@@ -79,8 +79,10 @@ Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
 runs there once; native Windows validation is not removed. Release quality lanes
 still install the full workspace and run the audited test suite while unsigned
-preparation and packaging proceed in parallel. Packaging waits only for
-preflight, the macOS icon catalog, portable JavaScript and Cua preparation;
+preparation and packaging proceed in parallel. Packaging starts after preflight
+and awaits the macOS icon catalog, portable JavaScript and its own Cua
+preparation inside each leg (see
+[Packaging legs start with their prerequisites](#packaging-legs-start-with-their-prerequisites));
 `quality` and every `server_tests` shard gate GitHub and npm publication directly
 (see [the release guide](../docs/release.md)). Signing, notarization, source
 provenance, publication and production dependency staging are unchanged.
@@ -405,10 +407,12 @@ trust checks). It verifies the key, source, pinned Xcode, catalog magic and
 digest, then publishes this run's `mac-icon-catalog`. A corrupt hit fails the
 job. `build_mac_icon` compiles on `macos-26` only on a miss; the icon-only
 validation stage (`stage=icon`) never restores, so it still exercises the
-compile. `build` accepts exactly one source: a successful restore with a hit and
-a skipped compile, or a successful restore with a miss and a successful compile.
-`release-smoke.ts` evaluates those conditions for hit, miss, failure and
-`build_icon == 'false'`. Packaging still
+compile. Packaging accepts exactly one source: a successful restore with a hit
+and a skipped compile, or a successful restore with a miss and a successful
+compile. Each macOS leg now checks that with its in-job waits (restore must
+succeed; the compile must succeed or be skipped), and `release-smoke.ts` pins
+the compile's condition and the restore's upload condition that make a skipped
+compile mean a verified hit. Packaging still
 downloads only this run's `mac-icon-catalog` and still fails without
 `Assets.car`. The cache path is workspace-relative because the cache version
 hashes the literal path, which differs between macOS and Linux `runner.temp`.
@@ -596,6 +600,54 @@ wiring itself has not run on hosted runners: it needs one build-only release
 run (`publish_release=false`) before the next Stable tag. The Intel runner now
 idles for the length of the packaging leg; that is not billed on a public
 repository, and three macOS jobs run at once instead of two.
+
+### Packaging legs start with their prerequisites
+
+`build` needed `preflight`, both icon jobs, `build_portable` and the whole
+`prepare_cua` matrix, so every leg started only after the slowest of them. In
+the [v1.5.4 run](https://github.com/Emanuele-web04/synara/actions/runs/43640497531)
+the portable build finished 225 s after the tag and each leg then spent its
+first minute on work that needs none of those artifacts:
+
+```text
+Leg           Leg start   Checkout + setup + install   Build step starts   Leg ends
+macOS x64        227 s            40 s                      285 s            950 s
+macOS arm64      228 s            42 s                      296 s            867 s
+Windows x64      227 s           141 s                      378 s            883 s
+```
+
+`build` now needs only `preflight`, with the same cancellation, preflight and
+`package_artifacts` conditions. Each leg checks out and installs while the
+portable build, the Cua jobs and the icon jobs run. Immediately before a step
+consumes one of their artifacts, `scripts/wait-for-release-job.ts` waits for
+that job of this run attempt:
+
+```text
+Consumer step                           Awaited job                      Accepted conclusion
+Download macOS icon catalog             Restore macOS icon               success
+                                        Compile macOS icon               success or skipped
+Import this candidate's verified Cua    Prepare Cua <this leg's label>   success
+Restore portable outputs                Build portable JavaScript        success
+```
+
+A prerequisite that fails, is cancelled or is unexpectedly skipped fails the leg
+at the wait, so nothing packages or publishes from a missing artifact; the
+publishers still need `build` to succeed. A leg no longer waits for another
+platform's Cua job. The icon compile is the only job that may be skipped: its
+own condition skips it only after a successful restore reported a hit, and the
+restore uploads the catalog only after verifying one, so the catalog still
+comes from exactly one source. `release-smoke.ts` rejects a missing, reordered,
+optional or mistargeted wait, a second `--accept`, a wait longer than the leg's
+timeout, a renamed prerequisite job, a loosened compile condition and any
+`needs` beyond `preflight` (thirteen deliberate breakages, each rejected).
+
+Expected effect, from the v1.5.4 timings: the macOS build step can start about
+50 s earlier and the Windows build step about 140 s earlier. This has not run on
+hosted runners; it needs one build-only release run. Side effects: a leg whose
+prerequisite fails now starts and fails at its wait instead of being skipped,
+and up to six macOS jobs can be requested at once on an icon miss (two legs,
+two Cua jobs, the Intel qualification and the icon compile) against a limit of
+five, so one of them queues for the 30–60 s a Cua job takes.
 
 ## Rejected experiments and external-service limits
 

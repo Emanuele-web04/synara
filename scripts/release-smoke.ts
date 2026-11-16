@@ -122,6 +122,9 @@ function verifyCanonicalIdentity(): void {
   }
 }
 
+const releaseJobWait = (job: string, minutes: number, accept = "") =>
+  `node scripts/wait-for-release-job.ts --job ${job} --timeout-minutes ${minutes}${accept}`;
+
 async function verifyReleaseWorkflowSafety(): Promise<void> {
   // Bun is the pinned release toolchain and already required by this smoke.
   const parseYaml = (source: string): unknown =>
@@ -517,80 +520,121 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "permissions:\n  contents: read\n  actions: read",
     "Native jobs require only repository and artifact reads.",
   );
-  // Execute the actual job predicate against failed/skipped prerequisites. A
-  // matching source string would not detect a permissive OR elsewhere in it.
+  const restoreIconJobSteps = () =>
+    (parseYaml(workflow) as { jobs: Record<string, { steps: Step[] }> }).jobs.restore_mac_icon!
+      .steps;
+  // Execute the actual job predicate. A matching source string would not
+  // detect a permissive OR elsewhere in it.
   const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
   if (!predicate) throw new Error("Missing packaging admission predicate.");
   const admits = new Function("needs", "cancelled", `return ${predicate};`) as (
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
-  const prerequisites = [
-    "preflight",
-    "restore_mac_icon",
-    "build_mac_icon",
-    "build_portable",
-    "prepare_cua",
-  ];
+  // Packaging starts with its prerequisites and awaits each one inside the
+  // leg, immediately before the step that consumes its artifact. Only
+  // preflight orders the job; the test gates never do.
   const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
-  for (const name of prerequisites)
-    if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
-  for (const testGate of ["quality", "server_tests"])
-    if (dependencies.includes(testGate))
-      throw new Error(`Packaging unnecessarily waits for ${testGate}.`);
-  // Baseline: an exact icon catalog miss compiled on macOS 26.
-  const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
-    Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
-  successful.preflight = {
-    result: "success",
-    outputs: { package_artifacts: "true", prepare_cua: "true", build_icon: "true" },
-  };
-  successful.restore_mac_icon = { result: "success", outputs: { hit: "" } };
-  if (!admits(successful, () => false)) throw new Error("Valid packaging is blocked.");
-  if (admits(successful, () => true)) throw new Error("Cancelled release can package artifacts.");
-  for (const name of prerequisites) {
-    for (const result of ["failure", "cancelled", "skipped", ""]) {
-      if (admits({ ...successful, [name]: { ...successful[name], result } }, () => false))
-        throw new Error(`Packaging admitted ${name}=${result}.`);
+  if (dependencies.join() !== "preflight")
+    throw new Error("Packaging must start after preflight alone and await the rest in the leg.");
+  const admitted = { preflight: { result: "success", outputs: { package_artifacts: "true" } } };
+  if (!admits(admitted, () => false)) throw new Error("Valid packaging is blocked.");
+  if (admits(admitted, () => true)) throw new Error("Cancelled release can package artifacts.");
+  for (const result of ["failure", "cancelled", "skipped", ""])
+    if (admits({ preflight: { ...admitted.preflight, result } }, () => false))
+      throw new Error(`Packaging admitted preflight=${result}.`);
+  for (const packageArtifacts of ["false", ""])
+    if (
+      admits(
+        { preflight: { result: "success", outputs: { package_artifacts: packageArtifacts } } },
+        () => false,
+      )
+    )
+      throw new Error("Packaging admitted a stage that does not package artifacts.");
+
+  type WaitStep = Step & { env?: Record<string, string> };
+  const packagingSteps = platformDefinition.jobs.build!.steps as WaitStep[];
+  const packagingTimeoutMinutes = (
+    parseYaml(platformWorkflow) as { jobs: { build: { "timeout-minutes": number } } }
+  ).jobs.build["timeout-minutes"];
+  const fresh = "steps.restore_checkpoint.outcome != 'success'";
+  // [consumer step, its condition, the exact wait commands, extra wait env]
+  const awaited: ReadonlyArray<
+    readonly [string, string, readonly string[], Record<string, string>]
+  > = [
+    [
+      "Download macOS icon catalog",
+      `inputs.platform == 'mac' && ${fresh}`,
+      [
+        releaseJobWait('"Restore macOS icon"', 30),
+        // The only prerequisite that may be skipped: its own condition skips
+        // it exactly when the successful restore reported a hit.
+        releaseJobWait('"Compile macOS icon"', 30, " --accept success,skipped"),
+      ],
+      {},
+    ],
+    [
+      "Import this candidate's verified Cua",
+      `(inputs.platform == 'mac' || inputs.platform == 'linux') && ${fresh}`,
+      [releaseJobWait('"$CUA_JOB"', 45)],
+      { CUA_JOB: "Prepare Cua ${{ inputs.label }}" },
+    ],
+    ["Restore portable outputs", fresh, [releaseJobWait('"Build portable JavaScript"', 30)], {}],
+  ];
+  for (const [consumerName, condition, commands, extraEnv] of awaited) {
+    const consumerIndex = packagingSteps.findIndex((step) => step.name === consumerName);
+    const consumer = packagingSteps[consumerIndex];
+    const waitStep = packagingSteps[consumerIndex - 1];
+    const waitCommands = (waitStep?.run ?? "").trim().split("\n");
+    if (
+      consumerIndex < 1 ||
+      consumer?.if !== condition ||
+      waitStep?.if !== condition ||
+      waitStep.uses !== undefined ||
+      waitStep["continue-on-error"] !== undefined ||
+      JSON.stringify(waitStep.env) !==
+        JSON.stringify({ GH_TOKEN: "${{ github.token }}", ...extraEnv }) ||
+      JSON.stringify(waitCommands) !== JSON.stringify(commands)
+    ) {
+      throw new Error(
+        `Packaging must await its prerequisite immediately before "${consumerName}".`,
+      );
+    }
+    for (const command of waitCommands) {
+      const minutes = Number(command.match(/--timeout-minutes (\d+)/)?.[1]);
+      if (!(minutes > 0 && minutes < packagingTimeoutMinutes))
+        throw new Error(`A prerequisite wait must end before the packaging job's own timeout.`);
     }
   }
-  // An exact hit publishes the catalog from Linux and skips the macOS compile.
-  // The catalog must come from exactly one verified source; a hit never
-  // excuses a failed restore, and a miss never excuses a missing compile.
-  const restored = {
-    ...successful,
-    restore_mac_icon: { result: "success", outputs: { hit: "true" } },
-    build_mac_icon: { result: "skipped" },
-  };
-  if (!admits(restored, () => false)) throw new Error("A verified icon catalog hit is blocked.");
-  for (const result of ["success", "failure", "cancelled", ""])
-    if (admits({ ...restored, build_mac_icon: { result } }, () => false))
-      throw new Error(`Packaging admitted an icon hit with build_mac_icon=${result}.`);
-  for (const result of ["failure", "cancelled", "skipped", ""])
-    if (
-      admits({ ...restored, restore_mac_icon: { result, outputs: { hit: "true" } } }, () => false)
-    )
-      throw new Error(`Packaging admitted an icon hit from restore_mac_icon=${result}.`);
-  for (const platform of ["linux", "win"]) {
-    const noMac = {
-      ...successful,
-      preflight: {
-        result: "success",
-        outputs: {
-          package_artifacts: "true",
-          build_icon: "false",
-          prepare_cua: platform === "win" ? "false" : "true",
-        },
-      },
-      restore_mac_icon: { result: "skipped", outputs: {} },
-      build_mac_icon: { result: "skipped" },
-      prepare_cua: { result: platform === "win" ? "skipped" : "success" },
-    };
-    if (!admits(noMac, () => false))
-      throw new Error(`${platform} packaging is blocked by an intentional skip.`);
-    if (admits({ ...noMac, preflight: successful.preflight }, () => false))
-      throw new Error("Packaging admitted a macOS release without its icon catalog.");
-  }
+  if (platformWorkflow.match(/--accept /g)?.length !== 1)
+    throw new Error("Only the icon compile may be awaited as skipped.");
+  // The waits address these jobs by display name, and a skipped icon compile
+  // proves a hit only while its own condition and prerequisites stay as they are.
+  const releaseJobs = (
+    parseYaml(workflow) as {
+      jobs: Record<string, { name?: string; if?: string; needs?: string | string[] }>;
+    }
+  ).jobs;
+  for (const [job, name] of [
+    ["restore_mac_icon", "Restore macOS icon"],
+    ["build_mac_icon", "Compile macOS icon"],
+    ["prepare_cua", "Prepare Cua ${{ matrix.label }}"],
+    ["build_portable", "Build portable JavaScript"],
+  ] as const)
+    if (releaseJobs[job]?.name !== name)
+      throw new Error(`Packaging awaits ${job} as "${name}"; its display name changed.`);
+  if (
+    releaseJobs.build_mac_icon?.if !==
+      "needs.preflight.outputs.build_icon == 'true' && needs.restore_mac_icon.outputs.hit != 'true'" ||
+    JSON.stringify(releaseJobs.build_mac_icon.needs) !==
+      JSON.stringify(["preflight", "restore_mac_icon"])
+  )
+    throw new Error("A skipped icon compile must still mean a verified exact restore.");
+  // The restore uploads the catalog only after it verified an exact hit, so a
+  // hit and a compile can never both publish one.
+  const iconUpload = restoreIconJobSteps().find((step) => step.name === "Upload icon catalog");
+  if (iconUpload?.if !== "steps.verify.outputs.hit == 'true'")
+    throw new Error("The icon restore must publish the catalog only after a verified hit.");
   for (const gate of [
     "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "  server_tests:\n    name: Server tests (${{ matrix.shard }})\n    needs: preflight\n    if: needs.preflight.outputs.quality_gates == 'true'\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
