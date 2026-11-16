@@ -176,7 +176,7 @@ test("web transform cache stays keyed by its inputs and out of production builds
   );
   const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const prefix =
-    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-";
+    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-";
   const restore = steps["Restore web transform cache"];
   const save = steps["Cache web transform results (main or first branch run)"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
@@ -194,8 +194,22 @@ test("web transform cache stays keyed by its inputs and out of production builds
   }
   // The salt in vite.config.ts must cover every file the archive key hashes.
   const viteConfig = read("../../apps/web/vite.config.ts");
-  for (const file of ["../../bun.lock", "vite.config.ts", "scripts/transform-cache.ts"])
+  for (const file of [
+    "../../bun.lock",
+    "vite.config.ts",
+    "scripts/react-compiler-plugin.mjs",
+    "scripts/transform-cache.ts",
+  ])
     assert.ok(viteConfig.includes(`"${file}"`), file);
+  // Workers must compile with the plugin definition the main thread uses, and
+  // the pool must stay out of the cache key: it never changes a module's output.
+  const worker = read("../../apps/web/scripts/parallel-transform.worker.mjs");
+  assert.ok(worker.includes('from "./react-compiler-plugin.mjs"'));
+  assert.ok(viteConfig.includes('from "./scripts/react-compiler-plugin.mjs"'));
+  assert.ok(!viteConfig.includes("reactCompilerPreset"), "one definition of the compiler plugin");
+  const pool = read("../../apps/web/scripts/parallel-transform.ts");
+  for (const relaxed of ["retry", "setTimeout"])
+    assert.ok(!pool.includes(relaxed), `the transform pool must not ${relaxed}`);
   assert.ok(
     viteConfig.includes(
       'process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined',

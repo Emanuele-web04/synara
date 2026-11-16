@@ -106,18 +106,18 @@ runs:
       uses: actions/cache/restore@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
 
     - name: Cache web transform results (main or first branch run)
       if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
 
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}
