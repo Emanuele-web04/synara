@@ -202,8 +202,20 @@ export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
   claimedThreadIds.add(threadId);
 }
 
-export function releaseQueuedComposerAutoDispatch(threadId: ThreadId): void {
+/**
+ * ChatView hands its thread back to the watcher. `pendingLocalDispatch` is a send the
+ * chat made whose turn has not gone live yet; the watcher keeps holding the queue for
+ * it exactly as it does for a send of its own, so leaving a chat right after sending
+ * cannot push the next queued message in front of that turn.
+ */
+export function releaseQueuedComposerAutoDispatch(
+  threadId: ThreadId,
+  pendingLocalDispatch: LocalDispatchSnapshot | null = null,
+): void {
   claimedThreadIds.delete(threadId);
+  if (pendingLocalDispatch !== null && !awaitingTurnStartsByThreadId.has(threadId)) {
+    awaitingTurnStartsByThreadId.set(threadId, pendingLocalDispatch);
+  }
   requestQueuedComposerDrainPass();
 }
 

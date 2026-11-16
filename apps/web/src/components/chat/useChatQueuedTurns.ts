@@ -32,7 +32,7 @@ import {
   type QueuedSteerGate,
 } from "../ChatView.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
-import { useChatLocalDispatch } from "./useChatLocalDispatch";
+import { useChatLocalDispatch, useThreadDispatchStore } from "./useChatLocalDispatch";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
 import { useComposerReferences } from "./useComposerReferences";
 import type { LateComposerSendHandlers } from "./chatSendTypes";
@@ -212,7 +212,11 @@ export function useChatQueuedTurns({
     claimQueuedComposerAutoDispatch(threadId);
     setQueuedSteerGate(getQueuedComposerSteerGate(threadId));
     return () => {
-      releaseQueuedComposerAutoDispatch(threadId);
+      // Read the store, not the render closure: the send may be newer than this effect.
+      releaseQueuedComposerAutoDispatch(
+        threadId,
+        useThreadDispatchStore.getState().threads[threadId]?.localDispatch ?? null,
+      );
     };
   }, [setQueuedSteerGate, threadId]);
 

@@ -8,6 +8,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerTurn } from "../composerDraftStore";
+import {
+  createLocalDispatchSnapshot,
+  LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
+} from "../components/ChatView.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
@@ -941,6 +945,50 @@ describe("queued composer drain watcher", () => {
     await vi.waitFor(() => {
       expect(dispatch).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("keeps holding the queue for a send ChatView made just before it unmounted", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-after-chat-send"));
+    // The open chat sent a message and the server accepted it, but its turn has not
+    // started yet. The user switches chats in that gap.
+    releaseQueuedComposerAutoDispatch(THREAD_ID, createLocalDispatchSnapshot(idleThread));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(true);
+
+    // The chat's turn starts: still nothing to send behind it.
+    seedThread(makeThread({ id: THREAD_ID, session: makeSession("running", LIVE_TURN_ID) }));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // It settles: the queue drains as usual.
+    seedThread(idleThread);
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("queued-after-chat-send");
+  });
+
+  it("stops waiting for a handed-over send whose turn never starts", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-after-lost-send"));
+    releaseQueuedComposerAutoDispatch(THREAD_ID, createLocalDispatchSnapshot(idleThread));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS + 1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("restores the shared steer gate after ChatView unmounts and remounts during the interrupt gap", async () => {
