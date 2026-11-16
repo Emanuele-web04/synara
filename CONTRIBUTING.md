@@ -67,13 +67,17 @@ with what the remote already has (or the default branch, for a new branch):
 
 - formatting with `oxfmt --check`
 - lint errors with `oxlint --quiet`
-- types with `tsrs`, for the projects that own those files, or every project
-  when shared code (`packages/`, `scripts/lib/`) or the lockfile changes
+- types with `tsrs`, for the projects that own those files and the scripts that
+  import server or desktop sources. Changes to shared code (`packages/`,
+  `scripts/lib/`), root TypeScript config or the lockfile check every project.
+  Deleted files count for project selection.
 
 `tsrs` keeps incremental build info under each workspace's
 `node_modules/.cache`, so a repeat check usually takes about a second; a first
 check of every project took about 7 seconds. It checks the working tree, so
-uncommitted edits to those files count too. Run `bun run fmt` to fix formatting.
+uncommitted edits to those files count too. Very large pushes format-check and
+lint the full tree to stay within platform argument limits. Run `bun run fmt`
+to fix formatting.
 CI still checks the whole tree and also runs the Effect language-service
 diagnostics, which are too slow for a hook. To skip the check once, push with
 `git push --no-verify`. Pushes that only delete branches skip it.

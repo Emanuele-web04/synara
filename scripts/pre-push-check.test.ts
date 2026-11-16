@@ -15,11 +15,17 @@ describe("pre-push check", () => {
     ]);
   });
 
-  it("type-checks only the projects that own the changed files", () => {
-    expect(affectedProjects(["apps/server/src/index.ts", "README.md"])).toEqual(["apps/server"]);
+  it("type-checks the owning projects and scripts that import server or desktop sources", () => {
+    expect(affectedProjects(["apps/server/src/index.ts", "README.md"])).toEqual([
+      "apps/server",
+      "scripts",
+      "scripts/tsconfig.computer-measurement.json",
+    ]);
     expect(affectedProjects(["apps/desktop/src/main.ts"])).toEqual([
       "apps/desktop",
       "apps/desktop/tsconfig.fixtures.json",
+      "scripts",
+      "scripts/tsconfig.computer-measurement.json",
     ]);
     expect(affectedProjects(["apps/api/src/routes/v1.ts"])).toEqual([
       "apps/api",
@@ -33,6 +39,7 @@ describe("pre-push check", () => {
       "packages/contracts/src/index.ts",
       "scripts/lib/env-bool.ts",
       "tsconfig.base.json",
+      "tsconfig.check.json",
       "bun.lock",
     ])
       expect(affectedProjects([file])).toEqual([...TYPECHECK_PROJECTS]);
