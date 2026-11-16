@@ -126,7 +126,8 @@ const SEARCH_TOOL_NAMES = new Set([
 function normalizedToolName(entry: WorkLogEntry): string {
   // toolName wins; the title's first word is the fallback for ACP calls that
   // arrive with only a `kind` and no native name ("Read /home/x").
-  const name = entry.toolName ?? entry.toolTitle?.trim().split(/\s+/, 1)[0] ?? "";
+  const title = entry.command || entry.rawCommand ? undefined : entry.toolTitle;
+  const name = entry.toolName ?? title?.trim().split(/\s+/, 1)[0] ?? "";
   return name.toLowerCase().replace(/[^a-z]/g, "");
 }
 

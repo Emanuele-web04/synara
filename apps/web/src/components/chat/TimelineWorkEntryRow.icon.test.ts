@@ -54,7 +54,9 @@ describe("workEntryLeftIcon read/search glyphs", () => {
     // Pi classifies its native `grep`/`find` as web_search; they are file
     // searches and must wear the magnifier, not the globe.
     expect(workEntryLeftIcon(entry({ itemType: "web_search", toolName: "grep" }))).toBe(SearchIcon);
-    expect(workEntryLeftIcon(entry({ itemType: "web_search" }))).toBe(WebSearchIcon);
+    expect(
+      workEntryLeftIcon(entry({ itemType: "web_search", toolTitle: "Searched the web" })),
+    ).toBe(WebSearchIcon);
     expect(workEntryLeftIcon(entry({ itemType: "web_search", toolName: "web_search" }))).toBe(
       WebSearchIcon,
     );

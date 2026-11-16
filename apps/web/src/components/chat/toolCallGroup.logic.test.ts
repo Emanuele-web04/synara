@@ -106,6 +106,16 @@ describe("classifyToolCallSummaryCategory", () => {
   it("classifies mutating commands, agent tasks, and MCP tools", () => {
     expect(classifyToolCallSummaryCategory(command("c1"))).toBe("command");
     expect(
+      classifyToolCallSummaryCategory(
+        workEntry({
+          id: "compound",
+          itemType: "command_execution",
+          toolTitle: "Read src/app.ts",
+          command: "cat src/app.ts | head -n 5",
+        }),
+      ),
+    ).toBe("command");
+    expect(
       classifyToolCallSummaryCategory(workEntry({ id: "a1", itemType: "collab_agent_tool_call" })),
     ).toBe("agent");
     expect(

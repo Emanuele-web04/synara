@@ -242,6 +242,8 @@ function toolIdentityWord(workEntry: TimelineWorkEntry): string {
   if (workEntry.toolName) {
     return workEntry.toolName.toLowerCase().replace(/[^a-z]/g, "");
   }
+  // A derived “Searched the web” label still describes a real web search.
+  if (workEntry.itemType === "web_search") return "";
   const firstWord = workEntry.toolTitle?.trim().split(/\s+/, 1)[0] ?? "";
   return firstWord.toLowerCase().replace(/[^a-z]/g, "");
 }
@@ -355,14 +357,14 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "file_change") {
     return PencilIcon;
   }
-  // Read/search names outrank the itemType buckets: Pi maps its native
+  if (workEntry.itemType === "image_generation") return ZapIcon;
+  if (workEntry.itemType === "image_view") return EyeIcon;
+  // Read/search names outrank the generic buckets: Pi maps its native
   // `grep`/`find` to web_search, and ACP read/execute kinds land on
   // dynamic_tool_call — the icon should follow what the tool actually is.
   if (isFileReadToolEntry(workEntry)) return FileReadIcon;
   if (isSearchToolEntry(workEntry)) return SearchIcon;
   if (workEntry.itemType === "web_search") return WebSearchIcon;
-  if (workEntry.itemType === "image_generation") return ZapIcon;
-  if (workEntry.itemType === "image_view") return EyeIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
