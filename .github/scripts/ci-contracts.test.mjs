@@ -78,6 +78,23 @@ test("filtered scopes preserve lifecycle scripts and the scripts workspace links
   assert.equal(turbo.tasks.test.cache, false);
   assert.equal(turbo.tasks.typecheck.cache, false);
 });
+test("the web build skips dependency builds but still hashes dependency sources", () => {
+  const turbo = JSON.parse(read("../../turbo.json"));
+  assert.deepEqual(turbo.tasks.build.dependsOn, ["^build"]);
+  // No package defines a `transit` script: the task only propagates hashes.
+  assert.deepEqual(turbo.tasks.transit, { dependsOn: ["^transit"] });
+  const web = read("../../apps/web/turbo.jsonc");
+  assert.ok(web.includes('"dependsOn": ["^transit"]'));
+  for (const workspace of ["apps/web", "packages/contracts", "packages/shared"])
+    assert.equal(
+      JSON.parse(read(`../../${workspace}/package.json`)).scripts.transit,
+      undefined,
+      workspace,
+    );
+  // Dropping the build edge is only sound while web resolves contracts from source.
+  const contracts = JSON.parse(read("../../packages/contracts/package.json"));
+  assert.equal(contracts.exports["."].import, "./src/index.ts");
+});
 test("caches restore in every consumer and save from one owner per key", () => {
   const steps = Object.fromEntries(
     setup
