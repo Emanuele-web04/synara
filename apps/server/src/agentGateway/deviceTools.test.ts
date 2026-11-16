@@ -286,6 +286,125 @@ describe("agent gateway device tool handlers", () => {
     expect(result.kind).toBe("boot-limit-reached");
   });
 
+  it("boots a shut-down simulator before installing on it", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("device_install", { udid: "FAKE-0002", appPath: "/tmp/Demo.app" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.calls.map((entry) => `${entry.kind}:${entry.udid}`)).toEqual([
+      `boot:${DEVICE}`,
+      "boot:FAKE-0002",
+      "install:FAKE-0002",
+    ]);
+  });
+
+  it("rejects a missing app path without booting the target", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("device_install", { udid: "FAKE-0002" });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("appPath");
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE]);
+  });
+
+  it("does not install or open the pane after Stop during the simulator boot", async () => {
+    const { backend, manager, byName } = await setup();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
+    const boot = backend.boot.bind(backend);
+    backend.boot = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      return await boot(udid);
+    };
+    manager.onEvent((event) => {
+      if (
+        event.type === "device.thread-state" &&
+        event.state.threadId === THREAD &&
+        !event.state.agentActive
+      )
+        settled.resolve();
+    });
+    const opened = collectOpenPaneRequests(manager);
+    const tool = byName.get("device_install")!;
+    const abort = new AbortController();
+    const result = Effect.runPromiseExit(
+      tool.handler({ udid: "FAKE-0002", appPath: "/tmp/Demo.app" }, makeContext()),
+      { signal: abort.signal },
+    );
+
+    await started.promise;
+    abort.abort();
+    finish.resolve();
+    await settled.promise;
+    await result;
+
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, "FAKE-0002"]);
+    expect(backend.callsOfKind("install")).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+    await manager.dispose();
+  });
+
+  it("waits for one boot when overlapping tools target the same shut-down simulator", async () => {
+    const { backend, manager, call } = await setup();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const checked = Promise.withResolvers<void>();
+    const boot = backend.boot.bind(backend);
+    vi.spyOn(backend, "boot").mockImplementationOnce(async (udid) => {
+      started.resolve();
+      await finish.promise;
+      return await boot(udid);
+    });
+
+    const args = { udid: "FAKE-0002", appPath: "/tmp/Demo.app" };
+    const first = call("device_install", args);
+    await started.promise;
+    const listDevices = backend.listDevices.bind(backend);
+    vi.spyOn(backend, "listDevices").mockImplementationOnce(async (options) => {
+      const devices = await listDevices(options);
+      checked.resolve();
+      return devices;
+    });
+    const second = call("device_install", args);
+    await checked.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    finish.resolve();
+
+    for (const result of await Promise.all([first, second])) {
+      expect(result.isError).not.toBe(true);
+    }
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, "FAKE-0002"]);
+    expect(backend.callsOfKind("install")).toHaveLength(2);
+    await manager.dispose();
+  });
+
+  it("brings back a simulator Synara powered off while idle when the agent launches again", async () => {
+    const { backend, manager, call } = await setup();
+    await manager.shutdown(DEVICE, true);
+
+    const result = await call("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, DEVICE]);
+    expect(backend.callsOfKind("launch").map((entry) => entry.udid)).toEqual([DEVICE]);
+  });
+
+  it("names the simulators holding the boot cap when a run cannot boot its device", async () => {
+    const { backend, call } = await setup();
+    await call("device_boot", { udid: "FAKE-0002" });
+    await call("device_boot", { udid: "FAKE-0003" });
+
+    const result = await call("device_open_url", { udid: "FAKE-0004", url: "demo://home" });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("Ask the user which one to shut down");
+    expect(backend.callsOfKind("openUrl")).toEqual([]);
+  });
+
   it("reports every backend failure to the agent and only actionable errors to the pane", async () => {
     const { manager, call } = await setup();
 
