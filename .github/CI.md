@@ -437,6 +437,45 @@ transcript end` fail, and restoring the file made it pass again: a cached run
 still sees a real change. `apps/web/scripts/transform-cache.test.ts` covers the
 key, malformed entries and unchanged-module results.
 
+### React Compiler on worker threads
+
+The web bundle is on every release's critical path (`build_portable` gates all
+packaging legs) and in the CI Desktop Build lane. A local production build spent
+60.0 s of its 63.6 s inside the React Compiler Babel hook, 1,578 calls with
+never more than one in flight: Babel runs synchronously on the bundler's single
+JavaScript thread. The bundler does issue those calls concurrently (298 in
+flight once the hook yields), so the pass can use every core.
+
+`apps/web/scripts/parallel-transform.ts` replaces the hook with one that sends
+each module to a pool of worker threads. Every worker builds its own instance
+of the same plugin from `scripts/react-compiler-plugin.mjs`, the definition
+`vite.config.ts` uses, and calls its unmodified hook. The pool leaves one core
+to the bundler (three workers on a four-vCPU runner, at most eight) and starts
+on the first transform; `SYNARA_WEB_TRANSFORM_WORKERS=0` keeps the pass on the
+main thread. Nothing is retried or skipped: a compile error is reported once
+through the bundler, and a worker that crashes or exits fails the modules it
+held and every later one. The transform cache sits in front of the pool and is
+unaffected by it.
+
+Local production builds (macOS, 18 cores, eight workers), each into an empty
+directory:
+
+```text
+Variant                    vite "built in"   Output files   SHA-256 over all files
+Main thread (workers=0)        67 s             3,192        6f59dba4218fa776...
+Worker pool                    33 s             3,192        6f59dba4218fa776...
+```
+
+The two outputs are byte-identical, including the precompressed sidecars. A
+unit test also compiles one component both ways and requires equal output.
+
+More workers do not help beyond that. One file bounds the pass:
+`ChatView.tsx` (304 KB) took 34.5 s to compile on its own and `Sidebar.tsx`
+9.7 s, out of 68–75 s of summed compile time. The bundler cannot discover what
+`ChatView.tsx` imports until its compile finishes, so 255 of the 1,578 modules
+arrive after it. With three workers the same build took 41 s. That single file
+is also most of the 80 s of import a cold chat browser lane pays.
+
 ## Release pipeline: November 2026
 
 An audit of 20 tag runs (`v1.0.6-remote.31` to `v1.5.2`, October 25 to
