@@ -316,6 +316,10 @@
       "types": "./src/automationMode.ts",
       "import": "./src/automationMode.ts"
     },
+    "./automationRunLifecycle": {
+      "types": "./src/automationRunLifecycle.ts",
+      "import": "./src/automationRunLifecycle.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"

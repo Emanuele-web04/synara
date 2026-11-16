@@ -137,7 +137,7 @@ import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { hasActiveComposerSend, runComposerSendOnce } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
-import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
+import { useThreadDispatchStore } from "../lib/chatDispatchStore";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.

@@ -1,7 +1,17 @@
-import { ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
+import {
+  OrchestrationSessionStatus,
+  ThreadId,
+  TurnId,
+  type OrchestrationLatestTurnState,
+  type OrchestrationThreadActivity,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  isSessionOpenOrLatestTurnRunning,
+  isSessionOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+  runningSessionActiveTurnId,
   buildSourceProposedPlanReference,
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
@@ -1233,5 +1243,48 @@ describe("PROVIDER_OPTIONS", () => {
       label: "Pi",
       available: true,
     });
+  });
+});
+
+describe("thread liveness predicates", () => {
+  const sessionStatuses = [undefined, ...OrchestrationSessionStatus.literals] as const;
+  const turnStates: ReadonlyArray<OrchestrationLatestTurnState | undefined> = [
+    undefined,
+    "running",
+    "interrupted",
+    "completed",
+    "error",
+  ];
+
+  // Each predicate replaced an inline expression; these are those expressions verbatim.
+  it("match the inline checks they replaced for every status pair", () => {
+    for (const status of sessionStatuses) {
+      for (const turnState of turnStates) {
+        const label = `${status ?? "none"} / ${turnState ?? "none"}`;
+        expect(isSessionOrLatestTurnRunning(status, turnState), label).toBe(
+          status === "running" || turnState === "running",
+        );
+        expect(isSessionOrLatestTurnStartingOrRunning(status, turnState), label).toBe(
+          status === "starting" || status === "running" || turnState === "running",
+        );
+        expect(isSessionOpenOrLatestTurnRunning(status, turnState), label).toBe(
+          Boolean(status && status !== "idle" && status !== "stopped") || turnState === "running",
+        );
+      }
+    }
+  });
+
+  it("reports the active turn only for a running session", () => {
+    const turnId = TurnId.makeUnsafe("turn-live");
+    for (const status of OrchestrationSessionStatus.literals) {
+      expect(
+        runningSessionActiveTurnId({ orchestrationStatus: status, activeTurnId: turnId }),
+        status,
+      ).toBe(status === "running" ? turnId : null);
+    }
+    expect(
+      runningSessionActiveTurnId({ orchestrationStatus: "running", activeTurnId: undefined }),
+    ).toBeNull();
+    expect(runningSessionActiveTurnId(null)).toBeNull();
   });
 });

@@ -7,25 +7,19 @@ import {
   stepComputerFrameGate,
   type ComputerFrameGateState,
 } from "../ComputerPanel.logic";
+import { frameReconnectDelayMs, type FrameStreamStatus } from "~/lib/binaryFrameSource";
 import {
   createComputerFrameSource,
   type ComputerFrameSource,
   type ComputerFrameSourceResetReason,
 } from "~/lib/computerFrameSource";
 
-const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
-
 export interface ComputerImageDimensions {
   readonly width: number;
   readonly height: number;
 }
 
-export type ComputerImageStreamStatus =
-  | { readonly kind: "idle" }
-  | { readonly kind: "unsupported" }
-  | { readonly kind: "connecting" }
-  | { readonly kind: "streaming" }
-  | { readonly kind: "error"; readonly message: string };
+export type ComputerImageStreamStatus = FrameStreamStatus;
 
 /**
  * Keeps the previous status object when nothing about it actually changed. A
@@ -169,7 +163,7 @@ export function useComputerImageStream(input: {
       if (reason === "closed") {
         setCurrentStatus({ kind: "connecting" });
         reconnectAttempts += 1;
-        const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), FRAME_RECONNECT_MAX_DELAY_MS);
+        const delay = frameReconnectDelayMs(reconnectAttempts);
         reconnectTimer = setTimeout(() => {
           if (disposed || !isCurrent()) return;
           source?.close();

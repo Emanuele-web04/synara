@@ -2059,6 +2059,9 @@ export class WsTransport {
 
   private noteFeatureSessionAdopted(): void {
     this.clearRecoveryEscalationTimer();
+    // "tripped" is the recovery breaker's terminal phase: only a new transport leaves it.
+    // Enforced here, not only by callers, so no adoption path can revive a tripped one.
+    if (this.recovery.phase === "tripped") return;
     if (this.recovery.phase !== "ready") {
       this.recovery.phase = "ready";
       this.recovery.episodeRef = null;

@@ -141,6 +141,55 @@ type LatestTurnTiming = Pick<
   "turnId" | "state" | "startedAt" | "completedAt"
 >;
 type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
+type LatestTurnState = OrchestrationLatestTurn["state"] | null | undefined;
+
+// "Is this thread live?" is asked with three different member sets. Each has its own
+// name so a caller picks the meaning it needs instead of re-listing statuses:
+//   running            session running, or latest turn running
+//   starting/running   + a session that is still starting (work about to emit events)
+//   open               any session status except idle/stopped, or latest turn running
+
+/** The session reports running, or its latest turn is still marked running. */
+export function isSessionOrLatestTurnRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return orchestrationStatus === "running" || latestTurnState === "running";
+}
+
+/** {@link isSessionOrLatestTurnRunning}, also counting a session that is still starting. */
+export function isSessionOrLatestTurnStartingOrRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return (
+    orchestrationStatus === "starting" ||
+    isSessionOrLatestTurnRunning(orchestrationStatus, latestTurnState)
+  );
+}
+
+/**
+ * The session exists and has not gone back to idle or stopped (ready, interrupted, and
+ * error sessions count), or its latest turn is still marked running.
+ */
+export function isSessionOpenOrLatestTurnRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return (
+    (orchestrationStatus != null &&
+      orchestrationStatus !== "idle" &&
+      orchestrationStatus !== "stopped") ||
+    latestTurnState === "running"
+  );
+}
+
+/** The in-flight turn of a running session; null whenever the session is not running. */
+export function runningSessionActiveTurnId(
+  session: SessionActivityState | null | undefined,
+): TurnId | null {
+  return session?.orchestrationStatus === "running" ? (session.activeTurnId ?? null) : null;
+}
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
@@ -231,8 +280,7 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  const runningTurnId =
-    session?.orchestrationStatus === "running" ? (session.activeTurnId ?? null) : null;
+  const runningTurnId = runningSessionActiveTurnId(session);
   if (runningTurnId !== null && runningTurnId === latestTurn?.turnId) {
     return latestTurn?.startedAt ?? sendStartedAt;
   }
