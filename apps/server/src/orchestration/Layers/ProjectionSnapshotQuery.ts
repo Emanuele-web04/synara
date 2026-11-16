@@ -89,6 +89,7 @@ import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   formatThreadLatestReplyPreview,
+  THREAD_LATEST_REPLY_PREVIEW_ENCODED_SOURCE_LENGTH,
   THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH,
 } from "../threadLatestReplyPreview.ts";
 import {
@@ -210,13 +211,13 @@ const BackgroundTaskActivityDbRowSchema = Schema.Struct({
   createdAt: Schema.String,
 });
 type BackgroundTaskActivityDbRow = typeof BackgroundTaskActivityDbRowSchema.Type;
-// The head of each thread's newest settled assistant reply; `encodedText` stays raw JSON so
-// one malformed fallback column cannot fail a whole shell snapshot.
+// Both text representations are bounded before they reach the JS read model.
 const ThreadLatestReplyDbRowSchema = Schema.Struct({
   threadId: ThreadId,
   text: Schema.String,
   textTruncated: Schema.Number,
   encodedText: Schema.NullOr(Schema.String),
+  encodedTextTruncated: Schema.Number,
 });
 type ThreadLatestReplyDbRow = typeof ThreadLatestReplyDbRowSchema.Type;
 type PendingInteractionRow = typeof OrchestrationPendingInteraction.Type;
@@ -832,6 +833,7 @@ function collectLatestReplyPreviews(
       text: row.text,
       textTruncated: row.textTruncated > 0,
       encodedText: row.encodedText,
+      encodedTextTruncated: row.encodedTextTruncated > 0,
     });
     if (preview !== undefined) previews.set(row.threadId, preview);
   }
@@ -2661,8 +2663,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           latest.thread_id AS "threadId",
           substr(messages.text, 1, ${THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH}) AS "text",
-          length(messages.text) > ${THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH} AS "textTruncated",
-          messages.text_json AS "encodedText"
+          substr(messages.text, ${THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH + 1}, 1) <> ''
+            AS "textTruncated",
+          substr(messages.text_json, 1, ${THREAD_LATEST_REPLY_PREVIEW_ENCODED_SOURCE_LENGTH})
+            AS "encodedText",
+          coalesce(
+            substr(messages.text_json, ${THREAD_LATEST_REPLY_PREVIEW_ENCODED_SOURCE_LENGTH + 1}, 1) <> '',
+            0
+          ) AS "encodedTextTruncated"
         FROM (
           SELECT
             threads.thread_id,

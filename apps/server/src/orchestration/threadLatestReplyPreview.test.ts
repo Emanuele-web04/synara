@@ -6,11 +6,15 @@ import {
   THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH,
 } from "./threadLatestReplyPreview.ts";
 
-const stored = (text: string, overrides: { textTruncated?: boolean; encodedText?: string } = {}) =>
+const stored = (
+  text: string,
+  overrides: { textTruncated?: boolean; encodedText?: string; encodedTextTruncated?: boolean } = {},
+) =>
   formatThreadLatestReplyPreview({
     text,
     textTruncated: overrides.textTruncated ?? false,
     encodedText: overrides.encodedText ?? null,
+    encodedTextTruncated: overrides.encodedTextTruncated ?? false,
   });
 
 describe("formatThreadLatestReplyPreview", () => {
@@ -47,6 +51,13 @@ describe("formatThreadLatestReplyPreview", () => {
     const long = `${"word ".repeat(THREAD_LATEST_REPLY_PREVIEW_SOURCE_LENGTH)}end`;
     expect(stored("lossy", { encodedText: JSON.stringify(long) })).toHaveLength(
       THREAD_LATEST_REPLY_PREVIEW_MAX_LENGTH,
+    );
+  });
+
+  it("decodes a bounded JSON prefix ending inside a Unicode escape", () => {
+    const encodedPrefix = JSON.stringify('Kept "intact"').slice(0, -1) + "\\u00";
+    expect(stored("lossy", { encodedText: encodedPrefix, encodedTextTruncated: true })).toBe(
+      'Kept "intact"…',
     );
   });
 });

@@ -2777,6 +2777,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           userOnly: asThreadId("reply-preview-user-only"),
           archived: asThreadId("reply-preview-archived"),
           encoded: asThreadId("reply-preview-encoded"),
+          longEncoded: asThreadId("reply-preview-long-encoded"),
           long: asThreadId("reply-preview-long"),
         };
         for (const threadId of Object.values(threads)) {
@@ -2826,6 +2827,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         yield* message(threads.encoded, "assistant", "lossy copy", 1, {
           textJson: JSON.stringify("Encoded **reply** text"),
         });
+        yield* message(threads.longEncoded, "assistant", "lossy copy", 1, {
+          textJson: JSON.stringify(`Encoded **reply** text${" ".repeat(8_000)}\u0000tail`),
+        });
         yield* message(threads.long, "assistant", "word ".repeat(400), 1);
 
         const expected: Record<string, string | undefined> = {
@@ -2835,6 +2839,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           [threads.userOnly]: undefined,
           [threads.archived]: undefined,
           [threads.encoded]: "Encoded reply text",
+          [threads.longEncoded]: "Encoded reply text…",
         };
         const ids = Object.values(threads);
         const snapshot = yield* query.getShellSnapshot({ includeLatestReplyPreview: true });
