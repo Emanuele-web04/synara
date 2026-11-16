@@ -527,6 +527,30 @@ Linux x64          50    6    6    6
 Linux arm64        35    5    3    6
 ```
 
+### Web bundle no longer waits for the contracts build
+
+`build_portable` gates every packaging leg (tag to first packaging leg: 267 s at
+the median over the last 30 tags). In the
+[v1.5.4 run](https://github.com/Emanuele-web04/synara/actions/runs/43640497531)
+its `bun run build:desktop` step took 180 s: the contracts `tsdown` build with
+declaration output (25 s) ran first, then the web bundle (152 s), then the
+server (2 s). The web bundle never reads that output. It compiles
+`@synara/contracts`, `@synara/shared` and `@synara/profile-ui` from source
+through their `import` exports, and it builds with no `packages/contracts/dist`
+present.
+
+`apps/web/turbo.jsonc` now makes the web build depend on `^transit` instead of
+`^build`. `transit` is a task with no script in any package: it finishes
+immediately and only carries each dependency's source hash into the web build's
+cache key. A dry run confirms that editing a contracts or shared source file
+still changes the `@synara/web#build` hash, so a restored Turbo entry cannot be
+stale. The contracts build now overlaps the web bundle; the server and desktop
+builds still wait for it.
+
+A clean forced local build (`turbo run build --filter=@synara/desktop
+--filter=@synara/cli --force`) produced the same four tasks in 70 s, with the
+contracts build (9.6 s) inside the web bundle's 57 s.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
