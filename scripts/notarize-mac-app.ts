@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { hashFile } from "./lib/file-digest.ts";
 import { join } from "node:path";
 import {
+  appNotaryArchiveArgs,
   appNotaryStateDirectory,
   notarizeMacPayload,
   runMacCommand,
@@ -51,11 +52,7 @@ if (existsSync(inputPath)) {
       "Signed app changed; remove its stale .app-notary directory before submitting again.",
     );
 } else {
-  runMacCommand(
-    "ditto",
-    ["-c", "-k", "--sequesterRsrc", "--keepParent", app, archive],
-    "app-notary-archive",
-  );
+  runMacCommand("ditto", appNotaryArchiveArgs(app, archive), "app-notary-archive");
   writeFileSync(inputPath, JSON.stringify({ original: digest }) + "\n");
 }
 await notarizeMacPayload(
