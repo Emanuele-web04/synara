@@ -91,6 +91,10 @@ describe("ServerGenerateComposerPredictionResult", () => {
       suggestion: null,
       outcome: "unavailable",
     });
+    expect(decode({ suggestion: null, outcome: "generation-unavailable" })).toEqual({
+      suggestion: null,
+      outcome: "generation-unavailable",
+    });
     expect(decode({ suggestion: null })).toEqual({ suggestion: null });
     expect("outcome" in decode({ suggestion: null })).toBe(false);
     expect(() => decode({ suggestion: null, outcome: "maybe" })).toThrow();

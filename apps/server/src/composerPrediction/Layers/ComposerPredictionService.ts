@@ -32,10 +32,9 @@ export const COMPOSER_PREDICTION_TIMEOUT = Duration.seconds(20);
 
 /**
  * How long a request waits before it reads the transcript and starts the provider CLI
- * (about 0.3 to 0.4 GB and 0.7 to 3 CPU seconds per run). A chat the user only passes
- * through, or starts typing in, cancels the request inside this window, so no process
- * starts; one that stays open gets its suggestion this much later, after the work that
- * opening the chat or settling the turn does.
+ * (about 0.3 to 0.4 GB and 0.7 to 3 CPU seconds per run). Leaving the chat or turn
+ * inside this window cancels the request before a process starts. Otherwise the delay
+ * gives opening the chat or settling the turn time to finish.
  */
 export const COMPOSER_PREDICTION_START_DELAY = Duration.seconds(1);
 
@@ -107,11 +106,19 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
     expectedTurnId: TurnId,
   ): Effect.Effect<ComposerPredictionAnswer> => {
     // Logs the one reason code for this miss. Ids only: no provider detail, prompt, or reply.
-    const unavailable = (reason: ComposerPredictionUnavailableReason) =>
+    const unavailable = (
+      reason: ComposerPredictionUnavailableReason,
+      generationMayHaveRun = FAILURE_REASONS.has(reason),
+    ) =>
       (FAILURE_REASONS.has(reason) ? Effect.logWarning : Effect.logInfo)(
         "Composer prediction unavailable",
         { threadId, expectedTurnId, reason },
-      ).pipe(Effect.as<ComposerPredictionAnswer>({ suggestion: null, outcome: "unavailable" }));
+      ).pipe(
+        Effect.as<ComposerPredictionAnswer>({
+          suggestion: null,
+          outcome: generationMayHaveRun ? "generation-unavailable" : "unavailable",
+        }),
+      );
 
     return Effect.gen(function* () {
       const thread = yield* readThread(threadId);
@@ -198,7 +205,7 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
         yield* readThread(threadId),
         expectedTurnId,
       );
-      if (settledBlocker !== null) return yield* unavailable(settledBlocker);
+      if (settledBlocker !== null) return yield* unavailable(settledBlocker, true);
       // Only a real answer from the model is remembered, "none" included.
       rememberAnswer(answerKey, generated.value.suggestion);
       return modelAnswer(generated.value.suggestion);

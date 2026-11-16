@@ -438,14 +438,16 @@ assistant text and generates through the isolated text-generation path on the ch
 provider instance, using the Git-writing model only when it is that same instance and the
 chat's model otherwise, either one at its lowest catalog effort. A chat without a stored
 provider instance id uses its provider's default instance, on the server and in the client.
-The result's `outcome` is `suggested`, `none` (the model had no suggestion), or `unavailable`
-(a timeout, a failed generation, a busy or moved-on thread, or no usable route; the server
-logs one content-free reason code for each). The client asks again after an `unavailable`
-answer or a failed request after 2, 5, and 15 seconds while the composer could show the
-suggestion, then stops until the chat or turn is left and opened again; a result without
-`outcome`, from an older server, counts as `unavailable`. Suggestions live in memory only;
-the window's session storage keeps just the keys of turns whose suggestion was accepted or
-that the model had none for, so a reload does not bring one back.
+The result's `outcome` is `suggested`, `none` (the model had no suggestion), `unavailable`
+(a busy or moved-on thread or no usable route before generation), or `generation-unavailable`
+(generation may already have run without returning a usable result). The server logs one
+content-free reason code per miss. While the composer can show the suggestion, the client
+retries pre-generation misses after 2, 5, and 15 seconds. If generation may have run, a
+response was lost, or an older server omitted `outcome`, only the first request can be
+retried after 2 seconds. Unanswered turns can try again when the chat is reopened.
+Suggestions live in memory only. The window's session storage remembers when a suggestion
+was accepted or the model had none. Older session data also treated failed attempts as
+settled, so the new storage starts fresh. This can also make previously accepted turns eligible again.
 The `server.getEnvironment` descriptor advertises RPC support as
 `capabilities.composerPredictions`. Older servers may omit the capability.
 

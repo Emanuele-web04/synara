@@ -1,5 +1,5 @@
 import { MessageId, ThreadId, TurnId } from "@synara/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   canShowComposerPrediction,
@@ -241,6 +241,7 @@ describe("composerPredictionEntryForResult", () => {
     expect(composerPredictionEntryForResult({ suggestion: null }, 1)).toEqual({
       status: "unavailable",
       attempts: 1,
+      limitRetries: true,
     });
   });
 });
@@ -248,6 +249,33 @@ describe("composerPredictionEntryForResult", () => {
 describe("composerPredictionStore", () => {
   beforeEach(() => {
     composerPredictionStore.setState({ entries: new Map(), settledKeys: new Set() });
+  });
+
+  it("recovers turns muted by v1 storage and preserves v2 settlements on reload", async () => {
+    const storage = new Map<string, string>([
+      ["synara:composer-prediction-settled:v1", JSON.stringify(["old-turn"])],
+    ]);
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    try {
+      vi.resetModules();
+      const current = (await import("./composerPrediction")).composerPredictionStore.getState();
+      expect(
+        nextComposerPredictionRequest({
+          entry: undefined,
+          settled: current.settledKeys.has("old-turn"),
+        }),
+      ).toEqual({ attempt: 1, delayMs: 0 });
+      current.setEntry("new-turn", { status: "done" });
+
+      vi.resetModules();
+      const reloaded = (await import("./composerPrediction")).composerPredictionStore.getState();
+      expect(reloaded.settledKeys).toEqual(new Set(["new-turn"]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("forgets the oldest keys past its limit and aborts an evicted request", () => {

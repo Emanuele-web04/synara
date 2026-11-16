@@ -30,6 +30,7 @@ const FINAL_REPLY = MessageId.makeUnsafe("assistant-final");
 const NOW = "2026-11-10T10:00:00.000Z";
 const INPUT = { threadId: THREAD_ID, expectedTurnId: TURN_ID };
 const UNAVAILABLE = { suggestion: null, outcome: "unavailable" };
+const GENERATION_UNAVAILABLE = { suggestion: null, outcome: "generation-unavailable" };
 
 function makeThread(modelSelection: ModelSelection, turnId = TURN_ID): OrchestrationThreadShell {
   return {
@@ -259,7 +260,7 @@ describe("ComposerPredictionServiceLive", () => {
     );
 
     expect(results).toEqual([
-      UNAVAILABLE,
+      GENERATION_UNAVAILABLE,
       { suggestion: "Fix the fixture and rerun that test.", outcome: "suggested" },
     ]);
     expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
@@ -292,7 +293,7 @@ describe("ComposerPredictionServiceLive", () => {
       ),
     );
 
-    await expect(harness.run(harness.generate)).resolves.toEqual(UNAVAILABLE);
+    await expect(harness.run(harness.generate)).resolves.toEqual(GENERATION_UNAVAILABLE);
   });
 
   it("is unavailable when generation outlives its timeout, and asks again afterwards", async () => {
@@ -312,7 +313,7 @@ describe("ComposerPredictionServiceLive", () => {
     );
 
     expect(results).toEqual([
-      UNAVAILABLE,
+      GENERATION_UNAVAILABLE,
       { suggestion: "Fix the fixture and rerun that test.", outcome: "suggested" },
     ]);
   });
@@ -400,7 +401,10 @@ describe("ComposerPredictionServiceLive", () => {
       }),
     );
 
-    expect(results).toEqual([{ suggestion: "Slow but fine", outcome: "suggested" }, UNAVAILABLE]);
+    expect(results).toEqual([
+      { suggestion: "Slow but fine", outcome: "suggested" },
+      GENERATION_UNAVAILABLE,
+    ]);
     expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
   });
 
@@ -412,7 +416,7 @@ describe("ComposerPredictionServiceLive", () => {
       ),
     );
 
-    await expect(harness.run(harness.generate)).resolves.toEqual(UNAVAILABLE);
+    await expect(harness.run(harness.generate)).resolves.toEqual(GENERATION_UNAVAILABLE);
     expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 
@@ -614,7 +618,7 @@ describe("ComposerPredictionServiceLive", () => {
     const results = await harness.run(Effect.all([harness.generate, harness.generate]));
 
     expect(results).toEqual([
-      UNAVAILABLE,
+      GENERATION_UNAVAILABLE,
       { suggestion: "Fix the fixture and rerun that test.", outcome: "suggested" },
     ]);
     expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);

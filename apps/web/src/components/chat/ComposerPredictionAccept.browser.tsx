@@ -59,7 +59,7 @@ const waitForFrames = (count = 3) =>
     step(count);
   });
 
-function AcceptHarness() {
+function AcceptHarness({ direction }: { direction: "ltr" | "rtl" }) {
   const formRef = useRef<HTMLFormElement>(null);
   const editorRef = useRef<ComposerPromptEditorHandle>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -119,7 +119,7 @@ function AcceptHarness() {
   };
 
   return (
-    <div style={{ position: "relative", width: 640, height: 480 }}>
+    <div dir={direction} style={{ position: "relative", width: 640, height: 480 }}>
       <div data-testid="transcript" ref={transcriptRef} style={{ height: 480, overflow: "auto" }}>
         <div style={{ height: 2000, paddingBottom: insetPx }} />
       </div>
@@ -200,9 +200,9 @@ function recordPaintedLayouts() {
   };
 }
 
-async function mountWithSuggestion(suggestion: string) {
+async function mountWithSuggestion(suggestion: string, direction: "ltr" | "rtl" = "ltr") {
   nativeApi.suggestion = suggestion;
-  await render(<AcceptHarness />);
+  await render(<AcceptHarness direction={direction} />);
   await expect.poll(() => ghostRows()).toBeGreaterThan(0);
   await waitForFrames();
 }
@@ -254,13 +254,16 @@ describe("accepting a composer prediction with Tab", () => {
     expect(transcript().scrollTop).toBe(150);
   });
 
-  it("accepts with Right Arrow through the editor", async () => {
-    await mountWithSuggestion("Rerun that test.");
+  it.each([
+    ["ltr", "Rerun that test."],
+    ["rtl", "أعد تشغيل هذا الاختبار."],
+  ] as const)("accepts with Right Arrow in a %s editor", async (direction, suggestion) => {
+    await mountWithSuggestion(suggestion, direction);
     const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!;
     editor.focus();
 
     await userEvent.keyboard("{ArrowRight}");
-    await expect.poll(() => editor.textContent).toBe("Rerun that test.");
+    await expect.poll(() => editor.textContent).toBe(suggestion);
     expect(composerPredictionStore.getState().entries.get(TARGET.key)?.status).toBe("done");
   });
 

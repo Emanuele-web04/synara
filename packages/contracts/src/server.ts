@@ -508,11 +508,16 @@ export type ServerGenerateComposerPredictionInput =
 
 /**
  * `suggested`: `suggestion` holds the prediction. `none`: the model answered with no
- * suggestion for this turn, so asking again cannot help. `unavailable`: no answer this
- * time (timeout, provider failure, a busy or moved-on thread, no usable route); a later
- * request for the same turn may still get one.
+ * suggestion for this turn. `unavailable`: the request stopped before provider generation.
+ * `generation-unavailable`: generation may have run without yielding a usable answer.
+ * Both unavailable results can be retried, with a smaller budget after provider work.
  */
-export const ComposerPredictionOutcome = Schema.Literals(["suggested", "none", "unavailable"]);
+export const ComposerPredictionOutcome = Schema.Literals([
+  "suggested",
+  "none",
+  "unavailable",
+  "generation-unavailable",
+]);
 export type ComposerPredictionOutcome = typeof ComposerPredictionOutcome.Type;
 
 export const ServerGenerateComposerPredictionResult = Schema.Struct({

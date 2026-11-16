@@ -45,6 +45,8 @@ export type ComposerPredictionEntry =
       readonly status: "unavailable";
       /** Requests that got no answer so far. */
       readonly attempts: number;
+      /** A provider may have already run, so only the first request can be retried. */
+      readonly limitRetries?: true;
     }
   | { readonly status: "done" };
 
@@ -239,7 +241,8 @@ export const COMPOSER_PREDICTION_STORE_LIMIT = 64;
 /** Most settled keys remembered, in memory and in the window's session storage. */
 export const COMPOSER_PREDICTION_SETTLED_LIMIT = 256;
 
-const SETTLED_STORAGE_KEY = "synara:composer-prediction-settled:v1";
+// v1 also recorded transient failures and discarded drafts as settled turns.
+const SETTLED_STORAGE_KEY = "synara:composer-prediction-settled:v2";
 
 function readSettledKeys(): ReadonlySet<string> {
   try {
@@ -321,19 +324,18 @@ export function nextComposerPredictionRequest(input: {
   readonly entry: ComposerPredictionEntry | undefined;
   readonly settled: boolean;
 }): { readonly attempt: number; readonly delayMs: number } | null {
-  if (input.settled) return null;
-  if (input.entry === undefined) return { attempt: 1, delayMs: 0 };
-  if (input.entry.status !== "unavailable") return null;
-  const delayMs = COMPOSER_PREDICTION_RETRY_DELAYS_MS[input.entry.attempts - 1];
-  return delayMs === undefined ? null : { attempt: input.entry.attempts + 1, delayMs };
+  const { entry, settled } = input;
+  if (settled) return null;
+  if (entry === undefined) return { attempt: 1, delayMs: 0 };
+  if (entry.status !== "unavailable" || (entry.limitRetries && entry.attempts >= 2)) return null;
+  const delayMs = COMPOSER_PREDICTION_RETRY_DELAYS_MS[entry.attempts - 1];
+  return delayMs === undefined ? null : { attempt: entry.attempts + 1, delayMs };
 }
 
 /**
  * The entry a request's result leaves: a suggestion is ready to show; the model's own "none"
- * settles the turn; anything else (`unavailable`) may be asked again. A server from before
- * `outcome` answers every miss with a bare null, so a missing outcome counts as
- * `unavailable`: settling on it would let one timeout end the turn for good, while the
- * bounded retries cost little because such a server reuses a real answer it already has.
+ * settles the turn. Only a confirmed pre-generation miss gets the full retry schedule.
+ * For an older server's bare null or a lost response, the provider may already have run.
  */
 export function composerPredictionEntryForResult(
   result: ServerGenerateComposerPredictionResult,
@@ -341,5 +343,9 @@ export function composerPredictionEntryForResult(
 ): ComposerPredictionEntry {
   if (result.suggestion) return { status: "ready", suggestion: result.suggestion };
   if (result.outcome === "none") return { status: "done" };
-  return { status: "unavailable", attempts: attempt };
+  return {
+    status: "unavailable",
+    attempts: attempt,
+    ...(result.outcome === "unavailable" ? {} : { limitRetries: true as const }),
+  };
 }

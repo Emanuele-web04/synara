@@ -300,13 +300,37 @@ describe("useComposerPrediction", () => {
       .mockResolvedValueOnce({ suggestion: "Rerun that test", outcome: "suggested" });
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
     await flush();
-    expect(entryOf()).toEqual({ status: "unavailable", attempts: 1 });
+    expect(entryOf()).toEqual({ status: "unavailable", attempts: 1, limitRetries: true });
     expect(hook.render().suggestion).toBeNull();
 
     vi.advanceTimersByTime(COMPOSER_PREDICTION_RETRY_DELAYS_MS[0]!);
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
     await flush();
     expect(hook.render().suggestion).toBe("Rerun that test");
+  });
+
+  it.each([
+    ["a failed generation", { suggestion: null, outcome: "generation-unavailable" }],
+    ["an older server", { suggestion: null }],
+    ["a dropped connection", undefined],
+  ])("limits retries when provider work may have run after %s", async (_case, result) => {
+    vi.useFakeTimers();
+    if (result) nativeApi.generateComposerPrediction.mockResolvedValue(result);
+    else nativeApi.generateComposerPrediction.mockRejectedValue(new Error("socket closed"));
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    await flush();
+    hook.render();
+    vi.advanceTimersByTime(COMPOSER_PREDICTION_RETRY_DELAYS_MS[0]!);
+    await flush();
+    hook.render();
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(60_000);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+    expect(composerPredictionStore.getState().settledKeys.has("key-turn-1")).toBe(false);
+    hook.render({ target: null });
+    hook.render({ target: target("turn-1") });
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(3);
   });
 
   it("holds a retry while the ghost could not show and waits the full delay after", async () => {

@@ -133,7 +133,7 @@ export function useComposerPrediction(input: {
           if (!isCurrent()) return;
           composerPredictionStore
             .getState()
-            .setEntry(key, { status: "unavailable", attempts: request.attempt });
+            .setEntry(key, composerPredictionEntryForResult({ suggestion: null }, request.attempt));
         });
     };
     if (request.delayMs === 0) {
