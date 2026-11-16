@@ -442,11 +442,7 @@ export function ProvidersSettingsPanel({
                   items={enabledProviderOptions.map((option) => option.provider)}
                   strategy={rectSortingStrategy}
                 >
-                  <div
-                    className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2"
-                    dir="ltr"
-                    style={{ direction: "ltr" }}
-                  >
+                  <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
                     {enabledProviderOptions.map((option, index) => (
                       <ProviderAgentRow
                         key={option.provider}
