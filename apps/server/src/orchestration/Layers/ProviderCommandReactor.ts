@@ -2643,7 +2643,7 @@ const make = Effect.gen(function* () {
       readonly enableComputerControl?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
-      /** Same-thread Hand off, after it cleared the source's native continuation. */
+      /** The user explicitly requested a same-thread handoff. */
       readonly providerHandoff?: boolean;
     },
   ) {
@@ -2766,8 +2766,7 @@ const make = Effect.gen(function* () {
       ? thread.modelSelection.provider
       : (boundProvider ?? desiredProvider);
     // Only Hand off may move a started thread to another account of its
-    // provider: it has already abandoned the source account's native
-    // continuation, so the new account starts fresh from the transcript.
+    // provider: the replacement starts fresh from the transcript.
     if (
       establishedProvider !== undefined &&
       requestedProviderInstanceChanged &&
@@ -2910,6 +2909,7 @@ const make = Effect.gen(function* () {
           ? providerService.startSessionWithOutcome(threadId, startInput, {
               registerPriorTranscriptBootstrapOnFreshStart,
               ...(startsStoredProvider ? { abandonOtherProviderContinuation: true } : {}),
+              ...(options?.providerHandoff ? { startFreshForAccountHandoff: true } : {}),
             })
           : providerService.startSession(threadId, startInput).pipe(
               Effect.map((session) => ({
@@ -8622,10 +8622,8 @@ const make = Effect.gen(function* () {
     // way to carry the conversation to the new provider.
     suppressContextBootstrapOnNextStartThreadIds.delete(input.threadId);
     const cachedProviderOptions = threadProviderOptions.get(input.threadId);
-    // The source's native continuation (e.g. a Codex resume cursor) is
-    // protected: ProviderService refuses another provider or account on the
-    // thread until the handoff explicitly abandons it. This also stops the
-    // source runtime.
+    const accountHandoff =
+      input.sourceModelSelection.provider === input.targetModelSelection.provider;
     let sourceContinuationReset = false;
     let blockedByBackgroundTasks = false;
     const startOutcome = yield* runBoundedProviderCall({
@@ -8661,10 +8659,23 @@ const make = Effect.gen(function* () {
             issue: "Finish or stop this thread's background tasks before handing it off.",
           });
         }
-        yield* providerService.clearSessionResumeCursor
-          ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
-          : providerService.stopSession({ threadId: input.threadId });
-        sourceContinuationReset = true;
+        if (accountHandoff) {
+          if (!providerService.stopRuntimeSession || !providerService.startSessionWithOutcome) {
+            return yield* new ProviderAdapterValidationError({
+              provider: input.sourceModelSelection.provider,
+              operation: "thread.meta.update",
+              issue:
+                "This server cannot hand off between accounts while preserving the source session.",
+            });
+          }
+          // Keep the source binding usable until startup commits the target account.
+          yield* providerService.stopRuntimeSession({ threadId: input.threadId });
+        } else {
+          yield* providerService.clearSessionResumeCursor
+            ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
+            : providerService.stopSession({ threadId: input.threadId });
+          sourceContinuationReset = true;
+        }
         yield* ensureSessionForThread(input.threadId, input.occurredAt, {
           modelSelection: input.targetModelSelection,
           registerPriorTranscriptBootstrapOnFreshStart: true,

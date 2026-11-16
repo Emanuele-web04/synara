@@ -83,6 +83,8 @@ export interface ProviderSessionStartOutcomeOptions {
    * driver stays protected: another home or account still cannot take it over.
    */
   readonly abandonOtherProviderContinuation?: boolean;
+  /** An explicit handoff to another account of this driver starts a fresh session. */
+  readonly startFreshForAccountHandoff?: true;
 }
 
 /** Durable identity of one Stop; its authority never transfers to a later turn. */
