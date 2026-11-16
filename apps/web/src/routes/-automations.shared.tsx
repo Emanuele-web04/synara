@@ -1,4 +1,5 @@
 import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { automationDraftWarningPresentation } from "~/lib/automationDraft";
 import {
   type AutomationCreateInput,
@@ -1188,7 +1189,7 @@ export function AutomationDialog({
                         type="checkbox"
                         checked={acknowledgedWarningIds.has(warning.id)}
                         onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
-                        className="mt-0.5"
+                        className={cn("mt-0.5 rounded-sm", FOCUS_RING_CLASS_NAME)}
                       />
                     ) : (
                       <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
