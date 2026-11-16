@@ -618,13 +618,12 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Install app", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_install", async (args, context) => {
+      handler: handle("device_install", async (args, context, signal) => {
         const udid = readUdid(args);
-        await manager.ensureBooted(udid);
-        const result = await manager.install(
-          udid,
-          readStringArg(args, "appPath", { required: true })!,
-        );
+        const appPath = readStringArg(args, "appPath", { required: true })!;
+        await manager.ensureBooted(udid, signal);
+        const result = await manager.install(udid, appPath, signal);
+        signal.throwIfAborted();
         await surfaceDevice(context, udid, "agent-install");
         return result;
       }),
@@ -670,7 +669,7 @@ export function makeAgentGatewayDeviceTools(
           terminateExisting: readBooleanArg(args, "restart") ?? false,
           environment: readEnvironmentArg(args),
         };
-        await manager.ensureBooted(udid);
+        await manager.ensureBooted(udid, signal);
         let launched: Awaited<ReturnType<typeof manager.launch>> | null = null;
         const observation = await manager.observe(
           udid,
@@ -713,7 +712,7 @@ export function makeAgentGatewayDeviceTools(
       handler: handleInteraction("device_open_url", async (args, _context, signal) => {
         const udid = readUdid(args);
         const url = readStringArg(args, "url", { required: true })!;
-        await manager.ensureBooted(udid);
+        await manager.ensureBooted(udid, signal);
         const observation = await manager.observe(udid, () => manager.openUrl(udid, url), {
           timeoutMs: DEVICE_LAUNCH_SETTLE_TIMEOUT_MS,
           signal,
