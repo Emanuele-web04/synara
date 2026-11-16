@@ -239,7 +239,7 @@ export function ProviderAgentRow(props: {
         {props.index !== undefined && !props.open ? (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute bottom-1 end-2 text-[9px] leading-none text-muted-foreground/50"
+            className="pointer-events-none absolute bottom-1.5 end-2.5 text-ui-sm leading-none text-muted-foreground/70"
           >
             {props.index + 1}
           </span>
