@@ -1283,7 +1283,9 @@ const makeWsRpcHandlersLayer = () =>
           default:
             if (event.aggregateKind !== "thread") return Effect.succeed(Option.none());
             return projectionReadModelQuery
-              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)))
+              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)), {
+                includeLatestReplyPreview: true,
+              })
               .pipe(
                 Effect.map((thread) =>
                   Option.map(thread, (nextThread) => ({
@@ -1682,7 +1684,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot({ verifyEmptyThreads: true }),
+            projectionReadModelQuery.getShellSnapshot({
+              verifyEmptyThreads: true,
+              includeLatestReplyPreview: true,
+            }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
@@ -1819,7 +1824,7 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: () => Effect.void,
               },
               snapshot: projectionReadModelQuery
-                .getShellSnapshot()
+                .getShellSnapshot({ includeLatestReplyPreview: true })
                 .pipe(
                   Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
                 ),

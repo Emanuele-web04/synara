@@ -226,6 +226,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
+    left.latestReplyPreview === right.latestReplyPreview &&
     left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
@@ -2108,9 +2109,13 @@ export function normalizeThreadFromReadModel(
     ...(resolvedHasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
       : {}),
-    // Only thread shells carry the server's background-task count; detail keeps it.
+    // Only thread shells carry the server's background-task count and reply preview; detail
+    // keeps them.
     ...(previous?.pendingBackgroundTaskCount !== undefined
       ? { pendingBackgroundTaskCount: previous.pendingBackgroundTaskCount }
+      : {}),
+    ...(previous?.latestReplyPreview !== undefined
+      ? { latestReplyPreview: previous.latestReplyPreview }
       : {}),
     turnDiffSummaries,
     activities,
@@ -2277,6 +2282,9 @@ export function normalizeThreadShellSnapshot(
       : {}),
     ...(incoming.pendingBackgroundTaskCount !== undefined
       ? { pendingBackgroundTaskCount: incoming.pendingBackgroundTaskCount }
+      : {}),
+    ...(incoming.latestReplyPreview !== undefined
+      ? { latestReplyPreview: incoming.latestReplyPreview }
       : {}),
     ...(previous?.pendingInteractions !== undefined
       ? { pendingInteractions: previous.pendingInteractions }

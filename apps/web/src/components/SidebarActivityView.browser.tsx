@@ -1,11 +1,22 @@
 // FILE: SidebarActivityView.browser.tsx
-// Purpose: Browser regressions for Activity paging, stateful actions, scope fallback, and live PR data.
+// Purpose: Browser regressions for Activity rows (reply preview, PR pill), paging, stateful
+//          actions, scope fallback, and live PR data.
 // Layer: Sidebar Activity UI test
 
 import "../index.css";
 
-import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationThreadPullRequest,
+  type OrchestrationThreadPullRequestLink,
+} from "@synara/contracts";
+import {
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -107,6 +118,24 @@ function makeThread(
   };
 }
 
+function makeOpenPullRequest(number: number): OrchestrationThreadPullRequest {
+  return {
+    number,
+    title: "Fix paddings",
+    url: `https://github.com/acme/synara/pull/${number}`,
+    baseBranch: "main",
+    headBranch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    state: "open",
+  };
+}
+
+function makePullRequestLink(
+  pullRequest: OrchestrationThreadPullRequest,
+  linkedAt: string,
+): OrchestrationThreadPullRequestLink {
+  return { pullRequest, source: "user", linkedAt };
+}
+
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
@@ -127,6 +156,11 @@ function renderActivity(input: {
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenThreadPullRequest?: (
+    event: ReactMouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onToggleThreadPinned?: (threadId: ThreadId) => void;
   onArchiveThread?: (threadId: ThreadId) => void;
@@ -177,7 +211,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
-      onOpenThreadPullRequest={() => {}}
+      onOpenThreadPullRequest={input.onOpenThreadPullRequest ?? (() => {})}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
       onToggleThreadPinned={input.onToggleThreadPinned ?? (() => {})}
@@ -316,6 +350,16 @@ function remoteActivityInput(sessions: readonly WorkspaceSession[]) {
     ),
     onOpen,
   };
+}
+
+/** The computed color a CSS color variable resolves to on this page. */
+function resolvedColor(variable: string): string {
+  const reference = document.createElement("span");
+  reference.style.color = `var(${variable})`;
+  document.body.appendChild(reference);
+  const color = getComputedStyle(reference).color;
+  reference.remove();
+  return color;
 }
 
 function actionButton(row: HTMLElement, label: string): HTMLButtonElement {
@@ -457,9 +501,17 @@ describe("SidebarActivityView", () => {
     expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
     const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
     expect(remoteRow).toHaveAttribute("draggable", "false");
-    // The computer is named by the hover card and the accessible label, not the meta line.
+    // The computer is named by the hover card and the accessible label, not the project line;
+    // the globe follows the title.
     expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
-    expect(remoteRow.element().textContent).not.toContain("Studio Mac");
+    const remoteContent = remoteRow.element().parentElement!;
+    expect(remoteContent.textContent).not.toContain("Studio Mac");
+    const remoteFooter = remoteContent.querySelector<HTMLElement>(
+      '[data-slot="activity-thread-footer"]',
+    )!;
+    expect(remoteFooter.textContent).toBe("Project B");
+    expect(remoteFooter.querySelector('[data-slot="remote-thread-marker"]')).toBeNull();
+    expect(remoteContent.querySelector('[data-slot="remote-thread-marker"]')).not.toBeNull();
     // Remote rows open the same hover card as local ones.
     expect(remoteRow.element().closest("[data-thread-hover-anchor]")).not.toBeNull();
     expect(renderThreadHoverCard).toHaveBeenCalledWith(
@@ -577,6 +629,7 @@ describe("SidebarActivityView", () => {
         }
         const title =
           wrapper.querySelector('[data-testid^="thread-title-"]') ??
+          wrapper.querySelector('[data-slot="activity-thread-title"]') ??
           button.querySelector("span.min-w-0.flex-1");
         await vi.waitFor(() =>
           expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
@@ -856,53 +909,323 @@ describe("SidebarActivityView", () => {
     { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
     { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
   ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
-    "keeps the $name project identity and worktree indicator in recent rows",
+    "shows the $name project identity, or a worktree in its place, and the branch on the project line",
     async ({ name, appearance }) => {
-      const thread = makeThread(0, {
+      const thread = makeThread(0, { branch: "feature/sidebar-icons" });
+      const worktree = makeThread(1, {
         envMode: "worktree",
         worktreePath: "/tmp/activity-worktree",
-        branch: "feature/sidebar-icons",
+        branch: "feature/worktree",
       });
       const mounted = await render(
         renderActivity({
-          threads: [thread],
+          threads: [thread, worktree],
           projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
         }),
       );
+      const wrapperOf = (row: SidebarThreadSummary) =>
+        page.getByTestId(`activity-thread-${row.id}`).element().parentElement!;
+      const footerOf = (row: SidebarThreadSummary) =>
+        wrapperOf(row).querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+      const wrapper = () => wrapperOf(thread);
+      const footer = () => footerOf(thread);
       await vi.waitFor(() => {
-        const row = page.getByTestId(`activity-thread-${thread.id}`).element();
+        const line = footer();
+        expect(line.querySelector('[aria-label="Worktree"]')).toBeNull();
         if (name === "favicon") {
-          const image = row.querySelector<HTMLImageElement>("img");
+          const image = line.querySelector<HTMLImageElement>("img");
           expect(image?.naturalWidth).toBeGreaterThan(0);
         } else if (appearance?.kind === "emoji") {
-          expect(row.textContent).toContain(appearance.emoji);
-          expect(row.querySelector("img")).toBeNull();
-        } else if (appearance?.kind === "icon") {
-          // The default project icon is the shared Hugeicons folder (an svg); every other
-          // choice is a masked Central asset named after the icon.
-          const glyph =
-            appearance.icon === DEFAULT_PROJECT_ICON
-              ? row.querySelector<SVGElement>('[data-slot="hugeicon"]')
-              : [...row.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
-                  (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
-                );
+          expect(line.textContent).toContain(appearance.emoji);
+          expect(line.querySelector("img")).toBeNull();
+        } else if (appearance?.kind === "icon" && appearance.icon !== DEFAULT_PROJECT_ICON) {
+          // A chosen icon is a masked Central asset named after the icon.
+          const glyph = [...line.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
+            (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
+          );
           expect(glyph).toBeDefined();
-          const reference = document.createElement("span");
-          reference.style.color = `var(--project-${appearance.color})`;
-          document.body.appendChild(reference);
-          const expectedColor = getComputedStyle(reference).color;
-          reference.remove();
-          expect(getComputedStyle(glyph!).color).toBe(expectedColor);
-          expect(row.querySelector("img")).toBeNull();
+          expect(getComputedStyle(glyph!).color).toBe(
+            resolvedColor(`--project-${appearance.color}`),
+          );
+          expect(line.querySelector("img")).toBeNull();
         }
-        expect(row.querySelector('[aria-label="Worktree"]')?.getAttribute("aria-hidden")).not.toBe(
-          "true",
-        );
       });
-      await expect.element(mounted.getByRole("img", { name: "Worktree" })).toBeVisible();
+      expect(footer().textContent).toContain("Project A");
+      expect(footer().textContent).toContain("feature/sidebar-icons");
+      // In a worktree, its glyph takes the project glyph's place, and nothing else marks it.
+      const worktreeLine = footerOf(worktree);
+      const worktreeGlyphs = worktreeLine.querySelectorAll('[aria-label="Worktree"]');
+      expect(worktreeGlyphs).toHaveLength(1);
+      expect(worktreeLine.firstElementChild!.contains(worktreeGlyphs[0]!)).toBe(true);
+      expect(worktreeLine.querySelector("img")).toBeNull();
+      if (appearance?.kind === "emoji") {
+        expect(worktreeLine.textContent).not.toContain(appearance.emoji);
+      }
+      expect(worktreeLine.textContent).toContain("Project A");
+      expect(worktreeLine.textContent).toContain("feature/worktree");
+      // Nothing sits above the title; the project line sits below the reply.
+      const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
+      expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
+      expect(title.textContent).not.toContain("Project A");
+      expect(footer().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        title.getBoundingClientRect().bottom,
+      );
       await mounted.unmount();
     },
   );
+
+  it("counts several PRs in the row's state color and lists them instead of opening one", async () => {
+    const merged: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(96),
+      title: "Review iOS PRs",
+      state: "merged",
+    };
+    const open = { ...makeOpenPullRequest(97), title: "Widget snapshot fix" };
+    const closed: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(95),
+      title: "Abandoned attempt",
+      state: "closed",
+    };
+    const several = makeThread(820, {
+      title: "Several PRs",
+      pullRequests: [
+        makePullRequestLink(merged, "2026-08-02T08:00:00.000Z"),
+        makePullRequestLink(closed, "2026-08-02T09:00:00.000Z"),
+        makePullRequestLink(open, "2026-08-02T07:00:00.000Z"),
+      ],
+    });
+    const single = makeThread(821, {
+      title: "One PR",
+      pullRequests: [makePullRequestLink(makeOpenPullRequest(2186), "2026-08-02T08:00:00.000Z")],
+    });
+    const onOpenThread = vi.fn();
+    // Like the sidebar's handler, which takes the press over to open the PR pane.
+    const onOpenThreadPullRequest = vi.fn((event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [several, single],
+          // The row's own PR, with its live state, decides the glyph and color.
+          prByThreadId: new Map([
+            [several.id, merged],
+            [single.id, makeOpenPullRequest(2186)],
+          ]),
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const countChip = page.getByRole("button", { name: "3 pull requests" });
+      const countElement = countChip.element() as HTMLElement;
+      expect(countElement.textContent).toBe("3");
+      expect(getComputedStyle(countElement).color).toBe(resolvedColor("--status-merged"));
+      expect(countElement.closest('[data-slot="activity-thread-footer"]')).not.toBeNull();
+      countElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // A press lists every PR (its own first, then open, then newest); none opens by itself.
+      await countChip.click();
+      const items = page.getByRole("menuitem");
+      await expect
+        .poll(() => items.elements().map((item) => item.textContent))
+        .toEqual(["#96 Review iOS PRs", "#97 Widget snapshot fix", "#95 Abandoned attempt"]);
+      expect(onOpenThreadPullRequest).not.toHaveBeenCalled();
+      await page.getByRole("menuitem", { name: "#97 Widget snapshot fix" }).click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([several, open]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      expect(onRenameThread).not.toHaveBeenCalled();
+      await expect.poll(() => items.elements().length).toBe(0);
+
+      // One PR keeps its #number and opens directly.
+      const singleChip = page.getByRole("button", { name: "Open pull request #2186" });
+      expect(singleChip.element().textContent).toBe("#2186");
+      await singleChip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledTimes(2);
+      expect(onOpenThreadPullRequest.mock.calls[1]?.slice(1)).toEqual([
+        single,
+        makeOpenPullRequest(2186),
+      ]);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("names a plain checkout by its folder and keeps the PR whole before the branch", async () => {
+    const local = makeThread(810, {
+      title: "Local checkout",
+      branch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    });
+    const chat = makeThread(811, { title: "Plain chat", projectId: PROJECT_B });
+    const chatWithPr = makeThread(812, { title: "Chat with a PR", projectId: PROJECT_B });
+    const mounted = await render(
+      <div className="w-60">
+        {renderActivity({
+          threads: [local, chat, chatWithPr],
+          projects: [
+            makeProject(PROJECT_A, "Project A"),
+            { ...makeProject(PROJECT_B, "Chats"), kind: "chat" },
+          ],
+          prByThreadId: new Map([
+            [local.id, makeOpenPullRequest(2186)],
+            [chatWithPr.id, makeOpenPullRequest(2187)],
+          ]),
+        })}
+      </div>,
+    );
+    try {
+      const footer = (thread: SidebarThreadSummary) =>
+        page
+          .getByTestId(`activity-thread-${thread.id}`)
+          .element()
+          .parentElement!.querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+      const localFooter = footer(local);
+      expect(localFooter.textContent).toBe(
+        "Project A#2186synara/frontend-consistency-fixes-for-every-settings-screen",
+      );
+      expect(localFooter.querySelector('[aria-label="Worktree"]')).toBeNull();
+      // The PR stays whole ahead of the branch, which truncates.
+      const chip = page.getByRole("button", { name: "Open pull request #2186" }).element();
+      const branch = page
+        .getByText("synara/frontend-consistency-fixes-for-every-settings-screen", { exact: true })
+        .element();
+      expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
+        branch.getBoundingClientRect().left,
+      );
+      expect(branch.scrollWidth).toBeGreaterThan(branch.clientWidth);
+
+      // A chat keeps its folder and name, and its PR.
+      expect(footer(chatWithPr).textContent).toBe("Synara#2187");
+      expect(footer(chat).textContent).toBe("Synara");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("previews the latest reply under the title and keeps the PR a target of its own", async () => {
+    const reply =
+      "Fixed 6 off-scale paddings across the settings screens. PR is ready for review, and the snapshot tests were rerun on every platform so nothing else should move.";
+    const unread = makeThread(800, {
+      title: "Design-taste consistency checker",
+      latestReplyPreview: reply,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const seen = makeThread(801, {
+      title: "Codice handle URL pubblico",
+      latestReplyPreview: reply,
+    });
+    const merged: OrchestrationThreadPullRequest = {
+      number: 2171,
+      title: "Public handle URLs",
+      url: "https://github.com/acme/synara/pull/2171",
+      baseBranch: "main",
+      headBranch: "feat/handles",
+      state: "merged",
+    };
+    const silent = makeThread(802, { title: "No reply yet" });
+    const pr: OrchestrationThreadPullRequest = {
+      number: 2186,
+      title: "Fix off-scale paddings",
+      url: "https://github.com/acme/synara/pull/2186",
+      baseBranch: "main",
+      headBranch: "fix/paddings",
+      state: "open",
+    };
+    const onOpenThread = vi.fn();
+    const onOpenThreadPullRequest = vi.fn();
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [unread, seen, silent],
+          prByThreadId: new Map([
+            [unread.id, pr],
+            [seen.id, merged],
+          ]),
+          resolveThreadStatus: (thread) =>
+            thread.id === unread.id
+              ? {
+                  label: "Completed",
+                  colorClass: "text-emerald-600",
+                  dotClass: "bg-emerald-500",
+                  pulse: false,
+                }
+              : null,
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const rowButton = (thread: SidebarThreadSummary) =>
+        page.getByTestId(`activity-thread-${thread.id}`).element() as HTMLButtonElement;
+      const part = (thread: SidebarThreadSummary, selector: string) =>
+        rowButton(thread).parentElement!.querySelector<HTMLElement>(selector);
+
+      // Unseen news reads medium; the reply sits under the title, aligned with the glyph.
+      const unreadTitle = part(unread, '[data-slot="activity-thread-title"]')!;
+      const seenTitle = part(seen, '[data-slot="activity-thread-title"]')!;
+      expect(getComputedStyle(unreadTitle).fontWeight).toBe("500");
+      expect(getComputedStyle(seenTitle).fontWeight).toBe("400");
+      const unreadReply = part(unread, "p")!;
+      const seenReply = part(seen, "p")!;
+      expect(unreadReply.textContent).toBe(reply);
+      expect(getComputedStyle(unreadReply).webkitLineClamp).toBe("2");
+      const lineHeight = Number.parseFloat(getComputedStyle(unreadReply).lineHeight);
+      expect(unreadReply.getBoundingClientRect().height).toBeLessThanOrEqual(lineHeight * 2 + 1);
+      expect(unreadReply.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        unreadTitle.getBoundingClientRect().bottom,
+      );
+      expect(unreadReply.getBoundingClientRect().left).toBe(
+        part(unread, '[data-slot="activity-thread-footer"]')!.getBoundingClientRect().left,
+      );
+      // A reply already seen steps back.
+      expect(getComputedStyle(seenReply).color).not.toBe(getComputedStyle(unreadReply).color);
+      // No reply, no reply line.
+      expect(part(silent, "p")).toBeNull();
+      expect(rowButton(silent).getBoundingClientRect().height).toBeLessThan(
+        rowButton(seen).getBoundingClientRect().height,
+      );
+
+      // The PR is plain icon + number in its state's color, yet a button of its own, outside
+      // the row's, named for what it does, with a target reaching past its glyphs.
+      const chip = page.getByRole("button", { name: "Open pull request #2186" });
+      const chipElement = chip.element() as HTMLElement;
+      expect(rowButton(unread).contains(chipElement)).toBe(false);
+      expect(chipElement.getAttribute("title")).toBe("#2186 PR open: Fix off-scale paddings");
+      expect(getComputedStyle(chipElement).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(getComputedStyle(chipElement).paddingLeft).toBe("4px");
+      expect(chipElement.getBoundingClientRect().height).toBeGreaterThanOrEqual(20);
+      expect(getComputedStyle(chipElement).color).toBe(resolvedColor("--status-open"));
+      const mergedChip = page.getByRole("button", { name: "Open pull request #2171" }).element();
+      expect(getComputedStyle(mergedChip).color).toBe(resolvedColor("--status-merged"));
+      await chip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([unread, pr]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      chipElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // Everywhere else the whole row, reply included, opens the thread.
+      await page.getByTestId(`activity-thread-${unread.id}`).click();
+      expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(unread.id);
+      expect(
+        document.elementFromPoint(
+          unreadReply.getBoundingClientRect().left + 4,
+          unreadReply.getBoundingClientRect().top + 4,
+        ),
+      ).toBe(rowButton(unread));
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
     const older = makeThread(500, {
