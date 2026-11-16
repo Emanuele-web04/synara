@@ -668,7 +668,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             return mcpToolResultJson({
               operationId: batch.operationId,
               requestId: batch.requestId,
-              ...(batch.threads?.[0] ?? {}),
+              ...batch.threads?.[0],
             });
           }),
         );

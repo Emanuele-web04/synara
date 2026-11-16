@@ -50,7 +50,7 @@ export function matchWikiLinkAt(source: string, index: number): RegExpExecArray 
   const pattern = /\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/y;
   pattern.lastIndex = index;
   const match = pattern.exec(source);
-  if (!match || /\\[\[\]|]/.test(match[0])) return null;
+  if (!match || /\\[[\]|]/.test(match[0])) return null;
   return match;
 }
 

@@ -73,7 +73,7 @@ function discoverToolchains(): Toolchain[] {
     // standard layout, so this is not worth reporting as an error.
   }
 
-  return [...developerDirs].sort().map((developerDir) => ({
+  return [...developerDirs].toSorted().map((developerDir) => ({
     developerDir,
     label: readToolchainLabel(developerDir) ?? developerDir,
   }));

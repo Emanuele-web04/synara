@@ -2375,7 +2375,9 @@ export function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "opencode" ||
     providerName === "pi" ||
     providerName === "devin" ||
-    providerName === "omp"
+    providerName === "omp" ||
+    providerName === "cline" ||
+    providerName === "commandCode"
   ) {
     return providerName;
   }

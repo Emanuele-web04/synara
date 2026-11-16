@@ -42,7 +42,7 @@ type ComposerEffortSliderCardProps = {
 };
 
 const CARD_ICON_BUTTON_CLASS_NAME =
-  "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 disabled:pointer-events-none disabled:opacity-35";
+  "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)] disabled:pointer-events-none disabled:opacity-35";
 
 // Effort ladder as a stepped slider. Every level the model exposes is one stop
 // (including prompt-injected ones such as Ultrathink), so the ladder matches the
@@ -144,7 +144,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           </TooltipPopup>
         </Tooltip>
       </div>
-      <div className="mt-1 px-0.5">
+      <div className="mt-1.5 px-1">
         <Slider
           value={ladderIndex}
           min={0}

@@ -147,6 +147,8 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
+const CLINE_PROVIDER = "cline" as const;
+const COMMAND_CODE_PROVIDER = "commandCode" as const;
 const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -163,6 +165,8 @@ const PROVIDERS = [
   GROK_PROVIDER,
   DROID_PROVIDER,
   DEVIN_PROVIDER,
+  CLINE_PROVIDER,
+  COMMAND_CODE_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
   OMP_PROVIDER,
@@ -275,6 +279,20 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
 export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
   Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>
 > = {
+  cline: {
+    provider: CLINE_PROVIDER,
+    binaryName: "cline",
+    npmPackageName: "cline",
+    homebrew: null,
+    nativeUpdate: null,
+  },
+  commandCode: {
+    provider: COMMAND_CODE_PROVIDER,
+    binaryName: "cmd",
+    npmPackageName: "command-code",
+    homebrew: null,
+    nativeUpdate: null,
+  },
   codex: {
     provider: CODEX_PROVIDER,
     binaryName: "codex",
@@ -932,6 +950,8 @@ export const makeProviderUpdateEnv = (
     case "opencode":
     case "pi":
     case "omp":
+    case "cline":
+    case "commandCode":
       return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
@@ -2590,6 +2610,93 @@ export const makeCheckDevinProviderStatus = (
 
 export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
 
+/** A version probe proves installation, never authentication. Cline restores auth on session/new. */
+export const makeCheckClineProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probe = yield* probeProviderCliVersion(
+      runProviderCommand(binaryPath?.trim() || "cline", ["--version"], {
+        env: providerCommandEnv(CLINE_PROVIDER),
+      }),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (probe.outcome !== "success") {
+      return {
+        provider: CLINE_PROVIDER,
+        instanceId: CLINE_PROVIDER,
+        driver: CLINE_PROVIDER,
+        checkedAt,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        message:
+          probe.outcome === "missing"
+            ? "Cline CLI is not installed. Run `npm install -g cline`, then `cline auth`."
+            : probe.outcome === "timeout"
+              ? "Cline CLI health check timed out."
+              : "Cline CLI failed its version check. Check the binary path or reinstall Cline.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: CLINE_PROVIDER,
+      instanceId: CLINE_PROVIDER,
+      driver: CLINE_PROVIDER,
+      checkedAt,
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: parseGenericCliVersion(`${probe.result.stdout}\n${probe.result.stderr}`),
+      message:
+        "Cline CLI is installed. Authenticate with `cline auth`; credentials are checked when starting a session.",
+    } satisfies ServerProviderStatus;
+  });
+
+/** A version probe proves installation, never authentication. Command Code restores auth on session/new. */
+export const makeCheckCommandCodeProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probe = yield* probeProviderCliVersion(
+      runProviderCommand(binaryPath?.trim() || "cmd", ["--version"], {
+        env: providerCommandEnv(COMMAND_CODE_PROVIDER),
+      }),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (probe.outcome !== "success") {
+      return {
+        provider: COMMAND_CODE_PROVIDER,
+        instanceId: COMMAND_CODE_PROVIDER,
+        driver: COMMAND_CODE_PROVIDER,
+        checkedAt,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        message:
+          probe.outcome === "missing"
+            ? "Command Code CLI is not installed. Run `npm install -g command-code`, then `cmd login` or set COMMAND_CODE_API_KEY."
+            : probe.outcome === "timeout"
+              ? "Command Code CLI health check timed out."
+              : "Command Code CLI failed its version check. Check the binary path or reinstall Command Code.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: COMMAND_CODE_PROVIDER,
+      instanceId: COMMAND_CODE_PROVIDER,
+      driver: COMMAND_CODE_PROVIDER,
+      checkedAt,
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: parseGenericCliVersion(`${probe.result.stdout}
+${probe.result.stderr}`),
+      message:
+        "Command Code CLI is installed. Authenticate with `cmd login` or COMMAND_CODE_API_KEY; credentials are checked when starting a session.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -3465,6 +3572,16 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               ),
             );
           }
+          case "cline":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckClineProviderStatus(binaryPath),
+            );
+          case "commandCode":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckCommandCodeProviderStatus(binaryPath),
+            );
         }
       };
 

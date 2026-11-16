@@ -7,6 +7,7 @@ import { cn } from "~/lib/utils";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { AnnouncementSheetPopup } from "./AnnouncementSheet";
 import { DIALOG_HERO_ITEM_SHADOW_CLASS_NAME, DialogHeroLink } from "./DialogHeroBand";
+import { SettingsRow, SettingsSection } from "./settings/SettingsPanelPrimitives";
 import { Button } from "./ui/button";
 import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Dialog } from "./ui/dialog";
@@ -45,16 +46,26 @@ function useSafariAccessInfo() {
   return info;
 }
 
-export function SafariAccessSetupButton() {
-  const { t } = useTranslation();
-
+export function SafariAccessSettingsSection() {
   const info = useSafariAccessInfo();
   if (!info?.supported) return null;
   return (
-    <Button size="sm" variant="outline" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
-      <SettingsIcon className="size-4" />
-      {t("onboarding:safariImportSetup")}
-    </Button>
+    <SettingsSection title="Browser import">
+      <SettingsRow
+        title="Safari logins"
+        description="Import your Safari cookies so Synara's browser can reuse sites you're already signed into. Optional — nothing is copied until you run the setup."
+        control={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}
+          >
+            <SettingsIcon className="size-4" />
+            Set up import
+          </Button>
+        }
+      />
+    </SettingsSection>
   );
 }
 

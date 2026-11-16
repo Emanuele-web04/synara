@@ -180,6 +180,12 @@ export function ModelsSettingsPanel({
     ],
   );
   const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
+  const { modelOptionsByProvider: customModelCatalogOptionsByProvider } = useProviderModelCatalog({
+    selectedProvider: selectedCustomModelProvider,
+    discoveryEnabled: active,
+    cwd: providerModelDiscoveryCwd,
+    prefetchProviders: enabledCustomModelProviderSettings.map((config) => config.provider),
+  });
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
   const selectedGitTextGenerationPickerOption = gitTextGenerationPickerOptions.find(
     (entry) => entry.value === currentGitTextGenerationValue,
@@ -212,6 +218,18 @@ export function ModelsSettingsPanel({
     selectedCustomModelProviderSettings?.provider ?? selectedCustomModelProvider;
   const selectedCustomModelInput = customModelInputByProvider[activeCustomModelProvider] ?? "";
   const selectedCustomModelError = customModelErrorByProvider[activeCustomModelProvider] ?? null;
+  const selectedCustomModelCatalog =
+    customModelCatalogOptionsByProvider[activeCustomModelProvider] ?? [];
+  const normalizedSelectedCustomModelInput = normalizeModelSlug(
+    selectedCustomModelInput,
+    activeCustomModelProvider,
+  );
+  const selectedCustomModelCatalogWarning =
+    normalizedSelectedCustomModelInput !== null &&
+    selectedCustomModelCatalog.length > 0 &&
+    !selectedCustomModelCatalog.some((option) => option.slug === normalizedSelectedCustomModelInput)
+      ? `Not in ${selectedCustomModelProviderSettings?.title ?? activeCustomModelProvider}'s model list — the slug may still work, but check the name.`
+      : null;
   const savedCustomModelRows = useMemo(
     () =>
       enabledCustomModelProviderSettings.flatMap((config) =>
@@ -451,6 +469,7 @@ export function ModelsSettingsPanel({
                 </Select>
                 <Input
                   id="custom-model-slug"
+                  aria-labelledby="setting-saved-model-slugs-title"
                   size="sm"
                   variant="soft"
                   value={selectedCustomModelInput}
@@ -493,6 +512,12 @@ export function ModelsSettingsPanel({
             {selectedCustomModelError ? (
               <p className="mt-2 text-ui leading-snug text-destructive">
                 {t(selectedCustomModelError, { limit: MAX_CUSTOM_MODEL_LENGTH })}
+              </p>
+            ) : null}
+
+            {!selectedCustomModelError && selectedCustomModelCatalogWarning ? (
+              <p className="mt-2 text-ui-sm text-warning-foreground">
+                {selectedCustomModelCatalogWarning}
               </p>
             ) : null}
 

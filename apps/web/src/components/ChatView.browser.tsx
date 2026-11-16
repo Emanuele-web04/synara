@@ -4862,13 +4862,13 @@ describe("ChatView transcript geometry (full app)", () => {
       const requestId = ApprovalRequestId.makeUnsafe("question-recovery");
       const generation = "question-generation";
       const requestKey = pendingRequestInstanceKey(requestId, generation);
-      const questions = [1, 2, 3].map((id) => ({
-        id: String(id),
-        header: `Question ${id}`,
-        question: `Choose option ${id}?`,
-        ...(navigation !== "auto-advance" ? { multiSelect: true } : {}),
-        options: [{ label: `Choice ${id}`, description: "Selected answer" }],
-      }));
+      const questions = [1, 2, 3].map((id) =>
+        Object.assign(
+          { id: String(id), header: `Question ${id}`, question: `Choose option ${id}?` },
+          navigation !== `auto-advance` ? { multiSelect: true } : {},
+          { options: [{ label: `Choice ${id}`, description: `Selected answer` }] },
+        ),
+      );
       const snapshot = createSnapshotForTargetUser({
         targetMessageId: MessageId.makeUnsafe("msg-question-recovery"),
         targetText: "Discuss the design",
@@ -5010,7 +5010,7 @@ describe("ChatView transcript geometry (full app)", () => {
   it("keeps near-cap composer work bounded while live activities arrive", async () => {
     onTestFinished(skipReactDevOwnerStacks());
     const percentile = (samples: readonly number[], fraction: number): number => {
-      const ordered = [...samples].sort((left, right) => left - right);
+      const ordered = [...samples].toSorted((left, right) => left - right);
       return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))] ?? 0;
     };
     const cases = [
@@ -9810,6 +9810,27 @@ describe("ChatView transcript geometry (full app)", () => {
       });
     } finally {
       focusTarget.remove();
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the composer model picker surface", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-shortcut" as MessageId,
+        targetText: "model picker shortcut",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
+      composerEditor.focus();
+      dispatchComposerPickerShortcut(composerEditor, "m");
+
+      await waitForComposerPickerSurfaceOpen();
+    } finally {
       await mounted.cleanup();
     }
   });

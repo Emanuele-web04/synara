@@ -426,6 +426,35 @@ splitting the assistant reply. Each notification keeps its timestamp and task id
 The transcript shows a compact Monitor update or terminal outcome; its output is available
 in the shared detail disclosure. Failed and stopped outcomes stay explicit. Updates do not
 mean the Monitor finished, and tool-only notifications do not enable assistant auto-follow.
+The composer uses the same compact model-and-reasoning panel before and after a chat starts.
+**Presets** appear above the current configuration. Set a model and effort, then use the star
+beside **Current configuration** to save that pair. You can save several efforts for the same
+model and restore one with a single click. Models without an effort ladder save their thinking
+setting, when available, or just the model. The effort slider is the default; the menu preference
+still works, and configuration changes leave the panel open so you can save the result.
+
+Open the current model label to browse providers and models inside that same panel. The Back
+control, Left Arrow outside the search field, or Escape returns one level; Escape from the
+configuration closes the picker. Choosing a model returns to its effort controls, or to a note when the model
+exposes no adjustable settings. After a chat
+starts, browsing skips the provider list and shows only the locked provider's models.
+
+Presets are stored locally, independently of model favourites. They do not copy your prompt,
+speed, context window, or agent settings. Claude Ultrathink presets apply the existing prompt-prefix
+behavior without saving prompt text; an Ultrathink-controlled prompt must be edited before a
+different effort can be restored. After a chat starts, only presets for its locked provider are
+shown. Missing models or unsupported efforts stay saved and removable, with an explanation;
+applying a preset never silently substitutes a different model or effort.
+
+In the model catalog, use the star beside any model to add or remove a favourite without selecting it or closing the
+picker. Favourites appear first, followed by the remaining model groups (or **Other models** for
+an ungrouped catalog). A model appears only once. Search filters both sections, and upstream
+provider labels distinguish favourites from different catalogs without repeating the active provider.
+
+Favourites are saved locally for each provider and also used by the next/previous model shortcuts.
+Existing Cursor, OpenCode and Pi favourites are preserved. Models absent from the current catalog
+are not displayed, but their saved preference is retained if they become available again.
+Supported provider executables can also be pointed at custom binary locations.
 
 ## Provider sessions
 
@@ -915,3 +944,35 @@ computer awake either for the server lifetime or while an agent turn is running.
 The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
 shutting down terminates it, deleting the last active thread releases its agent
 lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.
+
+## Cline
+
+Cline is an installed CLI provider, connected through `cline --acp`. Install the
+current CLI with `npm install -g cline`, run `cline auth` in a terminal, then select
+Cline in Synara. Settings → Providers supports a custom executable path, provider
+enablement, and custom model IDs. A successful `--version` check proves only that
+the CLI is installed; authentication is verified by Cline when a session starts.
+
+The model picker discovers the configured upstream provider's model catalog from
+ACP `configOptions`. IDs are preserved verbatim. **Cline configured model** follows
+the CLI's default at session startup; no specific hosted model, quota, or reasoning
+setting is assumed. Configure the upstream provider/account in Cline itself (or
+with Cline's documented environment variables), not with another Synara provider's
+credentials. Discovery failures are shown rather than replaced with an invented
+model catalog.
+
+Synara uses native Plan/Act modes and routes ACP permission requests through its
+existing approval controls. It explicitly disables Cline auto-approval even for
+Full Access sessions: Synara decides how to answer each request. Configuration
+failures prevent prompt dispatch. Text, images, file attachments, streamed replies,
+tool calls, plans, usage events, cancellation, and session load/resume are supported.
+Cancellation retires the child process to isolate late events; the next session can
+resume from the saved cursor. Scoped Synara MCP tools use the existing gateway.
+
+Native rollback, compaction, thread import, skills/plugins, command discovery,
+turn steering, and quota polling are not advertised. Rollback uses Synara's
+restart-with-history path. Git text generation is unchanged. Cline's official icon
+is included with attribution under `third-party/cline-icon`.
+
+References: [Cline ACP](https://docs.cline.bot/usage/acp),
+[Cline CLI reference](https://docs.cline.bot/cli/cli-reference).

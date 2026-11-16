@@ -437,7 +437,7 @@ async function nudgeClaudeCliAuthRefresh(ctx: ProviderUsageContext): Promise<boo
 
 /** Test-only: replace the CLI nudge (lock + exec) and clear its cooldown memory. */
 export function __setClaudeAuthNudgeDepsForTests(deps: Partial<ClaudeAuthNudgeDeps> | null): void {
-  authNudgeDeps = { ...defaultAuthNudgeDeps, ...(deps ?? {}) };
+  authNudgeDeps = { ...defaultAuthNudgeDeps, ...deps };
   authNudgeNotBeforeMs.clear();
 }
 

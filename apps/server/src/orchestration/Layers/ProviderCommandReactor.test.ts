@@ -110,6 +110,8 @@ import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
 import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
+import { ClineAdapter } from "../../provider/Services/ClineAdapter.ts";
+import { CommandCodeAdapter } from "../../provider/Services/CommandCodeAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
 import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDiscoveryService.ts";
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
@@ -499,6 +501,8 @@ function createRetainingRestartProviderServiceLayer(options?: {
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
+        Layer.succeed(ClineAdapter, adapterFor("cline")),
+        Layer.succeed(CommandCodeAdapter, adapterFor("commandCode")),
         settingsLayer,
       ),
     ),

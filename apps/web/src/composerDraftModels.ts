@@ -44,6 +44,8 @@ export const COMPOSER_PROVIDER_KINDS = [
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
+  "commandCode",
   "antigravity",
   "grok",
   "droid",
@@ -263,6 +265,10 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
           : {}),
       };
+    case "cline":
+      return { provider, model };
+    case "commandCode":
+      return { provider, model };
     case "devin":
       return {
         provider,

@@ -44,7 +44,6 @@ export const COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME = `h-8 px-2 py-1 sm:h-7 sm
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";
-
 /** Sticky search header inside frosted composer picker submenus. */
 export const COMPOSER_PICKER_SEARCH_HEADER_CLASS_NAME =
   "sticky z-20 shrink-0 border-b border-[color:color-mix(in_srgb,var(--foreground)_6%,transparent)] bg-transparent px-1.5 pb-1.5 pt-1";
@@ -165,7 +164,7 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_
 
 /** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
  *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200 has-focus-visible:border-[color:var(--color-border-focus)]`;
 
 /** Shell for floating menus, pickers, and popovers: the shared overlay fill over a backdrop
  *  blur. FLOATING_OVERLAY_SURFACE_CLASS_NAME hands the fill to index.css and, on a translucent
@@ -282,11 +281,9 @@ export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-chat";
  *  placeholder always aligns with typed text. Keep both surfaces on this one token. */
 export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
 /** Muted empty-state copy for the composer prompt editor.
- *  Deliberately fainter than MUTED_LABEL_TEXT_CLASS_NAME and NOT aliased to it: a
- *  placeholder sits in the exact position typed text will occupy, so at the label
- *  tone it stops reading as an empty field and starts reading as content already
- *  in the input. The quiet-label token is for chrome that sits *next to* text. */
-export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground/40";
+ *  Held at full muted-foreground so the placeholder stays at WCAG's 4.5:1 caption
+ *  floor (typed text is still much darker); anything fainter fails contrast. */
+export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground";
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME =
   "min-h-[var(--app-density-composer-editor-min-height,2lh)]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */

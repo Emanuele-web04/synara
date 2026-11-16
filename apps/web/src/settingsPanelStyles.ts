@@ -3,7 +3,6 @@
 // Layer: Settings UI styling
 // Exports: border, surface, card, row, and inset list class names
 
-import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "./sidebarRowStyles";
 import { SOFT_SURFACE_FILL_CLASS_NAME } from "./surfaceStyles";
 
 /** Corner radius for top-level settings boxes: cards, empty states, dropdown panels. */
@@ -26,8 +25,10 @@ export const SETTINGS_CONTROL_BORDER_CLASS_NAME = "border border-[color:var(--co
  *  so cards/rows read as outline-only on the same background as the chat. */
 export const SETTINGS_PAGE_BACKGROUND_CLASS_NAME = "app-settings-surface";
 
-/** Section label above a settings card — same tone as sidebar "Threads"/"Pinned". */
-export const SETTINGS_SECTION_LABEL_CLASS_NAME = `px-2 py-1 ${SIDEBAR_SECTION_LABEL_CLASS_NAME}`;
+/** Section label above a settings card — one size above the card row titles so
+ *  the h2 → h3 heading hierarchy reads by size, not only by weight/tone. */
+export const SETTINGS_SECTION_LABEL_CLASS_NAME =
+  "px-2 py-1 text-ui-lg font-medium text-muted-foreground";
 
 /** Vertical rhythm between stacked settings groups in the content panel. */
 export const SETTINGS_PANEL_SECTION_CLASS_NAME = "flex flex-col gap-1.5 not-first:mt-4";

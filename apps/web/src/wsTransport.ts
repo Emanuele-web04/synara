@@ -1900,7 +1900,7 @@ export class WsTransport {
     try {
       return await this.clientPromise;
     } catch (error) {
-      if (this.disposed) throw new Error("Transport disposed");
+      if (this.disposed) throw new Error("Transport disposed", { cause: error });
       if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
       if (isTerminalConnectionFailure(error)) throw error;
       return this.reconnect();
@@ -2341,7 +2341,7 @@ export class WsTransport {
       } catch (error) {
         const failedResources = this.takeCurrentRuntime();
         if (failedResources) await this.closeRuntime(failedResources);
-        if (this.disposed) throw new Error("Transport disposed");
+        if (this.disposed) throw new Error("Transport disposed", { cause: error });
         if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
         if (isTerminalConnectionFailure(error)) throw error;
         // The backend may still be starting. Continue with bounded backoff;

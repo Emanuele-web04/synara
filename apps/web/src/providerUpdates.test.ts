@@ -86,6 +86,8 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
+      cline: { ...provider, binaryPath: "cline" },
+      commandCode: { binaryPath: "", customModels: [], enabled: true },
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },

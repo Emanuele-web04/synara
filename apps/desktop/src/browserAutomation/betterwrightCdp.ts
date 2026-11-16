@@ -405,7 +405,7 @@ export class BetterwrightCdpTarget {
     // detach. Only settle them locally once teardown has acknowledged revocation.
     if (leaseRevoked || this.contents.isDestroyed() || !this.contents.debugger.isAttached())
       this.endLease();
-    await Promise.allSettled([...this.pending]);
+    await Promise.allSettled(this.pending);
     // The manager, annotations and diagnostics share this debugger. Never detach or close it here.
   }
 }

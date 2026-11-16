@@ -51,7 +51,7 @@ function percentile(sorted: ReadonlyArray<number>, fraction: number): number {
 }
 
 function summary(values: ReadonlyArray<number>) {
-  const sorted = [...values].sort((left, right) => left - right);
+  const sorted = [...values].toSorted((left, right) => left - right);
   return {
     mean: values.reduce((total, value) => total + value, 0) / Math.max(1, values.length),
     p50: percentile(sorted, 0.5),

@@ -816,7 +816,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           let compensatedThreadCount = 0;
           let compensatedWorktreeCount = 0;
           yield* Effect.forEach(
-            [...createdThreads].reverse(),
+            [...createdThreads].toReversed(),
             (entry) =>
               orchestrationEngine
                 .dispatch({
@@ -839,7 +839,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             { discard: true },
           );
           yield* Effect.forEach(
-            [...createdWorktrees].reverse(),
+            [...createdWorktrees].toReversed(),
             (worktree) =>
               git
                 .withMutation(

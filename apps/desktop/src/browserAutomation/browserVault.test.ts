@@ -160,7 +160,7 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     await restored.unlock(master);
     const snapshot = await restored.snapshot();
     expect(snapshot.logins).toHaveLength(2);
-    expect(snapshot.logins.map(({ source }) => source).sort()).toEqual(["agent", "user"]);
+    expect(snapshot.logins.map(({ source }) => source).toSorted()).toEqual(["agent", "user"]);
     expect(JSON.stringify(snapshot)).not.toContain("synthetic-");
     expect(await readFile(join(home, "preferences.json"), "utf8")).not.toContain("synthetic-");
     expect(vault.redact({ text: "synthetic-human-secret synthetic-agent-secret" })).not.toEqual({

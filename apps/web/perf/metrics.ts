@@ -21,7 +21,7 @@ export type DurationStats = {
 
 export function percentile(values: readonly number[], fraction: number): number {
   if (values.length === 0) return 0;
-  const ordered = [...values].sort((left, right) => left - right);
+  const ordered = [...values].toSorted((left, right) => left - right);
   return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))] ?? 0;
 }
 

@@ -1,0 +1,8 @@
+Cline logo by the Cline contributors, distributed under the Apache License 2.0.
+
+Source: https://github.com/cline/cline/blob/9de01af92d29fa7b454c18d7ae820052ab743681/apps/vscode/webview-ui/src/assets/ClineLogoWhite.tsx
+Upstream license: https://github.com/cline/cline/blob/9de01af92d29fa7b454c18d7ae820052ab743681/LICENSE
+
+Synara adaptation: converted the SVG component to use currentColor, removed fixed
+pixel dimensions, and renamed the export to ClineIcon. Geometry is unchanged.
+The Cline name and logo remain the property of their respective owners.

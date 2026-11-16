@@ -113,11 +113,11 @@ test("crawler policy separates search visibility from model training", () => {
     "Claude-User",
     "PerplexityBot",
   ]) {
-    assert.ok(discovery.includes(`\"${agent}\"`), `missing discovery crawler ${agent}`);
+    assert.ok(discovery.includes(`"${agent}"`), `missing discovery crawler ${agent}`);
   }
 
   for (const agent of ["GPTBot", "ClaudeBot", "Google-Extended"]) {
-    assert.ok(discovery.includes(`\"${agent}\"`), `missing training control ${agent}`);
+    assert.ok(discovery.includes(`"${agent}"`), `missing training control ${agent}`);
   }
 
   assert.ok(robots.includes("AI_DISCOVERY_USER_AGENTS"));
@@ -133,7 +133,7 @@ test("canonical sitemaps contain search-result pages, not AI utility files", () 
 
   for (const utilityPath of ["/llms.txt", "/llms-full.txt", "/ai.txt"]) {
     assert.equal(
-      routes.includes(`path: \"${utilityPath}\"`),
+      routes.includes(`path: "${utilityPath}"`),
       false,
       `${utilityPath} must not be a canonical sitemap entry`,
     );

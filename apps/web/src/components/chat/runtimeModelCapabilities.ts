@@ -74,8 +74,42 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
-  if (exactMatch || provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
+  if (exactMatch) {
     return exactMatch;
+  }
+
+  // Selections outlive catalog reshapes: a stored opencode slug can carry a
+  // stale upstream prefix (or none at all) while the label still resolves.
+  // Fall back to the bare model identifier so traits keep resolving; exact
+  // matches above always win, and effort ladders are consistent per model
+  // identifier across upstreams. Other providers keep strict matching.
+  if (provider === "opencode") {
+    const modelIdentifier = normalizedModel.includes("/")
+      ? normalizedModel.slice(normalizedModel.lastIndexOf("/") + 1).trim()
+      : normalizedModel.trim();
+    if (modelIdentifier) {
+      const fallback = runtimeModels.find((candidate) => {
+        const candidateIdentifier = (
+          normalizeModelSlug(candidate.slug, provider) ?? candidate.slug
+        ).split("/");
+        const resolvedIdentifier = (
+          normalizeModelSlug(candidate.resolvedModel, provider) ??
+          candidate.resolvedModel ??
+          ""
+        ).split("/");
+        return (
+          candidateIdentifier.at(-1) === modelIdentifier ||
+          (resolvedIdentifier.at(-1) !== "" && resolvedIdentifier.at(-1) === modelIdentifier)
+        );
+      });
+      if (fallback) {
+        return fallback;
+      }
+    }
+  }
+
+  if (provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
+    return undefined;
   }
 
   // The Claude picker hides context qualifiers and may replace an alias with
@@ -176,12 +210,11 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   const runtimeOptions: EffortOption[] = runtimeEfforts.map((effort) => {
     const description = trimOrNull(effort.description);
-    return {
-      value: effort.value,
-      label: trimOrNull(effort.label) ?? runtimeEffortLabel(effort.value),
-      ...(description ? { description } : {}),
-      ...(effort.value === runtimeDefaultEffort ? { isDefault: true as const } : {}),
-    };
+    return Object.assign(
+      { value: effort.value, label: trimOrNull(effort.label) ?? runtimeEffortLabel(effort.value) },
+      description ? { description } : {},
+      effort.value === runtimeDefaultEffort ? { isDefault: true as const } : {},
+    );
   });
 
   if (input.provider === "opencode") {

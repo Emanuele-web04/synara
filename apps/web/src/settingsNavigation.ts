@@ -158,6 +158,14 @@ const ALL_SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     eyebrow: "Alerts",
   },
   {
+    id: "behavior",
+    group: "synara",
+    label: "settings:nav_chats",
+    description: "settings:controlLiveResponsesFollowUpsReviewDefaultsAndSafety",
+    icon: "chat-bubbles",
+    eyebrow: "Interaction rules",
+  },
+  {
     id: "shortcuts",
     group: "synara",
     label: "settings:nav_keyboardShortcuts",

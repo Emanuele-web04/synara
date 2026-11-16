@@ -355,10 +355,10 @@ function Sidebar({
             // (layout): a fixed panel relayouts its whole subtree per frame otherwise,
             // which read as a janky close on heavy sidebar content. The gap still
             // animates width — reserving layout is its job — but its subtree is empty.
-            "fixed inset-y-0 z-0 flex h-svh w-(--sidebar-width) transition-[left,right,width,translate] duration-200 ease-linear motion-reduce:transition-none",
+            "fixed inset-y-0 z-0 flex h-svh w-(--sidebar-width) transition-[left,right,width,translate,visibility] duration-200 ease-linear motion-reduce:transition-none",
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
-              : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
+              ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full group-data-[collapsible=offcanvas]:invisible"
+              : "right-0 group-data-[collapsible=offcanvas]:translate-x-full group-data-[collapsible=offcanvas]:invisible",
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -787,6 +787,7 @@ function SidebarInset({
         className,
       )}
       data-slot="sidebar-inset"
+      id="main-content"
       {...props}
     >
       {/* Inner surface lives inside the content-box so rounded corners

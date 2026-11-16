@@ -107,7 +107,7 @@ function writeAscii(view: DataView, offset: number, value: string): void {
 }
 
 function summarize(values: readonly number[]): BenchmarkStats {
-  const sorted = [...values].sort((left, right) => left - right);
+  const sorted = [...values].toSorted((left, right) => left - right);
   const mean = values.reduce((total, value) => total + value, 0) / values.length;
   const variance = values.reduce((total, value) => total + (value - mean) ** 2, 0) / values.length;
   return {

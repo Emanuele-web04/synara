@@ -3432,7 +3432,7 @@ describe("Antigravity background task helpers (#752)", () => {
           ];
           io.transcript(
             agyCompletionStep(9, "session/task-8"),
-            ...(reverseStarts ? starts.reverse() : starts),
+            ...(reverseStarts ? starts.toReversed() : starts),
             agyText(20, "The other command is still running."),
           );
           io.hooks('stop\t{"stepIdx":20}');

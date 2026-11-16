@@ -13,6 +13,8 @@ import {
   CodexModelOptions,
   CursorModelOptions,
   DevinModelOptions,
+  ClineModelOptions,
+  CommandCodeModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -95,6 +97,8 @@ export const ProviderKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "cline",
+  "commandCode",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -329,11 +333,29 @@ export const DevinModelSelection = Schema.Struct({
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
 
+export const ClineModelSelection = Schema.Struct({
+  provider: Schema.Literal("cline"),
+  instanceId: ProviderInstanceIdForDriver("cline"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(ClineModelOptions),
+});
+export type ClineModelSelection = typeof ClineModelSelection.Type;
+
+export const CommandCodeModelSelection = Schema.Struct({
+  provider: Schema.Literal("commandCode"),
+  instanceId: ProviderInstanceIdForDriver("commandCode"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(CommandCodeModelOptions),
+});
+export type CommandCodeModelSelection = typeof CommandCodeModelSelection.Type;
+
 const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
   DevinModelSelection,
+  ClineModelSelection,
+  CommandCodeModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
@@ -458,11 +480,23 @@ export const DevinProviderStartOptions = Schema.Struct({
   environment: Schema.optional(ProcessEnvRecord),
 });
 
+export const ClineProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
+});
+
+export const CommandCodeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   devin: Schema.optional(DevinProviderStartOptions),
+  cline: Schema.optional(ClineProviderStartOptions),
+  commandCode: Schema.optional(CommandCodeProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),

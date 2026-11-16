@@ -2442,7 +2442,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         offer({
           ...base(context, { includeTurn: false }),
           type: "thread.started",
-          payload: { ...(conversationId ? { providerThreadId: conversationId } : {}) },
+          payload: conversationId ? { providerThreadId: conversationId } : {},
         } satisfies ProviderRuntimeEvent);
         return session;
       });

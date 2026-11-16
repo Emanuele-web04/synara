@@ -119,7 +119,7 @@ export function WhatsNewPopoutCard({
           "border border-white/[0.08] bg-popover text-popover-foreground shadow-xl",
           "transition-[transform,box-shadow,border-color] duration-150",
           "hover:border-primary/40 hover:shadow-2xl hover:[transform:translateY(-1px)]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         )}
       >
         {/* Close button. `stopPropagation` so dismissing doesn't also fire
@@ -135,7 +135,7 @@ export function WhatsNewPopoutCard({
             "absolute end-2.5 top-2.5 z-10 inline-flex size-7 items-center justify-center rounded-full",
             "text-muted-foreground/80 transition-colors",
             "hover:bg-[var(--sidebar-accent)] hover:text-foreground",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
           <XIcon className="size-3.5" />

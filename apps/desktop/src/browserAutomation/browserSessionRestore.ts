@@ -159,7 +159,7 @@ export class BrowserSessionRestore {
       file = await open(this.snapshotPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
-      throw new Error("Browser session restoration is unavailable.");
+      throw new Error("Browser session restoration is unavailable.", { cause: error });
     }
     try {
       const stat = await file.stat();

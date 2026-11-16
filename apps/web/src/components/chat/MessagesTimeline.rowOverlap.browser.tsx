@@ -181,7 +181,7 @@ function deepestRowOverlap(): { overlapPx: number; pair: string } {
   const rows = [...document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]")]
     .map((row) => ({ row, rect: row.getBoundingClientRect() }))
     .filter(({ rect }) => rect.height > 0)
-    .sort((left, right) => left.rect.top - right.rect.top);
+    .toSorted((left, right) => left.rect.top - right.rect.top);
 
   let overlapPx = 0;
   let pair = "";

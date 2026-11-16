@@ -39,7 +39,7 @@ describe("host-authored Betterwright locators", () => {
   });
 
   it("treats quotes, escapes and JavaScript-looking selectors as data", () => {
-    const selector = '\"); globalThis.injected = true; //\\\n';
+    const selector = '"); globalThis.injected = true; //\\\n';
     const call = vi.fn();
     const context = { page: { locator: call }, injected: false };
     // Bypass input validation deliberately to exercise the code-generation boundary.

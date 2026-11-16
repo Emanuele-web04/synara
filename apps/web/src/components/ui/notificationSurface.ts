@@ -27,7 +27,7 @@ export const EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME = `w-full rounded-2xl ${NO
 export const NOTIFICATION_ICON_CLASS_NAME =
   "text-[var(--notification-icon-fg,var(--notification-fg))]/92";
 
-export type NotificationTone = "default" | "error";
+export type NotificationTone = "default" | "error" | "warning";
 
 // Error notifications keep the same card geometry and swap the neutral popover for
 // a light destructive wash. The copy deliberately keeps the theme foreground
@@ -35,6 +35,11 @@ export type NotificationTone = "default" | "error";
 // role color, which reads muddy against the tint; the icon carries the red instead.
 const ERROR_NOTIFICATION_TONE_CLASS_NAME =
   "border-[color-mix(in_srgb,var(--destructive)_16%,transparent)] bg-[color-mix(in_srgb,var(--destructive)_5%,var(--popover))] [--notification-icon-fg:var(--destructive)] dark:border-[color-mix(in_srgb,var(--destructive)_13%,transparent)] dark:bg-[color-mix(in_srgb,var(--destructive)_8%,var(--popover))]";
+
+// Warning notifications get the analogous amber wash so they read as a caution
+// callout instead of a flat neutral card.
+const WARNING_NOTIFICATION_TONE_CLASS_NAME =
+  "border-[color-mix(in_srgb,var(--warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--warning)_6%,var(--popover))] [--notification-icon-fg:var(--warning)] dark:border-[color-mix(in_srgb,var(--warning)_16%,transparent)] dark:bg-[color-mix(in_srgb,var(--warning)_9%,var(--popover))]";
 
 export function notificationSurfaceClassName(options: {
   compact: boolean;
@@ -50,5 +55,6 @@ export function notificationSurfaceClassName(options: {
     options.floating &&
       options.tone === "error" &&
       "[--app-overlay-surface:color-mix(in_srgb,var(--destructive)_5%,var(--popover))] dark:[--app-overlay-surface:color-mix(in_srgb,var(--destructive)_8%,var(--popover))]",
+    options.tone === "warning" && WARNING_NOTIFICATION_TONE_CLASS_NAME,
   );
 }

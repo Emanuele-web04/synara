@@ -48,7 +48,7 @@ try {
   for (let repeat = 0; repeat < (paired ? 3 : 1); repeat++)
     for (const mode of ["hidden", "visible"])
       for (const threads of paired ? [1, 5, 10] : [10]) {
-        for (const variant of repeat % 2 ? [...variants].reverse() : variants) {
+        for (const variant of repeat % 2 ? [...variants].toReversed() : variants) {
           activeVariant = variant;
           const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
           const page = await context.newPage();

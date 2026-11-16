@@ -161,6 +161,7 @@ export async function commitAfterRuntimeModePersistence(input: {
   currentRuntimeMode: RuntimeMode;
   nextRuntimeMode: RuntimeMode;
   persistRuntimeMode: (mode: RuntimeMode) => Promise<boolean>;
+  canCommit?: () => boolean;
   commit: () => void;
 }): Promise<boolean> {
   if (
@@ -169,6 +170,7 @@ export async function commitAfterRuntimeModePersistence(input: {
   ) {
     return false;
   }
+  if (input.canCommit?.() === false) return false;
   input.commit();
   return true;
 }

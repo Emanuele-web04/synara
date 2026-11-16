@@ -1054,8 +1054,8 @@ function mergeCursorModelOptions(
   override: CursorModelOptions | null | undefined,
 ): CursorModelOptions | undefined {
   const merged: CursorModelOptions = {
-    ...(base ?? {}),
-    ...(override ?? {}),
+    ...base,
+    ...override,
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -1095,7 +1095,7 @@ function withCursorFastModeDefault(
       cursorChoiceMatchesBase(choice, baseModel) &&
       parseCursorModelParameters(choice.slug).has("fast"),
   );
-  return exposesFastParameter ? { ...(options ?? {}), fastMode: false } : options;
+  return exposesFastParameter ? { ...options, fastMode: false } : options;
 }
 
 function cursorModelParametersEqualExceptFast(left: string, right: string): boolean {

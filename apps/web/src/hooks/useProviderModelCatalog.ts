@@ -286,6 +286,8 @@ export function useProviderModelCatalog(input: {
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
   const ompModelDiscoveryEnabled = shouldDiscoverProvider("omp");
+  const clineModelDiscoveryEnabled = shouldDiscoverProvider("cline");
+  const commandCodeModelDiscoveryEnabled = shouldDiscoverProvider("commandCode");
 
   const queryOptionsForProvider = (provider: ProviderKind, enabled: boolean) => {
     const selectedInstanceId =
@@ -319,6 +321,8 @@ export function useProviderModelCatalog(input: {
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
     devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
     omp: queryOptionsForProvider("omp", ompModelDiscoveryEnabled),
+    cline: queryOptionsForProvider("cline", clineModelDiscoveryEnabled),
+    commandCode: queryOptionsForProvider("commandCode", commandCodeModelDiscoveryEnabled),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -330,6 +334,8 @@ export function useProviderModelCatalog(input: {
   const openCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.opencode);
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
   const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
+  const clineDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.cline);
+  const commandCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.commandCode);
 
   const [
     ,
@@ -455,6 +461,8 @@ export function useProviderModelCatalog(input: {
     devinModelDiscoveryEnabled &&
     !hasResolvedDevinModelDiscovery &&
     isInitialModelDiscoveryPending(devinDynamicModelsQuery);
+  const clineModelDiscoveryPending =
+    clineModelDiscoveryEnabled && isInitialModelDiscoveryPending(clineDynamicModelsQuery);
   const hasResolvedOmpModelDiscovery =
     ompDynamicModelsQuery.data?.source === "omp-cli" &&
     (ompDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -474,6 +482,9 @@ export function useProviderModelCatalog(input: {
     !isInitialModelDiscoveryPending(ompDynamicModelsQuery);
   const ompModelDiscoveryPending =
     ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && !ompDiscoveryFailed;
+  const commandCodeModelDiscoveryPending =
+    commandCodeModelDiscoveryEnabled &&
+    isInitialModelDiscoveryPending(commandCodeDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -516,6 +527,12 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.omp,
         modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
       ),
+      cline: getAppModelOptions("cline", customModelsByProvider.cline, modelHintByProvider?.cline),
+      commandCode: getAppModelOptions(
+        "commandCode",
+        customModelsByProvider.commandCode,
+        modelHintByProvider?.commandCode,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -535,6 +552,8 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
       omp: ompDynamicModelsQuery.data,
+      cline: clineDynamicModelsQuery.data,
+      commandCode: commandCodeDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -547,6 +566,7 @@ export function useProviderModelCatalog(input: {
       "pi",
       "devin",
       "omp",
+      "cline",
     ] as const) {
       const discovery = dynamicSources[provider];
       const dynamicModels = discovery?.models;
@@ -635,6 +655,7 @@ export function useProviderModelCatalog(input: {
     selectedProvider,
     selectedProviderInstanceId,
     settings,
+    clineDynamicModelsQuery.data,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -646,6 +667,7 @@ export function useProviderModelCatalog(input: {
       pi: piModelDiscoveryPending,
       devin: devinModelDiscoveryPending,
       omp: ompModelDiscoveryPending,
+      cline: clineModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -655,6 +677,8 @@ export function useProviderModelCatalog(input: {
       piModelDiscoveryPending,
       devinModelDiscoveryPending,
       ompModelDiscoveryPending,
+      clineModelDiscoveryPending,
+      commandCodeModelDiscoveryPending,
     ],
   );
 
@@ -667,11 +691,13 @@ export function useProviderModelCatalog(input: {
       cursor: cursorRuntimeModels,
       antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      commandCode: commandCodeDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
       omp: ompDynamicModelsQuery.data?.models ?? [],
+      cline: clineDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -684,6 +710,7 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
       ompDynamicModelsQuery.data?.models,
+      clineDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -739,6 +766,10 @@ export function useProviderModelCatalog(input: {
         devinDynamicModelsQuery.data?.error,
         devinDynamicModelsQuery.error,
       ),
+      cline: modelDiscoveryError(
+        clineDynamicModelsQuery.data?.error,
+        clineDynamicModelsQuery.error,
+      ),
       antigravity: modelDiscoveryError(
         antigravityModelsQuery.data?.error,
         antigravityModelsQuery.error,
@@ -763,7 +794,9 @@ export function useProviderModelCatalog(input: {
       cursorDynamicModelsQuery.data?.error,
       cursorDynamicModelsQuery.error,
       devinDynamicModelsQuery.data?.error,
+      clineDynamicModelsQuery.data?.error,
       devinDynamicModelsQuery.error,
+      clineDynamicModelsQuery.error,
       droidDynamicModelsQuery.data?.error,
       droidDynamicModelsQuery.error,
       grokDynamicModelsQuery.data?.error,
@@ -798,7 +831,11 @@ export function useProviderModelCatalog(input: {
                     ? piDynamicModelsQuery
                     : selectedProvider === "omp"
                       ? ompDynamicModelsQuery
-                      : devinDynamicModelsQuery;
+                      : selectedProvider === "cline"
+                        ? clineDynamicModelsQuery
+                        : selectedProvider === "commandCode"
+                          ? commandCodeDynamicModelsQuery
+                          : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

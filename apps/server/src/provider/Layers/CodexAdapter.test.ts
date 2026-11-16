@@ -701,7 +701,7 @@ turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
           "",
           "<attached_files>",
           "The user attached the following file(s), saved on disk. Read/extract them with your tools as needed; do not assume their contents.",
-          `- \"notes.txt\" - text/plain - 5 B - ${filePath}`,
+          `- "notes.txt" - text/plain - 5 B - ${filePath}`,
           "</attached_files>",
         ].join("\n"),
         skills: [{ name: "check-code", path: "/skills/check-code/SKILL.md" }],

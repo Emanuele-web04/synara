@@ -19,8 +19,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { arrayMove, rectSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -53,6 +52,7 @@ import {
 } from "~/providerUpdates";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
+  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
@@ -428,71 +428,83 @@ export function ProvidersSettingsPanel({
             </div>
           }
         >
-          <SettingsCard>
-            {enabledProviderOptions.length > 0 ? (
+          {enabledProviderOptions.length > 0 ? (
+            <>
+              <p className="mb-2 text-ui-sm text-muted-foreground">
+                {t("settings:providers_agentsDragHint")}
+              </p>
               <DndContext
                 sensors={providerVisibilitySensors}
                 collisionDetection={closestCenter}
-                modifiers={[restrictToVerticalAxis]}
                 onDragEnd={handleProviderOrderDragEnd}
               >
                 <SortableContext
                   items={enabledProviderOptions.map((option) => option.provider)}
-                  strategy={verticalListSortingStrategy}
+                  strategy={rectSortingStrategy}
                 >
-                  {enabledProviderOptions.map((option) => (
-                    <ProviderAgentRow
-                      key={option.provider}
-                      option={option}
-                      config={providerInstallSettingsByProvider.get(option.provider)}
-                      open={openInstallProviders[option.provider] ?? false}
-                      settings={settings}
-                      hiddenProviderSet={hiddenProviderSet}
-                      serverSettings={providerUpdateServerSettings}
-                      setupStatus={providerSetupStatusByProvider.get(option.provider)}
-                      providerStatus={providerStatusByProvider.get(option.provider)}
-                      statusReconciled={providerStatusesReconciled}
-                      enablementDisabled={
-                        !serverSettingsQuery.data || providerEnablementMutationPending
-                      }
-                      updatingProviders={updatingProviders}
-                      onOpenChange={(open) =>
-                        setOpenInstallProviders((existing) => ({
-                          ...existing,
-                          [option.provider]: open,
-                        }))
-                      }
-                      onDisable={() =>
-                        void updateProviderEnablement(
-                          setProviderListMembership(
-                            settings.disabledProviders,
-                            option.provider,
-                            true,
-                          ),
-                        )
-                      }
-                      onHiddenChange={(hidden) =>
-                        updateSettings({
-                          hiddenProviders: setProviderListMembership(
-                            settings.hiddenProviders,
-                            option.provider,
-                            hidden,
-                          ),
-                        })
-                      }
-                      onUpdate={(provider) => void runProviderUpdate(provider)}
-                      onManageAccounts={onManageAccounts}
-                      updateSettings={updateSettings}
-                    />
-                  ))}
+                  <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
+                    {enabledProviderOptions.map((option, index) => (
+                      <ProviderAgentRow
+                        key={option.provider}
+                        index={index}
+                        className={cn(
+                          SETTINGS_CARD_CLASS_NAME,
+                          "h-full",
+                          openInstallProviders[option.provider] && "sm:col-span-2",
+                        )}
+                        option={option}
+                        config={providerInstallSettingsByProvider.get(option.provider)}
+                        open={openInstallProviders[option.provider] ?? false}
+                        settings={settings}
+                        hiddenProviderSet={hiddenProviderSet}
+                        serverSettings={providerUpdateServerSettings}
+                        setupStatus={providerSetupStatusByProvider.get(option.provider)}
+                        providerStatus={providerStatusByProvider.get(option.provider)}
+                        statusReconciled={providerStatusesReconciled}
+                        enablementDisabled={
+                          !serverSettingsQuery.data || providerEnablementMutationPending
+                        }
+                        updatingProviders={updatingProviders}
+                        onOpenChange={(open) =>
+                          setOpenInstallProviders((existing) => ({
+                            ...existing,
+                            [option.provider]: open,
+                          }))
+                        }
+                        onDisable={() =>
+                          void updateProviderEnablement(
+                            setProviderListMembership(
+                              settings.disabledProviders,
+                              option.provider,
+                              true,
+                            ),
+                          )
+                        }
+                        onHiddenChange={(hidden) =>
+                          updateSettings({
+                            hiddenProviders: setProviderListMembership(
+                              settings.hiddenProviders,
+                              option.provider,
+                              hidden,
+                            ),
+                          })
+                        }
+                        onUpdate={(provider) => void runProviderUpdate(provider)}
+                        onManageAccounts={onManageAccounts}
+                        updateSettings={updateSettings}
+                      />
+                    ))}
+                  </div>
                 </SortableContext>
               </DndContext>
-            ) : (
+            </>
+          ) : (
+            <SettingsCard>
               <p className={cn(SETTINGS_CARD_ROW_CLASS_NAME, "text-ui text-muted-foreground")}>
                 {t("settings:noProvidersEnabledOpenDisabledProvidersBelowToEnable")}
               </p>
-            )}
-          </SettingsCard>
+            </SettingsCard>
+          )}
           {disabledProviderOptions.length > 0 ? (
             <Collapsible open={disabledProvidersOpen} onOpenChange={setDisabledProvidersOpen}>
               <CollapsibleTrigger className="flex w-full items-center gap-2 px-2 py-2 text-left text-ui text-muted-foreground">

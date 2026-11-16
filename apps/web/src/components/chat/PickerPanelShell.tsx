@@ -131,6 +131,7 @@ export function PickerPanelShell(props: {
               type="search"
               unstyled={isPlain}
               placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
               value={query}
               onChange={(event) => onQueryChange?.(event.target.value)}
               onKeyDownCapture={

@@ -85,6 +85,9 @@ export function ProviderAgentRow(props: {
   onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
   onManageAccounts: (provider: ProviderKind) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  /** Extra classes merged onto the row's root element (e.g. tile chrome in the grid layout). */
+  className?: string;
+  index?: number;
 }) {
   const { t } = useTranslation();
 
@@ -148,6 +151,14 @@ export function ProviderAgentRow(props: {
     (props.setupStatus.status !== "ready" || props.setupStatus.authStatus !== "authenticated")
       ? props.setupStatus.message
       : null;
+  const setupStatusText = providerSetupStatusLabel(
+    {
+      status: props.setupStatus,
+      reconciled: props.statusReconciled,
+      disabled: false,
+    },
+    t,
+  );
 
   return (
     <div
@@ -158,6 +169,7 @@ export function ProviderAgentRow(props: {
         SETTINGS_CARD_ROW_CLASS_NAME,
         "relative",
         isDragging && "z-10 bg-background opacity-80 shadow-lg",
+        props.className,
       )}
     >
       <Collapsible open={props.open} onOpenChange={props.onOpenChange}>
@@ -166,7 +178,7 @@ export function ProviderAgentRow(props: {
             type="button"
             ref={setActivatorNodeRef}
             className={cn(
-              "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground active:cursor-grabbing",
+              "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
               ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
               SETTINGS_INSET_RADIUS_CLASS_NAME,
             )}
@@ -179,16 +191,9 @@ export function ProviderAgentRow(props: {
           <ProviderIcon provider={provider} className="size-4 shrink-0" />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
-            <div className="truncate text-ui-sm text-muted-foreground">
-              {providerSetupStatusLabel(
-                {
-                  status: props.setupStatus,
-                  reconciled: props.statusReconciled,
-                  disabled: false,
-                },
-                t,
-              )}
-              {providerUpdateLabel ? (
+            <div className="break-words text-ui-sm text-muted-foreground">
+              {props.open ? setupStatusText : setupStatusText?.split("·")[0]?.trim()}
+              {props.open && providerUpdateLabel ? (
                 <>
                   {" · "}
                   <span
@@ -229,6 +234,14 @@ export function ProviderAgentRow(props: {
             }
           />
         </div>
+        {props.index !== undefined && !props.open ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-2.5 end-3 text-ui-sm leading-none text-muted-foreground/70"
+          >
+            {props.index + 1}
+          </span>
+        ) : null}
 
         <CollapsiblePanel>
           <div className="mt-2.5 space-y-3 border-t border-border/70 pt-3">

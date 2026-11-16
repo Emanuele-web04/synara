@@ -75,7 +75,7 @@ export function AnnouncementSheetPopup(props: AnnouncementSheetContent) {
         <div className="flex flex-col px-7 pt-5 pb-6">
           <DialogHeader className="items-center gap-1.5 p-0 text-center">
             <DialogTitle className="text-[19px] leading-tight">{props.title}</DialogTitle>
-            <DialogDescription className="text-ui-lg leading-normal text-balance">
+            <DialogDescription className="text-ui-lg leading-normal text-balance text-foreground/80">
               {props.description}
             </DialogDescription>
           </DialogHeader>

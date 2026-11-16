@@ -172,7 +172,7 @@ async function measureScenario(input: {
     const memory = input.observeMemory();
     maxSampleRssBytes = Math.max(maxSampleRssBytes, memory.rss);
   }
-  const sorted = [...samplesMs].sort((left, right) => left - right);
+  const sorted = [...samplesMs].toSorted((left, right) => left - right);
   const p50Ms = percentile(sorted, 0.5);
   return {
     name: input.name,

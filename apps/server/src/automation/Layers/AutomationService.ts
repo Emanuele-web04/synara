@@ -2420,7 +2420,7 @@ export const AutomationServiceLive = Layer.effect(
       const policy = definition.notificationPolicy ?? "all";
       const unread = decision === "notify" && policy !== "failed-runs-only";
       return {
-        ...(run.result ?? {}),
+        ...run.result,
         outcome: run.result?.outcome ?? "unknown",
         summary:
           run.result?.summary ??

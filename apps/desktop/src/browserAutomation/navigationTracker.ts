@@ -251,7 +251,7 @@ class BrowserNavigationTracker {
           redirects.push(event.redirectUrl);
           if (redirects.length >= 20) break;
         }
-        const eventUrl = [...matching].reverse().find((event) => event.url)?.url;
+        const eventUrl = [...matching].toReversed().find((event) => event.url)?.url;
         return {
           url: eventUrl ?? this.mainFrameUrl ?? this.webContents.getURL(),
           state,

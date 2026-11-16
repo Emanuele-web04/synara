@@ -2259,7 +2259,7 @@ describe("ClaudeAdapterLive", () => {
           text: [
             "<attached_files>",
             "The user attached the following file(s), saved on disk. Read/extract them with your tools as needed; do not assume their contents.",
-            `- \"diagram.svg\" - image/svg+xml - 11 B - ${attachmentPath}`,
+            `- "diagram.svg" - image/svg+xml - 11 B - ${attachmentPath}`,
             "</attached_files>",
           ].join("\n"),
         },

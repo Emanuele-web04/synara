@@ -28,7 +28,7 @@ const mediaRoutes = walk(CONTENT_ROOT)
   .filter((file) => file.endsWith(".mdx"))
   .filter((file) => /<Docs(?:Image|Screenshot|Gallery|Video)\b/.test(readFileSync(file, "utf8")))
   .map(routeForFile)
-  .sort();
+  .toSorted();
 
 test.describe("documentation media", () => {
   test("has at least one production integration", () => {

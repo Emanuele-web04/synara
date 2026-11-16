@@ -298,7 +298,7 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
         !activePaths.has(value.entry.path) &&
         !seenDeletedPaths.has(value.entry.path),
     )
-    .sort((left, right) =>
+    .toSorted((left, right) =>
       (right.thread.archivedAt ?? "").localeCompare(left.thread.archivedAt ?? ""),
     )
     .filter(({ entry }) => {

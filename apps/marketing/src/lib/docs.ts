@@ -29,5 +29,5 @@ export function getDocumentationCatalog(): DocumentationCatalogEntry[] {
       url: page.url,
       lastModified: page.data.lastModified ?? null,
     }))
-    .sort((left, right) => left.url.localeCompare(right.url));
+    .toSorted((left, right) => left.url.localeCompare(right.url));
 }

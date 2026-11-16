@@ -59,7 +59,7 @@ export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
 
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 /** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
-export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
+export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground";
 
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
 

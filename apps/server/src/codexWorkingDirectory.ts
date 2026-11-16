@@ -19,7 +19,7 @@ export function assertCodexWorkingDirectoryExists(cwd: string): void {
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(formatMissingCodexWorkingDirectoryError(cwd));
+      throw new Error(formatMissingCodexWorkingDirectoryError(cwd), { cause: error });
     }
     throw error;
   }

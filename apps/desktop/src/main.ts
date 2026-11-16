@@ -5977,7 +5977,7 @@ function registerIpcHandlers(): void {
               ? error.message
               : "Browser session checkpoint failed.",
           );
-          throw new Error("Browser session checkpoint failed.");
+          throw new Error("Browser session checkpoint failed.", { cause: error });
         }
       },
     ),

@@ -128,4 +128,50 @@ describe("Claude runtime effort default", () => {
     expect(selection(modelOptionsForDispatch).effort).toBe("high");
     expect(selection({ effort: "medium" }).effort).toBe("medium");
   });
+
+  it("falls back to the bare model identifier when the upstream prefix is stale", () => {
+    const runtimeModels: ReadonlyArray<ProviderModelDescriptor> = [
+      {
+        slug: "opencode-go/muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+        supportedReasoningEfforts: [{ value: "high", label: "High" }],
+      },
+    ];
+
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "opencode/muse-spark-1.3-contributor",
+        runtimeModels,
+      }),
+    ).toBe(runtimeModels[0]);
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "muse-spark-1.3-contributor",
+        runtimeModels,
+      }),
+    ).toBe(runtimeModels[0]);
+  });
+
+  it("prefers exact matches over the identifier fallback", () => {
+    const zoned: ReadonlyArray<ProviderModelDescriptor> = [
+      {
+        slug: "opencode/muse-spark-1.3-contributor-free",
+        name: "Muse Spark 1.3 Free",
+      },
+      {
+        slug: "opencode-go/muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+      },
+    ];
+
+    expect(
+      resolveRuntimeModelDescriptor({
+        provider: "opencode",
+        model: "opencode/muse-spark-1.3-contributor-free",
+        runtimeModels: zoned,
+      }),
+    ).toBe(zoned[0]);
+  });
 });

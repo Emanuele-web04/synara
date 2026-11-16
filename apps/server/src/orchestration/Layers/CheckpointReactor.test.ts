@@ -92,6 +92,8 @@ import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
 import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
+import { ClineAdapter } from "../../provider/Services/ClineAdapter.ts";
+import { CommandCodeAdapter } from "../../provider/Services/CommandCodeAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
@@ -334,6 +336,8 @@ function createRetainingPiProviderServiceLayer(options?: {
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
+        Layer.succeed(ClineAdapter, adapterFor("cline")),
+        Layer.succeed(CommandCodeAdapter, adapterFor("commandCode")),
         settingsLayer,
       ),
     ),
@@ -5275,12 +5279,12 @@ describe("CheckpointReactor", () => {
           checkpoint.status === "ready" &&
           checkpoint.files
             ?.map((file) => file.path)
-            .sort()
+            .toSorted()
             .join(",") === "early.txt,late.txt",
       ),
     );
 
-    expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       "early.txt",
       "late.txt",
     ]);

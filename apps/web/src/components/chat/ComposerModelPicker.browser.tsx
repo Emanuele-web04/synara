@@ -44,6 +44,8 @@ const EMPTY_BY_PROVIDER: Record<ProviderKind, never[]> = {
   omp: [],
   opencode: [],
   pi: [],
+  cline: [],
+  commandCode: [],
 };
 
 const MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<ProviderModelOption>> = {

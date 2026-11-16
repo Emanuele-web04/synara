@@ -177,11 +177,19 @@ export const DevinModelOptions = Schema.Struct({
 });
 export type DevinModelOptions = typeof DevinModelOptions.Type;
 
+export const ClineModelOptions = Schema.Struct({});
+export type ClineModelOptions = typeof ClineModelOptions.Type;
+
+export const CommandCodeModelOptions = Schema.Struct({});
+export type CommandCodeModelOptions = typeof CommandCodeModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   devin: Schema.optional(DevinModelOptions),
+  cline: Schema.optional(ClineModelOptions),
+  commandCode: Schema.optional(CommandCodeModelOptions),
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
@@ -352,11 +360,12 @@ function cursorCapabilities(input?: {
   const defaultEffort =
     input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
   return {
-    reasoningEffortLevels: efforts.map((value) => ({
-      value,
-      label: CURSOR_EFFORT_LABELS[value],
-      ...(value === defaultEffort ? { isDefault: true as const } : {}),
-    })),
+    reasoningEffortLevels: efforts.map((value) =>
+      Object.assign(
+        { value, label: CURSOR_EFFORT_LABELS[value] },
+        value === defaultEffort ? { isDefault: true as const } : {},
+      ),
+    ),
     supportsFastMode: input?.fast ?? false,
     supportsThinkingToggle: input?.thinking ?? false,
     promptInjectedEffortLevels: [],
@@ -1139,6 +1148,18 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   // Devin selects its model at process start via `devin acp --model`; the ACP
   // session does not expose a live model list. This list is a static fallback
   // for when the CLI is unreachable.
+  cline: [
+    { slug: "default", name: "Cline configured model", capabilities: EMPTY_MODEL_CAPABILITIES },
+  ],
+  // Command Code selects its model at process start (`cmd acp`); the ACP
+  // session may expose a live model list. Static fallback when unreachable.
+  commandCode: [
+    {
+      slug: "default",
+      name: "Command Code configured model",
+      capabilities: EMPTY_MODEL_CAPABILITIES,
+    },
+  ],
   devin: [
     {
       slug: "adaptive",
@@ -1182,6 +1203,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   devin: "adaptive",
+  cline: "default",
+  commandCode: "default",
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
@@ -1353,6 +1376,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {},
   pi: {},
+  cline: {},
+  commandCode: {},
   devin: {
     adaptive: "adaptive",
     auto: "adaptive",
@@ -1405,6 +1430,8 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   devin: "Devin",
+  cline: "Cline",
+  commandCode: "Command Code",
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",

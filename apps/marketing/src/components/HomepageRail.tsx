@@ -35,7 +35,7 @@ export default function HomepageRail() {
       (entries) => {
         const visible = entries
           .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => {
+          .toSorted((a, b) => {
             const distanceA = Math.abs(a.boundingClientRect.top - window.innerHeight * 0.3);
             const distanceB = Math.abs(b.boundingClientRect.top - window.innerHeight * 0.3);
             return distanceA - distanceB;

@@ -246,6 +246,58 @@ export function applyDroidAcpInteractionMode<E>(input: {
   );
 }
 
+export function flattenDroidConfigOptions(
+  options: Acp.SessionConfigSelectOptions,
+): ReadonlyArray<Acp.SessionConfigSelectOption> {
+  return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
+}
+
+function findDroidSelectConfig(
+  options: ReadonlyArray<Acp.SessionConfigOption>,
+  input: { readonly id: string; readonly category: string },
+): Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined {
+  return options.find(
+    (option): option is Extract<Acp.SessionConfigOption, { readonly type: "select" }> =>
+      option.type === "select" && (option.id === input.id || option.category === input.category),
+  );
+}
+
+function droidModelDescriptor(
+  model: Acp.SessionConfigSelectOption,
+  reasoning: Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined,
+): ProviderModelDescriptor {
+  const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
+  const optionDescriptors = reasoning
+    ? [
+        {
+          id: "reasoningEffort",
+          label: reasoning.name,
+          type: "select" as const,
+          options: efforts.map((effort) => ({
+            id: effort.value,
+            label: effort.name,
+            ...(effort.description ? { description: effort.description } : {}),
+          })),
+          ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
+        },
+      ]
+    : undefined;
+  return {
+    slug: model.value,
+    name: model.name,
+    ...(model.description ? { description: model.description } : {}),
+    supportedReasoningEfforts: efforts.map((effort) =>
+      Object.assign(
+        { value: effort.value, label: effort.name },
+        effort.description ? { description: effort.description } : {},
+      ),
+    ),
+    ...(optionDescriptors ? { optionDescriptors } : {}),
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+  };
+}
+
 /**
  * Reads the model catalog from ACP and reselects each model so Droid returns that
  * model's current reasoning choices. Discovery runs in a disposable session.

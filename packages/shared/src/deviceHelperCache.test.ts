@@ -56,7 +56,7 @@ describe("device helper cache key", () => {
       { name: "B.swift", contents: "y" },
     ];
     // Same tree, listed the other way round: readdir order must not shift the key.
-    expect(deviceHelperSourceRevision([...a].reverse())).toBe(deviceHelperSourceRevision(a));
+    expect(deviceHelperSourceRevision([...a].toReversed())).toBe(deviceHelperSourceRevision(a));
     // A rename with identical contents is still a different build.
     expect(
       deviceHelperSourceRevision([

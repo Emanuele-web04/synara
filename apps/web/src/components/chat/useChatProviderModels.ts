@@ -10,8 +10,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import {
+  findProviderStatus,
   findUsableProviderStatus,
+  isProviderUsable,
   providerStatusInstanceKey,
+  resolveAvailableProviderPreference,
   resolveUnsentComposerProvider,
 } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -225,6 +228,8 @@ export function useChatProviderModels({
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
       omp: resolveHint("omp"),
+      cline: resolveHint("cline"),
+      commandCode: resolveHint("commandCode"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -393,6 +398,19 @@ export function useChatProviderModels({
         : activeProject?.defaultModelSelection?.provider === selectedProvider
           ? activeProject.defaultModelSelection
           : null;
+  // A persisted selection pointing at a provider that can never be selected (CLI
+  // missing or unusable after statuses reconcile) would keep the bootstrap skeleton
+  // forever: the swap it waits on cannot land. Drop it so the picker renders the
+  // provider that was actually resolved.
+  const pickerPersistedModelSelection =
+    persistedComposerModelSelection !== null &&
+    persistedComposerModelSelection.provider !== selectedProvider &&
+    providerStatusesReconciled &&
+    !isProviderUsable(
+      findProviderStatus(localProviderStatuses, persistedComposerModelSelection.provider),
+    )
+      ? null
+      : persistedComposerModelSelection;
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
@@ -401,11 +419,13 @@ export function useChatProviderModels({
     selectedProvider === "opencode" ||
     selectedProvider === "pi" ||
     selectedProvider === "devin" ||
-    selectedProvider === "omp";
+    selectedProvider === "omp" ||
+    selectedProvider === "cline" ||
+    selectedProvider === "commandCode";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
-    persistedModelSelection: persistedComposerModelSelection,
+    persistedModelSelection: pickerPersistedModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
     requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,

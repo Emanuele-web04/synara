@@ -1485,7 +1485,6 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const {
-    hasThreadStarted,
     lockedProvider,
     boundProvider,
     boundProviderInstanceId,
@@ -2856,10 +2855,6 @@ export default function ChatView({
       }),
     [keybindings],
   );
-  const traitsPickerShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
-    [keybindings],
-  );
   const onToggleDiff = useCallback(() => {
     if (diffEnvironmentPending && !diffOpen) {
       return;
@@ -4065,7 +4060,6 @@ export default function ChatView({
     ) => {
       if (!activeThread) return;
       if (lockedProvider !== null && provider !== lockedProvider) {
-        scheduleComposerFocus();
         return;
       }
       const resolvedInstanceId =
@@ -4150,10 +4144,12 @@ export default function ChatView({
       boundProvider,
       customModelsByProvider,
       lockedProvider,
+      loadingModelProviders,
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
       persistRuntimeModeChange,
       providerStatuses,
+      promptRef,
       runtimeMode,
       runtimeModelsByProvider,
       runtimeModelsByProviderInstance,
@@ -4920,7 +4916,6 @@ export default function ChatView({
     (nextPrompt: string) => {
       const currentPrompt = promptRef.current;
       if (nextPrompt === currentPrompt) {
-        scheduleComposerFocus();
         return;
       }
       promptRef.current = nextPrompt;
@@ -4928,9 +4923,8 @@ export default function ChatView({
       const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
       setComposerCursor(nextCursor);
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      scheduleComposerFocus();
     },
-    [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
+    [promptRef, setComposerCursor, setComposerTrigger, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
   const composerTraitSelection = getComposerTraitSelection(

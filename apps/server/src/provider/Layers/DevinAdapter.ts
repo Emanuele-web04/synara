@@ -1382,20 +1382,19 @@ export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelD
   return MODEL_OPTIONS_BY_PROVIDER.devin.map((modelDefinition) => {
     const caps = getModelCapabilities(PROVIDER, modelDefinition.slug);
     const modelVariants = getDevinStaticModelVariants(modelDefinition.slug);
-    return {
-      slug: modelDefinition.slug,
-      name: modelDefinition.name,
-      optionDescriptors: getProviderOptionDescriptors({
-        provider: PROVIDER,
-        caps,
-      }),
-      supportsFastMode: caps.supportsFastMode,
-      supportsThinkingToggle: caps.supportsThinkingToggle,
-      contextWindowOptions: caps.contextWindowOptions,
-      supportedReasoningEfforts: caps.reasoningEffortLevels,
-      defaultReasoningEffort: caps.reasoningEffortLevels.find((o) => o.isDefault)?.value,
-      ...(modelVariants ? { modelVariants } : {}),
-    };
+    return Object.assign(
+      {
+        slug: modelDefinition.slug,
+        name: modelDefinition.name,
+        optionDescriptors: getProviderOptionDescriptors({ provider: PROVIDER, caps }),
+        supportsFastMode: caps.supportsFastMode,
+        supportsThinkingToggle: caps.supportsThinkingToggle,
+        contextWindowOptions: caps.contextWindowOptions,
+        supportedReasoningEfforts: caps.reasoningEffortLevels,
+        defaultReasoningEffort: caps.reasoningEffortLevels.find((o) => o.isDefault)?.value,
+      },
+      modelVariants ? { modelVariants } : {},
+    );
   });
 }
 

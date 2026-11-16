@@ -179,7 +179,7 @@ for (const file of files) {
   }
 }
 
-const urls = [...urlMap.keys()].sort();
+const urls = [...urlMap.keys()].toSorted();
 const results = new Map();
 let next = 0;
 

@@ -73,7 +73,7 @@ async function collectShipItCacheDiagnostics(bundleId: string): Promise<string[]
     const entries = await FS.promises.readdir(cacheDir, { withFileTypes: true });
     const stagedDirectories = entries
       .filter((entry) => entry.isDirectory() && entry.name.startsWith("update."))
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .toSorted((left, right) => left.name.localeCompare(right.name));
     if (stagedDirectories.length === 0) {
       lines.push("Staged update directories: none");
     } else {

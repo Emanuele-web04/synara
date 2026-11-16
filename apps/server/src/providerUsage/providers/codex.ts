@@ -222,7 +222,7 @@ async function persistRotatedCodexAuth(
   nowMs: number,
 ): Promise<CodexOAuthState> {
   const tokens: Record<string, unknown> = {
-    ...(asRecord(state.record.tokens) ?? {}),
+    ...asRecord(state.record.tokens),
     access_token: refreshed.accessToken,
   };
   if (refreshed.refreshToken) {
@@ -324,9 +324,10 @@ async function refreshCodexAuth(
       return { kind: "needs-auth" };
     }
     // Transport failure / 5xx / WAF page: nothing wrong with the stored credential per se.
-    log.warn("codex token refresh unavailable; continuing with the stored access token", {
-      ...(refreshed.status !== undefined ? { status: refreshed.status } : {}),
-    });
+    log.warn(
+      "codex token refresh unavailable; continuing with the stored access token",
+      refreshed.status !== undefined ? { status: refreshed.status } : {},
+    );
     return { kind: "unavailable" };
   });
 }

@@ -321,7 +321,7 @@ export const withDialogHandling = async <T>(
         capture.dialogs.push(dialog);
       }
     }
-    await Promise.allSettled([...capture.pending]);
+    await Promise.allSettled(capture.pending);
     monitor.captures.delete(capture);
     if (dialogShimInstalled && mayIssueCleanupCommands) await restoreDialogShim(runtime);
   }

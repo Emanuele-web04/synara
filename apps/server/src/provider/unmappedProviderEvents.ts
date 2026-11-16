@@ -465,7 +465,7 @@ function redactInspectedNamedValueObjects(value: string): string {
   const replacements = objectRanges
     .map(({ start, end }) => namedValueReplacement(value.slice(start, end), start))
     .filter((replacement): replacement is TextReplacement => replacement !== null)
-    .sort((left, right) => right.start - left.start);
+    .toSorted((left, right) => right.start - left.start);
   let redacted = value;
   for (const replacement of replacements) {
     redacted =

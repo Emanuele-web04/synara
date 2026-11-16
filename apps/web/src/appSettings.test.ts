@@ -18,7 +18,9 @@ import {
   applyLocalAppSettingsPatch,
   appSettingsPatchToServerSettingsPatch,
   buildInitialServerSettingsMigrationPatch,
+  CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
+  DEFAULT_TIMESTAMP_FORMAT,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   didProviderCommandDiscoverySettingsChange,
@@ -29,6 +31,7 @@ import {
   getCustomBinaryPathForProviderInstance,
   getDefaultNativeFontSmoothing,
   getCustomModelsByProvider,
+  MODEL_PROVIDER_SETTINGS,
   getCustomModelsForProviderInstance,
   getManageableProviderInstances,
   getProviderInstanceOptions,
@@ -400,12 +403,14 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          commandCode: [],
+          cline: [],
+          omp: [],
           antigravity: [],
           grok: [],
           droid: [],
           opencode: [],
           pi: [],
-          omp: [],
         },
         "galapagos-alpha",
       ),
@@ -421,16 +426,93 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          commandCode: [],
+          cline: [],
+          omp: [],
           antigravity: [],
           grok: [],
           droid: [],
           opencode: [],
           pi: [],
-          omp: [],
         },
         "",
       ),
     ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
+
+  it("resolves display names through the shared resolver", () => {
+    expect(
+      resolveAppModelSelection(
+        "codex",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          commandCode: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "GPT-5.3 Codex",
+      ),
+    ).toBe("gpt-5.3-codex");
+  });
+
+  it("resolves aliases through the shared resolver", () => {
+    expect(
+      resolveAppModelSelection(
+        "claudeAgent",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          commandCode: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "sonnet",
+      ),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("resolves transient selected custom models included in app model options", () => {
+    expect(
+      resolveAppModelSelection(
+        "codex",
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          devin: [],
+          commandCode: [],
+          cline: [],
+          omp: [],
+          antigravity: [],
+          grok: [],
+          droid: [],
+          opencode: [],
+          pi: [],
+        },
+        "custom/selected-model",
+      ),
+    ).toBe("custom/selected-model");
+  });
+});
+
+describe("timestamp format defaults", () => {
+  it("defaults timestamp format to locale", () => {
+    expect(DEFAULT_TIMESTAMP_FORMAT).toBe("locale");
   });
 });
 
@@ -654,6 +736,7 @@ describe("normalizeStoredAppSettings", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({
         claudeBinaryPath: "claude",
+        clineBinaryPath: "",
         codexBinaryPath: "codex",
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
@@ -667,6 +750,7 @@ describe("normalizeStoredAppSettings", () => {
 
     expect(normalized).toMatchObject({
       claudeBinaryPath: "",
+      clineBinaryPath: "",
       codexBinaryPath: "",
       cursorBinaryPath: "",
       antigravityBinaryPath: "",
@@ -738,6 +822,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "/usr/local/bin/devin",
         ompBinaryPath: "",
         ompAgentDir: "",
+        clineBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -783,6 +868,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        clineBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -791,6 +877,7 @@ describe("getProviderStartOptions", () => {
     expect(
       getProviderStartOptions({
         claudeBinaryPath: "",
+        clineBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
         codexAccounts: [
@@ -830,6 +917,7 @@ describe("getProviderStartOptions", () => {
       getProviderStartOptions(
         {
           claudeBinaryPath: "",
+          clineBinaryPath: "",
           codexBinaryPath: "",
           codexHomePath: "/Users/you/.codex",
           codexAccounts: [
@@ -869,6 +957,7 @@ describe("getProviderStartOptions", () => {
       getProviderStartOptions(
         {
           claudeBinaryPath: "",
+          clineBinaryPath: "",
           codexBinaryPath: "",
           codexHomePath: "/Users/you/.codex",
           codexAccounts: [
@@ -910,6 +999,7 @@ describe("getProviderStartOptions", () => {
       getProviderStartOptions(
         {
           claudeBinaryPath: "/usr/local/bin/claude",
+          clineBinaryPath: "",
           claudeHomePath: "/Users/base",
           codexBinaryPath: "",
           codexHomePath: "",
@@ -954,6 +1044,7 @@ describe("getProviderStartOptions", () => {
     const result = getProviderStartOptions(
       {
         claudeBinaryPath: "",
+        clineBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "/Users/default/.codex",
         codexAccounts: [
@@ -996,6 +1087,7 @@ describe("getProviderStartOptions", () => {
     const result = getProviderStartOptions(
       {
         claudeBinaryPath: "/opt/bin/claude",
+        clineBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
         codexAccounts: [],
@@ -1031,6 +1123,7 @@ describe("getProviderStartOptions", () => {
     expect(
       getProviderStartOptions({
         claudeBinaryPath: "",
+        clineBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
         codexAccounts: [
@@ -1097,6 +1190,7 @@ describe("getProviderStartOptions", () => {
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         devinBinaryPath: "devin",
+        clineBinaryPath: "",
         droidBinaryPath: "droid",
         openCodeBinaryPath: "opencode",
         openCodeExperimentalWebSockets: false,
@@ -1584,6 +1678,7 @@ describe("provider instance configuration", () => {
       getCustomBinaryPathForProviderInstance(
         {
           claudeBinaryPath: "/legacy/bin/claude",
+          clineBinaryPath: "",
           claudeHomePath: "",
           codexAccounts: [],
           codexBinaryPath: "",
@@ -1694,6 +1789,8 @@ describe("provider-indexed custom model settings", () => {
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
     customDevinModels: ["devin/custom-model"],
+    customClineModels: [],
+    customCommandCodeModels: [],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
     customOmpModels: [],
@@ -1718,6 +1815,23 @@ describe("provider-indexed custom model settings", () => {
         },
       },
     });
+  });
+
+  it("exports one provider config per provider", () => {
+    expect(MODEL_PROVIDER_SETTINGS.map((config) => config.provider)).toEqual([
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "devin",
+      "cline",
+      "commandCode",
+      "antigravity",
+      "grok",
+      "droid",
+      "opencode",
+      "pi",
+      "omp",
+    ]);
   });
 
   it("patches custom models for a selected provider instance", () => {
@@ -1753,6 +1867,12 @@ describe("provider-indexed custom model settings", () => {
         },
       },
     });
+  });
+
+  it("keeps Droid persistence compatible without advertising unsupported custom slugs", () => {
+    expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
+      "droid",
+    );
   });
 
   it("patches custom models for the default provider instance into providerInstances", () => {
@@ -1876,6 +1996,8 @@ describe("provider-indexed custom model settings", () => {
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
       devin: ["devin/custom-model"],
+      commandCode: [],
+      cline: [],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
@@ -2199,6 +2321,7 @@ describe("AppSettingsSchema", () => {
       decode(
         JSON.stringify({
           codexBinaryPath: "/usr/local/bin/codex",
+          clineBinaryPath: "",
           confirmThreadDelete: false,
         }),
       ),
@@ -2208,6 +2331,7 @@ describe("AppSettingsSchema", () => {
       chatFontSizePx: 13,
       terminalFontSizePx: 12,
       codexBinaryPath: "/usr/local/bin/codex",
+      clineBinaryPath: "",
       codexHomePath: "",
       grokBinaryPath: "",
       defaultThreadEnvMode: "local",

@@ -24,6 +24,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import { isElectron } from "~/env";
 import {
+  type BrowserNotificationPermissionState,
   buildNotificationSettingsSupportText,
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
@@ -57,6 +58,40 @@ import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useTranslation, t } from "~/i18n";
+
+interface BlockingToast {
+  readonly type: "warning" | "error";
+  readonly title: string;
+  readonly description: string;
+}
+
+export function desktopNotificationsUnavailableToast(
+  permission: BrowserNotificationPermissionState,
+): BlockingToast {
+  return {
+    type: permission === "denied" ? "warning" : "error",
+    title: "Desktop notifications unavailable",
+    description: buildNotificationSettingsSupportText(permission),
+  };
+}
+
+export function resolveSystemNotificationEnableResult(
+  permission: BrowserNotificationPermissionState,
+): { readonly enable: true } | { readonly enable: false; readonly toast: BlockingToast } {
+  if (permission === "granted") {
+    return { enable: true };
+  }
+  return { enable: false, toast: desktopNotificationsUnavailableToast(permission) };
+}
+
+export function resolveTestNotificationToast(
+  permission: BrowserNotificationPermissionState,
+): BlockingToast | null {
+  if (permission === "granted") {
+    return null;
+  }
+  return desktopNotificationsUnavailableToast(permission);
+}
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
   if (!state) return t("settings:availableInTheSynaraDesktopApp");
@@ -108,16 +143,23 @@ export function NotificationsSettingsPanel({
     const permission = await requestBrowserNotificationPermission();
     setBrowserNotificationPermission(permission);
 
-    if (permission === "granted") {
+    const result = resolveSystemNotificationEnableResult(permission);
+    if (result.enable) {
       updateSettings({ enableSystemTaskCompletionNotifications: true });
       return;
     }
 
     updateSettings({ enableSystemTaskCompletionNotifications: false });
+    toastManager.add(result.toast);
+  }
+
+  function showSampleActivityToast() {
+    if (!settings.enableTaskCompletionToasts) return;
     toastManager.add({
-      type: permission === "denied" ? "warning" : "error",
-      title: t("settings:desktopNotificationsUnavailable"),
-      description: buildNotificationSettingsSupportText(permission),
+      type: "success",
+      title: t("settings:chatFinished"),
+      description: t("settings:docsPolishDraftIsReadyToReview"),
+      data: { compactContextual: true },
     });
   }
 
@@ -136,6 +178,7 @@ export function NotificationsSettingsPanel({
           ? t("settings:yourOperatingSystemShouldShowTheNotification")
           : t("settings:desktopNotificationsAreNotSupportedOnThisDevice"),
       });
+      showSampleActivityToast();
       return;
     }
 
@@ -159,12 +202,27 @@ export function NotificationsSettingsPanel({
       title: t("settings:testNotificationSent"),
       description: t("settings:yourBrowserShouldShowTheNotification"),
     });
+    showSampleActivityToast();
   }
 
   if (!active) return null;
 
   return (
     <div className="space-y-6">
+      <SettingsCard divided={false} className="flex items-start gap-3 px-4 py-3.5">
+        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] text-muted-foreground">
+          <CentralIcon name="bell" className="size-4" />
+        </span>
+        <div className="min-w-0 space-y-1">
+          <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+            {t("settings:notifications_introTitle")}
+          </p>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+            {t("settings:notifications_introDescription")}
+          </p>
+        </div>
+      </SettingsCard>
+
       <SettingsSection title="settings:notifications_activityAlerts">
         <SettingsRow
           id="setting-activity-toasts"

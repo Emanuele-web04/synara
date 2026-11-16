@@ -7,8 +7,8 @@ import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@synara/contr
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import {
-  EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
   NOTIFICATION_ICON_CLASS_NAME,
+  notificationSurfaceClassName,
 } from "../ui/notificationSurface";
 import { CircleAlertIcon, TriangleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -43,11 +43,17 @@ export const ProviderHealthBanner = function ProviderHealthBanner({
   return (
     <ChatColumnBannerFrame>
       <Alert
-        className={cn(EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME, "pr-10")}
+        className={cn(
+          notificationSurfaceClassName({
+            compact: false,
+            tone: status.status === "error" ? "error" : "warning",
+          }),
+          "pr-10",
+        )}
         variant={status.status === "error" ? "error" : "warning"}
       >
         <Icon className={NOTIFICATION_ICON_CLASS_NAME} />
-        <AlertTitle className="font-normal text-[var(--notification-fg)]">{title}</AlertTitle>
+        <AlertTitle className="text-[var(--notification-fg)]">{title}</AlertTitle>
         <AlertDescription
           className="line-clamp-3 text-[var(--notification-fg)]/72"
           title={status.message ?? defaultMessage}

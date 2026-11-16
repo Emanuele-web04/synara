@@ -173,7 +173,7 @@ export async function submitFeedback(
     throw new Error(message || `Feedback could not be sent (${response.status}).`);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Feedback delivery timed out. Please try again.");
+      throw new Error("Feedback delivery timed out. Please try again.", { cause: error });
     }
     throw error;
   } finally {

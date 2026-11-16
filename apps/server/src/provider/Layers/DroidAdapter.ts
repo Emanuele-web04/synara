@@ -1611,7 +1611,7 @@ export function makeDroidAdapter(
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: { ...(model ? { model } : {}) },
+          payload: model ? { model } : {},
         });
 
         const runPrompt = Effect.suspend(() =>
@@ -2084,10 +2084,12 @@ export function makeDroidAdapter(
           setDroidDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
             expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
             result: {
-              commands: commands.map((command) => ({
-                name: command.name,
-                ...(command.description ? { description: command.description } : {}),
-              })),
+              commands: commands.map((command) =>
+                Object.assign(
+                  { name: command.name },
+                  command.description ? { description: command.description } : {},
+                ),
+              ),
               source: "droid-acp",
               cached: false,
             },
@@ -2213,10 +2215,12 @@ export function makeDroidAdapter(
             commands = yield* runtime.getAvailableCommands;
           }
           const result = {
-            commands: commands.map((command) => ({
-              name: command.name,
-              ...(command.description ? { description: command.description } : {}),
-            })),
+            commands: commands.map((command) =>
+              Object.assign(
+                { name: command.name },
+                command.description ? { description: command.description } : {},
+              ),
+            ),
             source: "droid-acp",
             cached: false,
           } satisfies ProviderListCommandsResult;
