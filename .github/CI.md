@@ -326,6 +326,7 @@ fail serially on macOS (`accountSession`, `hostConnectivity.integration`,
 caused by parallel execution. A shard's wall time is now bounded by its slowest
 file (`ProviderCommandReactor.test.ts`, about 150–167 s serially on hosted
 Linux), not by the sum of its files.
+
 ## November 16 audit: queueing and cold compiles
 
 An audit of the 150 most recent `ci.yml` runs (November 13–16; 82 successful
@@ -396,6 +397,39 @@ Cold cache                                51.6            65.0
 Warm cache                                 4.4             7.5
 Warm cache after editing vite.config.ts   45.2            57.2   (salt changed: full recompile)
 ```
+
+Hosted measurement: [run 43865513495](https://github.com/Emanuele-web04/synara/actions/runs/43865513495)
+ran this change twice on the same commit. Attempt 1 started with no archive
+(cold, and saved one 7–8 MB archive per lane); attempt 2 restored them (warm).
+Vitest's own figures, seconds:
+
+```text
+Lane              Import cold -> warm   Vitest total cold -> warm   Audit p50 (step)   Warm step
+chat-follow            86.2 ->   7.8         295.5 -> 192.8               303              195
+chat-projects         118.2 ->   7.9         354.7 -> 180.0               283              182
+chat-workflows         79.2 ->  12.1         318.9 -> 301.7               347              304
+components 1/3        101.3 ->  79.8         314.5 -> 211.1               335              213
+components 2/3        216.9 ->  98.9         359.9 -> 248.2               306              251
+components 3/3        212.9 ->  73.2         446.4 -> 263.1               385              265
+```
+
+The slowest browser test step fell from 385 s (audit p50; 449 s in the cold
+attempt) to 304 s, and the six steps together from 1,959 s (sum of audit
+medians) to 1,410 s. This is one warm run. `chat-workflows` barely moved: its
+import fell by 67 s, but its tests took 284 s against 236 s in the cold
+attempt, so it is now the slowest browser lane. The component lanes keep
+73–99 s of import because every test file still reloads the page and refetches
+its modules. The first ChatView test, which waits for the composer while the
+cold server compiles, took 20.1 s cold and 2.5 s warm; that test failed once in
+the audit with `Chat composer did not mount` after 20.5 s and passed on rerun.
+
+The server lanes finish at the same time as the browser lanes, so this change
+alone does not shorten a run. Projecting the 80 audited code runs onto the
+measured lanes, without queueing: 500 s at the median today, 496 s with only
+this change, 480 s with only two-or-more workers per server shard (#2164,
+measured there at 154 / 234 / 110 s per shard), and 369 s with both (−26%;
+p95 539 → 432 s). Runner time per run falls from 4,384 to 3,195 s (−27%), which
+also shortens the queue described above.
 
 With the cache warm, renaming `data-chat-scroll-container` in
 `MessagesTimeline.tsx` made `settles the scroll-to-bottom arrow at the measured
