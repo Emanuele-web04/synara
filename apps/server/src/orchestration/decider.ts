@@ -182,22 +182,23 @@ function validateAutoRuntimeMode(
 }
 
 /**
- * A same-thread provider handoff restarts the session on another provider, so
- * it shares Hand off's preconditions: no running turn, pending approval, or
- * pending question the new session could not settle.
+ * A same-thread provider handoff restarts the session on another provider or
+ * another account of the same one, so it shares Hand off's preconditions: no
+ * running turn, pending approval, or pending question the new session could
+ * not settle.
  */
 function validateProviderHandoff(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   thread: OrchestrationThread,
 ) {
   const target = command.modelSelection;
-  // A live session cannot switch between instances of one provider in place
-  // (the turn path rejects that), so those handoffs keep using a new thread.
   const detail =
     target === undefined
       ? "A provider handoff needs a target model selection."
-      : target.provider === thread.modelSelection.provider
-        ? `Thread '${command.threadId}' already runs on '${target.provider}'; hand off to a new thread instead.`
+      : target.provider === thread.modelSelection.provider &&
+          (target.instanceId ?? target.provider) ===
+            (thread.modelSelection.instanceId ?? thread.modelSelection.provider)
+        ? `Thread '${command.threadId}' already runs on '${target.instanceId ?? target.provider}'.`
         : thread.session?.status === "starting" || thread.session?.status === "running"
           ? `Thread '${command.threadId}' still has a running turn.`
           : thread.hasPendingApprovals || thread.hasPendingUserInput

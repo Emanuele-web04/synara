@@ -1,12 +1,13 @@
 // FILE: ProviderHandoffDivider.tsx
-// Purpose: Mark where a thread was handed off to another provider/model, in place.
+// Purpose: Mark where a thread was handed off to another provider, account or model, in place.
 // Layer: Chat transcript UI
 // Why: A handoff changes who answers from this point on, so it reads as a
 //      transcript boundary (like ForkSourceDivider) rather than a work row
 //      folded into the previous turn. Clicking it reveals the transferred context.
 
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
+import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
 import type { FastModeNotice } from "~/lib/fastModeState";
 import { ArrowRightIcon, CircleAlertIcon, HandoffIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -22,6 +23,8 @@ import { useTranslation } from "~/i18n";
 // provider glyph, model name, fast-mode bolt, then the effort label.
 function HandoffEndpoint(props: {
   readonly selection: ProviderHandoffInfo["sourceModelSelection"];
+  /** Set when both ends share a provider: the account is what changed. */
+  readonly accountLabel?: string | undefined;
   readonly fastModeNotice?: FastModeNotice | null | undefined;
   readonly className?: string;
 }) {
@@ -30,6 +33,7 @@ function HandoffEndpoint(props: {
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", props.className)}>
       <ProviderIcon provider={props.selection.provider} className="size-3.5 shrink-0" />
+      {props.accountLabel ? <span className="shrink-0">{props.accountLabel}</span> : null}
       <span className="truncate">{summary?.modelLabel ?? props.selection.model}</span>
       {summary?.fastMode ? (
         <FastModeBadgeIcon notice={props.fastModeNotice} className="size-3 shrink-0 opacity-75" />
@@ -47,9 +51,23 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
   readonly info: ProviderHandoffInfo;
 }) {
   const { t } = useTranslation();
+  const { settings } = useAppSettings();
 
   const [open, setOpen] = useState(false);
   const failed = info.status === "failed";
+  const source = info.sourceModelSelection;
+  const target = info.targetModelSelection;
+  const switchesAccount =
+    source.provider === target.provider &&
+    (source.instanceId ?? source.provider) !== (target.instanceId ?? target.provider);
+  const accountLabelFor = useMemo(() => {
+    if (!switchesAccount) return () => undefined;
+    const accounts = getProviderInstanceOptions(settings);
+    return (selection: typeof source) =>
+      accounts.find(
+        (account) => account.instanceId === (selection.instanceId ?? selection.provider),
+      )?.label ?? selection.instanceId;
+  }, [settings, switchesAccount]);
 
   return (
     <div data-provider-handoff-divider="true" className="w-full py-3 font-system-ui">
@@ -73,12 +91,14 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
             {failed ? t("chat:handoffFailed") : t("chat:contextHandoff")}
           </span>
           <HandoffEndpoint
-            selection={info.sourceModelSelection}
+            selection={source}
+            accountLabel={accountLabelFor(source)}
             fastModeNotice={info.sourceFastModeNotice}
           />
           <ArrowRightIcon className="size-3 shrink-0 opacity-70" aria-hidden />
           <HandoffEndpoint
-            selection={info.targetModelSelection}
+            selection={target}
+            accountLabel={accountLabelFor(target)}
             fastModeNotice={info.targetFastModeNotice}
             className={failed ? "line-through" : "text-foreground/84"}
           />

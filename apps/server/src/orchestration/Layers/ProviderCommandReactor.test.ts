@@ -25805,6 +25805,81 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("hands a bound thread off to another account of its provider in place", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work",
+            enabled: true,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-account-handoff-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-account-handoff-1"),
+          role: "user",
+          text: "first turn on the default account",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-account-handoff"),
+        threadId,
+        modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
+        providerHandoff: true,
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.handoff",
+        ),
+      ),
+    );
+    // The source account's native continuation is dropped before the new account starts.
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({ threadId });
+    expect(harness.startSession.mock.calls).toHaveLength(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "codex",
+      providerInstanceId: "codex_work",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerInstanceId).toBe("codex_work");
+    expect(thread?.modelSelection).toMatchObject({ provider: "codex", instanceId: "codex_work" });
+    const handoffActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.handoff",
+    );
+    expect(handoffActivity?.payload).toMatchObject({
+      sourceModelSelection: { provider: "codex", instanceId: "codex" },
+      targetModelSelection: { provider: "codex", instanceId: "codex_work" },
+    });
+    // The provider alone would read the same on both sides, so the target names its account.
+    expect(handoffActivity?.summary).toBe(
+      "Handed off from Codex (gpt-5-codex) to Codex · Work (gpt-5.4)",
+    );
+  });
+
   it("rejects provider changes after a thread is already bound to a session provider", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

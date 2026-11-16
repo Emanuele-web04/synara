@@ -2643,6 +2643,8 @@ const make = Effect.gen(function* () {
       readonly enableComputerControl?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
+      /** Same-thread Hand off, after it cleared the source's native continuation. */
+      readonly providerHandoff?: boolean;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -2763,10 +2765,14 @@ const make = Effect.gen(function* () {
     const preferredProvider: ProviderKind = providerRebindRequested
       ? thread.modelSelection.provider
       : (boundProvider ?? desiredProvider);
+    // Only Hand off may move a started thread to another account of its
+    // provider: it has already abandoned the source account's native
+    // continuation, so the new account starts fresh from the transcript.
     if (
       establishedProvider !== undefined &&
       requestedProviderInstanceChanged &&
-      !providerRebindRequested
+      !providerRebindRequested &&
+      options?.providerHandoff !== true
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
@@ -8499,8 +8505,31 @@ const make = Effect.gen(function* () {
       : undefined;
 
   type ProviderHandoffRequest = NonNullable<ReturnType<typeof readProviderHandoff>>;
-  const describeHandoffSelection = (selection: ModelSelection) =>
-    `${PROVIDER_DISPLAY_NAMES[selection.provider] ?? selection.provider} (${selection.model})`;
+  // "Claude (model)", or "Claude · Work (model)" when the handoff switches
+  // accounts of one provider: the provider alone would read the same on both
+  // sides. Mobile clients parse this summary, so keep its shape.
+  const describeHandoffEndpoints = Effect.fnUntraced(function* (input: ProviderHandoffRequest) {
+    const { sourceModelSelection: source, targetModelSelection: target } = input;
+    const settings =
+      source.provider === target.provider
+        ? yield* serverSettings.getSettings.pipe(Effect.catch(() => Effect.succeed(null)))
+        : null;
+    const describe = (selection: ModelSelection) => {
+      const providerName = PROVIDER_DISPLAY_NAMES[selection.provider] ?? selection.provider;
+      const accountName =
+        settings === null
+          ? undefined
+          : resolveProviderInstance(settings, {
+              instanceId: resolveModelSelectionInstanceId(selection),
+            })?.displayName;
+      const name =
+        accountName && !accountName.toLowerCase().includes(providerName.toLowerCase())
+          ? `${providerName} · ${accountName}`
+          : providerName;
+      return `${name} (${selection.model})`;
+    };
+    return { source: describe(source), target: describe(target) };
+  });
   const handoffPayload = (input: ProviderHandoffRequest) => ({
     sourceProvider: input.sourceModelSelection.provider,
     sourceModel: input.sourceModelSelection.model,
@@ -8554,6 +8583,7 @@ const make = Effect.gen(function* () {
         return changed ? Effect.succeed(false) : Effect.fail(error);
       }),
     );
+    const endpoints = yield* describeHandoffEndpoints(input);
     yield* persistHandoffOutcome({
       type: "thread.activity.append",
       commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.handoffKey}`),
@@ -8563,8 +8593,8 @@ const make = Effect.gen(function* () {
         tone: "error",
         kind: PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
         summary: restoredSource
-          ? `Handoff to ${describeHandoffSelection(input.targetModelSelection)} failed; the thread stays on ${describeHandoffSelection(input.sourceModelSelection)}.`
-          : `Handoff to ${describeHandoffSelection(input.targetModelSelection)} failed.`,
+          ? `Handoff to ${endpoints.target} failed; the thread stays on ${endpoints.source}.`
+          : `Handoff to ${endpoints.target} failed.`,
         payload: {
           ...handoffPayload(input),
           detail,
@@ -8593,8 +8623,9 @@ const make = Effect.gen(function* () {
     suppressContextBootstrapOnNextStartThreadIds.delete(input.threadId);
     const cachedProviderOptions = threadProviderOptions.get(input.threadId);
     // The source's native continuation (e.g. a Codex resume cursor) is
-    // protected: ProviderService refuses another provider on the thread until
-    // the handoff explicitly abandons it. This also stops the source runtime.
+    // protected: ProviderService refuses another provider or account on the
+    // thread until the handoff explicitly abandons it. This also stops the
+    // source runtime.
     let sourceContinuationReset = false;
     let blockedByBackgroundTasks = false;
     const startOutcome = yield* runBoundedProviderCall({
@@ -8637,6 +8668,7 @@ const make = Effect.gen(function* () {
         yield* ensureSessionForThread(input.threadId, input.occurredAt, {
           modelSelection: input.targetModelSelection,
           registerPriorTranscriptBootstrapOnFreshStart: true,
+          providerHandoff: true,
           ...(cachedProviderOptions !== undefined
             ? { providerOptions: cachedProviderOptions }
             : {}),
@@ -8660,6 +8692,7 @@ const make = Effect.gen(function* () {
     if (startFailure === null) {
       threadSessionModelSelections.set(input.threadId, input.targetModelSelection);
       providerHandoffContextThreadIds.add(input.threadId);
+      const endpoints = yield* describeHandoffEndpoints(input);
       // Same metadata a new-thread handoff carries, so surfaces that already
       // show "handed off from <provider>" (the sidebar avatar pair) show it here.
       // "completed": the context travels through the prior-transcript bootstrap.
@@ -8682,7 +8715,7 @@ const make = Effect.gen(function* () {
           id: EventId.makeUnsafe(`provider-handoff:${input.handoffKey}`),
           tone: "info",
           kind: PROVIDER_HANDOFF_ACTIVITY_KIND,
-          summary: `Handed off from ${describeHandoffSelection(input.sourceModelSelection)} to ${describeHandoffSelection(input.targetModelSelection)}`,
+          summary: `Handed off from ${endpoints.source} to ${endpoints.target}`,
           payload: {
             ...handoffPayload(input),
             contextText,
