@@ -17,7 +17,7 @@ import {
 } from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
-import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
+import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 
 import {
   AddPlusIcon,
@@ -259,11 +259,11 @@ export function ActivityThreadRow({
     ) : null;
   // The project line, as it always was: the project, then the worktree, the PR and the branch.
   const branch = resolveThreadDisplayBranch(thread);
-  const isWorktree =
-    resolveThreadEnvironmentMode({
-      envMode: thread.envMode,
-      worktreePath: thread.worktreePath,
-    }) === "worktree";
+  // A worktree is marked beside the title, as on the project list's thread rows.
+  const { worktreeBadgeLabel } = resolveThreadEnvironmentPresentation({
+    envMode: thread.envMode,
+    worktreePath: thread.worktreePath,
+  });
   // Remote rows show no PR; several PRs share one chip that lists them.
   const [rowPullRequest, ...otherPullRequests] = resolveActivityRowPullRequests(
     external ? null : pr,
@@ -271,14 +271,8 @@ export function ActivityThreadRow({
   );
   const footer = (
     <span data-slot="activity-thread-footer" className="flex min-w-0 items-center gap-1.5">
-      {/* A worktree takes the folder's place; no second glyph says so. */}
       <span className="inline-flex shrink-0">
-        {isWorktree ? (
-          <WorktreeIcon
-            className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-            aria-label={t("common:worktreeMode_worktree")}
-          />
-        ) : project?.cwd && !external ? (
+        {project?.cwd && !external ? (
           <ProjectSidebarIcon
             cwd={project.cwd}
             expanded={false}
@@ -416,6 +410,12 @@ export function ActivityThreadRow({
                 aria-hidden
               />
             </span>
+          ) : null}
+          {worktreeBadgeLabel ? (
+            <WorktreeIcon
+              className={sidebarGlyphClass("meta", "shrink-0 text-muted-foreground/55")}
+              aria-label={worktreeBadgeLabel}
+            />
           ) : null}
           {thread.snoozedUntil != null ? (
             <ClockIcon

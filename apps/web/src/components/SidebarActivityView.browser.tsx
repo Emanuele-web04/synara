@@ -909,7 +909,7 @@ describe("SidebarActivityView", () => {
     { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
     { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
   ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
-    "shows the $name project identity, or a worktree in its place, and the branch on the project line",
+    "keeps the $name project identity and the branch on the project line, and marks a worktree beside the title",
     async ({ name, appearance }) => {
       const thread = makeThread(0, { branch: "feature/sidebar-icons" });
       const worktree = makeThread(1, {
@@ -952,17 +952,23 @@ describe("SidebarActivityView", () => {
       });
       expect(footer().textContent).toContain("Project A");
       expect(footer().textContent).toContain("feature/sidebar-icons");
-      // In a worktree, its glyph takes the project glyph's place, and nothing else marks it.
+      // A worktree keeps the project's glyph on its project line and is marked once, beside
+      // the title, as on the project list's thread rows.
       const worktreeLine = footerOf(worktree);
-      const worktreeGlyphs = worktreeLine.querySelectorAll('[aria-label="Worktree"]');
+      expect(worktreeLine.querySelector('[aria-label="Worktree"]')).toBeNull();
+      expect(worktreeLine.innerHTML).toBe(
+        footer().innerHTML.replace("feature/sidebar-icons", "feature/worktree"),
+      );
+      const worktreeTitle = wrapperOf(worktree).querySelector<HTMLElement>(
+        '[data-slot="activity-thread-title"]',
+      )!;
+      const worktreeGlyphs = wrapperOf(worktree).querySelectorAll('[aria-label="Worktree"]');
       expect(worktreeGlyphs).toHaveLength(1);
-      expect(worktreeLine.firstElementChild!.contains(worktreeGlyphs[0]!)).toBe(true);
-      expect(worktreeLine.querySelector("img")).toBeNull();
-      if (appearance?.kind === "emoji") {
-        expect(worktreeLine.textContent).not.toContain(appearance.emoji);
-      }
-      expect(worktreeLine.textContent).toContain("Project A");
-      expect(worktreeLine.textContent).toContain("feature/worktree");
+      expect(worktreeGlyphs[0]!.parentElement).toBe(worktreeTitle.parentElement);
+      expect(worktreeGlyphs[0]!.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        worktreeTitle.getBoundingClientRect().right,
+      );
+      expect(wrapper().querySelector('[aria-label="Worktree"]')).toBeNull();
       // Nothing sits above the title; the project line sits below the reply.
       const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
       expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
