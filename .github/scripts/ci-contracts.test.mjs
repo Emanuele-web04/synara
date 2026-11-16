@@ -64,6 +64,27 @@ test("required check, independent static lane and full-history lineage stay inta
   assert.ok(workflow.includes("git tag --list 'v[0-9]*'"));
   assert.ok(!workflow.includes("continue-on-error"));
 });
+test("history readers clone blobless; jobs that never read history stay shallow", () => {
+  // Measured: a blobless full clone took 9-12 s per hosted job against 6 s
+  // shallow, and 10 s against 37 s for the full clone Migration Lineage used.
+  const jobs = workflow.split(/\n(?=  [a-z_-]+:\n)/);
+  const historyReaders = ["migration_lineage"];
+  let checked = 0;
+  for (const job of jobs) {
+    const name = job.trimStart().split(":")[0];
+    for (const rest of job.split("uses: actions/checkout@v6").slice(1)) {
+      const options = rest.split("\n      - ")[0];
+      checked++;
+      if (historyReaders.includes(name)) {
+        assert.ok(options.includes("fetch-depth: 0"), name);
+        assert.ok(options.includes("filter: blob:none"), name);
+      } else {
+        assert.ok(!options.includes("fetch-depth: 0"), `${name} needs no history`);
+      }
+    }
+  }
+  assert.ok(checked >= 8);
+});
 test("filtered scopes preserve lifecycle scripts and the scripts workspace links", () => {
   assert.ok(
     setup.includes(

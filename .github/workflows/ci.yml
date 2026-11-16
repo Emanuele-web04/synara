@@ -409,10 +409,12 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
+      # Reads history: a blobless full clone (commits and trees, blobs on demand).
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          filter: blob:none
 
       - name: Setup Node
         uses: actions/setup-node@v6
