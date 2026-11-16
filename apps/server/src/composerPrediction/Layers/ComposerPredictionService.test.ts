@@ -153,7 +153,7 @@ function makeHarness(
 }
 
 describe("ComposerPredictionServiceLive", () => {
-  it("predicts from the settled turn on the chat's own instance at its lowest effort", async () => {
+  it("predicts from the settled turn on the chat's own instance with its smaller model", async () => {
     const harness = makeHarness();
 
     await expect(harness.run(harness.generate)).resolves.toEqual({
@@ -169,7 +169,7 @@ describe("ComposerPredictionServiceLive", () => {
         modelSelection: expect.objectContaining({
           provider: "claudeAgent",
           instanceId: "claudeAgent",
-          model: "claude-opus-4-8",
+          model: "claude-sonnet-5-5",
           options: { effort: "low" },
         }),
       }),
