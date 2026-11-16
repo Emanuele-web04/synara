@@ -78,6 +78,31 @@ describe("classifyToolCallSummaryCategory", () => {
     );
   });
 
+  it("classifies ACP native read and search tool names", () => {
+    // Grok/Cursor report reads through rawInput._toolName (read_file, view) and
+    // searches as `search`/`find`; all must count in the collapsed summary.
+    expect(
+      classifyToolCallSummaryCategory(
+        workEntry({ id: "g1", itemType: "dynamic_tool_call", toolName: "read_file" }),
+      ),
+    ).toBe("read");
+    expect(
+      classifyToolCallSummaryCategory(
+        workEntry({ id: "g2", itemType: "dynamic_tool_call", toolName: "view" }),
+      ),
+    ).toBe("read");
+    expect(
+      classifyToolCallSummaryCategory(
+        workEntry({ id: "g3", itemType: "dynamic_tool_call", toolName: "search" }),
+      ),
+    ).toBe("search");
+    expect(
+      classifyToolCallSummaryCategory(
+        workEntry({ id: "g4", itemType: "web_search", toolName: "grep" }),
+      ),
+    ).toBe("search");
+  });
+
   it("classifies mutating commands, agent tasks, and MCP tools", () => {
     expect(classifyToolCallSummaryCategory(command("c1"))).toBe("command");
     expect(

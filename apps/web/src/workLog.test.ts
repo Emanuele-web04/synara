@@ -5298,6 +5298,36 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it.each(["_toolName", "toolName", "tool_name"] as const)(
+    "surfaces the ACP native tool name from rawInput.%s",
+    (nameKey) => {
+      // Grok/ACP read calls arrive with the native name only in rawInput —
+      // data.toolName is reserved for Computer tools — so reads stayed
+      // indistinguishable from generic tool calls.
+      const activities: OrchestrationThreadActivity[] = [
+        makeActivity({
+          id: "acp-read",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Read src/app.ts",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read src/app.ts",
+            data: {
+              toolCallId: "acp-read-call",
+              kind: "read",
+              rawInput: { [nameKey]: "read_file", path: "src/app.ts" },
+            },
+          },
+        }),
+      ];
+
+      expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+        { itemType: "dynamic_tool_call", toolName: "read_file" },
+      ]);
+    },
+  );
+
   it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
