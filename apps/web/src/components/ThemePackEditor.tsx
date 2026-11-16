@@ -305,7 +305,7 @@ export function ThemePackEditor({
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
             {systemUiFont ? (
-              <span className="max-w-44 text-end text-ui-sm break-words text-muted-foreground">
+              <span className="max-w-44 text-end text-ui-sm break-words text-muted-foreground sm:max-w-none sm:whitespace-nowrap">
                 {t("common:useSystemUIFontIsOnThemeFontsAre")}
               </span>
             ) : null}
