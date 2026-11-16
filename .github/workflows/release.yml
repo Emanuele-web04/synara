@@ -490,6 +490,7 @@ jobs:
     uses: ./.github/workflows/release-platform.yml
     with:
       runner: ${{ matrix.runner }}
+      label: ${{ matrix.label }}
       platform: ${{ matrix.platform }}
       arch: ${{ matrix.arch }}
       target: ${{ matrix.target }}

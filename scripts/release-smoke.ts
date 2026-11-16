@@ -242,6 +242,47 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   ) {
     throw new Error("Successful packaging and qualification must share one runner.");
   }
+  // Intel qualification starts beside packaging and waits in-job. The name it
+  // waits for is assembled from the caller's job name and the packaging job's
+  // name, and the wait must precede the artifact download it protects.
+  const qualifyIntel = (
+    parseYaml(platformWorkflow) as {
+      jobs: Record<string, { name?: string; needs?: unknown; "timeout-minutes"?: number }>;
+    }
+  ).jobs;
+  const packagingTimeout = qualifyIntel.build?.["timeout-minutes"];
+  const qualifyTimeout = qualifyIntel.qualify_intel?.["timeout-minutes"];
+  const qualifySteps = platformDefinition.jobs.qualify_intel?.steps ?? [];
+  const waitIndex = qualifySteps.findIndex((step) =>
+    step.run?.includes("node scripts/wait-for-release-job.ts"),
+  );
+  const downloadIndex = qualifySteps.findIndex((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  const waitStep = qualifySteps[waitIndex] as (Step & { env?: Record<string, string> }) | undefined;
+  const waitMinutes = Number(waitStep?.run?.match(/--timeout-minutes (\d+)/)?.[1]);
+  if (
+    qualifyIntel.qualify_intel?.needs !== undefined ||
+    qualifyIntel.build?.name !== "Package and qualify" ||
+    !buildJob.includes("    name: Build ${{ matrix.label }}\n") ||
+    !buildJob.includes("      label: ${{ matrix.label }}\n") ||
+    waitStep?.env?.PACKAGING_JOB !== "Build ${{ inputs.label }} / Package and qualify" ||
+    waitStep?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    waitStep?.run !==
+      `node scripts/wait-for-release-job.ts --job "$PACKAGING_JOB" --timeout-minutes ${waitMinutes}` ||
+    waitStep.if !== undefined ||
+    waitStep["continue-on-error"] !== undefined ||
+    waitIndex < 0 ||
+    downloadIndex < waitIndex ||
+    typeof packagingTimeout !== "number" ||
+    typeof qualifyTimeout !== "number" ||
+    !(waitMinutes > packagingTimeout) ||
+    !(qualifyTimeout > waitMinutes)
+  ) {
+    throw new Error(
+      "Intel qualification must wait for this attempt's packaging job before downloading its app.",
+    );
+  }
   const nativeSteps = Object.values(platformDefinition.jobs)[0]!.steps;
   const stepById = (id: string): Step => {
     const step = nativeSteps.find((step) => step.id === id);

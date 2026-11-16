@@ -6,6 +6,11 @@ on:
       runner:
         required: true
         type: string
+      # The caller's matrix label. The caller job is named `Build <label>`, so
+      # this workflow's jobs are listed as `Build <label> / <job name>`.
+      label:
+        required: true
+        type: string
       platform:
         required: true
         type: string
@@ -422,12 +427,17 @@ jobs:
   # Rosetta 2 ran the cross-built Intel app too slowly to qualify it (startup
   # took 135s, then over 180s). Launch it on real Intel hardware instead. The
   # caller's publishers await this job through the reusable workflow's result.
+  #
+  # This job starts with the packaging job instead of after it: the Intel
+  # runner's checkout and install (about 90 s) no longer extend the release.
+  # It then waits for this attempt's packaging job to succeed before it
+  # downloads that job's artifact, so it qualifies the same bytes as before and
+  # fails when packaging fails. The timeout covers the packaging job's own.
   qualify_intel:
     name: Qualify on Intel
-    needs: build
     if: inputs.platform == 'mac' && inputs.arch == 'x64'
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 100
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -449,6 +459,14 @@ jobs:
       # resolve the server's `effect` import.
       - name: Install verification dependencies
         run: bun install --frozen-lockfile --ignore-scripts --filter '@synara/scripts' --filter '@synara/cli'
+
+      # The run attempt's job list carries over jobs a partial rerun did not
+      # repeat, so a rerun waits for the job that produced this attempt's app.
+      - name: Wait for this attempt's packaged Intel app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGING_JOB: Build ${{ inputs.label }} / Package and qualify
+        run: node scripts/wait-for-release-job.ts --job "$PACKAGING_JOB" --timeout-minutes 85
 
       - name: Download the packaged Intel app
         uses: actions/download-artifact@v8
