@@ -155,7 +155,7 @@ function ConnectorShelf(props: { title: string; children: ReactNode; cards?: boo
     <section className="space-y-1">
       <h2 className="px-3 text-ui-lg font-medium text-foreground">{props.title}</h2>
       <div
-        className={`grid grid-cols-1 sm:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
+        className={`grid grid-cols-1 lg:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
       >
         {props.children}
       </div>
