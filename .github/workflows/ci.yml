@@ -201,8 +201,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # React Compiler only compiles the browser (client) environment, so the
+      # node unit lanes have nothing to reuse. Each browser lane loads a
+      # different module set, so each owns its own archive.
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
 
       - name: Cache Playwright browsers
         uses: actions/cache@v5
