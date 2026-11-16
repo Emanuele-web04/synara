@@ -44,10 +44,6 @@ export const COMPOSER_TOOLBAR_CHIP_TRIGGER_CLASS_NAME = `h-8 px-2 py-1 sm:h-7 sm
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";
-/** Scoped layouts for the compact provider list and wider, viewport-bound model list. */
-export const COMPOSER_PICKER_MODEL_PANEL_CLASS_NAME = "provider-model-menu";
-export const COMPOSER_PICKER_PROVIDER_PANEL_CLASS_NAME = "provider-picker-menu";
-
 /** Sticky search header inside frosted composer picker submenus. */
 export const COMPOSER_PICKER_SEARCH_HEADER_CLASS_NAME =
   "sticky z-20 shrink-0 border-b border-[color:color-mix(in_srgb,var(--foreground)_6%,transparent)] bg-transparent px-1.5 pb-1.5 pt-1";
