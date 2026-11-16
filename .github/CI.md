@@ -767,6 +767,31 @@ stapling, provenance verification and packaged startup on their native
 architectures. This was a combined run, so these timings do not isolate
 the effect of skipping per-file signatures.
 
+### Notarization archive compression
+
+Before uploading the app to Apple, `notarize-mac-app.ts` archives it with
+`ditto`. `app-notary-archive` took 40 s (arm64) and 37 s (x64) in the
+[v1.5.4 run](https://github.com/Emanuele-web04/synara/actions/runs/43640497531).
+Apple reads that archive once and it is then discarded, so it now uses
+`--zlibCompressionLevel 1`. Archiving the shipped 1.6.0 app (850 MB) locally:
+
+```text
+Level        Time     Archive size
+default      18.3 s     337 MB
+1             6.8 s     369 MB
+0             0.6 s     852 MB
+```
+
+Level 1 extracts to a bundle identical to the original (`diff -rq`). The
+update ZIP that ships to users keeps the default compression level.
+
+A signed build-only [run 43878279502](https://github.com/Emanuele-web04/synara/actions/runs/43878279502)
+tested level 1 together with other release changes. Archive creation took
+12.7 s on x64 and 12.6 s on arm64, compared with 37.1 s and 39.6 s in v1.5.4.
+Uploads took 23.1 s and 25.5 s, compared with 23.8 s and 22.4 s. Both macOS
+legs passed and the unrelated Windows startup smoke stalled, so the run
+did not measure a complete release.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
