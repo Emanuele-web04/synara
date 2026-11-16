@@ -109,6 +109,10 @@ const ServerProviderStatusWire = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  // False only when the provider's CLI was not found at all. An unavailable provider
+  // without it is installed but could not be used, which is a different thing to tell
+  // the user than "not installed".
+  installed: Schema.optional(Schema.Boolean),
   availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,
@@ -157,6 +161,10 @@ const ServerProviderStatusSource = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  // False only when the provider's CLI was not found at all. An unavailable provider
+  // without it is installed but could not be used, which is a different thing to tell
+  // the user than "not installed".
+  installed: Schema.optional(Schema.Boolean),
   availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,

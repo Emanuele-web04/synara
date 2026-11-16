@@ -642,6 +642,7 @@
   "chatsArchived": "{{value0}} chats archived.",
   "more": "{{value0}} more {{value1}}",
   "providerStatus": "{{value0}} provider status",
+  "providerHealthBanner_signInBody": "{{provider}} is installed but not signed in. Sign in here and Synara opens the login for you, no terminal needed.",
   "threadsCreated": "{{value0}} threads created",
   "moreToolCalls": "+{{value0}} more tool calls",
   "agentActivity2": "Agent activity ({{value0}})",
