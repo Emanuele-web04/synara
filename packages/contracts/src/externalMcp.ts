@@ -21,6 +21,10 @@ export const ExternalMcpCapability = Schema.Literals([
   "runtime:local",
   "runtime:full-access",
   "computer:control",
+  // Register an existing local folder as an ordinary Synara project.
+  "projects:create",
+  // Create Hubs and link allowed projects into them.
+  "hubs:manage",
 ]);
 export type ExternalMcpCapability = typeof ExternalMcpCapability.Type;
 
@@ -169,3 +173,25 @@ export const ExternalMcpWaitTaskInput = Schema.Struct({
   ),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpWaitTaskInput = typeof ExternalMcpWaitTaskInput.Type;
+
+// Requires "projects:create". Registers an existing local folder; idempotent per folder.
+export const ExternalMcpAddProjectInput = Schema.Struct({
+  workspacePath: TrimmedNonEmptyString,
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(240))),
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type ExternalMcpAddProjectInput = typeof ExternalMcpAddProjectInput.Type;
+
+// Requires "hubs:manage". Returns the existing Hub when one already has this title.
+export const ExternalMcpCreateHubInput = Schema.Struct({
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(240)),
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type ExternalMcpCreateHubInput = typeof ExternalMcpCreateHubInput.Type;
+
+// Requires "hubs:manage". Pass exactly one of linkedProjectId or workspacePath.
+export const ExternalMcpLinkHubProjectInput = Schema.Struct({
+  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH)),
+  hubProjectId: ProjectId,
+  linkedProjectId: Schema.optional(ProjectId),
+  workspacePath: Schema.optional(TrimmedNonEmptyString),
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type ExternalMcpLinkHubProjectInput = typeof ExternalMcpLinkHubProjectInput.Type;

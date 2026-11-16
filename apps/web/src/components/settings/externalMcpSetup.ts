@@ -214,5 +214,8 @@ export function describeExternalMcpPermissions(
   if (capabilities.includes("computer:control")) {
     descriptions.push(translate("settings:externalPermission_computer"));
   }
+  if (capabilities.includes("projects:create") || capabilities.includes("hubs:manage")) {
+    descriptions.push(translate("settings:externalPermission_workspaceManage"));
+  }
   return descriptions.join(" · ");
 }

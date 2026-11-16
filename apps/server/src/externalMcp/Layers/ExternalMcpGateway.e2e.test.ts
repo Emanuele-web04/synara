@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -124,10 +126,17 @@ describe("external MCP gateway stdio flow", () => {
     const threads = new Map<string, OrchestrationThreadShell>();
     const details = new Map<string, OrchestrationThread>();
     const dispatched: OrchestrationCommand[] = [];
+    const linkCalls: Array<{ readonly projectId: string; readonly linkedProjectId: string }> = [];
     const worktreeCreates: Array<{ readonly path?: string }> = [];
     const discoveryCalls: Array<{ readonly provider: string; readonly instanceId?: string }> = [];
 
     const snapshotLayer = Layer.succeed(ProjectionSnapshotQuery, {
+      getActiveProjectByWorkspaceRoot: (root: string) =>
+        Effect.succeed(
+          fs.realpathSync(root) === fs.realpathSync(workspaceRoot)
+            ? Option.some(project)
+            : Option.none(),
+        ),
       getShellSnapshot: () =>
         Effect.succeed({
           snapshotSequence: 1,
@@ -373,6 +382,18 @@ describe("external MCP gateway stdio flow", () => {
       Layer.provide(projectionTurnsLayer),
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
+      Layer.provide(
+        Layer.succeed(ProjectAgentService, {
+          linkProject: (input: {
+            readonly projectId: string;
+            readonly linkedProjectId: string;
+          }) => {
+            linkCalls.push(input);
+            return Effect.succeed({ linkedProjectIds: [input.linkedProjectId] });
+          },
+        } as never),
+      ),
+      Layer.provide(NodeServices.layer),
     );
     const testLayer = Layer.mergeAll(gatewayLayer, serviceLayer, SqlitePersistenceMemory);
 
@@ -787,6 +808,69 @@ describe("external MCP gateway stdio flow", () => {
         expect(JSON.stringify(successfulDespiteAuditFailure.body)).toContain(PROJECT_ID);
         expect(JSON.stringify(successfulDespiteAuditFailure.body)).not.toContain('"isError":true');
         yield* sql`DROP TRIGGER reject_external_mcp_gateway_audit_finish`;
+
+        // Workspace management: selected-scope integrations cannot create rows; an
+        // all-projects integration gets an idempotent add and a user-authority link.
+        const callTool = (credential: string, name: string, args: Record<string, unknown>) =>
+          gateway.handlePost({
+            authorizationHeader: `Bearer ${credential}`,
+            body: {
+              jsonrpc: "2.0",
+              id: name,
+              method: "tools/call",
+              params: { name, arguments: args },
+            },
+          });
+        const selectedManager = yield* service.createIntegration({
+          name: "Selected manager",
+          projectIds: [PROJECT_ID],
+          capabilities: ["projects:read", "projects:create", "hubs:manage"],
+          expiresInDays: 30,
+        });
+        const selectedCredential = "syn_mcp_v1_selected-manager-secret";
+        yield* service.pair(selectedManager.pairingCode, selectedCredential);
+        const selectedAdd = yield* callTool(selectedCredential, "synara_add_project", {
+          workspacePath: workspaceRoot,
+        });
+        expect(JSON.stringify(selectedAdd.body)).toContain("capability_denied");
+
+        const allManager = yield* service.createIntegration({
+          name: "All manager",
+          projectIds: [],
+          projectScope: "all",
+          capabilities: ["projects:read", "projects:create", "hubs:manage"],
+          expiresInDays: 30,
+        });
+        const allCredential = "syn_mcp_v1_all-manager-secret";
+        yield* service.pair(allManager.pairingCode, allCredential);
+        const dispatchedBeforeAdd = dispatched.length;
+        const existingAdd = toolPayload(
+          (yield* callTool(allCredential, "synara_add_project", { workspacePath: workspaceRoot }))
+            .body as Record<string, unknown>,
+        );
+        expect(existingAdd).toMatchObject({ projectId: PROJECT_ID, created: false });
+        expect(dispatched.length).toBe(dispatchedBeforeAdd);
+        const missingAdd = yield* callTool(allCredential, "synara_add_project", {
+          workspacePath: path.join(baseDir, "does-not-exist"),
+        });
+        expect(JSON.stringify(missingAdd.body)).toContain("does not exist");
+
+        const linked = toolPayload(
+          (yield* callTool(allCredential, "synara_link_hub_project", {
+            requestId: "link-1",
+            hubProjectId: PROJECT_ID,
+            workspacePath: workspaceRoot,
+          })).body as Record<string, unknown>,
+        );
+        expect(linked).toMatchObject({ linkedProjectIds: [PROJECT_ID] });
+        expect(linkCalls).toEqual([
+          expect.objectContaining({ projectId: PROJECT_ID, linkedProjectId: PROJECT_ID }),
+        ]);
+        const ambiguousLink = yield* callTool(allCredential, "synara_link_hub_project", {
+          requestId: "link-2",
+          hubProjectId: PROJECT_ID,
+        });
+        expect(JSON.stringify(ambiguousLink.body)).toContain("exactly one of");
       }).pipe(Effect.provide(testLayer)),
     );
   });

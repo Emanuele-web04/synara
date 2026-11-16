@@ -248,6 +248,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const externalMcpGatewayLayer = ExternalMcpGatewayLive.pipe(
     Layer.provideMerge(externalMcpServiceLayer),
+    Layer.provideMerge(projectAgentServiceLayer),
     Layer.provideMerge(ExternalMcpRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
