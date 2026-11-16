@@ -3,6 +3,8 @@
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -14,6 +16,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
+import { withTransformCache } from "./scripts/transform-cache";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -55,6 +58,23 @@ function centralIconPrunePlugin(): Plugin {
       },
     },
   };
+}
+
+// React Compiler output is a pure function of the module, the lockfile, the
+// Babel environment and this file, so test lanes may reuse it between runs
+// (.github/CI.md). Only Vitest opts in: a production build never reads or
+// writes this cache.
+const transformCacheDirectory =
+  process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
+
+function transformCacheSalt(): string {
+  const hash = createHash("sha256");
+  hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
+  for (const file of ["../../bun.lock", "vite.config.ts", "scripts/transform-cache.ts"]) {
+    hash.update(readFileSync(path.resolve(import.meta.dirname, file)));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 const gzip = promisify(zlib.gzip);
@@ -152,7 +172,12 @@ export default defineConfig({
       parserOpts: { plugins: ["typescript", "jsx"] },
       presets: [reactCompilerPreset()],
     }).then((plugin) => ({
-      ...plugin,
+      ...(transformCacheDirectory
+        ? withTransformCache(plugin, {
+            directory: path.resolve(import.meta.dirname, transformCacheDirectory),
+            salt: transformCacheSalt(),
+          })
+        : plugin),
       // Large chat modules make the compiler expensive on cold loads and every
       // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
       // Keep production builds and browser tests compiled, with an opt-in for

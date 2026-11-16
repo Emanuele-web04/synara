@@ -327,6 +327,116 @@ caused by parallel execution. A shard's wall time is now bounded by its slowest
 file (`ProviderCommandReactor.test.ts`, about 150–167 s serially on hosted
 Linux), not by the sum of its files.
 
+## November 16 audit: queueing and cold compiles
+
+An audit of the 150 most recent `ci.yml` runs (November 13–16; 82 successful
+first attempts, 81 of them code runs) split every job into waiting (created to
+started), setup (checkout, workspace, browser runtime) and running. Seconds:
+
+```text
+Lane                         Wait p50/p95   Setup p50/p95   Run p50/p95   Job p50/p95
+Unit Tests (server 1/3)         15 / 607       32 / 42       392 / 457     425 / 494
+Unit Tests (server 2/3)         25 / 583       31 / 41       378 / 474     414 / 510
+Unit Tests (server 3/3)          4 / 457       32 / 40       348 / 424     387 / 455
+Browser (components 3/3)        20 / 583       37 / 51       385 / 446     429 / 487
+Browser (components 1/3)        10 / 766       37 / 48       335 / 408     376 / 447
+Browser (components 2/3)        18 / 542       35 / 47       306 / 368     346 / 409
+Browser (chat-workflows)        12 / 728       36 / 49       347 / 438     394 / 478
+Browser (chat-follow)           37 / 618       36 / 46       303 / 347     347 / 386
+Browser (chat-projects)         22 / 523       35 / 51       283 / 350     326 / 396
+Unit Tests (web)                 5 / 499       31 / 41       192 / 249     228 / 280
+Desktop Build                    3 / 377       40 / 57       184 / 241     231 / 287
+Static Checks (typecheck)        8 / 297       31 / 50        91 / 125     129 / 162
+Windows Process Regression       4 / 143       53 / 66        50 /  64     117 / 137
+Unit Tests (core)                9 / 543       31 / 44        57 /  71      96 / 107
+Migration Lineage                4 / 527       40 / 48         1 /   7      43 /  53
+Static Checks (fast)             2 / 169       20 / 27        (parallel)    40 /  46
+Detect code changes              2 / 129        8 / 13         0 /   0      11 /  17
+```
+
+A code run took 635 s at the median and 1,586 s at p95. Without any waiting the
+same runs would have taken 491 s (p95 530 s): the docs filter plus the slowest
+lane. The difference is queueing, 133 s at the median and 1,098 s at p95. While a
+Linux job had been queued for more than 30 seconds, 55% of the samples had 19 or
+20 jobs running, the account's concurrent-job limit. One run needs 17 runners, so
+two overlapping runs already queue. Replaying the same runs through a 40-job
+limit removes the queue (p95 overhead 21 s); that needs a paid plan and is not
+part of this change.
+
+Setup is 31–40 s per Linux lane and is not the bottleneck. Test execution is
+about 90% of every slow lane, so the changes below shorten the time each lane
+holds a runner, which also shortens the queue behind it.
+
+### React Compiler transform cache
+
+Each browser lane starts a cold Vite server and compiles every module it loads
+with React Compiler. In [run 43857434725](https://github.com/Emanuele-web04/synara/actions/runs/43857434725)
+Vitest reported 81 s of import time for `chat-follow` (285 s total) and 146 s
+for `components 3/3` (343 s total).
+
+`apps/web/scripts/transform-cache.ts` stores each compiled module on disk. An
+entry is keyed by the exact module source, its id, the Vite environment, the
+module type and a salt that hashes `bun.lock`, `apps/web/vite.config.ts`, the
+cache code and the Babel environment. A changed module therefore never matches
+an older entry and is recompiled; a dependency or config change starts empty; a
+malformed entry is recomputed. Only Vitest enables it (`VITEST=true` and
+`SYNARA_WEB_TRANSFORM_CACHE_DIR`), so `vite build`, the release workflow and the
+nightly geometry lane never read or write it. React Compiler runs only in the
+browser (client) environment, so the node unit lanes have nothing to reuse.
+
+Each stable browser lane owns one archive. Pull requests restore main's newest
+archive for the same lockfile and config and save only when nothing matched;
+pushes to `main` save one entry per commit. A release bumps the lockfile, so the
+first run afterwards is cold.
+
+Local measurements (macOS, one ChatView test, `chat-follow` project):
+
+```text
+State                                  Import (s)   Whole command (s)
+Cold cache                                51.6            65.0
+Warm cache                                 4.4             7.5
+Warm cache after editing vite.config.ts   45.2            57.2   (salt changed: full recompile)
+```
+
+Hosted measurement: [run 43865513495](https://github.com/Emanuele-web04/synara/actions/runs/43865513495)
+ran this change twice on the same commit. Attempt 1 started with no archive
+(cold, and saved one 7–8 MB archive per lane); attempt 2 restored them (warm).
+Vitest's own figures, seconds:
+
+```text
+Lane              Import cold -> warm   Vitest total cold -> warm   Audit p50 (step)   Warm step
+chat-follow            86.2 ->   7.8         295.5 -> 192.8               303              195
+chat-projects         118.2 ->   7.9         354.7 -> 180.0               283              182
+chat-workflows         79.2 ->  12.1         318.9 -> 301.7               347              304
+components 1/3        101.3 ->  79.8         314.5 -> 211.1               335              213
+components 2/3        216.9 ->  98.9         359.9 -> 248.2               306              251
+components 3/3        212.9 ->  73.2         446.4 -> 263.1               385              265
+```
+
+The slowest browser test step fell from 385 s (audit p50; 449 s in the cold
+attempt) to 304 s, and the six steps together from 1,959 s (sum of audit
+medians) to 1,410 s. This is one warm run. `chat-workflows` barely moved: its
+import fell by 67 s, but its tests took 284 s against 236 s in the cold
+attempt, so it is now the slowest browser lane. The component lanes keep
+73–99 s of import because every test file still reloads the page and refetches
+its modules. The first ChatView test, which waits for the composer while the
+cold server compiles, took 20.1 s cold and 2.5 s warm; that test failed once in
+the audit with `Chat composer did not mount` after 20.5 s and passed on rerun.
+
+The server lanes finish at the same time as the browser lanes, so this change
+alone does not shorten a run. Projecting the 80 audited code runs onto the
+measured lanes, without queueing: 500 s at the median today, 496 s with only
+this change, 480 s with only two-or-more workers per server shard (#2164,
+measured there at 154 / 234 / 110 s per shard), and 369 s with both (−26%;
+p95 539 → 432 s). Runner time per run falls from 4,384 to 3,195 s (−27%), which
+also shortens the queue described above.
+
+With the cache warm, renaming `data-chat-scroll-container` in
+`MessagesTimeline.tsx` made `settles the scroll-to-bottom arrow at the measured
+transcript end` fail, and restoring the file made it pass again: a cached run
+still sees a real change. `apps/web/scripts/transform-cache.test.ts` covers the
+key, malformed entries and unchanged-module results.
+
 ## Release pipeline: November 2026
 
 An audit of 20 tag runs (`v1.0.6-remote.31` to `v1.5.2`, October 25 to

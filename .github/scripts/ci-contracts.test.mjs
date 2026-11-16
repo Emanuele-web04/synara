@@ -161,7 +161,64 @@ test("caches restore in every consumer and save from one owner per key", () => {
   const saving = Object.entries(steps)
     .filter(([, step]) => step.includes("uses: actions/cache@"))
     .map(([name]) => name);
-  assert.deepEqual(saving, ["Cache Turbo outputs (main)", "Cache Electron runtime"]);
+  assert.deepEqual(saving, [
+    "Cache Turbo outputs (main)",
+    "Cache web transform results (main or first branch run)",
+    "Cache Electron runtime",
+  ]);
+});
+test("web transform cache stays keyed by its inputs and out of production builds", () => {
+  const steps = Object.fromEntries(
+    setup
+      .split("\n    - name: ")
+      .slice(1)
+      .map((step) => [step.split("\n")[0], step]),
+  );
+  const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
+  const prefix =
+    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/transform-cache.ts') }}-";
+  const restore = steps["Restore web transform cache"];
+  const save = steps["Cache web transform results (main or first branch run)"];
+  assert.ok(restore.includes("uses: actions/cache/restore@v5"));
+  assert.ok(restore.includes(`inputs.web-transform-cache != '' && !(${main})`));
+  // A branch saves only when no archive matched; main saves one entry per commit.
+  assert.ok(
+    save.includes(
+      `inputs.web-transform-cache != '' && ((${main}) || steps.web-transform.outputs.cache-matched-key == '')`,
+    ),
+  );
+  for (const step of [restore, save]) {
+    assert.ok(step.includes(`key: ${prefix}\${{ github.sha }}`));
+    assert.ok(step.includes(`restore-keys: |\n          ${prefix}\n`));
+    assert.ok(step.includes("path: ${{ runner.temp }}/web-transform-cache"));
+  }
+  // The salt in vite.config.ts must cover every file the archive key hashes.
+  const viteConfig = read("../../apps/web/vite.config.ts");
+  for (const file of ["../../bun.lock", "vite.config.ts", "scripts/transform-cache.ts"])
+    assert.ok(viteConfig.includes(`"${file}"`), file);
+  assert.ok(
+    viteConfig.includes(
+      'process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined',
+    ),
+    "only Vitest may enable the transform cache",
+  );
+  // Only the stable browser lanes opt in: no build, release or nightly lane.
+  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 1);
+  const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
+  assert.ok(
+    browser.includes(
+      "web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}",
+    ),
+  );
+  for (const other of [
+    "../workflows/release.yml",
+    "../workflows/release-platform.yml",
+    "../workflows/ci-nightly.yml",
+  ]) {
+    const text = read(other);
+    assert.ok(!text.includes("web-transform-cache"), other);
+    assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
+  }
 });
 test("Windows install uses the runner-volume cache without changing other platforms", () => {
   const install = setup.match(

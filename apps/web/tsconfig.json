@@ -25,6 +25,7 @@
     "src",
     "perf",
     "scripts/production-assets*.ts",
+    "scripts/transform-cache*.ts",
     "scripts/settingsSearchRows.ts",
     "scripts/generate-settings-search-rows.ts",
     "vite.config.ts"
