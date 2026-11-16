@@ -224,6 +224,7 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     uses?: string;
     if?: string;
     run?: string;
+    env?: Record<string, string>;
     with?: Record<string, string>;
     "continue-on-error"?: boolean | string;
   };
@@ -241,6 +242,123 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     )
   ) {
     throw new Error("Successful packaging and qualification must share one runner.");
+  }
+  // Intel qualification starts beside packaging and waits in-job. The name it
+  // waits for is assembled from the caller's job name and the packaging job's
+  // name, and the wait must precede the artifact download it protects.
+  const qualifyIntel = (
+    parseYaml(platformWorkflow) as {
+      jobs: Record<string, { name?: string; needs?: unknown; "timeout-minutes"?: number }>;
+    }
+  ).jobs;
+  const packagingTimeout = qualifyIntel.build?.["timeout-minutes"];
+  const qualifyTimeout = qualifyIntel.qualify_intel?.["timeout-minutes"];
+  const qualifySteps = platformDefinition.jobs.qualify_intel?.steps ?? [];
+  const waitIndex = qualifySteps.findIndex((step) =>
+    step.run?.includes("node scripts/wait-for-release-job.ts"),
+  );
+  const downloadIndex = qualifySteps.findIndex((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  const waitStep = qualifySteps[waitIndex];
+  const waitMinutes = Number(waitStep?.run?.match(/--timeout-minutes (\d+)/)?.[1]);
+  if (
+    qualifyIntel.qualify_intel?.needs !== undefined ||
+    qualifyIntel.build?.name !== "Package and qualify" ||
+    !buildJob.includes("    name: Build ${{ matrix.label }}\n") ||
+    !buildJob.includes("      label: ${{ matrix.label }}\n") ||
+    waitStep?.env?.PACKAGING_JOB !== "Build ${{ inputs.label }} / Package and qualify" ||
+    waitStep?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    waitStep?.run !==
+      `node scripts/wait-for-release-job.ts --job "$PACKAGING_JOB" --timeout-minutes ${waitMinutes}` ||
+    waitStep.if !== undefined ||
+    waitStep["continue-on-error"] !== undefined ||
+    waitIndex < 0 ||
+    downloadIndex < waitIndex ||
+    typeof packagingTimeout !== "number" ||
+    typeof qualifyTimeout !== "number" ||
+    !(waitMinutes > packagingTimeout) ||
+    !(qualifyTimeout > waitMinutes)
+  ) {
+    throw new Error(
+      "Intel qualification must wait for this attempt's packaging job before downloading its app.",
+    );
+  }
+  // The publisher never selects Intel by name. An old receipt cannot qualify a
+  // replacement archive with a different ID after a packaging-only rerun.
+  const releaseSteps = (parseYaml(workflow) as { jobs: Record<string, { steps: Step[] }> }).jobs
+    .release!.steps;
+  const lookupIndex = qualifySteps.findIndex((step) => step.id === "intel_package");
+  const intelStartupIndex = qualifySteps.findIndex((step) =>
+    step.run?.includes("node scripts/verify-packaged-desktop-startup.ts"),
+  );
+  const recordIndex = qualifySteps.findIndex((step) => step.run?.includes("> desktop-mac-x64.id"));
+  const receiptUploadIndex = qualifySteps.findIndex(
+    (step) => step.with?.name === "intel-qualification-receipt",
+  );
+  const releaseStepIndex = (name: string) => releaseSteps.findIndex((step) => step.name === name);
+  const otherDownload = releaseStepIndex("Download non-Intel desktop artifacts");
+  const receiptDownload = releaseStepIndex("Download Intel qualification receipt");
+  const receiptRead = releaseStepIndex("Read the qualified Intel artifact ID");
+  const intelDownload = releaseStepIndex("Download the qualified Intel desktop artifact");
+  const mergeManifest = releaseStepIndex("Merge macOS updater manifests");
+  const intelLookup = qualifySteps[lookupIndex];
+  const record = qualifySteps[recordIndex];
+  const upload = qualifySteps[receiptUploadIndex];
+  const intelReleaseSteps = [receiptDownload, receiptRead, intelDownload].map(
+    (index) => releaseSteps[index],
+  );
+  if (
+    !(
+      waitIndex < lookupIndex &&
+      lookupIndex < downloadIndex &&
+      downloadIndex < intelStartupIndex &&
+      intelStartupIndex < recordIndex &&
+      recordIndex < receiptUploadIndex
+    ) ||
+    !intelLookup?.run?.includes("artifacts?name=desktop-mac-x64") ||
+    qualifySteps[downloadIndex]?.with?.["artifact-ids"] !==
+      "${{ steps.intel_package.outputs.id }}" ||
+    qualifySteps[downloadIndex]?.with?.name !== undefined ||
+    record?.env?.INTEL_ARTIFACT_ID !== "${{ steps.intel_package.outputs.id }}" ||
+    !upload?.uses?.startsWith("actions/upload-artifact@") ||
+    upload.with?.path !== "desktop-mac-x64.id" ||
+    upload.with?.["if-no-files-found"] !== "error" ||
+    [
+      intelLookup,
+      qualifySteps[downloadIndex],
+      qualifySteps[intelStartupIndex],
+      record,
+      upload,
+    ].some((step) => step?.if !== undefined || step?.["continue-on-error"] !== undefined) ||
+    !(
+      otherDownload >= 0 &&
+      otherDownload < receiptDownload &&
+      receiptDownload < receiptRead &&
+      receiptRead < intelDownload &&
+      intelDownload < mergeManifest
+    ) ||
+    [otherDownload, receiptDownload, intelDownload].some(
+      (index) => !releaseSteps[index]?.uses?.startsWith("actions/download-artifact@"),
+    ) ||
+    releaseSteps[otherDownload]?.with?.pattern !== "desktop-!(mac-x64)" ||
+    releaseSteps[receiptDownload]?.with?.name !== "intel-qualification-receipt" ||
+    releaseSteps[receiptDownload]?.with?.path !== "intel-qualification" ||
+    releaseSteps[receiptRead]?.id !== "intel_qualification" ||
+    !releaseSteps[receiptRead]?.run?.includes("<intel-qualification/desktop-mac-x64.id") ||
+    releaseSteps[intelDownload]?.with?.["artifact-ids"] !==
+      "${{ steps.intel_qualification.outputs.id }}" ||
+    releaseSteps[intelDownload]?.with?.name !== undefined ||
+    releaseSteps[intelDownload]?.with?.path !== "release-assets" ||
+    intelReleaseSteps.some(
+      (step) =>
+        step?.if !== "needs.preflight.outputs.desktop_flavor != 'remote'" ||
+        step["continue-on-error"] !== undefined,
+    )
+  ) {
+    throw new Error(
+      "Intel publication must consume only the artifact ID recorded after startup smoke.",
+    );
   }
   const nativeSteps = Object.values(platformDefinition.jobs)[0]!.steps;
   const stepById = (id: string): Step => {

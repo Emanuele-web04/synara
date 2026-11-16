@@ -23,11 +23,15 @@ version, release notes and lockfile are final.
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
-    Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
-    job then downloads it and runs the startup smoke on `macos-15-intel`:
-    under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
-    That job installs only `@synara/scripts` and `@synara/cli`, the workspaces
-    the smoke imports.
+    Mach-O in the app must carry the `x86_64` slice. A `qualify_intel` job
+    downloads it and runs the startup smoke on `macos-15-intel`: under
+    Rosetta 2 the app took 135 seconds to over 180 seconds to start. That job
+    installs only `@synara/scripts` and `@synara/cli`, the workspaces the smoke
+    imports. It starts with the packaging job, installs, and then waits for
+    that job of the same run attempt to succeed before downloading its
+    artifact (see [CI setup](../.github/CI.md#intel-qualification-starts-with-packaging)).
+    Publication downloads only the artifact ID recorded after Intel startup
+    passes. Rerun Intel qualification after replacing a packaged x64 artifact.
   - Linux `x64` AppImage
   - Linux `arm64` AppImage on `ubuntu-24.04-arm`. It runs on a native arm64 host
     because `node-pty` and the patched Cua driver compile for the host, and the

@@ -634,6 +634,46 @@ reliably faster on the hosted Intel runner. The install step took 36, 43 and
 68.40 s), and the whole job took 110, 154 and 204 s against 151 s. The
 package-count reduction from 1404 to 1129 is the only established effect.
 
+### Intel qualification starts with packaging
+
+On a Stable tag the Intel job ran after the macOS x64 packaging leg. Over the
+eight clean Stable or Beta runs among the last 30 tags, that leg finished 1,027 s
+after the tag at the median and `qualify_intel` 1,194 s after it, later than the
+arm64 leg (1,063 s), so it set when publication could start (1,197 s). Its 144 s
+were checkout 13 s, dependency install 68 s, artifact download 48 s and the
+startup smoke 44 s (medians of each step).
+
+`qualify_intel` no longer has `needs: build`. It starts when the packaging job
+starts, checks out and installs, and then runs
+`scripts/wait-for-release-job.ts`, which polls this run attempt's job list
+until `Build <label> / Package and qualify` has completed successfully. Only
+then does it download that job's artifact and run the same smoke. Checkout and
+install (about 90 s with job startup) now overlap packaging; the download and
+the smoke are unchanged and still follow it.
+
+The wait cannot pass on anything but that job's success. Any other conclusion
+(failure, cancelled, skipped, timed out) fails the Intel job, as does an
+ambiguous name or the 85-minute deadline, which exceeds the packaging job's own
+75-minute timeout. A job that is not listed yet and a failed or malformed
+listing are retried, never read as success. The listing is per run attempt and
+carries over jobs that a partial rerun did not repeat, so a rerun of only the
+Intel job proceeds at once and a rerun of both waits for the new packaging job.
+After its smoke passes, Intel records the exact artifact ID it downloaded.
+The publisher uses that ID for the Intel archive. A packaging-only rerun that
+replaces the archive makes the old receipt unusable. Rerun Intel qualification
+to publish the replacement.
+`release-smoke.ts` rejects a restored `needs`, a missing or optional wait, a
+download before the wait, a renamed packaging job and a wait shorter than the
+packaging timeout. `scripts/lib/release-job-wait.test.ts` covers the states.
+
+The helper was run against real runs: it returned at once for the v1.5.4
+packaging job, failed for the Windows packaging job of v1.6.0 attempt 1, and
+accepted the macOS x64 job that v1.6.0 attempt 2 carried over. The workflow
+wiring itself has not run on hosted runners: it needs one build-only release
+run (`publish_release=false`) before the next Stable tag. The Intel runner now
+idles for the length of the packaging leg; that is not billed on a public
+repository, and three macOS jobs run at once instead of two.
+
 ### Release checkout depth
 
 The packaging legs and `prepare_cua` fetched full history. Packaging reads only
