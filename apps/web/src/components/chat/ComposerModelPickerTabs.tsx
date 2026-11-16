@@ -4,6 +4,7 @@
 // Layer: Chat composer presentation
 // Depends on: provider icons/availability helpers and tooltip primitives.
 
+import { providerAccountNeedsSignIn } from "~/lib/providerSetupStatus";
 import {
   type ProviderInstanceId,
   type ProviderKind,
@@ -101,6 +102,8 @@ export type ComposerModelPickerProviderTab = {
   blocked: boolean;
   /** Shown in place of the model list when the account still has to be signed in or fixed. */
   setupMessage: string | null;
+  /** The setup still owed is a sign-in, which the picker can start in place. */
+  needsSignIn: boolean;
 };
 
 // Why an enabled account cannot run, phrased for its tab tooltip.
@@ -118,28 +121,40 @@ function resolveAccountTabState(input: {
   label: string;
   status: ServerProviderStatus | undefined;
   lockedToSibling: boolean;
-}): Pick<ComposerModelPickerProviderTab, "unavailableLabel" | "blocked" | "setupMessage"> {
+}): Pick<
+  ComposerModelPickerProviderTab,
+  "unavailableLabel" | "blocked" | "setupMessage" | "needsSignIn"
+> {
   const { label, status } = input;
   if (input.lockedToSibling) {
     return {
       unavailableLabel: `${label} is unavailable in this thread. Start a new thread to switch accounts.`,
       blocked: true,
       setupMessage: null,
+      needsSignIn: false,
     };
   }
   if (!resolveLiveProviderAvailability(status).disabled) {
-    return { unavailableLabel: null, blocked: false, setupMessage: null };
+    return { unavailableLabel: null, blocked: false, setupMessage: null, needsSignIn: false };
   }
   if (!status) {
-    return { unavailableLabel: `${label} — Checking.`, blocked: true, setupMessage: null };
+    return {
+      unavailableLabel: `${label} — Checking.`,
+      blocked: true,
+      setupMessage: null,
+      needsSignIn: false,
+    };
   }
+  const needsSignIn = providerAccountNeedsSignIn({ status, enabled: status.enabled !== false });
   return {
     unavailableLabel: describeUnavailableAccount(label, status),
     blocked: false,
-    setupMessage:
-      status.authStatus === "unauthenticated"
+    setupMessage: needsSignIn
+      ? "Sign in here and Synara opens the login for you, no terminal needed."
+      : status.authStatus === "unauthenticated"
         ? "Open provider setup to sign in to this account."
         : (status.message?.trim() ?? `${label} is unavailable right now.`),
+    needsSignIn,
   };
 }
 
@@ -206,6 +221,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         unavailableLabel: state.unavailableLabel,
         blocked: state.blocked,
         setupMessage: state.setupMessage,
+        needsSignIn: state.needsSignIn,
       };
     });
   });

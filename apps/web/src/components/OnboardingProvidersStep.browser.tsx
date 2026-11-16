@@ -22,17 +22,17 @@ vi.mock("../nativeApi", () => {
   };
   return { ensureNativeApi: () => api, readNativeApi: () => api };
 });
-vi.mock("../appSettings", () => {
+vi.mock("../appSettings", async (importOriginal) => {
   const appSettings = {
     settings: mocks.settings,
     updateSettingsAndWait: mocks.updateSettingsAndWait,
   };
-  return { useAppSettings: () => appSettings, getCustomBinaryPathForProvider: () => null };
+  return {
+    ...(await importOriginal<typeof import("../appSettings")>()),
+    useAppSettings: () => appSettings,
+    getCustomBinaryPathForProvider: () => null,
+  };
 });
-vi.mock("../workspacePathsStore", () => ({
-  useWorkspacePathsStore: (select: (state: { homeDir: null }) => unknown) =>
-    select({ homeDir: null }),
-}));
 
 const codexStatus: ServerProviderStatus = {
   provider: "codex",
@@ -163,4 +163,31 @@ it("keeps the default agent connected while re-enabling it alongside a custom in
   }
   await expect.element(disabled).toBeVisible();
   await expect.element(codexSwitch).not.toBeChecked();
+});
+
+it("switches on only the agents installed on this machine", async () => {
+  const claudeSignedOut: ServerProviderStatus = {
+    ...codexStatus,
+    provider: "claudeAgent",
+    instanceId: "claudeAgent",
+    driver: "claudeAgent",
+    authStatus: "unauthenticated",
+  };
+  const providers = [codexStatus, claudeSignedOut];
+  mocks.getConfig.mockResolvedValue({ providers });
+  mocks.refreshProviders.mockResolvedValue({ providers });
+  await renderStep();
+
+  await expect
+    .element(page.getByText("1 connected · 1 need sign-in · 8 not installed"))
+    .toBeVisible();
+  await expect.element(page.getByRole("switch", { name: "Codex", exact: true })).toBeChecked();
+  // Installed but signed out: on, with sign-in offered in place.
+  await expect.element(page.getByRole("switch", { name: "Claude", exact: true })).toBeChecked();
+  await expect.element(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  // Not on this machine: off, and not switchable until it is installed.
+  const cursorSwitch = page.getByRole("switch", { name: "Cursor", exact: true });
+  await expect.element(cursorSwitch).not.toBeChecked();
+  await expect.element(cursorSwitch).toBeDisabled();
+  expect(mocks.updateSettingsAndWait).not.toHaveBeenCalled();
 });

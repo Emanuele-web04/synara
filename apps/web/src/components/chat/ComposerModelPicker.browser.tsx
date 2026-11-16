@@ -857,7 +857,7 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
-  it("invites the user to set up an account that is not signed in", async () => {
+  it("offers sign-in in place for an account that is not signed in", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       providers: [
@@ -872,10 +872,12 @@ describe("ComposerModelPicker with several accounts", () => {
     });
     try {
       await page.getByRole("tab", { name: "Codex · Work", exact: true }).click();
+      // The picker signs the account in itself instead of sending the user to Settings.
+      await expect.element(page.getByText("Sign in to Codex · Work")).toBeVisible();
       await expect
-        .element(page.getByText("Open provider setup to sign in to this account."))
+        .element(page.getByRole("button", { name: "Sign in", exact: true }))
         .toBeVisible();
-      await expect.element(page.getByRole("button", { name: "Open provider setup" })).toBeVisible();
+      expect(page.getByRole("button", { name: "Open provider setup" }).elements()).toHaveLength(0);
       // Its catalog is not offered while it cannot run.
       expect(page.getByRole("menuitem", { name: /GPT-5 Work/u }).elements()).toHaveLength(0);
     } finally {
