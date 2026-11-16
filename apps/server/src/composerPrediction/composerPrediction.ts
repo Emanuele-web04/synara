@@ -3,7 +3,8 @@
 //          which conversation text the model reads, and which provider instance, model,
 //          and effort generate it.
 // Layer: Server domain logic (no IO)
-// Exports: isComposerPredictionTurnCurrent, buildComposerPredictionConversation,
+// Exports: resolveComposerPredictionTurnBlocker, isComposerPredictionTurnCurrent,
+//          buildComposerPredictionConversation,
 //          resolveComposerPredictionRouting, lowestSupportedEffort,
 //          resolveComposerPredictionHedgeDelayMs
 
@@ -36,24 +37,45 @@ type ComposerPredictionThread = Pick<
   "archivedAt" | "latestTurn" | "session" | "hasPendingApprovals" | "hasPendingUserInput"
 >;
 
+/** Why a turn cannot be predicted right now; a content-free code for logs. */
+export type ComposerPredictionTurnBlocker =
+  | "thread-missing"
+  | "thread-archived"
+  | "turn-not-latest"
+  | "turn-incomplete"
+  | "session-busy"
+  | "pending-approval"
+  | "pending-user-input";
+
 /**
- * True while `expectedTurnId` is still the thread's latest turn, that turn
- * completed with a final assistant reply, and nothing is running or waiting on
- * the user. Checked before and again after generation.
+ * Null while `expectedTurnId` is still the thread's latest turn, that turn completed with a
+ * final assistant reply, and nothing is running or waiting on the user; otherwise the first
+ * reason it is not. Checked before and again after generation.
  */
+export function resolveComposerPredictionTurnBlocker(
+  thread: ComposerPredictionThread | undefined,
+  expectedTurnId: TurnId,
+): ComposerPredictionTurnBlocker | null {
+  if (!thread) return "thread-missing";
+  if (thread.archivedAt != null) return "thread-archived";
+  const turn = thread.latestTurn;
+  if (!turn || turn.turnId !== expectedTurnId) return "turn-not-latest";
+  if (turn.state !== "completed" || turn.completedAt === null || turn.assistantMessageId === null) {
+    return "turn-incomplete";
+  }
+  const sessionStatus = thread.session?.status;
+  if (sessionStatus === "running" || sessionStatus === "starting") return "session-busy";
+  if (thread.hasPendingApprovals === true) return "pending-approval";
+  if (thread.hasPendingUserInput === true) return "pending-user-input";
+  return null;
+}
+
+/** True when {@link resolveComposerPredictionTurnBlocker} finds nothing in the way. */
 export function isComposerPredictionTurnCurrent(
   thread: ComposerPredictionThread | undefined,
   expectedTurnId: TurnId,
 ): boolean {
-  if (!thread || thread.archivedAt != null) return false;
-  const turn = thread.latestTurn;
-  if (!turn || turn.turnId !== expectedTurnId) return false;
-  if (turn.state !== "completed" || turn.completedAt === null || turn.assistantMessageId === null) {
-    return false;
-  }
-  const sessionStatus = thread.session?.status;
-  if (sessionStatus === "running" || sessionStatus === "starting") return false;
-  return thread.hasPendingApprovals !== true && thread.hasPendingUserInput !== true;
+  return resolveComposerPredictionTurnBlocker(thread, expectedTurnId) === null;
 }
 
 type ComposerPredictionMessage = Pick<OrchestrationMessage, "id" | "role" | "text" | "streaming">;

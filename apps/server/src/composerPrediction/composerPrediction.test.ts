@@ -18,6 +18,7 @@ import {
   COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS,
   resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
+  resolveComposerPredictionTurnBlocker,
 } from "./composerPrediction.ts";
 
 const TURN = TurnId.makeUnsafe("turn-2");
@@ -92,6 +93,32 @@ describe("isComposerPredictionTurnCurrent", () => {
     ["a pending user-input request", settledThread({ hasPendingUserInput: true })],
   ])("rejects %s", (_label, thread) => {
     expect(isComposerPredictionTurnCurrent(thread as never, TURN)).toBe(false);
+  });
+});
+
+describe("resolveComposerPredictionTurnBlocker", () => {
+  it("finds nothing in the way of the settled latest turn", () => {
+    expect(resolveComposerPredictionTurnBlocker(settledThread(), TURN)).toBeNull();
+  });
+
+  it.each([
+    ["thread-missing", undefined],
+    ["thread-archived", settledThread({ archivedAt: NOW })],
+    [
+      "turn-not-latest",
+      settledThread({
+        latestTurn: { ...settledThread().latestTurn, turnId: TurnId.makeUnsafe("turn-3") },
+      }),
+    ],
+    [
+      "turn-incomplete",
+      settledThread({ latestTurn: { ...settledThread().latestTurn, assistantMessageId: null } }),
+    ],
+    ["session-busy", settledThread({ session: session({ status: "starting" }) })],
+    ["pending-approval", settledThread({ hasPendingApprovals: true })],
+    ["pending-user-input", settledThread({ hasPendingUserInput: true })],
+  ])("names %s", (reason, thread) => {
+    expect(resolveComposerPredictionTurnBlocker(thread as never, TURN)).toBe(reason);
   });
 });
 

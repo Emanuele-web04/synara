@@ -66,6 +66,7 @@ import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useComposerPrediction } from "~/hooks/useComposerPrediction";
 import {
   canShowComposerPrediction,
+  resolveComposerPredictionInstanceId,
   resolveComposerPredictionTarget,
 } from "~/lib/composerPrediction";
 import { executionNamespace, readExecutionContext } from "~/lib/hosts/executionContext";
@@ -3705,7 +3706,8 @@ export default function ChatView({
         !activeThreadIsSidechat,
       hostId: executionNamespace() ?? null,
       threadId: activeThread?.id ?? null,
-      providerInstanceId: activeThreadProviderInstanceId,
+      // Resolved like the server routes it, so a chat without an instance id still has one.
+      providerInstanceId: resolveComposerPredictionInstanceId(activeThread),
       latestTurn: activeLatestTurn,
       latestTurnSettled,
       hasStreamingAssistant: hasStreamingAssistantText,
