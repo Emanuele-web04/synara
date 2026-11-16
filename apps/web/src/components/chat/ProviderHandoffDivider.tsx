@@ -15,6 +15,7 @@ import type { ProviderHandoffInfo } from "~/workLog";
 import { ProviderIcon } from "../ProviderIcon";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { FastModeBadgeIcon } from "./FastModeBadgeIcon";
+import { TranscriptDividerRule } from "./TranscriptDividerRule";
 import { ProviderHandoffDetails } from "./TimelineWorkEntryRow";
 import { useTranslation } from "~/i18n";
 
@@ -54,7 +55,7 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
   return (
     <div data-provider-handoff-divider="true" className="w-full py-3 font-system-ui">
       <div className="flex w-full items-center gap-4">
-        <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+        <TranscriptDividerRule />
         <button
           type="button"
           aria-expanded={open}
@@ -83,7 +84,7 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
             className={failed ? "line-through" : "text-foreground/84"}
           />
         </button>
-        <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+        <TranscriptDividerRule />
       </div>
       <DisclosureRegion open={open} contentClassName="pt-3">
         <ProviderHandoffDetails info={info} />

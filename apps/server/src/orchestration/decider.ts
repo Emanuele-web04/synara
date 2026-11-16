@@ -3760,16 +3760,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
       }
     }
     if (!thread || !("threadId" in command)) return events;
+    // Only a real change invalidates a wait or its source. Clients and server
+    // housekeeping resend current values (a worktree branch rename restates its
+    // path; every send restates the model), and treating those echoes as edits
+    // silently disarmed recovery for the running turn.
     const metadataChange =
       command.type === "thread.meta.update" &&
-      (command.modelSelection !== undefined ||
-        command.goal !== undefined ||
-        command.goalPaused !== undefined ||
+      ((command.modelSelection !== undefined &&
+        !isDeepStrictEqual(command.modelSelection, thread.modelSelection)) ||
+        (command.goal !== undefined && command.goal.trim() !== (thread.goal ?? "").trim()) ||
+        (command.goalPaused !== undefined &&
+          command.goalPaused !== (thread.goalPausedAt != null)) ||
         command.goalAchieved === true ||
         command.isSettled === true ||
-        command.worktreePath !== undefined ||
-        command.workingDirectory !== undefined ||
-        command.parentThreadId !== undefined);
+        (command.worktreePath !== undefined &&
+          command.worktreePath !== (thread.worktreePath ?? null)) ||
+        (command.workingDirectory !== undefined &&
+          command.workingDirectory !== (thread.workingDirectory ?? null)) ||
+        (command.parentThreadId !== undefined &&
+          command.parentThreadId !== (thread.parentThreadId ?? null)));
     const cancel =
       metadataChange ||
       command.type === "thread.turn.interrupt" ||

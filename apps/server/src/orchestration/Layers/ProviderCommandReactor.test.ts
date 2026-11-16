@@ -2044,8 +2044,9 @@ describe("ProviderCommandReactor", () => {
       await requestResume(harness, wait.id);
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
-      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
-        "verify whether pending operations already completed before repeating them",
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
+        "I hit my usage limit while you were working, but it has reset now. Please continue from where you left off. " +
+          "Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
       );
       expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
         id: wait.id,

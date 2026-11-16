@@ -760,6 +760,69 @@ describe("ProviderRuntimeIngestion", () => {
       ).toHaveLength(1);
     });
 
+    it("a provider-started turn after housekeeping echoes inherits the source and arms its refusal", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ autoResumeAfterUsageLimits: true });
+      const firstTurnId = await startLimitTurn(harness, "sent");
+      const before = (await harness.readProjectedThread())!;
+      // A worktree branch rename restates the current path; it is not a workspace change.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("limit-branch-rename-echo"),
+          threadId,
+          branch: "synara/renamed-branch",
+          worktreePath: before.worktreePath,
+          modelSelection: before.modelSelection,
+        }),
+      );
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource?.turnId).toBe(
+        firstTurnId,
+      );
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("limit-sent-completed"),
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        turnId: firstTurnId,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+        payload: { state: "completed" },
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId == null);
+      await harness.drain();
+      // A background task wakes the provider into a turn Synara never dispatched.
+      const wakeTurnId = asTurnId("limit-provider-wake-turn");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("limit-provider-wake-start"),
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        turnId: wakeTurnId,
+        createdAt: new Date().toISOString(),
+        payload: {},
+        providerRefs: {},
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === wakeTurnId);
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource).toMatchObject({
+        turnId: wakeTurnId,
+        bindingKey,
+      });
+      harness.emit(refusal(wakeTurnId, "provider-wake"));
+      await waitForThread(harness.engine, (thread) => thread.usageLimitRecovery != null);
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.usageLimitRecovery).toMatchObject({
+        turnId: wakeTurnId,
+        state: "waiting",
+        bindingKey,
+      });
+    });
+
     it("enabling after a turn began does not retroactively grant it auto-resume", async () => {
       const identity = vi
         .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")

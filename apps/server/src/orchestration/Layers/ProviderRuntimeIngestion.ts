@@ -3184,6 +3184,14 @@ const make = Effect.gen(function* () {
                 Effect.provideService(ServerSettingsService, recoverySettings.value),
                 Effect.provideService(ServerConfig, serverConfig),
                 Effect.timeoutOption("8 seconds"),
+                Effect.tap((result) =>
+                  Option.isNone(result)
+                    ? Effect.logWarning(
+                        "usage-limit recovery unavailable: provider account binding timed out",
+                        { threadId: thread.id, turnId: eventTurnId, provider: event.provider },
+                      )
+                    : Effect.void,
+                ),
                 Effect.map((result) => Option.getOrNull(result)),
                 Effect.catch(() => Effect.succeed(null)),
               );
