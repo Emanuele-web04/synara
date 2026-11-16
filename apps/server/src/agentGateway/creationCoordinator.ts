@@ -34,9 +34,10 @@ import type { OrchestrationEngineShape } from "../orchestration/Services/Orchest
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
 import { runWorktreeSetupScript } from "../worktreeSetup.ts";
-import type {
-  AgentGatewayOperationRecord,
-  AgentGatewayOperationRepositoryShape,
+import {
+  type AgentGatewayOperationRecord,
+  type AgentGatewayOperationRepositoryShape,
+  isTerminalAgentGatewayOperationStatus,
 } from "./Services/AgentGatewayOperationRepository.ts";
 import type {
   ExternalMcpRepositoryShape,
@@ -323,8 +324,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       while (
         operation !== null &&
-        operation.status !== "completed" &&
-        operation.status !== "failed" &&
+        !isTerminalAgentGatewayOperationStatus(operation.status) &&
         Date.now() < deadline
       ) {
         yield* assertAuthority();

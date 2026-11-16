@@ -7,13 +7,38 @@ import { resolveWorktreeHandoffWorkspaceMetadata } from "@synara/shared/worktree
 import { Data, Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-type HandoffPhase = "pending" | "git_applied" | "completed" | "uncertain";
+// One durable Git handoff, keyed by its command id.
+//
+//   pending ─recordGitHandoffResult─> git_applied ─completeGitHandoff─> completed
+//      │                                   ^ startup recovery replays the metadata, then completes
+//      ├─recoverGitHandoffOperations─> uncertain   (the process died before the result was durable)
+//      └─discardPendingGitHandoff─> (row deleted; Git failed, so the command may run again)
+//
+// `completed` and `uncertain` are terminal. Only `git_applied` and `completed` carry a
+// result. The SQL guards below enforce this table; the lifecycle matrix in
+// `gitHandoffOperations.test.ts` fails when one of them drifts.
+export const GIT_HANDOFF_PHASE_TRANSITIONS = {
+  pending: ["git_applied", "uncertain"],
+  git_applied: ["completed"],
+  completed: [],
+  uncertain: [],
+} as const;
+
+export type GitHandoffPhase = keyof typeof GIT_HANDOFF_PHASE_TRANSITIONS;
+
+export function canTransitionGitHandoff(from: GitHandoffPhase, to: GitHandoffPhase): boolean {
+  return (GIT_HANDOFF_PHASE_TRANSITIONS[from] as ReadonlyArray<GitHandoffPhase>).includes(to);
+}
+
+function gitHandoffPhaseHasResult(phase: GitHandoffPhase): phase is "git_applied" | "completed" {
+  return phase === "git_applied" || phase === "completed";
+}
 
 interface HandoffRow {
   readonly commandId: string;
   readonly threadId: string;
   readonly inputJson: string;
-  readonly phase: HandoffPhase;
+  readonly phase: GitHandoffPhase;
   readonly resultJson: string | null;
 }
 
@@ -58,7 +83,7 @@ const readOperation = (commandId: string) =>
 const decodeOperation = (
   row: HandoffRow,
 ): Effect.Effect<GitHandoffOperation, GitHandoffOperationError> =>
-  row.phase === "git_applied" || row.phase === "completed"
+  gitHandoffPhaseHasResult(row.phase)
     ? parseResult(row).pipe(Effect.map((result) => ({ phase: row.phase, result })))
     : Effect.succeed({ phase: row.phase });
 
