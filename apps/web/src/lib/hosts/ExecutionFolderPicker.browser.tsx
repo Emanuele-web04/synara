@@ -39,7 +39,6 @@ it.each(["light", "dark"])(
     await page.getByRole("button", { name: "Go", exact: true }).click();
     await page.getByRole("button", { name: "Developer", exact: true }).click();
     await expect.element(page.getByRole("button", { name: "Synara", exact: true })).toBeVisible();
-    await page.screenshot({ path: `./__screenshots__/folder-picker-${theme}.png` });
     await page.getByRole("button", { name: "Use folder" }).click();
     expect(await selected).toBe("/Users/mini/Developer");
     const cancelled = showExecutionFolderPicker({ label: "Mac mini", browse });

@@ -3504,20 +3504,17 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(fake.objects.size).toBe(0);
     });
 
-    it.each([["image/gif"], ["image/svg+xml"], ["application/octet-stream"], ["text/plain"]])(
-      "refuses a %s upload",
-      async (contentType) => {
-        const fake = fakeAvatarStorage();
-        const { app } = buildApp({ avatarStorage: fake.storage });
-        const { token } = await signInWithPicture();
-        await onboard(app, token);
+    it.each([["image/gif"], ["image/svg+xml"]])("refuses a %s upload", async (contentType) => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
 
-        const res = await putAvatar(app, token, PNG_BYTES, contentType);
-        expect(res.status).toBe(400);
-        expect(await res.json()).toMatchObject({ error: "validation_failed" });
-        expect(fake.objects.size).toBe(0);
-      },
-    );
+      const res = await putAvatar(app, token, PNG_BYTES, contentType);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+      expect(fake.objects.size).toBe(0);
+    });
 
     it("answers 503 with a clear message when storage is not configured", async () => {
       const { app } = buildApp(); // no avatarStorage

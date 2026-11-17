@@ -83,7 +83,6 @@ it("walks the tour in order, remembers dismissal per installation, and replays a
   await expect
     .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-desktop.png" });
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect
     .element(page.getByRole("dialog", { name: "See what your agents are doing" }))
@@ -328,7 +327,6 @@ it("keeps the tour usable on a narrow screen and with large UI text", async () =
     expect(box.bottom).toBeLessThanOrEqual(700);
     const surface = dialog.querySelector<HTMLElement>("[tabindex='-1']")!;
     expect(surface.scrollWidth).toBeLessThanOrEqual(surface.clientWidth);
-    await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-mobile.png" });
     await page.getByRole("button", { name: "Close tour" }).click();
   } finally {
     for (const key of Object.keys(sizes)) document.documentElement.style.removeProperty(key);

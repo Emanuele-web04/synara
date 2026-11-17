@@ -107,7 +107,6 @@ it("lays out captioned screenshots in a column and adjacent images side by side"
     expect(rect("After").top).toBe(rect("Before").top);
     expect(rect("After").left).toBeGreaterThan(rect("Before").right);
     expect(trailing.top).toBeGreaterThanOrEqual(rect("Before").bottom);
-    await page.getByTestId("image-rows").screenshot({ path: "image-rows-proof.png" });
   } finally {
     await mounted.unmount();
     queryClient.clear();

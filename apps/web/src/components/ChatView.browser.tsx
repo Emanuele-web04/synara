@@ -2639,10 +2639,6 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(
           page.getByText("Checkpoint baseline unavailable for this turn", { exact: true }).query(),
         ).toBeNull();
-        if (!warningsHidden)
-          await page.screenshot({
-            path: "../../../../output/playwright/status-warnings-usage.png",
-          });
         await toggle.click();
         await expect
           .element(toggle)
@@ -2670,9 +2666,6 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(
           document.querySelector('[data-chat-composer-form="true"]')!.contains(banner.element()),
         ).toBe(true);
-        await page.screenshot({
-          path: "../../../../output/playwright/status-warnings-blocked.png",
-        });
         appendQuota("quota-recovered", "allowed", snapshot.snapshotSequence + 2);
         await expect.element(banner).not.toBeInTheDocument();
         await expect.element(toggle).toHaveAccessibleName("Toggle environment panel");
@@ -3738,7 +3731,6 @@ describe("ChatView transcript geometry (full app)", () => {
         )!;
         expect(getComputedStyle(close).color).toBe(getComputedStyle(diff).color);
       }
-      await page.screenshot({ path: "../../../../output/playwright/split-chat-headers.png" });
       await userEvent.click(
         closingPane.querySelector<HTMLButtonElement>('button[aria-label="Close chat"]')!,
       );
@@ -5204,19 +5196,9 @@ describe("ChatView transcript geometry (full app)", () => {
               .element(page.getByRole("button", { name: "Stop generation", exact: true }))
               .toBeVisible();
           }
-          const screenshotName =
-            provider === "claudeAgent"
-              ? "claude-model-switch-note"
-              : "claude-provider-handoff-note";
-          await page.screenshot({
-            path: `../../../../output/playwright/${screenshotName}.png`,
-          });
           await mounted.setViewport({ name: "narrow", width: 480, height: 640 });
           await expect.element(note).toBeVisible();
           expect(surface.contains(note.element())).toBe(false);
-          await page.screenshot({
-            path: `../../../../output/playwright/${screenshotName}-narrow.png`,
-          });
           await note.getByRole("button", { name: "Dismiss tip" }).click();
           await expect.element(note).not.toBeInTheDocument();
 
@@ -5614,9 +5596,6 @@ describe("ChatView transcript geometry (full app)", () => {
         await page.getByRole("button", { name: "Continue task", exact: true }).click();
         if (handoffDisabled) {
           await expect.element(page.getByText("Cannot switch to Claude yet")).toBeVisible();
-          await page.screenshot({
-            path: "../../../../output/playwright/provider-handoff-continue-guard.png",
-          });
           expect(mounted.commands).toEqual([]);
           return;
         }
@@ -5666,9 +5645,6 @@ describe("ChatView transcript geometry (full app)", () => {
           await page.getByRole("button", { name: "Implement", exact: true }).click();
           if (outcome === "blocked") {
             await expect.element(page.getByTestId("blocked-handoff-notice")).toBeVisible();
-            await page.screenshot({
-              path: "../../../../output/playwright/provider-handoff-plan-blocked.png",
-            });
             expect(document.body.textContent ?? "").not.toContain("cannot switch to Claude yet.");
             expect(mounted.commands).toHaveLength(1);
           } else {
@@ -10607,11 +10583,6 @@ describe("ChatView transcript geometry (full app)", () => {
               wsRequests.some((request) => turnStartText(request)?.includes(manualPrompt) === true),
             ).toBe(true);
           });
-          if (kind === "plan-follow-up") {
-            await page.screenshot({
-              path: "../../../../output/playwright/queue-plan-resume.png",
-            });
-          }
           await vi.waitFor(
             () => {
               expect(
@@ -16705,7 +16676,6 @@ describe("ChatView transcript geometry (full app)", () => {
         "Nested agents must remain visible while their root runtime is alive.",
       );
       expect(capsule.textContent).toContain("2 agents running");
-      await page.screenshot({ path: "../../../../output/playwright/running-agents-child.png" });
       // Once its own tasks finish, the child-shell fallback still sees only the nested worker.
       useStore.getState().syncServerReadModel({
         ...fixture.snapshot,

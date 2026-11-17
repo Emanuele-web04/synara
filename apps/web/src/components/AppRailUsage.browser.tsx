@@ -174,9 +174,6 @@ describe("AppRailUsage", () => {
     await userEvent.hover(work);
     await expect.element(page.getByText("Claude · Work", { exact: true }).last()).toBeVisible();
     await expect.element(page.getByText("20% left", { exact: true }).last()).toBeVisible();
-    await page
-      .getByTestId("usage-rail")
-      .screenshot({ path: "node_modules/.cache/multiple-claude-accounts.png" });
 
     await workSwitch.click();
     await rerender();

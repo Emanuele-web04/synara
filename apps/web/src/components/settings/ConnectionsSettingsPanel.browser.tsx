@@ -433,9 +433,6 @@ describe("Connections settings", () => {
     await expect
       .element(page.getByText("Emanuele’s MacBook is waiting for approval"))
       .toBeVisible();
-    await page.screenshot({
-      path: "./__screenshots__/connections.png",
-    });
 
     await page.getByRole("radio", { name: "Control other devices" }).click();
     await expect.element(page.getByText("Studio Mac mini", { exact: true })).toBeVisible();
@@ -443,7 +440,6 @@ describe("Connections settings", () => {
     await expect.element(page.getByText("This MacBook", { exact: true })).not.toBeInTheDocument();
     expect(page.getByRole("button", { name: "Connect", exact: true }).elements()).toHaveLength(1);
     await expect.element(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
-    await page.screenshot({ path: "./__screenshots__/connections-others.png" });
 
     await page.getByRole("radio", { name: "SSH" }).click();
     await expect.element(page.getByText("Port forwarding")).toBeVisible();
@@ -633,9 +629,6 @@ describe("Connections settings", () => {
     expect(CREATE_CALLS()).toHaveLength(1);
     // Let the dialog's open transition settle so the screenshot is legible.
     await new Promise((resolve) => setTimeout(resolve, 400));
-    await page.screenshot({
-      path: "./__screenshots__/connections-add.png",
-    });
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await expect
       .element(page.getByRole("heading", { name: /Connect a device to this/ }))
@@ -685,9 +678,6 @@ describe("Connections settings", () => {
       .element(page.getByRole("button", { name: "Copy fingerprint", exact: true }))
       .toBeVisible();
     await new Promise((resolve) => setTimeout(resolve, 400));
-    await page.screenshot({
-      path: "./__screenshots__/connections-add-computer.png",
-    });
   });
 
   it("withdraws the code on screen when a new one replaces it", async () => {
