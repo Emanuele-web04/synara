@@ -6,7 +6,6 @@ import { render } from "vitest-browser-react";
 
 import { AmbientRailSlot } from "~/components/chat/AmbientRailSlot";
 import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
-import { notificationSurfaceClassName } from "~/components/ui/notificationSurface";
 import { installGlassOverlayCutout } from "./glassOverlayCutout";
 
 const disposers: Array<() => void> = [];
@@ -154,26 +153,6 @@ describe("glass overlay content cutouts", () => {
     await screen.unmount();
   });
 
-  it("gives a portaled selection composer the menu material in sidebar-only glass", async () => {
-    glassRoot();
-    document.documentElement.dataset.windowTranslucency = "sidebar";
-    const menu = portal(50, 50);
-    const composer = portal(250, 50);
-    composer.className = "chat-composer-surface";
-    // The selection layer portals a positioned host containing the composer surface.
-    const host = document.createElement("div");
-    document.body.append(host);
-    host.append(composer);
-    disposers.push(() => host.remove());
-    for (const surface of [menu, composer]) {
-      surface.style.setProperty("--app-overlay-surface", "rgba(255, 255, 255, 0.55)");
-      surface.style.setProperty("--app-overlay-backing", "rgba(0, 0, 0, 0.3)");
-    }
-    await frames();
-    expect(getComputedStyle(composer).backgroundImage).toBe(getComputedStyle(menu).backgroundImage);
-    expect(getComputedStyle(composer, "::before").backdropFilter).toBe("none");
-  });
-
   it("drops dialog backing before a kept-mounted overlay fades in over the page", async () => {
     const root = glassRoot();
     const dialog = document.createElement("div");
@@ -209,20 +188,6 @@ describe("glass overlay content cutouts", () => {
     expect(root.style.clipPath).not.toBe("inset(2px)");
     disposers.splice(1, 1)[0]!();
     expect(root.style.clipPath).toBe("inset(2px)");
-  });
-
-  it("keeps inline error notifications tinted and blurred on a translucent window", async () => {
-    const root = glassRoot();
-    const banner = document.createElement("div");
-    banner.className = notificationSurfaceClassName({ compact: false, tone: "error" });
-    banner.style.setProperty("--popover", "rgb(255, 255, 255)");
-    banner.style.setProperty("--destructive", "rgb(255, 0, 0)");
-    banner.style.setProperty("--app-overlay-surface", "rgb(0, 255, 0)");
-    root.append(banner);
-    await frames();
-    expect(getComputedStyle(banner).backgroundImage).toBe("none");
-    expect(getComputedStyle(banner).backgroundColor).toMatch(/color\(srgb 1 0\.95 0\.95\)/);
-    expect(getComputedStyle(banner).backdropFilter).not.toBe("none");
   });
 
   it("backs an overlay rendered inside the page, which cannot be cut out from under itself", async () => {

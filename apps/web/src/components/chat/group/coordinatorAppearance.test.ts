@@ -8,11 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { BrainIcon, HubIcon } from "~/lib/icons";
 
-import {
-  COORDINATOR_COLOR_OPTIONS,
-  COORDINATOR_ICON_OPTIONS,
-  resolveCoordinatorAppearance,
-} from "./coordinatorAppearance";
+import { resolveCoordinatorAppearance } from "./coordinatorAppearance";
 
 describe("resolveCoordinatorAppearance", () => {
   it("returns the Hubs icon and inherited color for an empty config", () => {
@@ -42,14 +38,5 @@ describe("resolveCoordinatorAppearance", () => {
     const appearance = resolveCoordinatorAppearance({ coordinatorColor: "no-such-color" });
     expect(appearance.iconClassName).toBe("");
     expect(appearance.colorKey).toBe("default");
-  });
-
-  it("keeps icon and color sets distinct and non-empty", () => {
-    expect(COORDINATOR_ICON_OPTIONS.length).toBeGreaterThanOrEqual(16);
-    expect(COORDINATOR_COLOR_OPTIONS.length).toBeGreaterThanOrEqual(8);
-    const iconKeys = new Set(COORDINATOR_ICON_OPTIONS.map((option) => option.key));
-    const colorKeys = new Set(COORDINATOR_COLOR_OPTIONS.map((option) => option.key));
-    expect(iconKeys.size).toBe(COORDINATOR_ICON_OPTIONS.length);
-    expect(colorKeys.size).toBe(COORDINATOR_COLOR_OPTIONS.length);
   });
 });

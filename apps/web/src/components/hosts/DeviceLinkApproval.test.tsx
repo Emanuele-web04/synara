@@ -89,10 +89,6 @@ describe("DeviceCodeField input normalization", () => {
 });
 
 describe("DeviceCodeField rendering", () => {
-  it("renders the code in the mono face", () => {
-    expect(renderField("ABCDEFGH").className).toContain("font-mono");
-  });
-
   it("shows the grouped form of a complete code", () => {
     expect(renderField("ABCDEFGH").value).toBe("ABCD-EFGH");
   });

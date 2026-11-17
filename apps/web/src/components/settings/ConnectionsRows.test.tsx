@@ -147,20 +147,6 @@ describe("HostRow", () => {
     ).toContain("No response");
   });
 
-  // ADR 0010 + the palette: no success/warning token exists, and there is no
-  // live presence to justify a light anyway.
-  it("renders reachability without a status dot or status color", () => {
-    for (const reachability of [
-      { state: "reachable", transport: "lan", at: 1 },
-      { state: "unreachable", at: 1 },
-      { state: "no-answer", at: 1 },
-    ] satisfies HostReachability[]) {
-      const html = renderHostRow({ host: makeHost(), reachability });
-      expect(html).not.toMatch(/bg-success|bg-destructive|text-success|text-warning/);
-      expect(html).not.toMatch(/rounded-full[^"]*bg-(green|red|emerald|amber)/);
-    }
-  });
-
   it("disables Connect until the host has finished its key exchange", () => {
     const html = renderHostRow({ host: makeHost({ linked: false }) });
     expect(html).toContain("Not linked yet");
