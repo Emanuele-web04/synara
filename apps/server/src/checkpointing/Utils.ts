@@ -9,6 +9,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
 
@@ -139,6 +140,7 @@ export function resolveProjectCwdForKind(input: {
 }
 
 export function resolveThreadWorkspaceCwd(input: {
+  readonly dedicatedChatWorkspaceParent?: string | undefined;
   readonly thread: {
     readonly projectId: ProjectId;
     readonly envMode?: "local" | "worktree" | undefined;
@@ -152,11 +154,21 @@ export function resolveThreadWorkspaceCwd(input: {
   }>;
 }): string | undefined {
   const project = input.projects.find((entry) => entry.id === input.thread.projectId);
-  const projectCwd = resolveProjectCwdForKind({
-    kind: project?.kind,
-    workspaceRoot: project?.workspaceRoot ?? null,
-    worktreePath: input.thread.worktreePath,
-  });
+  // A provider may use a materialized chat folder without treating the shared
+  // Home container itself as a workspace or changing Git checkpoint behavior.
+  const parent = input.dedicatedChatWorkspaceParent;
+  const dedicatedChatWorkspace =
+    project?.kind === "chat" &&
+    parent !== undefined &&
+    isWorkspaceRootWithin(project.workspaceRoot, parent) &&
+    !workspaceRootsEqual(project.workspaceRoot, parent);
+  const projectCwd = dedicatedChatWorkspace
+    ? project.workspaceRoot
+    : resolveProjectCwdForKind({
+        kind: project?.kind,
+        workspaceRoot: project?.workspaceRoot ?? null,
+        worktreePath: input.thread.worktreePath,
+      });
   return (
     resolveSharedThreadWorkspaceCwd({
       projectCwd,
