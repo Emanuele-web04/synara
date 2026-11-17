@@ -837,6 +837,49 @@ describe("OpenCode host policy delivery", () => {
     });
   });
 
+  it("rehydrates host policy state after adapter teardown and recreation", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-adapter-recreation");
+
+    const resumeCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "before teardown",
+          attachments: [],
+          modelSelection,
+        });
+        return first.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after recreation",
+          attachments: [],
+          modelSelection,
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+  });
+
   it("retries host policy delivery after the first prompt is rejected", async () => {
     let promptAttempt = 0;
     const runtime = createMockOpenCodeRuntime({
@@ -5784,5 +5827,51 @@ describe("OpenCode background subagent tasks", () => {
     expect(events).toMatchObject([
       { type: "task.completed", payload: { taskId: "child-session-1", status: "stopped" } },
     ]);
+  });
+
+  it("settles unsettled background tasks as stopped on session teardown", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const startedFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 2),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+
+        const started = Array.from(yield* Fiber.join(startedFiber));
+        expect(started.map((event) => event.type)).toEqual(["task.started", "task.updated"]);
+
+        const settledFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(adapter.streamEvents, (event) => event.type === "task.completed"),
+            1,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.stopSession(threadId);
+
+        const settled = Array.from(yield* Fiber.join(settledFiber));
+        eventQueue.close();
+        return settled;
+      }),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      payload: { taskId: "child-session-1", status: "stopped" },
+    });
   });
 });
