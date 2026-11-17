@@ -23,6 +23,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { captureCrashResumeRecord } from "../quitResume.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
@@ -41,67 +42,89 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
-  it.effect("captures a running first human turn whose stored request has no turn id", () =>
-    Effect.gen(function* () {
-      const query = yield* ProjectionSnapshotQuery;
-      const sql = yield* SqlClient.SqlClient;
-      const now = "2026-10-13T10:00:00.000Z";
-      yield* sql`INSERT INTO projection_projects
+  it.effect(
+    "recovers persisted human turn bindings without requiring a visible resume message",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-13T10:00:00.000Z";
+        yield* sql`INSERT INTO projection_projects
         (project_id, title, workspace_root, scripts_json, created_at, updated_at)
         VALUES ('crash-project', 'Crash recovery', '/tmp/crash-recovery', '[]', ${now}, ${now})`;
 
-      for (const [id, origin] of [
-        ["human", "user"],
-        ["agent", "agent"],
-        ["scheduled", "automation"],
-      ] as const) {
-        const thread = asThreadId(`crash-${id}`);
-        const turn = asTurnId(`crash-${id}-turn`);
-        const request = asMessageId(`crash-${id}-request`);
-        yield* sql`INSERT INTO projection_threads
+        for (const [id, origin] of [
+          ["human", "user"],
+          ["agent", "agent"],
+          ["scheduled", "automation"],
+          ["hidden-resume", null],
+          ["hidden-goal", null],
+        ] as const) {
+          const thread = asThreadId(`crash-${id}`);
+          const turn = asTurnId(`crash-${id}-turn`);
+          const request = asMessageId(
+            id === "hidden-resume"
+              ? "turn-resume:durable-event"
+              : id === "hidden-goal"
+                ? "goal-continuation:durable-event"
+                : `crash-${id}-request`,
+          );
+          yield* sql`INSERT INTO projection_threads
           (thread_id, project_id, title, model_selection_json, latest_turn_id,
            created_at, updated_at)
           VALUES (${thread}, 'crash-project', ${id},
             '{"provider":"codex","model":"gpt-5"}', ${turn}, ${now}, ${now})`;
-        yield* sql`INSERT INTO projection_thread_messages
-          (message_id, thread_id, turn_id, role, text, dispatch_origin,
-           is_streaming, source, sequence, created_at, updated_at)
-          VALUES (${request}, ${thread}, NULL, 'user', 'Continue', ${origin},
-            0, 'native', 1, ${now}, ${now})`;
-        yield* sql`INSERT INTO projection_turns
+          if (origin !== null) {
+            yield* sql`INSERT INTO projection_thread_messages
+            (message_id, thread_id, turn_id, role, text, dispatch_origin,
+             is_streaming, source, sequence, created_at, updated_at)
+            VALUES (${request}, ${thread}, NULL, 'user', 'Continue', ${origin},
+              0, 'native', 1, ${now}, ${now})`;
+          }
+          yield* sql`INSERT INTO projection_turns
           (thread_id, turn_id, pending_message_id, state, requested_at,
            started_at, checkpoint_turn_count, checkpoint_status, checkpoint_files_json)
           VALUES (${thread}, ${turn}, ${request}, 'running', ${now},
             ${now}, 0, 'missing', '[]')`;
-        yield* sql`INSERT INTO projection_thread_sessions
+          yield* sql`INSERT INTO projection_thread_sessions
           (thread_id, status, provider_name, runtime_mode, active_turn_id, updated_at)
           VALUES (${thread}, 'running', 'codex', 'full-access', ${turn}, ${now})`;
-      }
+        }
 
-      const stored = Option.getOrThrow(yield* query.getThreadDetailById(asThreadId("crash-human")));
-      assert.equal(stored.messages[0]?.turnId, null);
-      const readModel = yield* query.getSnapshot();
-      const captured = yield* captureCrashResumeRecord.pipe(
-        Effect.provideService(ProviderCommandReactor, {
-          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
-        } as Pick<
-          (typeof ProviderCommandReactor)["Service"],
-          "withRestartOrphanedThread"
-        > as never),
-        Effect.provideService(OrchestrationEngineService, {
-          getReadModel: () => Effect.succeed(readModel),
-        } as never),
-        Effect.provideService(ProjectionPendingInteractionRepository, {
-          listUnsettled: () => Effect.succeed([]),
-        } as never),
-      );
+        const stored = Option.getOrThrow(
+          yield* query.getThreadDetailById(asThreadId("crash-human")),
+        );
+        assert.equal(stored.messages[0]?.turnId, null);
+        const readModel = yield* query.getSnapshot();
+        const captured = yield* captureCrashResumeRecord.pipe(
+          Effect.provideService(ProviderCommandReactor, {
+            withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+          } as Pick<
+            (typeof ProviderCommandReactor)["Service"],
+            "withRestartOrphanedThread"
+          > as never),
+          Effect.provideService(OrchestrationEngineService, {
+            getReadModel: () => Effect.succeed(readModel),
+          } as never),
+          Effect.provideService(ProjectionPendingInteractionRepository, {
+            listUnsettled: () => Effect.succeed([]),
+          } as never),
+          Effect.provide(ProjectionTurnRepositoryLive),
+        );
 
-      assert.equal(captured.kind, "record");
-      if (captured.kind !== "record") return;
-      assert.deepEqual(captured.record.threads, [
-        { threadId: asThreadId("crash-human"), turnId: asTurnId("crash-human-turn") },
-      ]);
-    }),
+        assert.equal(captured.kind, "record");
+        if (captured.kind !== "record") return;
+        assert.deepEqual(
+          captured.record.threads.toSorted((a, b) => a.threadId.localeCompare(b.threadId)),
+          [
+            {
+              threadId: asThreadId("crash-hidden-resume"),
+              turnId: asTurnId("crash-hidden-resume-turn"),
+            },
+            { threadId: asThreadId("crash-human"), turnId: asTurnId("crash-human-turn") },
+          ],
+        );
+      }),
   );
 
   it.effect(
@@ -2757,6 +2780,124 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               '{"taskId":"c","isBackgrounded":false}', 9, ${now})`;
         const settled = Option.getOrThrow(yield* query.getThreadShellById(threads.alive));
         assert.equal(settled.pendingBackgroundTaskCount, 0);
+      }),
+  );
+
+  it.effect(
+    "previews each client shell's newest finished reply with text, and only when asked",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_projects
+          (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES ('reply-preview-project', 'Reply preview', '/tmp/reply-preview', '[]',
+            '2026-11-16T10:00:00.000Z', '2026-11-16T10:00:00.000Z')`;
+        const threads = {
+          replied: asThreadId("reply-preview-replied"),
+          streaming: asThreadId("reply-preview-streaming"),
+          toolOnly: asThreadId("reply-preview-tool-only"),
+          userOnly: asThreadId("reply-preview-user-only"),
+          archived: asThreadId("reply-preview-archived"),
+          encoded: asThreadId("reply-preview-encoded"),
+          longEncoded: asThreadId("reply-preview-long-encoded"),
+          long: asThreadId("reply-preview-long"),
+        };
+        for (const threadId of Object.values(threads)) {
+          const archivedAt = threadId === threads.archived ? "2026-11-16T11:00:00.000Z" : null;
+          yield* sql`INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, created_at, updated_at, archived_at)
+            VALUES (${threadId}, 'reply-preview-project', 'Reply preview',
+              '{"provider":"codex","model":"gpt-5"}', '2026-11-16T10:00:00.000Z',
+              '2026-11-16T10:00:00.000Z', ${archivedAt})`;
+        }
+        let sequence = 0;
+        const message = (
+          threadId: ThreadId,
+          role: "user" | "assistant" | "system",
+          text: string,
+          minute: number,
+          options: { readonly streaming?: boolean; readonly textJson?: string } = {},
+        ) => {
+          sequence += 1;
+          const at = `2026-11-16T10:${String(minute).padStart(2, "0")}:00.000Z`;
+          return sql`INSERT INTO projection_thread_messages
+            (message_id, thread_id, turn_id, role, text, text_json, is_streaming, source,
+             sequence, created_at, updated_at)
+            VALUES (${`${threadId}-${sequence}`}, ${threadId}, NULL, ${role}, ${text},
+              ${options.textJson ?? null}, ${options.streaming ? 1 : 0}, 'native', ${sequence},
+              ${at}, ${at})`;
+        };
+        yield* message(threads.replied, "assistant", "An earlier reply.", 1);
+        yield* message(threads.replied, "user", "Merge them all", 2);
+        yield* message(
+          threads.replied,
+          "assistant",
+          "## Done\n\nAll four PRs are **merged** into `main`.\n- Rerun the snapshot test",
+          3,
+        );
+        // A reply still streaming never moves the preview; the last finished one stays.
+        yield* message(threads.streaming, "assistant", "Finished answer.", 1);
+        yield* message(threads.streaming, "assistant", "Still typ", 2, { streaming: true });
+        // A turn that ended in tools only, then failed: its empty assistant row and the
+        // system notice are skipped for the newest reply that said something.
+        yield* message(threads.toolOnly, "assistant", "Here is the plan.", 1);
+        yield* message(threads.toolOnly, "user", "Go ahead", 2);
+        yield* message(threads.toolOnly, "assistant", "", 3);
+        yield* message(threads.toolOnly, "system", "Turn failed: provider error", 4);
+        yield* message(threads.userOnly, "user", "Anyone there?", 1);
+        yield* message(threads.archived, "assistant", "Archived reply.", 1);
+        yield* message(threads.encoded, "assistant", "lossy copy", 1, {
+          textJson: JSON.stringify("Encoded **reply** text"),
+        });
+        yield* message(threads.longEncoded, "assistant", "lossy copy", 1, {
+          textJson: JSON.stringify(`Encoded **reply** text${" ".repeat(8_000)}\u0000tail`),
+        });
+        yield* message(threads.long, "assistant", "word ".repeat(400), 1);
+
+        const expected: Record<string, string | undefined> = {
+          [threads.replied]: "Done All four PRs are merged into main. · Rerun the snapshot test",
+          [threads.streaming]: "Finished answer.",
+          [threads.toolOnly]: "Here is the plan.",
+          [threads.userOnly]: undefined,
+          [threads.archived]: undefined,
+          [threads.encoded]: "Encoded reply text",
+          [threads.longEncoded]: "Encoded reply text…",
+        };
+        const ids = Object.values(threads);
+        const snapshot = yield* query.getShellSnapshot({ includeLatestReplyPreview: true });
+        const batch = yield* query.getThreadShellsByIds(ids, {
+          includeLatestReplyPreview: true,
+          includeLatestMessageActivity: true,
+        });
+        for (const [threadId, preview] of Object.entries(expected)) {
+          const id = asThreadId(threadId);
+          const single = Option.getOrThrow(
+            yield* query.getThreadShellById(id, { includeLatestReplyPreview: true }),
+          );
+          assert.equal(single.latestReplyPreview, preview, `single ${threadId}`);
+          assert.equal(
+            snapshot.threads.find((thread) => thread.id === id)?.latestReplyPreview,
+            preview,
+            `snapshot ${threadId}`,
+          );
+          assert.equal(
+            batch.find((thread) => thread.id === id)?.latestReplyPreview,
+            preview,
+            `batch ${threadId}`,
+          );
+        }
+        const long = Option.getOrThrow(
+          yield* query.getThreadShellById(threads.long, { includeLatestReplyPreview: true }),
+        ).latestReplyPreview;
+        assert.equal(long?.length, 240);
+        assert.isTrue(long?.endsWith("word…"));
+
+        // Internal reads skip the message read entirely.
+        const internal = yield* query.getShellSnapshot();
+        assert.isTrue(internal.threads.every((thread) => thread.latestReplyPreview === undefined));
+        const internalSingle = Option.getOrThrow(yield* query.getThreadShellById(threads.replied));
+        assert.equal(internalSingle.latestReplyPreview, undefined);
       }),
   );
 

@@ -1,33 +1,33 @@
 // FILE: ProvidersStep.tsx
-// Purpose: Agents step of the onboarding: a full-bleed grid with one cell per runtime,
-//          its detection status, an enable/disable switch bound to the server-backed
-//          `disabledProviders` setting, inline sign-in for detected-but-unauthenticated
-//          CLIs, and a setup-guide link for missing ones.
+// Purpose: Agents step of the onboarding: a grid with one cell per runtime, its detection
+//          status, an enable/disable switch for the installed ones (bound to the
+//          server-backed `disabledProviders` setting), guided sign-in for detected but
+//          unauthenticated CLIs, and a setup-guide link for missing ones.
 // Layer: Web UI component
 
 import type { ProviderKind } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
+import { ProviderGuidedSignIn } from "~/components/settings/accounts/ProviderGuidedSignIn";
+import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { StatusDot } from "~/components/ui/status-chip";
 import { Switch } from "~/components/ui/switch";
-import { ChevronRightIcon, RefreshCwIcon, XIcon } from "~/lib/icons";
+import { ChevronRightIcon, RefreshCwIcon } from "~/lib/icons";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
-import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import type { ProviderSetupState } from "../logic";
 import type { ProviderDetection } from "../useProviderDetection";
 import type { ProviderSetup } from "../useProviderSetup";
 import { ONBOARDING_LIVE_COLOR } from "../stage/stageTokens";
-import { ProviderConnectTerminal } from "./ProviderConnectTerminal";
 
 /** Status as a dot + word; the dot carries the colour, the copy stays muted. */
 const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassName: string }> = {
   connected: { label: "chat:connected", dotClassName: "bg-[#317CFF]" },
   "needs-sign-in": { label: "common:needsSignIn", dotClassName: "bg-warning" },
   "not-installed": { label: "onboarding:notInstalled", dotClassName: "bg-muted-foreground/40" },
+  unavailable: { label: "common:triageOutcome_needsAttention", dotClassName: "bg-warning" },
   detecting: { label: "onboarding:detecting", dotClassName: "bg-muted-foreground/40" },
   "check-failed": { label: "onboarding:couldNotCheck", dotClassName: "bg-warning" },
   disabled: { label: "chat:disabled", dotClassName: "bg-muted-foreground/40" },
@@ -43,8 +43,6 @@ export function ProvidersStep(props: {
   const { t } = useTranslation();
   const { detection } = props;
   const { rows, summary, setProviderDisabled } = props.setup;
-  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
-  const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
 
   // Probe once on entry so a CLI installed while the intro was open shows up.
   const refreshedOnEntryRef = useRef(false);
@@ -54,33 +52,12 @@ export function ProvidersStep(props: {
     void detection.detect({ silent: true });
   }, [detection]);
 
-  const connecting = connectingProvider
-    ? rows.find((row) => row.descriptor.kind === connectingProvider)
+  // The same isolated sign-in Settings uses: it runs the CLI's login command itself, so
+  // nobody has to know that command or open a terminal. Re-probe when it closes.
+  const [signingInProvider, setSigningInProvider] = useState<ProviderKind | null>(null);
+  const signingIn = signingInProvider
+    ? rows.find((row) => row.descriptor.kind === signingInProvider)
     : undefined;
-  const connectingSignInCommand = connecting?.descriptor.usage?.signInCommand;
-
-  const finishConnect = () => {
-    setConnectingProvider(null);
-    void detection.detect({ silent: true });
-  };
-  const toggleConnect = (provider: ProviderKind) => {
-    if (connectingProvider === provider) {
-      finishConnect();
-      return;
-    }
-    setConnectingProvider(provider);
-  };
-
-  // The terminal mounts below the provider grid in a fixed-height dialog; bring it into
-  // view so the sign-in prompt is not left under the scroll fold.
-  const terminalRegionRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!connectingProvider) return;
-    const frame = window.requestAnimationFrame(() => {
-      terminalRegionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [connectingProvider]);
 
   return (
     <div className="flex min-h-full flex-col">
@@ -90,11 +67,17 @@ export function ProvidersStep(props: {
             ? t("onboarding:detectingAgentsOnThisMachine")
             : summary.checkFailed > 0
               ? t("onboarding:couldnTCheckAllAgentsTryReDetect")
-              : t("onboarding:providerSummary", {
-                  connected: summary.connected,
-                  needsSignIn: summary.needsSignIn,
-                  notInstalled: summary.notInstalled,
-                })}
+              : [
+                  t("onboarding:providerSummary", {
+                    connected: summary.connected,
+                    needsSignIn: summary.needsSignIn,
+                    notInstalled: summary.notInstalled,
+                  }),
+                  // Rare enough to stay out of the line until there is one to report.
+                  ...(summary.unavailable > 0
+                    ? [t("onboarding:providerSummaryUnavailable", { count: summary.unavailable })]
+                    : []),
+                ].join(" · ")}
         </span>
         <button
           type="button"
@@ -110,16 +93,18 @@ export function ProvidersStep(props: {
         </button>
       </div>
 
-      <div className="grid flex-1 auto-rows-[minmax(168px,1fr)] grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid auto-rows-[176px] grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
         {rows.map(({ descriptor, status, state }) => {
           const presentation = STATE_PRESENTATION[state];
           const enabled = state !== "disabled";
           const installed = status?.available === true;
-          const canConnectInline =
-            state === "needs-sign-in" &&
-            descriptor.usage?.signInCommand !== undefined &&
-            homeDir !== null;
-          const isConnecting = connectingProvider === descriptor.kind;
+          // A switch only means something for a CLI that is on this machine: missing
+          // agents read as off, and cannot be switched on until they are installed.
+          const switchable =
+            installed ||
+            state === "disabled" ||
+            state === "check-failed" ||
+            state === "unavailable";
           const switchId = `onboarding-provider-${descriptor.kind}`;
           return (
             <div
@@ -139,10 +124,14 @@ export function ProvidersStep(props: {
                 />
                 <Switch
                   id={switchId}
-                  checked={enabled}
-                  aria-label={t(enabled ? "settings:disableProvider" : "settings:enableProvider", {
-                    provider: descriptor.displayName,
-                  })}
+                  checked={enabled && switchable}
+                  disabled={!switchable}
+                  aria-label={t(
+                    enabled && switchable ? "settings:disableProvider" : "settings:enableProvider",
+                    {
+                      provider: descriptor.displayName,
+                    },
+                  )}
                   onCheckedChange={(checked) => setProviderDisabled(descriptor.kind, !checked)}
                 />
               </div>
@@ -169,17 +158,31 @@ export function ProvidersStep(props: {
                     </>
                   )}
                 </span>
-                <span className="flex h-lh items-center">
-                  {canConnectInline ? (
-                    <button
-                      type="button"
-                      className={CELL_ACTION_CLASS_NAME}
-                      style={{ color: ONBOARDING_LIVE_COLOR }}
-                      onClick={() => toggleConnect(descriptor.kind)}
+                {state === "unavailable" ? (
+                  // Installed but unusable: say what the server found, not "set it up".
+                  <span
+                    className="line-clamp-2 min-h-7 text-ui-xs text-muted-foreground sm:min-h-6"
+                    title={status?.message}
+                  >
+                    {status?.message ?? t("onboarding:providerUnavailableHint")}
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    "flex h-7 items-center sm:h-6",
+                    state === "unavailable" && "hidden",
+                  )}
+                >
+                  {state === "needs-sign-in" ? (
+                    <Button
+                      size="xs"
+                      shape="capsule"
+                      className="px-2.5"
+                      disabled={signingInProvider !== null}
+                      onClick={() => setSigningInProvider(descriptor.kind)}
                     >
-                      {isConnecting ? t("git:detail_done") : t("chat:providerModelPicker_signIn")}
-                      <ChevronRightIcon className="size-3" aria-hidden />
-                    </button>
+                      {t("chat:providerModelPicker_signIn")}
+                    </Button>
                   ) : null}
                   {state === "not-installed" ? (
                     <a
@@ -200,36 +203,20 @@ export function ProvidersStep(props: {
         })}
       </div>
 
-      <DisclosureRegion open={connecting !== undefined}>
-        {connecting && connectingSignInCommand !== undefined && homeDir !== null ? (
-          <div ref={terminalRegionRef} className="flex flex-col gap-1.5 px-8 py-4">
-            {/* Always-available close: the card's "Done" link disappears once the
-                provider is detected as connected, but the terminal stays mounted. */}
-            <div className="flex items-center justify-between text-ui text-muted-foreground">
-              <span>
-                {t("onboarding:signingInToProvider", {
-                  provider: connecting.descriptor.displayName,
-                })}{" "}
-                · <code className="text-foreground/80">{connectingSignInCommand}</code>
-              </span>
-              <button
-                type="button"
-                className="inline-flex cursor-pointer items-center gap-1 text-foreground/70 transition-colors hover:text-foreground motion-reduce:transition-none"
-                onClick={finishConnect}
-              >
-                <XIcon className="size-3.5" aria-hidden />
-                {t("git:detail_done")}
-              </button>
-            </div>
-            <ProviderConnectTerminal
-              key={connecting.descriptor.kind}
-              provider={connecting.descriptor.kind}
-              signInCommand={connectingSignInCommand}
-              cwd={homeDir}
-            />
-          </div>
-        ) : null}
-      </DisclosureRegion>
+      {signingIn ? (
+        <ProviderGuidedSignIn
+          key={signingIn.descriptor.kind}
+          account={{
+            provider: signingIn.descriptor.kind,
+            instanceId: signingIn.descriptor.kind,
+            label: signingIn.descriptor.displayName,
+          }}
+          onClosed={() => {
+            setSigningInProvider(null);
+            void detection.detect({ silent: true });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

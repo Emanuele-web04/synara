@@ -84,7 +84,8 @@ function listRoutePaths(router: ReturnType<typeof createHarness>["router"]): str
   return [...paths];
 }
 
-describe("resolveCommittedPathname", () => {
+// With shuffled tests, any navigation case can be first to compile a lazy route.
+describe("resolveCommittedPathname", { timeout: 60_000 }, () => {
   it("stays string-identical to location.pathname on every route", async () => {
     const harness = createHarness("/");
     await harness.router.load();
@@ -100,8 +101,7 @@ describe("resolveCommittedPathname", () => {
     }
 
     harness.expectCoherentSnapshots();
-    // The first visit to each route imports its lazy chunk, which is slow in a busy run.
-  }, 60_000);
+  });
 
   it("keeps both trailing-slash forms of an index route distinct", async () => {
     const harness = createHarness("/pull-requests/");

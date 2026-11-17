@@ -2211,6 +2211,33 @@ describe("WsTransport", () => {
     },
   );
 
+  it("keeps a tripped recovery breaker tripped when a session is adopted late", () => {
+    const { transport, internals } = makeBareTransport();
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = { id: 1, failed: false };
+    internals.currentFeatureSession = session;
+    internals.recovery.consecutiveDefects = 1;
+    try {
+      internals.noteProtocolFailure(
+        session,
+        new RpcClientError.RpcClientError({
+          reason: new RpcClientError.RpcClientDefect({
+            message: "bad frame",
+            cause: new Error("malformed frame"),
+          }),
+        }),
+      );
+      expect(internals.recovery.phase).toBe("tripped");
+
+      (transport as unknown as { noteFeatureSessionAdopted(): void }).noteFeatureSessionAdopted();
+
+      expect(internals.recovery.phase).toBe("tripped");
+    } finally {
+      internals.disposed = true;
+      warnings.mockRestore();
+    }
+  });
+
   it("retries capacity-rejected streams in place with the server-provided delay", () => {
     expect(
       getStreamCapacityRetryDelayMs(

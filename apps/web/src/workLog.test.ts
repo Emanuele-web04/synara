@@ -5298,6 +5298,103 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it.each(["_toolName", "toolName", "tool_name"] as const)(
+    "surfaces the ACP native tool name from rawInput.%s",
+    (nameKey) => {
+      // Grok/ACP read calls arrive with the native name only in rawInput —
+      // data.toolName is reserved for Computer tools — so reads stayed
+      // indistinguishable from generic tool calls.
+      const activities: OrchestrationThreadActivity[] = [
+        makeActivity({
+          id: "acp-read",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Read src/app.ts",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read src/app.ts",
+            data: {
+              toolCallId: "acp-read-call",
+              kind: "read",
+              rawInput: { [nameKey]: "read_file", path: "src/app.ts" },
+            },
+          },
+        }),
+      ];
+
+      expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+        { itemType: "dynamic_tool_call", toolName: "read_file" },
+      ]);
+    },
+  );
+
+  it("keeps a persisted ACP read distinct from a real shell command", () => {
+    const activities = [
+      makeActivity({
+        id: "persisted-acp-read",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "read-call",
+            providerToolCallId: "read-call",
+            command: "src/app.ts",
+          },
+        },
+      }),
+      makeActivity({
+        id: "persisted-acp-read-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "read-call",
+            providerToolCallId: "read-call",
+            kind: "read",
+            command: "src/app.ts",
+            rawInput: { _toolName: "read_file", path: "src/app.ts" },
+          },
+        },
+      }),
+      makeActivity({
+        id: "acp-execute",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "command_execution",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "run-call",
+            providerToolCallId: "run-call",
+            kind: "execute",
+            command: "cat src/app.ts | head -n 5",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      id: "persisted-acp-read",
+      itemType: "dynamic_tool_call",
+      toolName: "read_file",
+      toolTitle: "Read `src/app.ts`",
+    });
+    expect(entries[0]).not.toHaveProperty("command");
+    expect(entries[1]).toMatchObject({
+      id: "acp-execute",
+      command: "cat src/app.ts | head -n 5",
+    });
+  });
+
   it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

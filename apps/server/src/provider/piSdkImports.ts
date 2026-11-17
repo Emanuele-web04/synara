@@ -158,13 +158,18 @@ async function findPiPackageDir(binaryPath: string): Promise<string | undefined>
   return undefined;
 }
 
+/** No Pi executable was found, as opposed to one that is present but unusable. */
+export class PiNotInstalledError extends Error {
+  override readonly name = "PiNotInstalledError";
+}
+
 export async function resolvePiInstallation(
   options: { binaryPath?: string | undefined; env?: NodeJS.ProcessEnv | undefined } = {},
 ): Promise<PiInstallation> {
   const executable = options.binaryPath?.trim() || "pi";
   const binaryPath = resolveExecutable(executable, { env: options.env });
   if (!binaryPath) {
-    throw new Error(
+    throw new PiNotInstalledError(
       options.binaryPath?.trim()
         ? `The configured Pi CLI (${executable}) is unavailable.`
         : "Pi is not installed. Install the Pi CLI with `npm install -g @earendil-works/pi-coding-agent` or `bun install -g @earendil-works/pi-coding-agent`.",

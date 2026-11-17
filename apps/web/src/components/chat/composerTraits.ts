@@ -4,6 +4,7 @@
 // Depends on: shared model capability helpers and provider model option types.
 
 import {
+  type CodexModelOptions,
   type ProviderOptionDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
@@ -268,6 +269,11 @@ export function getComposerTraitSelection(
     Boolean(fastModeDescriptor) &&
     (fastModeDescriptor?.currentValue ??
       (provider === "cursor" ? getCursorBooleanModelParameter(model, "fast") : false)) === true;
+  const supportsUltrafastMode =
+    provider === "codex" && runtimeModel?.supportsUltrafastMode === true;
+  const ultrafastModeEnabled =
+    supportsUltrafastMode &&
+    (modelOptions as CodexModelOptions | undefined)?.serviceTier === "ultrafast";
 
   const contextWindow = resolvedContextWindow ?? defaultContextWindow;
 
@@ -287,6 +293,8 @@ export function getComposerTraitSelection(
     effortLevels,
     thinkingEnabled,
     fastModeEnabled,
+    supportsUltrafastMode,
+    ultrafastModeEnabled,
     contextWindowOptions,
     contextWindow,
     defaultContextWindow,

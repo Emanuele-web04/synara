@@ -64,6 +64,27 @@ test("required check, independent static lane and full-history lineage stay inta
   assert.ok(workflow.includes("git tag --list 'v[0-9]*'"));
   assert.ok(!workflow.includes("continue-on-error"));
 });
+test("history readers clone blobless; jobs that never read history stay shallow", () => {
+  // Measured: a blobless full clone took 9-12 s per hosted job against 6 s
+  // shallow, and 10 s against 37 s for the full clone Migration Lineage used.
+  const jobs = workflow.split(/\n(?=  [a-z_-]+:\n)/);
+  const historyReaders = ["migration_lineage"];
+  let checked = 0;
+  for (const job of jobs) {
+    const name = job.trimStart().split(":")[0];
+    for (const rest of job.split("uses: actions/checkout@v6").slice(1)) {
+      const options = rest.split("\n      - ")[0];
+      checked++;
+      if (historyReaders.includes(name)) {
+        assert.ok(options.includes("fetch-depth: 0"), name);
+        assert.ok(options.includes("filter: blob:none"), name);
+      } else {
+        assert.ok(!options.includes("fetch-depth: 0"), `${name} needs no history`);
+      }
+    }
+  }
+  assert.ok(checked >= 8);
+});
 test("filtered scopes preserve lifecycle scripts and the scripts workspace links", () => {
   assert.ok(
     setup.includes(
@@ -77,6 +98,23 @@ test("filtered scopes preserve lifecycle scripts and the scripts workspace links
   const turbo = JSON.parse(read("../../turbo.json"));
   assert.equal(turbo.tasks.test.cache, false);
   assert.equal(turbo.tasks.typecheck.cache, false);
+});
+test("the web build skips dependency builds but still hashes dependency sources", () => {
+  const turbo = JSON.parse(read("../../turbo.json"));
+  assert.deepEqual(turbo.tasks.build.dependsOn, ["^build"]);
+  // No package defines a `transit` script: the task only propagates hashes.
+  assert.deepEqual(turbo.tasks.transit, { dependsOn: ["^transit"] });
+  const web = read("../../apps/web/turbo.jsonc");
+  assert.ok(web.includes('"dependsOn": ["^transit"]'));
+  for (const workspace of ["apps/web", "packages/contracts", "packages/shared"])
+    assert.equal(
+      JSON.parse(read(`../../${workspace}/package.json`)).scripts.transit,
+      undefined,
+      workspace,
+    );
+  // Dropping the build edge is only sound while web resolves contracts from source.
+  const contracts = JSON.parse(read("../../packages/contracts/package.json"));
+  assert.equal(contracts.exports["."].import, "./src/index.ts");
 });
 test("caches restore in every consumer and save from one owner per key", () => {
   const steps = Object.fromEntries(
@@ -123,7 +161,78 @@ test("caches restore in every consumer and save from one owner per key", () => {
   const saving = Object.entries(steps)
     .filter(([, step]) => step.includes("uses: actions/cache@"))
     .map(([name]) => name);
-  assert.deepEqual(saving, ["Cache Turbo outputs (main)", "Cache Electron runtime"]);
+  assert.deepEqual(saving, [
+    "Cache Turbo outputs (main)",
+    "Cache web transform results (main or first branch run)",
+    "Cache Electron runtime",
+  ]);
+});
+test("web transform cache stays keyed by its inputs and out of production builds", () => {
+  const steps = Object.fromEntries(
+    setup
+      .split("\n    - name: ")
+      .slice(1)
+      .map((step) => [step.split("\n")[0], step]),
+  );
+  const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
+  const prefix =
+    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-";
+  const restore = steps["Restore web transform cache"];
+  const save = steps["Cache web transform results (main or first branch run)"];
+  assert.ok(restore.includes("uses: actions/cache/restore@v5"));
+  assert.ok(restore.includes(`inputs.web-transform-cache != '' && !(${main})`));
+  // A branch saves only when no archive matched; main saves one entry per commit.
+  assert.ok(
+    save.includes(
+      `inputs.web-transform-cache != '' && ((${main}) || steps.web-transform.outputs.cache-matched-key == '')`,
+    ),
+  );
+  for (const step of [restore, save]) {
+    assert.ok(step.includes(`key: ${prefix}\${{ github.sha }}`));
+    assert.ok(step.includes(`restore-keys: |\n          ${prefix}\n`));
+    assert.ok(step.includes("path: ${{ runner.temp }}/web-transform-cache"));
+  }
+  // The salt in vite.config.ts must cover every file the archive key hashes.
+  const viteConfig = read("../../apps/web/vite.config.ts");
+  for (const file of [
+    "../../bun.lock",
+    "vite.config.ts",
+    "scripts/react-compiler-plugin.mjs",
+    "scripts/transform-cache.ts",
+  ])
+    assert.ok(viteConfig.includes(`"${file}"`), file);
+  // Workers must compile with the plugin definition the main thread uses, and
+  // the pool must stay out of the cache key: it never changes a module's output.
+  const worker = read("../../apps/web/scripts/parallel-transform.worker.mjs");
+  assert.ok(worker.includes('from "./react-compiler-plugin.mjs"'));
+  assert.ok(viteConfig.includes('from "./scripts/react-compiler-plugin.mjs"'));
+  assert.ok(!viteConfig.includes("reactCompilerPreset"), "one definition of the compiler plugin");
+  const pool = read("../../apps/web/scripts/parallel-transform.ts");
+  for (const relaxed of ["retry", "setTimeout"])
+    assert.ok(!pool.includes(relaxed), `the transform pool must not ${relaxed}`);
+  assert.ok(
+    viteConfig.includes(
+      'process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined',
+    ),
+    "only Vitest may enable the transform cache",
+  );
+  // Only the stable browser lanes opt in: no build, release or nightly lane.
+  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 1);
+  const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
+  assert.ok(
+    browser.includes(
+      "web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}",
+    ),
+  );
+  for (const other of [
+    "../workflows/release.yml",
+    "../workflows/release-platform.yml",
+    "../workflows/ci-nightly.yml",
+  ]) {
+    const text = read(other);
+    assert.ok(!text.includes("web-transform-cache"), other);
+    assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
+  }
 });
 test("Windows install uses the runner-volume cache without changing other platforms", () => {
   const install = setup.match(
@@ -193,10 +302,12 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
 test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
-  // Pinned placement only moves whole files between shards; each shard stays serial.
+  // Pinned placement only moves whole files between shards; each shard runs
+  // its files on every core of its runner.
   const server = JSON.parse(read("../../apps/server/package.json"));
-  assert.equal(server.scripts.test, "vitest run --maxWorkers=1 --no-file-parallelism");
+  assert.equal(server.scripts.test, "vitest run");
   const serverConfig = read("../../apps/server/vitest.config.ts");
+  assert.ok(serverConfig.includes("maxWorkers: availableParallelism()"));
   assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);

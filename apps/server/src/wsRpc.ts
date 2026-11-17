@@ -209,7 +209,10 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
   ProviderDeliveryRecoveryError,
 } from "./orchestration/Errors";
-import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import {
+  makeDispatchCommandNormalizer,
+  withoutRemoteResumeComputerGrant,
+} from "./orchestration/dispatchCommandNormalization";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -1283,7 +1286,9 @@ const makeWsRpcHandlersLayer = () =>
           default:
             if (event.aggregateKind !== "thread") return Effect.succeed(Option.none());
             return projectionReadModelQuery
-              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)))
+              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)), {
+                includeLatestReplyPreview: true,
+              })
               .pipe(
                 Effect.map((thread) =>
                   Option.map(thread, (nextThread) => ({
@@ -1637,10 +1642,15 @@ const makeWsRpcHandlersLayer = () =>
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
               const { command: normalizedCommand, prepareWorkspaceRoot } =
-                yield* normalizeDispatchCommand({ command });
+                yield* normalizeDispatchCommand({
+                  command: withoutRemoteResumeComputerGrant(command, principal.ownerId),
+                });
               // A paused/archived group's coordinator must not run turns —
               // the picker filters them out, but the server enforces it.
-              if (normalizedCommand.type === "thread.turn.start") {
+              if (
+                normalizedCommand.type === "thread.turn.start" ||
+                normalizedCommand.type === "thread.turn.resume"
+              ) {
                 yield* projectAgentService.assertGroupCoordinatorTurnAllowed({
                   threadId: normalizedCommand.threadId,
                 });
@@ -1682,7 +1692,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot({ verifyEmptyThreads: true }),
+            projectionReadModelQuery.getShellSnapshot({
+              verifyEmptyThreads: true,
+              includeLatestReplyPreview: true,
+            }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
@@ -1819,7 +1832,7 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: () => Effect.void,
               },
               snapshot: projectionReadModelQuery
-                .getShellSnapshot()
+                .getShellSnapshot({ includeLatestReplyPreview: true })
                 .pipe(
                   Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
                 ),

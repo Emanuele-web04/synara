@@ -137,7 +137,7 @@ import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { hasActiveComposerSend, runComposerSendOnce } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
-import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
+import { useThreadDispatchStore } from "../lib/chatDispatchStore";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -1548,7 +1548,8 @@ function installDeterministicSendNativeApi(options?: {
             _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
             command,
           });
-          if (command.type === "thread.turn.start") await options?.beforeTurnStart?.();
+          if (command.type === "thread.turn.start" || command.type === "thread.turn.resume")
+            await options?.beforeTurnStart?.();
           if (options?.rejectTurnStart && command.type === "thread.turn.start") {
             throw new Error("Turn start failed for test.");
           }
@@ -2616,9 +2617,12 @@ describe("ChatView transcript geometry (full app)", () => {
           await expect
             .element(page.getByRole("button", { name: /Toggle environment panel/ }))
             .not.toBeInTheDocument();
-          const warning = page.getByText("Approaching rate limit (91% used).", { exact: true });
+          const warning = page.getByTestId("composer-usage-limit-warning");
           if (warningsHidden) expect(warning.query()).toBeNull();
-          else await expect.element(warning, { timeout: 3_000 }).toBeVisible();
+          else {
+            await expect.element(warning, { timeout: 3_000 }).toBeVisible();
+            await expect.element(warning).toHaveTextContent("91% used");
+          }
           return;
         }
         const toggle = page.getByRole("button", { name: /Toggle environment panel/ });
@@ -2661,8 +2665,9 @@ describe("ChatView transcript geometry (full app)", () => {
           snapshot.snapshotSequence + 1,
           new Date(Date.now() + (2 * 24 + 2) * 3_600_000 + 300_000).toISOString(),
         );
-        const banner = page.getByRole("alert").filter({ hasText: "Rate limit reached." });
+        const banner = page.getByTestId("composer-usage-limit-card");
         await expect.element(banner).toBeVisible();
+        await expect.element(banner).toHaveTextContent("usage limit reached");
         await expect.element(banner).toHaveTextContent("Resets in 2d 2h");
         expect(
           document.querySelector('[data-chat-composer-form="true"]')!.contains(banner.element()),
@@ -2820,18 +2825,24 @@ describe("ChatView transcript geometry (full app)", () => {
             .element() as HTMLButtonElement
         ).click();
         await vi.waitFor(() => {
-          const starts = wsRequests.filter(
+          const resumes = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              "command" in request &&
+              (request.command as { type?: string }).type === "thread.turn.resume",
+          );
+          expect(resumes).toHaveLength(1);
+          expect(resumes[0]?.command).toMatchObject({ threadId: THREAD_ID });
+        });
+        // The continuation goes to the provider only: no chat message is sent.
+        expect(
+          wsRequests.some(
             (request) =>
               request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
               "command" in request &&
               (request.command as { type?: string }).type === "thread.turn.start",
-          );
-          expect(starts).toHaveLength(1);
-          expect(starts[0]?.command).toMatchObject({
-            threadId: THREAD_ID,
-            message: { text: expect.stringContaining("avoid repeating") },
-          });
-        });
+          ),
+        ).toBe(false);
         expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
       } finally {
         releaseSend();
@@ -2840,6 +2851,66 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("resumes an interrupted task from the empty composer's send button", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("interrupted-user"),
+      targetText: "Refactor the settings page",
+    });
+    const turnId = TurnId.makeUnsafe("interrupted-turn");
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: [
+        {
+          ...base.threads[0]!,
+          latestTurn: {
+            turnId,
+            state: "interrupted",
+            requestedAt: isoAt(140),
+            startedAt: isoAt(140),
+            completedAt: isoAt(150),
+            assistantMessageId: null,
+          },
+        },
+      ],
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    let releaseSend!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+    try {
+      const resume = page.getByRole("button", { name: "Resume task", exact: true });
+      await expect.element(resume).toBeEnabled();
+      wsRequests.length = 0;
+      await resume.click();
+      const dispatchedTypes = () =>
+        wsRequests.flatMap((request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand && "command" in request
+            ? [(request.command as { type?: string }).type]
+            : [],
+        );
+      await vi.waitFor(() => {
+        expect(dispatchedTypes().filter((type) => type === "thread.turn.resume")).toHaveLength(1);
+      });
+      // The click carries the consent a resent message needs for its computer access.
+      expect(
+        wsRequests.find(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            "command" in request &&
+            (request.command as { type?: string }).type === "thread.turn.resume",
+        ),
+      ).toMatchObject({ command: { computerControlGeneration: expect.any(Number) } });
+      // Resume adds no chat message: nothing is sent as a user turn.
+      expect(dispatchedTypes()).not.toContain("thread.turn.start");
+    } finally {
+      releaseSend();
+      restoreApi();
+      await mounted.cleanup();
+    }
+  });
 
   it.each([
     {
@@ -5826,7 +5897,7 @@ describe("ChatView transcript geometry (full app)", () => {
         }
         await vi.waitFor(
           () =>
-            expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+            expect(mounted.commands.some((command) => command.type === "thread.turn.resume")).toBe(
               true,
             ),
           { timeout: 8_000, interval: 16 },
@@ -5838,15 +5909,15 @@ describe("ChatView transcript geometry (full app)", () => {
             command.modelSelection?.provider === "claudeAgent",
         );
         expect(mounted.commands[handoffIndex]).toMatchObject({ providerHandoff: true });
-        const turnStartIndex = mounted.commands.findIndex(
-          (command) => command.type === "thread.turn.start",
+        // The resume runs on the provider the handoff switched to, adding no message.
+        const resumeIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.turn.resume",
         );
-        expect(turnStartIndex).toBeGreaterThan(handoffIndex);
-        expect(mounted.commands[turnStartIndex]).toMatchObject({
-          threadId: THREAD_ID,
-          modelSelection: { provider: "claudeAgent" },
-          message: { text: expect.stringContaining("avoid repeating") },
-        });
+        expect(resumeIndex).toBeGreaterThan(handoffIndex);
+        expect(mounted.commands[resumeIndex]).toMatchObject({ threadId: THREAD_ID });
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
       } finally {
         await mounted.cleanup();
       }

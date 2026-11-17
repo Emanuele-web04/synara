@@ -3382,7 +3382,7 @@ export function createV1Routes(deps: {
     return Boolean(deps.webCheckoutOrigin && c.req.header("origin") === deps.webCheckoutOrigin);
   }
 
-  v1.post("/billing/web-checkout/code", (c) => {
+  v1.post("/billing/web-checkout/code", async (c) => {
     if (!isWebCheckoutOrigin(c))
       return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
     if (!deps.billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");

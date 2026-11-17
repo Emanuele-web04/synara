@@ -54,6 +54,7 @@ import {
   collapseExpandedComposerCursor,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  type ComposerCommandKey,
 } from "~/composer-logic";
 import {
   matchComposerLinkToken,
@@ -546,10 +547,7 @@ interface ComposerPromptEditorProps {
     cursorAdjacentToMention: boolean,
     terminalContextIds: string[],
   ) => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: ComposerCommandKey, event: KeyboardEvent) => boolean;
   onPaste: ClipboardEventHandler<HTMLElement>;
 }
 
@@ -558,18 +556,12 @@ interface ComposerPromptEditorInnerProps extends ComposerPromptEditorProps {
 }
 
 function ComposerCommandKeyPlugin(props: {
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: ComposerCommandKey, event: KeyboardEvent) => boolean;
 }) {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
-    const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-      event: KeyboardEvent | null,
-    ): boolean => {
+    const handleCommand = (key: ComposerCommandKey, event: KeyboardEvent | null): boolean => {
       if (!props.onCommandKeyDown || !event) {
         return false;
       }
@@ -589,6 +581,13 @@ function ComposerCommandKeyPlugin(props: {
     const unregisterArrowUp = editor.registerCommand(
       KEY_ARROW_UP_COMMAND,
       (event) => handleCommand("ArrowUp", event),
+      COMMAND_PRIORITY_HIGH,
+    );
+    // Only for the owner's accept of a composer prediction, which needs an empty editor; the
+    // owner returns false otherwise, so the inline-token arrow handling still applies.
+    const unregisterArrowRight = editor.registerCommand(
+      KEY_ARROW_RIGHT_COMMAND,
+      (event) => handleCommand("ArrowRight", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterEnter = editor.registerCommand(
@@ -611,6 +610,7 @@ function ComposerCommandKeyPlugin(props: {
     return () => {
       unregisterArrowDown();
       unregisterArrowUp();
+      unregisterArrowRight();
       unregisterEnter();
       unregisterTab();
       unregisterSlash();

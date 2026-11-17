@@ -186,7 +186,13 @@ export function IosInboxScreen(props: {
           ))}
         </span>
       </div>
-      <div className="flex flex-col gap-[6px] px-[20px] pt-[18px] pb-[16px]">
+      {/* A landed notification covers the toolbar; the title starts clear of it. */}
+      <div
+        className={cn(
+          "flex flex-col gap-[6px] px-[20px] pb-[16px]",
+          props.banner ? "pt-[52px]" : "pt-[18px]",
+        )}
+      >
         <span className="text-[34px] leading-[40px] font-bold tracking-[-0.01em]">
           {t("workspace:inbox")}
         </span>

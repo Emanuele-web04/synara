@@ -12,8 +12,10 @@ import type { Effect } from "effect";
  */
 export interface ComposerPredictionServiceShape {
   /**
-   * A stale turn, an unavailable provider, a timeout, or invalid output all return
-   * `suggestion: null`. Concurrent calls for the same thread and turn share one
+   * Always sets `outcome`: `suggested` or `none` for a model answer, `unavailable` before
+   * starting provider generation, or `generation-unavailable` when generation may have run.
+   * A later call for the same turn may get an answer after either unavailable outcome.
+   * Concurrent calls for the same thread and turn share one
    * generation, which is interrupted once every caller has stopped waiting. It starts
    * after a short delay, so a caller that stops waiting sooner starts no provider
    * process, and the model's answer is reused for later calls about the same turn.

@@ -82,6 +82,10 @@ import TerminalViewport from "../../terminal/TerminalViewport";
 import { terminalRuntimeRegistry } from "../../terminal/terminalRuntimeRegistry";
 import { AccountsSettingsPanel } from "./AccountsSettingsPanel";
 
+// The terminal runtime subscribes once for the whole file and the sign-in window once per
+// attempt; events reach every listener still subscribed.
+const terminalListeners = new Set<(event: TerminalEvent) => void>();
+
 const defaults = AppSettingsSchema.makeUnsafe({});
 const props = {
   defaults,
@@ -126,10 +130,13 @@ beforeEach(() => {
   }));
   harness.api.terminal.write.mockClear();
   harness.api.terminal.close.mockReset().mockResolvedValue(undefined);
+  harness.terminalListener = (event) => {
+    for (const listener of terminalListeners) listener(event);
+  };
   harness.api.terminal.onEvent.mockImplementation((listener: (event: TerminalEvent) => void) => {
-    harness.terminalListener = listener;
+    terminalListeners.add(listener);
     return () => {
-      harness.terminalListener = null;
+      terminalListeners.delete(listener);
     };
   });
   harness.statuses = PROVIDER_DESCRIPTORS.map(({ kind }) => ({
@@ -411,7 +418,9 @@ it("goes straight on to sign-in after adding an account without its own folder",
   expect(added.providerInstances.codex_team_eu?.displayName).toBe("Team EU");
   // The new account's settings are saved before its sign-in starts.
   await expect.poll(() => save.mock.calls.length).toBeGreaterThan(0);
-  await expect.element(page.getByRole("dialog", { name: "Sign in to Team EU" })).toBeVisible();
+  await expect
+    .element(page.getByRole("dialog", { name: "Finish signing in to Team EU in your browser" }))
+    .toBeVisible();
 });
 
 it("routes a migrated Codex account's rename to its saved account entry", async () => {
@@ -454,8 +463,11 @@ it("survives StrictMode, waits for account edits, and verifies selected-account 
   await expect.element(signIn).toBeDisabled();
   expect(harness.api.terminal.open).not.toHaveBeenCalled();
   finishSave();
-  const dialog = page.getByRole("dialog", { name: "Sign in to Work" });
-  await expect.element(dialog).toBeVisible();
+  await expect
+    .element(page.getByRole("dialog", { name: "Finish signing in to Work in your browser" }))
+    .toBeVisible();
+  // The window's title follows the sign-in's state, so the dialog is addressed by role.
+  const dialog = page.getByRole("dialog");
   await expect.poll(() => harness.api.terminal.open.mock.calls.length).toBeGreaterThan(0);
   const input = harness.api.terminal.open.mock.calls[0]![0] as TerminalOpenInput;
   expect(input.providerAuthInstanceId).toBe("codex_work");
@@ -464,26 +476,142 @@ it("survives StrictMode, waits for account edits, and verifies selected-account 
   expect(harness.api.terminal.close).not.toHaveBeenCalledWith(
     expect.objectContaining({ threadId: input.threadId }),
   );
-  harness.refresh.mockResolvedValue([WORK_STATUS]);
-  harness.terminalListener?.({
-    type: "exited",
-    threadId: input.threadId,
-    terminalId: input.terminalId ?? "sign-in",
-    exitCode: 0,
-    exitSignal: null,
-    createdAt: "2026-10-02T12:00:00Z",
+  const emit = (threadId: string, event: { type: "output"; data: string } | { type: "exited" }) =>
+    harness.terminalListener?.({
+      threadId,
+      terminalId: "sign-in",
+      createdAt: "2026-10-02T12:00:00Z",
+      ...(event.type === "exited" ? { ...event, exitCode: 0, exitSignal: null } : event),
+    });
+
+  // The window reads the login's own output: the link becomes an action, not a wall of text.
+  const signInUrlPrefix = "https://auth.openai.com/oauth/authorize?state=abc";
+  emit(input.threadId, {
+    type: "output",
+    data: `Starting local login server on http://localhost:1455.\r\nIf your browser did not open, navigate to this URL to authenticate:\r\n\r\n${signInUrlPrefix}`,
   });
-  await expect.element(dialog.getByText(/This account is not authenticated yet/u)).toBeVisible();
-  harness.refresh.mockResolvedValue([{ ...WORK_STATUS, authStatus: "authenticated" }]);
-  await dialog.getByRole("button", { name: "Check authentication" }).click();
-  await expect.element(dialog.getByText("Authenticated. You can close this window.")).toBeVisible();
-  await dialog.getByRole("button", { name: "Close", exact: true }).click();
-  await expect.poll(() => harness.api.terminal.close.mock.calls.length).toBeGreaterThan(0);
+  await expect.element(dialog.getByText("Browser tab opened")).toBeVisible();
+  emit(input.threadId, { type: "output", data: "def\r\n" });
+  await dialog.getByRole("button", { name: "Open again" }).click();
+  expect(harness.api.shell.openExternal).toHaveBeenCalledWith(`${signInUrlPrefix}def`);
+
+  // A login that closes without an account says so and offers another go.
+  harness.refresh.mockResolvedValue([WORK_STATUS]);
+  emit(input.threadId, { type: "exited" });
+  await expect.element(dialog.getByText("The sign-in stopped early")).toBeVisible();
+  await dialog.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(() => harness.api.terminal.open.mock.calls.length).toBeGreaterThan(1);
+  const retry = harness.api.terminal.open.mock.calls.at(-1)![0] as TerminalOpenInput;
+  expect(retry.threadId).not.toBe(input.threadId);
   expect(harness.api.terminal.close).toHaveBeenCalledWith({
     threadId: input.threadId,
     terminalId: input.terminalId,
     deleteHistory: true,
   });
+
+  harness.refresh.mockResolvedValue([
+    { ...WORK_STATUS, authStatus: "authenticated", accountEmail: "work@example.com" },
+  ]);
+  emit(retry.threadId, { type: "exited" });
+  await expect.element(dialog.getByText("Work is connected")).toBeVisible();
+  await expect.element(dialog.getByText(/Signed in as work@example\.com/u)).toBeVisible();
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(harness.api.terminal.close).toHaveBeenCalledWith({
+    threadId: retry.threadId,
+    terminalId: retry.terminalId,
+    deleteHistory: true,
+  });
+});
+
+it("rechecks authentication after the CLI exits during an earlier status check", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  let finishFirstCheck!: (statuses: ServerProviderStatus[]) => void;
+  harness.refresh
+    .mockResolvedValue([{ ...WORK_STATUS, authStatus: "authenticated" }])
+    .mockImplementationOnce(
+      () =>
+        new Promise<ServerProviderStatus[]>((resolve) => {
+          finishFirstCheck = resolve;
+        }),
+    );
+  await render(<AccountsHarness {...accountProps().props} initialAccountId="codex_work" />);
+  const signIn = page.getByRole("button", { name: "Sign in to Work", exact: true });
+  await signIn.click();
+  const dialog = page.getByRole("dialog");
+  await expect.poll(() => dialog.element().querySelector(".xterm-screen")).not.toBeNull();
+  const { threadId, terminalId = "sign-in" } = harness.api.terminal.open.mock
+    .calls[0]![0] as TerminalOpenInput;
+  const terminal = { threadId, terminalId, createdAt: "2026-10-02T12:00:00Z" };
+  harness.terminalListener?.({ ...terminal, type: "output", data: "Paste the code:\r\n" });
+  await dialog.getByRole("textbox").fill("fixture-code");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect.poll(() => finishFirstCheck).toBeDefined();
+  harness.terminalListener?.({ ...terminal, type: "exited", exitCode: 0, exitSignal: null });
+  // TerminalViewport notifies its owner on the next task, after flushing output.
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  finishFirstCheck([WORK_STATUS]);
+  await expect.element(dialog.getByText("Work is connected")).toBeVisible();
+});
+
+it("keeps the current attempt open when retry cannot close its terminal", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  harness.refresh.mockResolvedValue([WORK_STATUS]);
+  await render(<AccountsHarness {...accountProps().props} initialAccountId="codex_work" />);
+  await page.getByRole("button", { name: "Sign in to Work", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect.poll(() => dialog.element().querySelector(".xterm-screen")).not.toBeNull();
+  const { threadId, terminalId = "sign-in" } = harness.api.terminal.open.mock
+    .calls[0]![0] as TerminalOpenInput;
+  harness.terminalListener?.({
+    type: "error",
+    threadId,
+    terminalId,
+    message: "Login terminal failed",
+    createdAt: "2026-10-02T12:00:00Z",
+  });
+  harness.api.terminal.close.mockRejectedValueOnce(new Error("Server disconnected; retry closing"));
+  const retry = dialog.getByRole("button", { name: "Try again", exact: true });
+  await retry.click();
+  await expect.element(dialog.getByText("Server disconnected; retry closing")).toBeVisible();
+  expect(
+    new Set(
+      harness.api.terminal.open.mock.calls.map(([input]) => (input as TerminalOpenInput).threadId),
+    ),
+  ).toEqual(new Set([threadId]));
+
+  await retry.click();
+  await expect
+    .poll(() =>
+      harness.api.terminal.open.mock.calls.some(
+        ([input]) => (input as TerminalOpenInput).threadId !== threadId,
+      ),
+    )
+    .toBe(true);
+});
+
+it("keeps a signed-in but unavailable account out of the connected state", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  const message = "The agent reports no models available for this account.";
+  harness.refresh.mockResolvedValue([
+    { ...WORK_STATUS, available: false, authStatus: "authenticated", message },
+  ]);
+  await render(<AccountsHarness {...accountProps().props} initialAccountId="codex_work" />);
+  await page.getByRole("button", { name: "Sign in to Work", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect.poll(() => dialog.element().querySelector(".xterm-screen")).not.toBeNull();
+  const { threadId, terminalId = "sign-in" } = harness.api.terminal.open.mock
+    .calls[0]![0] as TerminalOpenInput;
+  harness.terminalListener?.({
+    type: "exited",
+    threadId,
+    terminalId,
+    exitCode: 0,
+    exitSignal: null,
+    createdAt: "2026-10-02T12:00:00Z",
+  });
+  await expect.element(dialog.getByRole("alert")).toHaveTextContent(message);
+  await expect.element(dialog.getByText("Work is connected")).not.toBeInTheDocument();
 });
 
 it("sends Pi's login selector only after startup and keeps cancellation failures visible", async () => {
@@ -508,12 +636,12 @@ it("sends Pi's login selector only after startup and keeps cancellation failures
   );
   await expect.element(options).toBeDisabled();
   harness.api.terminal.close.mockRejectedValueOnce(new Error("Server disconnected; retry closing"));
-  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect.element(dialog.getByText("Server disconnected; retry closing")).toBeVisible();
   expect(harness.api.terminal.write).not.toHaveBeenCalledWith(
     expect.objectContaining({ data: "exit\n" }),
   );
-  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect.element(dialog).not.toBeInTheDocument();
 });
 
@@ -529,10 +657,10 @@ it("closes a late authentication open after the settings dialog is cancelled", a
   await render(<AccountsHarness {...accountProps().props} />);
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   await page.getByRole("button", { name: "Sign in to Work", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Sign in to Work" });
+  const dialog = page.getByRole("dialog", { name: "Finish signing in to Work in your browser" });
   await expect.poll(() => harness.api.terminal.open.mock.calls.length).toBeGreaterThan(0);
   const input = harness.api.terminal.open.mock.calls[0]![0] as TerminalOpenInput;
-  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect.element(dialog).not.toBeInTheDocument();
   const beforeLate = harness.api.terminal.close.mock.calls.length;
   finishOpen({

@@ -8,6 +8,39 @@ import {
 } from "./codexDiscoveryCatalog.ts";
 
 describe("Codex discovery catalog", () => {
+  it("uses the account's modern speed tiers before the deprecated list", () => {
+    expect(
+      parseCodexModelListResponse({
+        data: [
+          {
+            id: "gpt-6.2-sol",
+            serviceTiers: [
+              { id: "priority", description: "2x speed, increased usage" },
+              { id: "ultrafast", description: "Lowest latency" },
+            ],
+          },
+          {
+            id: "gpt-6.2-astra",
+            serviceTiers: [{ id: "priority" }],
+            additionalSpeedTiers: ["fast", "ultrafast"],
+          },
+          { id: "legacy", additional_speed_tiers: ["ultrafast"] },
+        ],
+      }),
+    ).toEqual([
+      {
+        slug: "gpt-6.2-sol",
+        name: "gpt-6.2-sol",
+        supportsFastMode: true,
+        fastModeDescription: "2x speed, increased usage",
+        supportsUltrafastMode: true,
+        ultrafastModeDescription: "Lowest latency",
+      },
+      { slug: "gpt-6.2-astra", name: "gpt-6.2-astra", supportsFastMode: true },
+      { slug: "legacy", name: "legacy", supportsUltrafastMode: true },
+    ]);
+  });
+
   it.each([
     {
       responseShape: "camelCase",

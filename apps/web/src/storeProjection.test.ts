@@ -207,6 +207,29 @@ describe("store projection", () => {
     });
   });
 
+  it("carries the server's reply preview into the sidebar and keeps it through detail syncs", () => {
+    const thread = makeReadModelThread({});
+    const shell = makeShellSnapshot(thread).threads[0]!;
+    let state = applyShellEvent(makeState(makeThread()), {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: { ...shell, latestReplyPreview: "All four PRs are merged into main." },
+    });
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestReplyPreview).toBe(
+      "All four PRs are merged into main.",
+    );
+
+    // Thread detail never carries the preview, so a detail sync keeps the shell's.
+    state = syncServerReadModel(state, makeReadModel(thread));
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestReplyPreview).toBe(
+      "All four PRs are merged into main.",
+    );
+
+    // A shell without one means the thread has none now.
+    state = applyShellEvent(state, { kind: "thread-upserted", sequence: 3, thread: shell });
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestReplyPreview).toBeUndefined();
+  });
+
   it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
     const thread = makeReadModelThread({ isProjectImport: true });
     let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));

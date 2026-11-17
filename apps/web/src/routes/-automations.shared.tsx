@@ -1,4 +1,5 @@
 import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { automationDraftWarningPresentation } from "~/lib/automationDraft";
 import {
   type AutomationCreateInput,
@@ -19,6 +20,10 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import {
+  type ActiveAutomationRunStatus,
+  isActiveAutomationRunStatus,
+} from "@synara/shared/automationRunLifecycle";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -374,12 +379,7 @@ export function runResultTitle(run: AutomationRun): string | null {
 }
 
 export function canCancelAutomationRun(run: AutomationRun): boolean {
-  return (
-    run.status === "pending" ||
-    run.status === "claimed" ||
-    run.status === "running" ||
-    run.status === "waiting-for-approval"
-  );
+  return isActiveAutomationRunStatus(run.status);
 }
 
 /**
@@ -403,16 +403,11 @@ export function automationAttentionLabel(run: AutomationRun): string | null {
 }
 
 type LiveAutomationRun = AutomationRun & {
-  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
+  readonly status: ActiveAutomationRunStatus;
 };
 
 export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
-  return (
-    run?.status === "pending" ||
-    run?.status === "claimed" ||
-    run?.status === "running" ||
-    run?.status === "waiting-for-approval"
-  );
+  return run !== null && isActiveAutomationRunStatus(run.status);
 }
 
 /**
@@ -1188,7 +1183,7 @@ export function AutomationDialog({
                         type="checkbox"
                         checked={acknowledgedWarningIds.has(warning.id)}
                         onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
-                        className="mt-0.5"
+                        className={cn("mt-0.5 rounded-sm", FOCUS_RING_CLASS_NAME)}
                       />
                     ) : (
                       <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />

@@ -259,7 +259,7 @@ export class DeviceManager {
    * a listing taken meanwhile, and reconciling against that listing released
    * its slot and forgot that Synara owns it.
    */
-  private readonly bootsInFlight = new Set<string>();
+  private readonly bootsInFlight = new Map<string, Promise<DeviceBootResult>>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   /** New consumers wait out an already-issued idle poweroff before dispatching. */
   private readonly idleShutdowns = new Map<string, Promise<void>>();
@@ -432,12 +432,17 @@ export class DeviceManager {
 
   // ── Boot / shutdown ────────────────────────────────────────────────
 
-  async boot(udid: string): Promise<DeviceBootResult> {
+  async boot(udid: string, signal?: AbortSignal): Promise<DeviceBootResult> {
     this.assertNotDisposed();
     await this.waitForIdleShutdown(udid);
     this.assertNotDisposed();
+    signal?.throwIfAborted();
     const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
     this.assertNotDisposed();
+    signal?.throwIfAborted();
+    // Several tools can reach a shut-down device before simctl reports it booting.
+    const pendingBoot = this.bootsInFlight.get(udid);
+    if (pendingBoot) return await pendingBoot;
     // Devices that stopped without Synara doing it still held their slots, so
     // three shutdowns from a shell were enough to make every later boot refuse.
     if (listed !== null) this.reconcileSynaraBooted(listed);
@@ -462,7 +467,13 @@ export class DeviceManager {
     // exists to stop Synara accumulating multi-gigabyte simulators would be
     // exceeded by however many requests arrived inside that window.
     this.synaraBooted.add(udid);
-    this.bootsInFlight.add(udid);
+    const pending = this.completeBoot(udid).finally(() => this.bootsInFlight.delete(udid));
+    this.bootsInFlight.set(udid, pending);
+    return await pending;
+  }
+
+  /** Record an admitted native boot before releasing callers waiting on it. */
+  private async completeBoot(udid: string): Promise<DeviceBootResult> {
     let device: DeviceDescriptor;
     try {
       device = await this.backend.boot(udid);
@@ -471,8 +482,6 @@ export class DeviceManager {
       // after a failure would leak the slot for the process lifetime.
       this.synaraBooted.delete(udid);
       throw cause;
-    } finally {
-      this.bootsInFlight.delete(udid);
     }
     // Persisted before the caller is told the boot succeeded, so a crash in the
     // next instant still leaves a record to reclaim from.
@@ -481,6 +490,36 @@ export class DeviceManager {
     this.clearIdleTimer(udid);
     await this.publishAllThreads();
     return { kind: "booted", device: { ...device, bootSource: "synara" } };
+  }
+
+  /**
+   * Boot `udid` if it is shut down, so putting an app on a simulator never
+   * stops at the one step the caller skipped.
+   *
+   * Synara powers its own simulators off after `DEVICE_IDLE_SHUTDOWN_MS`, so
+   * the device an agent used last turn is routinely off by the next one, and an
+   * install that failed on it left the user starting the simulator by hand.
+   * Join a boot already admitted here. A device booting outside Synara and an
+   * unknown udid are left for the action itself to handle. With no pane dialog
+   * on this path, hitting the boot cap names the devices that hold the slots.
+   */
+  async ensureBooted(udid: string, signal?: AbortSignal): Promise<void> {
+    this.assertNotDisposed();
+    signal?.throwIfAborted();
+    const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
+    signal?.throwIfAborted();
+    const device = listed?.find((candidate) => candidate.udid === udid);
+    const pendingBoot = this.bootsInFlight.get(udid);
+    if (!pendingBoot && device?.state !== "shutdown") return;
+    const result = await (pendingBoot ?? this.boot(udid, signal));
+    // An admitted boot still records its ownership. A cancelled tool must stop
+    // before the app action, even when the native boot could not be interrupted.
+    signal?.throwIfAborted();
+    if (result.kind === "booted") return;
+    const running = result.synaraBooted.map((candidate) => candidate.name).join(", ");
+    throw new DeviceBackendError(
+      `${device?.name ?? udid} is shut down, and Synara already runs the ${result.limit} simulators it may boot${running ? ` (${running})` : ""}. Ask the user which one to shut down, then retry.`,
+    );
   }
 
   async shutdown(udid: string, onlyIfIdle = false): Promise<void> {
@@ -1198,8 +1237,15 @@ export class DeviceManager {
     await this.withDeviceAction(udid, () => this.backend.pressButton(udid, button, options));
   }
 
-  async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
-    return await this.withDeviceAction(udid, () => this.backend.install(udid, appPath));
+  async install(
+    udid: string,
+    appPath: string,
+    signal?: AbortSignal,
+  ): Promise<DeviceInstallAppResult> {
+    return await this.withDeviceAction(udid, () => {
+      signal?.throwIfAborted();
+      return this.backend.install(udid, appPath);
+    });
   }
 
   async launch(

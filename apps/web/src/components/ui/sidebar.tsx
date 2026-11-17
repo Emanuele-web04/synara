@@ -378,6 +378,10 @@ function Sidebar({
           <div
             className={cn(
               "relative z-0 flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
+              // Slid off-screen, the panel stays mounted: hiding it takes its controls out of
+              // the tab order and the accessibility tree. Visibility flips after the slide
+              // when closing and at once when opening; the rail outside stays reachable.
+              "transition-[visibility] duration-200 group-data-[collapsible=offcanvas]:invisible motion-reduce:transition-none",
               !transparentSurface && "bg-sidebar",
               innerClassName,
             )}

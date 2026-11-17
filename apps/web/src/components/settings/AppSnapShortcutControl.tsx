@@ -237,7 +237,7 @@ export function AppSnapShortcutControl({
             "flex min-h-8 items-center gap-1.5 rounded-md border px-2 outline-none transition-colors",
             capture.capturing
               ? "border-primary bg-primary/10 ring-2 ring-primary/20"
-              : "border-[color:var(--color-border)] hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/30",
+              : "border-[color:var(--color-border)] hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
           )}
         >
           {capture.capturing ? (

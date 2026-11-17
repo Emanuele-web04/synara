@@ -1,6 +1,6 @@
 {
   "name": "@synara/web",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --sequence.shuffle",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:browser:stable": "vitest run --config vitest.browser.stable.config.ts",
     "test:browser:ci": "vitest run --config vitest.browser.ci.config.ts",

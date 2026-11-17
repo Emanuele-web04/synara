@@ -356,7 +356,13 @@ function createRetainingRestartProviderServiceLayer(options?: {
   readonly failFirstTeardown?: boolean;
   readonly keepLiveOnFailedTeardown?: boolean;
   readonly liveTurns?: boolean;
-  readonly failStart?: () => boolean;
+  readonly failStart?: (
+    input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0],
+  ) => boolean;
+  readonly startResumeCursor?: (
+    input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0],
+  ) => unknown;
+  readonly serverSettings?: DeepPartial<ServerSettings>;
   readonly interruptFailure?: boolean;
   readonly onSendTurn?: (input: Parameters<ProviderServiceShape["sendTurn"]>[0]) => void;
 }) {
@@ -394,7 +400,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
       capabilities: { sessionModelSwitch: "in-session" },
       startSession: (input) =>
         Effect.suspend(() =>
-          options?.failStart?.()
+          options?.failStart?.(input)
             ? Effect.fail(
                 new ProviderAdapterRequestError({
                   provider,
@@ -405,6 +411,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
             : teardown(input.threadId, "session/restart").pipe(
                 Effect.map(() => {
                   const now = new Date().toISOString();
+                  const resumeCursor = options?.startResumeCursor?.(input);
                   const session: ProviderSession = {
                     provider,
                     status: "ready",
@@ -414,6 +421,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
                       ? { providerInstanceId: input.providerInstanceId }
                       : {}),
                     ...(input.cwd ? { cwd: input.cwd } : {}),
+                    ...(resumeCursor !== undefined ? { resumeCursor } : {}),
                     createdAt: now,
                     updatedAt: now,
                   };
@@ -464,7 +472,9 @@ function createRetainingRestartProviderServiceLayer(options?: {
       const codexHomePath = path.join(fixtureRoot, "codex");
       fs.mkdirSync(codexHomePath);
       return ServerSettingsService.layerTest({
+        ...options?.serverSettings,
         providerInstances: {
+          ...options?.serverSettings?.providerInstances,
           codex: {
             driver: "codex",
             config: { homePath: codexHomePath },
@@ -685,6 +695,7 @@ describe("ProviderCommandReactor", () => {
       NonNullable<ProviderServiceShape["startSessionWithOutcome"]>
     >((threadId, sessionInput, outcomeOptions) => {
       const persistedCursor =
+        outcomeOptions?.startFreshForAccountHandoff !== true &&
         persistedResumeCursorProviders.get(threadId) === sessionInput.provider
           ? persistedResumeCursors.get(threadId)
           : undefined;
@@ -2044,8 +2055,9 @@ describe("ProviderCommandReactor", () => {
       await requestResume(harness, wait.id);
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
-      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
-        "verify whether pending operations already completed before repeating them",
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
+        "I hit my usage limit while you were working, but it has reset now. Please continue from where you left off. " +
+          "Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
       );
       expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
         id: wait.id,
@@ -12391,6 +12403,326 @@ describe("ProviderCommandReactor", () => {
       }
     },
   );
+
+  const sendUserTurn = (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    text: string,
+    options?: {
+      readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: string };
+    },
+  ) =>
+    Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        commandId: CommandId.makeUnsafe(`cmd-send-${id}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: { messageId: MessageId.makeUnsafe(id), role: "user", text, attachments: [] },
+        enableComputerControl: false,
+        computerControlGeneration: 0,
+        ...(options?.sourceProposedPlan ? { sourceProposedPlan: options.sourceProposedPlan } : {}),
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  const resumeThread = (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    options?: { readonly continuationPrompt?: string; readonly computerControlGeneration?: number },
+  ) =>
+    Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.resume",
+        commandId: CommandId.makeUnsafe(id),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        ...(options?.continuationPrompt ? { continuationPrompt: options.continuationPrompt } : {}),
+        ...(options?.computerControlGeneration !== undefined
+          ? { computerControlGeneration: options.computerControlGeneration }
+          : {}),
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  // A refused send quarantines the thread; Unblock abandons that delivery and
+  // never retries it, which leaves exactly the message Resume should resend.
+  const failThenUnblockSend = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    send: () => Promise<unknown>,
+  ) => {
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Provider refused the turn.",
+        }),
+      ),
+    );
+    await send();
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    await harness.drain();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const blocker = (
+      await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId,
+        }),
+      )
+    ).pipe(Option.getOrThrow);
+    await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: blocker.eventSequence,
+        threadId,
+        expectedState: blocker.state === "dead" ? "dead" : "uncertain",
+        outcome: "abandon",
+        reconciledBy: "local-loopback:local-loopback",
+        note: "Unblocked from the thread error banner.",
+      }),
+    );
+    await harness.drain();
+  };
+  // The turn requests the stored message has had, oldest first.
+  const turnRequestsFor = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    messageId: string,
+  ) =>
+    (
+      await Effect.runPromise(
+        harness.engine
+          .readThreadEventsThrough("thread-1", 0, Number.MAX_SAFE_INTEGER, [
+            "thread.turn-start-requested",
+          ])
+          .pipe(Stream.runCollect),
+      )
+    ).flatMap((event) =>
+      event.type === "thread.turn-start-requested" && event.payload.messageId === messageId
+        ? [event.payload]
+        : [],
+    );
+  // The provider accepted turn-1 and ran it; it then stopped (Stop, quit or
+  // restart) or finished on its own.
+  const runThenSettleTurn = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    id: string,
+    settled: "interrupted" | "ready" = "interrupted",
+  ) => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    for (const [status, activeTurnId] of [
+      ["running", asTurnId("turn-1")],
+      [settled, null],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`${id}-${status}`),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId,
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.latestTurn?.state ===
+        (settled === "ready" ? "completed" : "interrupted"),
+    );
+  };
+  const userMessages = async (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    ((await readHarnessThread(harness))?.messages ?? []).filter(
+      (message) => message.role === "user",
+    );
+
+  it("resends a request that never reached the provider without adding a chat message", async () => {
+    const harness = await createHarness();
+    await failThenUnblockSend(harness, () =>
+      sendUserTurn(harness, "resume-unsent", "Refactor the settings page"),
+    );
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    // Unblocked and idle: the composer offers Resume for the unsent message.
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "stopped",
+      lastError: null,
+    });
+
+    await resumeThread(harness, "cmd-turn-resume-unsent");
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("Refactor the settings page");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).not.toContain(
+      "Continue the interrupted task",
+    );
+    expect((await userMessages(harness)).map((message) => message.id)).toEqual(["resume-unsent"]);
+  });
+
+  it("keeps the plan a resent message implements", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.proposed-plan.upsert",
+        commandId: CommandId.makeUnsafe("cmd-resume-plan"),
+        threadId,
+        proposedPlan: {
+          id: "plan-resume",
+          turnId: null,
+          planMarkdown: "1. Refactor the settings page",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    const sourceProposedPlan = { threadId, planId: "plan-resume" };
+    await failThenUnblockSend(harness, () =>
+      sendUserTurn(harness, "resume-plan-message", "Implement the plan", { sourceProposedPlan }),
+    );
+
+    await resumeThread(harness, "cmd-turn-resume-plan");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const requests = await turnRequestsFor(harness, "resume-plan-message");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({ sourceProposedPlan });
+  });
+
+  it.each([
+    ["restores /computer access with the resuming person's consent", 0, true],
+    ["resends without computer access when nobody granted it", undefined, false],
+  ] as const)("%s", async (_case, consentGeneration, computerAccess) => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
+    try {
+      await failThenUnblockSend(harness, () =>
+        sendUserTurn(harness, "resume-computer-message", "/computer-use open Calculator"),
+      );
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
+
+      await resumeThread(
+        harness,
+        "cmd-turn-resume-computer",
+        consentGeneration !== undefined ? { computerControlGeneration: consentGeneration } : {},
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      await harness.drain();
+
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("open Calculator");
+      expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(
+        computerAccess,
+      );
+      const requests = await turnRequestsFor(harness, "resume-computer-message");
+      expect(requests.at(-1)?.computerControlMode).toBe(computerAccess ? "request" : "off");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("continues an interrupted turn with a provider-only prompt", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-delivered", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-interrupt-session");
+
+    await resumeThread(harness, "cmd-resume-delivered");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const input = harness.sendTurn.mock.calls[1]?.[0].input;
+    expect(input).toContain("Continue the interrupted task");
+    expect(input).not.toContain("Refactor the settings page");
+    expect((await userMessages(harness)).map((message) => message.id)).toEqual([
+      "resume-delivered",
+    ]);
+  });
+
+  it("quarantines a resume whose provider acknowledgement was lost", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-before-ack-loss", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-before-ack-loss");
+
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Transport closed while awaiting turn acceptance.",
+        }),
+      ),
+    );
+    const resume = await resumeThread(harness, "cmd-resume-without-ack");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: resume.sequence,
+      }),
+    );
+    expect(Option.getOrThrow(delivery)).toMatchObject({ state: "uncertain", attemptCount: 1 });
+    const restarted = await harness.restartReactor();
+    await restarted.start();
+    await resumeThread(harness, "cmd-second-resume-without-ack").catch(() => undefined);
+    await Effect.runPromise(restarted.reactor.drain);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+    expect(await userMessages(harness)).toHaveLength(1);
+  });
+
+  it("sends the recorded quit prompt when the app resumes a chat", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-quit", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-quit-session");
+
+    await resumeThread(harness, "cmd-resume-quit", {
+      continuationPrompt: "Synara was closed. Continue where you left off.",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain(
+      "Synara was closed. Continue where you left off.",
+    );
+    expect(await userMessages(harness)).toHaveLength(1);
+  });
+
+  it("does nothing when there is nothing to resume", async () => {
+    const harness = await createHarness();
+    await sendUserTurn(harness, "resume-settled", "Refactor the settings page");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await runThenSettleTurn(harness, "cmd-resume-settled-session", "ready");
+
+    await resumeThread(harness, "cmd-resume-settled").catch(() => undefined);
+    await harness.drain();
+
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
 
   it("pauses a failed visible first goal turn and does not recover it until resumed", async () => {
     const harness = await createHarness();
@@ -25804,6 +26136,181 @@ describe("ProviderCommandReactor", () => {
       },
     });
   });
+
+  it("hands a bound thread off to another account of its provider in place", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work",
+            enabled: true,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-account-handoff-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-account-handoff-1"),
+          role: "user",
+          text: "first turn on the default account",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-account-handoff"),
+        threadId,
+        modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
+        providerHandoff: true,
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.handoff",
+        ),
+      ),
+    );
+    // Stop the source runtime while the replacement is still starting.
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.startSession.mock.calls).toHaveLength(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "codex",
+      providerInstanceId: "codex_work",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerInstanceId).toBe("codex_work");
+    expect(thread?.modelSelection).toMatchObject({ provider: "codex", instanceId: "codex_work" });
+    const handoffActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.handoff",
+    );
+    expect(handoffActivity?.payload).toMatchObject({
+      sourceModelSelection: { provider: "codex", instanceId: "codex" },
+      targetModelSelection: { provider: "codex", instanceId: "codex_work" },
+    });
+    // The provider alone would read the same on both sides, so the target names its account.
+    expect(handoffActivity?.summary).toBe(
+      "Handed off from Codex (gpt-5-codex) to Codex · Work (gpt-5.4)",
+    );
+  });
+
+  it.each([false, true])(
+    "keeps the native cursor with the source account during a handoff (target rejects: %s)",
+    async (targetRejects) => {
+      const sourceCursor = { resume: "source-native-session" };
+      const targetAccountId = "claude_work";
+      const serverSettings = {
+        providerInstances: {
+          [targetAccountId]: { driver: "claudeAgent" as const, enabled: true },
+        },
+      };
+      const starts = vi.fn(
+        (input: Parameters<ProviderAdapterShape<ProviderAdapterError>["startSession"]>[0]) =>
+          targetRejects && input.providerInstanceId === targetAccountId,
+      );
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "sonnet" },
+        serverSettings,
+        providerServiceLayer: createRetainingRestartProviderServiceLayer({
+          failFirstTeardown: false,
+          serverSettings,
+          failStart: starts,
+          // The target can start before the adapter has a native cursor to persist.
+          startResumeCursor: (input) =>
+            input.providerInstanceId === targetAccountId
+              ? undefined
+              : (input.resumeCursor ?? sourceCursor),
+        }),
+      });
+      const repository = harness.providerRuntimeRepository;
+      if (!repository) throw new Error("Expected real provider persistence");
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const send = async (id: string) => {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(id),
+            threadId,
+            message: {
+              messageId: asMessageId(id),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await harness.drain();
+      };
+      await send("account-handoff-initial-turn");
+      const binding = async () =>
+        Option.getOrThrow(await Effect.runPromise(repository.getByThreadId({ threadId })));
+      expect(await binding()).toMatchObject({
+        providerInstanceId: "claudeAgent",
+        resumeCursor: sourceCursor,
+      });
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("account-handoff-switch"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", instanceId: targetAccountId, model: "sonnet" },
+          providerHandoff: true,
+        }),
+      );
+      await harness.drain();
+      const targetStart = starts.mock.calls.find(
+        ([input]) => input.providerInstanceId === targetAccountId,
+      );
+      expect(targetStart?.[0]).toBeDefined();
+      expect(targetStart?.[0].resumeCursor).toBeUndefined();
+      const thread = await readHarnessThread(harness);
+      expect(thread?.activities.map((activity) => activity.kind)).toContain(
+        targetRejects ? "provider.handoff.failed" : "provider.handoff",
+      );
+
+      if (targetRejects) {
+        expect(thread?.modelSelection.instanceId).toBe("claudeAgent");
+        expect(await binding()).toMatchObject({
+          providerInstanceId: "claudeAgent",
+          resumeCursor: sourceCursor,
+          status: "stopped",
+        });
+        await send("account-handoff-retry-source");
+        expect(starts.mock.lastCall?.[0]).toMatchObject({
+          providerInstanceId: "claudeAgent",
+          resumeCursor: sourceCursor,
+        });
+      } else {
+        expect(await binding()).toMatchObject({
+          providerInstanceId: targetAccountId,
+          resumeCursor: null,
+        });
+      }
+    },
+  );
 
   it("rejects provider changes after a thread is already bound to a session provider", async () => {
     const harness = await createHarness();

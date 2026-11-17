@@ -171,12 +171,17 @@ export type ProviderSetupState =
   | "connected"
   | "needs-sign-in"
   | "not-installed"
+  /** The CLI is on this machine but Synara could not use it; the status says why. */
+  | "unavailable"
   | "detecting"
   | "check-failed"
   | "disabled";
 
 export function classifyProviderSetup(input: {
-  readonly status: Pick<ServerProviderStatus, "available" | "authStatus"> | null | undefined;
+  readonly status:
+    | Pick<ServerProviderStatus, "available" | "authStatus" | "installed">
+    | null
+    | undefined;
   readonly disabled: boolean;
   readonly detecting?: boolean;
   readonly detectionFailed?: boolean;
@@ -184,7 +189,12 @@ export function classifyProviderSetup(input: {
   if (input.disabled) return "disabled";
   if (!input.status && input.detecting) return "detecting";
   if (!input.status && input.detectionFailed) return "check-failed";
-  if (!input.status || !input.status.available) return "not-installed";
+  if (!input.status) return "not-installed";
+  if (!input.status.available) {
+    // Only a CLI the server could not find is "not installed". Anything else that is
+    // unavailable is installed and broken, and pointing at a setup guide would mislead.
+    return input.status.installed === false ? "not-installed" : "unavailable";
+  }
   // Providers whose auth is not probed report "unknown"; treat a detected binary as
   // usable rather than nagging for a sign-in Synara cannot verify.
   return input.status.authStatus === "unauthenticated" ? "needs-sign-in" : "connected";
@@ -195,6 +205,7 @@ export interface ProviderSetupSummary {
   readonly connected: number;
   readonly needsSignIn: number;
   readonly notInstalled: number;
+  readonly unavailable: number;
   readonly detecting: number;
   readonly checkFailed: number;
 }
@@ -206,6 +217,7 @@ export function summarizeProviderSetup(
   let connected = 0;
   let needsSignIn = 0;
   let notInstalled = 0;
+  let unavailable = 0;
   let detecting = 0;
   let checkFailed = 0;
   for (const entry of states) {
@@ -213,10 +225,11 @@ export function summarizeProviderSetup(
     if (entry.state === "connected") connected += 1;
     if (entry.state === "needs-sign-in") needsSignIn += 1;
     if (entry.state === "not-installed") notInstalled += 1;
+    if (entry.state === "unavailable") unavailable += 1;
     if (entry.state === "detecting") detecting += 1;
     if (entry.state === "check-failed") checkFailed += 1;
   }
-  return { enabled, connected, needsSignIn, notInstalled, detecting, checkFailed };
+  return { enabled, connected, needsSignIn, notInstalled, unavailable, detecting, checkFailed };
 }
 
 export function describeOnboardingAgentSummary(summary: ProviderSetupSummary): string {

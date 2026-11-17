@@ -422,9 +422,11 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
 async function terminateProcessTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
+    // Bounded: a taskkill that cannot finish must not hold the smoke open.
     spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 30_000,
     });
     await waitForExit(child, 5_000);
     return;

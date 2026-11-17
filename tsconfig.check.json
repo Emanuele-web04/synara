@@ -1,0 +1,50 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "apps/analytics"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/api/cloudflare/tsconfig.json"
+    },
+    {
+      "path": "apps/desktop"
+    },
+    {
+      "path": "apps/desktop/tsconfig.fixtures.json"
+    },
+    {
+      "path": "apps/e2e"
+    },
+    {
+      "path": "apps/marketing"
+    },
+    {
+      "path": "apps/profiles"
+    },
+    {
+      "path": "apps/server"
+    },
+    {
+      "path": "apps/web"
+    },
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/profile-ui"
+    },
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "scripts"
+    },
+    {
+      "path": "scripts/tsconfig.computer-measurement.json"
+    }
+  ]
+}

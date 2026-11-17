@@ -3179,11 +3179,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   `Provider instance '${resolved.instance.instanceId}' changed while its session was starting.`,
                 );
               }
+              const freshAccountHandoff =
+                outcomeOptions?.startFreshForAccountHandoff === true &&
+                persistedBinding?.provider === resolved.instance.driver &&
+                persistedProviderInstanceId !== resolved.instance.instanceId;
               const hasExplicitResumeCursor = input.resumeCursor !== undefined;
               const currentContinuationIdentity =
-                (hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
-                (persistedBinding !== undefined &&
-                  persistedBinding.provider === resolved.instance.driver)
+                !freshAccountHandoff &&
+                ((hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
+                  persistedBinding?.provider === resolved.instance.driver)
                   ? yield* prepareContinuationIdentityForCompatibility({
                       operation: "ProviderService.startSession",
                       provider: resolved.instance.driver,
@@ -3225,9 +3229,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const continuationResetRequested =
                 persistedBinding !== undefined &&
                 readPersistedContinuationResetRequested(persistedBinding.runtimePayload);
-              // Only a switch to another driver may abandon the persisted
-              // continuation implicitly; a same-driver home or account change
-              // still has to be resolved by the user.
+              // A stored rebind can leave another driver. Leaving the current
+              // account within one driver requires an explicit handoff.
               const abandonsOtherProviderContinuation =
                 outcomeOptions?.abandonOtherProviderContinuation === true &&
                 persistedBinding !== undefined &&
@@ -3240,6 +3243,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 persistedBinding !== undefined &&
                 !continuationResetRequested &&
                 !abandonsOtherProviderContinuation &&
+                !freshAccountHandoff &&
                 ((!hasAvailableResumeCursor && !exactPersistedLaunchMatch) ||
                   (hasAvailableResumeCursor && !continuationCompatible)) &&
                 (providerUsesProtectedNativeContinuation(persistedBinding.provider) ||
@@ -3258,7 +3262,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
               const effectiveResumeCursor =
-                input.forkSourceResumeCursor !== undefined
+                freshAccountHandoff || input.forkSourceResumeCursor !== undefined
                   ? undefined
                   : (input.resumeCursor ??
                     // A replacement retired for another account or endpoint must
@@ -3400,6 +3404,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
                   abandonsOtherProviderContinuation ||
+                  freshAccountHandoff ||
                   ((nativeResumeAttempted ||
                     outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true) &&
                     !nativeResumeSucceeded);
@@ -3413,6 +3418,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const sessionWithInstance: ProviderSession = {
                   ...session,
                   providerInstanceId: resolved.instance.instanceId,
+                  // An account can start before it has a cursor to persist.
+                  ...(freshAccountHandoff && session.resumeCursor === undefined
+                    ? { resumeCursor: null }
+                    : {}),
                 };
 
                 yield* withBindingWriteLock(

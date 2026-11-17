@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,7 +23,7 @@
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
+    "test": "vitest run"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",

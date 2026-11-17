@@ -1,5 +1,6 @@
-// Tab on a composer prediction: the branch runs after the menus and before prompt history
-// and Enter, re-reads the editor at key time, and otherwise leaves Tab alone.
+// Tab or Right Arrow on a composer prediction: the Tab branch runs after the menus and before
+// prompt history and Enter, both re-read the editor at key time, and otherwise leave the key
+// alone. Enter never accepts.
 
 import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,10 @@ import { useChatComposerCommands } from "./useChatComposerCommands";
 
 const SUGGESTION = "Fix the fixture and rerun that test.";
 const PREDICTION = { key: "prediction-key", suggestion: SUGGESTION };
+
+function arrowRight(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
+  return tab({ keyCode: 39, ...overrides });
+}
 
 function tab(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return {
@@ -204,5 +209,59 @@ describe("useChatComposerCommands Tab on a composer prediction", () => {
 
     expect(harness.composerPrediction.accept).not.toHaveBeenCalled();
     expect(harness.onSend).toHaveBeenCalled();
+  });
+});
+
+describe("useChatComposerCommands Right Arrow on a composer prediction", () => {
+  beforeEach(() => {
+    reactHookHarness.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("inserts the suggestion like Tab does", () => {
+    const harness = setup();
+
+    expect(harness.commands.onComposerCommandKey("ArrowRight", arrowRight())).toBe(true);
+    expect(harness.composerPrediction.accept).toHaveBeenCalledWith(PREDICTION);
+    expect(harness.promptRef.current).toBe(SUGGESTION);
+    expect(harness.setPrompt).toHaveBeenCalledWith(SUGGESTION);
+    expect(harness.setComposerCursor).toHaveBeenCalledWith(SUGGESTION.length);
+    expect(harness.setComposerTrigger).toHaveBeenCalledWith(null);
+    expect(harness.onSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Shift+Right", arrowRight({ shiftKey: true })],
+    ["Alt+Right", arrowRight({ altKey: true })],
+    ["Ctrl+Right", arrowRight({ ctrlKey: true })],
+    ["Meta+Right", arrowRight({ metaKey: true })],
+    ["Right during IME composition", arrowRight({ isComposing: true })],
+    ["Right with IME keyCode 229", arrowRight({ keyCode: 229 })],
+  ])("keeps the default for %s", (_label, event) => {
+    const harness = setup();
+
+    expect(harness.commands.onComposerCommandKey("ArrowRight", event)).toBe(false);
+    expect(harness.composerPrediction.accept).not.toHaveBeenCalled();
+    expect(harness.setPrompt).not.toHaveBeenCalled();
+  });
+
+  it("keeps the default when the editor holds text, lost focus, or the prediction was used", () => {
+    for (const harness of [setup({ editorValue: "draft" }), setup({ focused: false })]) {
+      expect(harness.commands.onComposerCommandKey("ArrowRight", arrowRight())).toBe(false);
+      expect(harness.setPrompt).not.toHaveBeenCalled();
+    }
+    const used = setup();
+    expect(used.commands.onComposerCommandKey("ArrowRight", arrowRight())).toBe(true);
+    used.setPrompt.mockClear();
+    expect(used.commands.onComposerCommandKey("ArrowRight", arrowRight())).toBe(false);
+    expect(used.setPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does nothing else with Right Arrow, even with an open menu", () => {
+    const harness = setup({ menuOpen: true, editorValue: "@fo" });
+
+    expect(harness.commands.onComposerCommandKey("ArrowRight", arrowRight())).toBe(false);
+    expect(harness.handleForkTargetSelection).not.toHaveBeenCalled();
+    expect(harness.onSend).not.toHaveBeenCalled();
   });
 });

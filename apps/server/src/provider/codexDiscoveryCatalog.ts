@@ -383,11 +383,19 @@ export function parseCodexModelListResponse(response: unknown): ProviderListMode
     const defaultReasoningEffort =
       readString(model, "defaultReasoningEffort") ?? readString(model, "default_reasoning_effort");
     const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
-    const additionalSpeedTiers =
+    const serviceTiers = readArray(model, "serviceTiers") ?? readArray(model, "service_tiers");
+    const legacyTiers =
       readArray(model, "additionalSpeedTiers") ?? readArray(model, "additional_speed_tiers") ?? [];
-    const hasFastSpeedTier = additionalSpeedTiers.some(
-      (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
-    );
+    // A modern catalog's tier list reflects the current account's access.
+    const speedTiers = (serviceTiers ?? legacyTiers).map((tier) => {
+      const id = typeof tier === "string" ? tier : readString(tier, "id");
+      return {
+        id: id?.trim().toLowerCase(),
+        description: readString(tier, "description")?.trim(),
+      };
+    });
+    const fastSpeedTier = speedTiers.find((tier) => tier.id === "priority" || tier.id === "fast");
+    const ultrafastSpeedTier = speedTiers.find((tier) => tier.id === "ultrafast");
     const supportsFastMode =
       readFirstBoolean(model, [
         "supportsFastMode",
@@ -396,7 +404,7 @@ export function parseCodexModelListResponse(response: unknown): ProviderListMode
         "fast_mode",
         "fastServiceTier",
         "fast_service_tier",
-      ]) ?? (hasFastSpeedTier ? true : undefined);
+      ]) ?? (fastSpeedTier ? true : undefined);
 
     seen.add(trimmedSlug);
     return [
@@ -411,6 +419,11 @@ export function parseCodexModelListResponse(response: unknown): ProviderListMode
           ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
           : {}),
         ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
+        ...(fastSpeedTier?.description ? { fastModeDescription: fastSpeedTier.description } : {}),
+        ...(ultrafastSpeedTier ? { supportsUltrafastMode: true } : {}),
+        ...(ultrafastSpeedTier?.description
+          ? { ultrafastModeDescription: ultrafastSpeedTier.description }
+          : {}),
       },
     ];
   });

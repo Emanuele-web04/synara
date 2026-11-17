@@ -1318,7 +1318,9 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     accentBackgroundActive: mixHex("#000000", theme.theme.accent, 0.22 + theme.contrast * 0.12),
     accentBackgroundHover: mixHex("#000000", theme.theme.accent, 0.21 + theme.contrast * 0.1),
     border: formatRgba(theme.ink, 0.1 + theme.contrast * 0.04),
-    borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
+    // Opaque, as in the light derivation: at 0.63 alpha a 2px focus ring drew under 3:1
+    // against the surface for darker accents (the Codex blue reads 2.56:1).
+    borderFocus: formatOpaqueRgb(focusBase),
     borderHeavy: formatRgba(theme.ink, 0.16 + theme.contrast * 0.06),
     borderLight: formatRgba(theme.ink, 0.06 + theme.contrast * 0.02),
     // High-contrast primary button (white-on-dark) mirroring the light-mode
@@ -1354,7 +1356,9 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     // for the border, rather than using the raw accent directly.
     textAccent: formatOpaqueRgb(focusBase),
     textButtonPrimary: theme.theme.surface,
-    textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
+    // Full ink, as in the light derivation and the stylesheet default: a mix towards the
+    // surface left secondary button labels near 3:1 on dark themes.
+    textButtonSecondary: theme.theme.ink,
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     textForeground: theme.theme.ink,
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),

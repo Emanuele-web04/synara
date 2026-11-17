@@ -26,6 +26,7 @@ import {
   supportsComposerFastModeControl,
 } from "./composerTraits";
 import { FastModeToggle } from "./TraitsPicker";
+import { ComposerUltrafastMenu } from "./ComposerUltrafastMenu";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { useTranslation } from "~/i18n";
 
@@ -78,7 +79,8 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
     activeLevel?.label ??
     t("chat:traitsPicker_effort");
   const effortIsDefault = ultrathinkPromptControlled || effort === defaultEffort;
-  const canReset = fastModeEnabled || !effortIsDefault;
+  const speedIsDefault = !fastModeEnabled && !selection.ultrafastModeEnabled;
+  const canReset = !speedIsDefault || !effortIsDefault;
 
   const lastIndex = Math.max(effortLevels.length - 1, 0);
 
@@ -102,14 +104,21 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         : null;
     commitTrait({
       ...(effortPlan?.kind === "options" ? effortPlan.patch : {}),
-      ...(fastModeEnabled ? { fastMode: false } : {}),
+      ...(!speedIsDefault ? { fastMode: false } : {}),
     });
   };
 
   return (
     <div className="px-1 pt-0.5 pb-1" data-slot="effort-slider-card">
       <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_1.5rem] items-center gap-1">
-        {supportsFastMode ? (
+        {selection.supportsUltrafastMode ? (
+          <ComposerUltrafastMenu
+            compact
+            selection={selection}
+            runtimeModel={props.runtimeModel}
+            onChange={commitTrait}
+          />
+        ) : supportsFastMode ? (
           <FastModeToggle
             tone="accent"
             enabled={fastModeEnabled}
