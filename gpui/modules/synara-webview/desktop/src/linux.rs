@@ -1,66 +1,95 @@
-//! The Linux web view: an X11 child window under the composition surface,
-//! with a Chromium-family browser window reparented into it.
+//! The Linux web view: an in-process WebKitGTK web view (via `wry`) inside an
+//! X11 child window under the composition surface.
 //!
-//! GPUI on Linux has no in-process web view, so the component embeds a real
-//! browser process. The browser runs chromeless (`--app=<url>`) in an
-//! isolated profile with a unique `--class`, so its window can be found and
-//! reparented under the child no matter how the browser's launcher re-execs.
-//! A watcher thread keeps the browser's geometry in sync with the surface and
-//! kills it when the host window or the component goes away.
+//! GTK is single-threaded and `gtk::init` must run before any wry call, so a
+//! dedicated thread owns the GTK main loop and every web view operation is
+//! posted to it. The component's own child window stays the tracked native
+//! view; wry creates its container inside it. A 250 ms poll keeps the web
+//! view's bounds in sync with the child window's geometry, which the
+//! compositor moves and resizes with the surface.
+//!
+//! Hardening: WebKitGTK sandboxes its web processes through bubblewrap when
+//! available; devtools are off, navigation is limited to http/https/about,
+//! `window.open` and downloads are denied, and sensor permissions
+//! (microphone, camera, geolocation) are refused.
 
 use std::{
-    process::{Child, Command, Stdio},
+    cell::RefCell,
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Mutex, Once,
     },
     thread,
     time::Duration,
 };
 
-use raw_window_handle::RawWindowHandle;
+use raw_window_handle::{
+    HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle,
+};
 use react_native_gpui::native_surface::{Error, NativeViewHandle, NativeViewParent, Result};
+use wry::{
+    dpi::{LogicalPosition, LogicalSize},
+    NewWindowResponse, PermissionKind, PermissionResponse, Rect, WebView, WebViewBuilder,
+};
 use x11rb::{
     connection::Connection,
     protocol::xproto::{
-        AtomEnum, ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, WindowClass,
+        ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, WindowClass,
     },
     rust_connection::RustConnection,
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
 };
 
-/// A Chromium-family executable, in PATH-preference order. The
-/// `SYNARA_WEBVIEW_BROWSER` environment variable overrides the search.
-const BROWSERS: &[&str] = &[
-    "google-chrome",
-    "google-chrome-stable",
-    "chromium",
-    "chromium-browser",
-    "microsoft-edge",
-];
+/// How often the GTK thread reconciles each web view's bounds with its
+/// window's geometry and drops views whose window is gone.
+const POLL: Duration = Duration::from_millis(250);
 
-/// How often the watcher reconciles the browser's geometry and checks the
-/// host window still exists.
-const POLL: Duration = Duration::from_millis(200);
+/// A web view living on the GTK thread, keyed by the child window id that
+/// hosts it.
+struct View {
+    webview: WebView,
+    /// The composition surface our child window lives under; its geometry is
+    /// what the web view must match.
+    surface: u32,
+    width: u32,
+    height: u32,
+}
 
-/// How many polls the watcher looks for a new browser window before giving up
-/// on that launch and restarting it (~20 s).
-const FIND_WINDOW_POLLS: u32 = 100;
+thread_local! {
+    static VIEWS: RefCell<HashMap<u32, View>> = RefCell::new(HashMap::new());
+    /// The GTK thread's own X connection for geometry reads — GDK's foreign
+    /// window wrapper does not report real geometry for windows we created.
+    static XCONN: RefCell<Option<RustConnection>> = const { RefCell::new(None) };
+}
 
-/// The embedded web view. Dropping it stops the watcher, kills the browser
-/// and destroys the child window.
+/// The embedded web view. Dropping it destroys the web view on the GTK
+/// thread and then the child window.
 pub struct LinuxWebView {
     window: u32,
-    url: Arc<Mutex<String>>,
-    stop: Arc<AtomicBool>,
-    browser: Arc<Mutex<Option<Child>>>,
+    gone: AtomicBool,
     conn: RustConnection,
-    watcher: Option<thread::JoinHandle<()>>,
+}
+
+/// `HasWindowHandle` over a raw X11 window id for `build_as_child` (wry reads
+/// only `XlibWindowHandle::window`; the display comes from GDK).
+struct XlibParent {
+    window: std::os::raw::c_ulong,
+}
+
+impl HasWindowHandle for XlibParent {
+    fn window_handle(&self) -> std::result::Result<WindowHandle<'_>, HandleError> {
+        // SAFETY: `window` is our child X11 window, alive for the borrow's
+        // lifetime (the caller holds it until `build_as_child` returns).
+        Ok(unsafe {
+            WindowHandle::borrow_raw(RawWindowHandle::Xlib(XlibWindowHandle::new(self.window)))
+        })
+    }
 }
 
 impl LinuxWebView {
-    /// Creates the child window under `parent`'s surface window and starts
-    /// the watcher that launches and embeds the browser for `url`.
+    /// Creates the child window under `parent`'s surface window and builds
+    /// the WebKitGTK web view inside it on the GTK thread.
     pub fn create(parent: &NativeViewParent<'_>, url: &str) -> Result<Self> {
         let surface = match parent.raw_window_handle()? {
             RawWindowHandle::Xcb(handle) => handle.window.get(),
@@ -69,6 +98,15 @@ impl LinuxWebView {
 
         let (conn, _screen) =
             RustConnection::connect(None).map_err(|e| Error::msg(format!("X connect: {e}")))?;
+        let geometry = conn
+            .get_geometry(surface)
+            .map_err(|e| Error::msg(format!("X get geometry: {e}")))?
+            .reply()
+            .map_err(|e| Error::msg(format!("X get geometry reply: {e}")))?;
+        let (width, height) = (
+            u32::from(geometry.width).max(1),
+            u32::from(geometry.height).max(1),
+        );
         let window = conn
             .generate_id()
             .map_err(|e| Error::msg(format!("X generate id: {e}")))?;
@@ -78,8 +116,8 @@ impl LinuxWebView {
             surface,
             0,
             0,
-            1,
-            1,
+            width as u16,
+            height as u16,
             0,
             WindowClass::INPUT_OUTPUT,
             COPY_FROM_PARENT,
@@ -93,338 +131,222 @@ impl LinuxWebView {
         conn.flush()
             .map_err(|e| Error::msg(format!("X flush: {e}")))?;
 
-        let url = Arc::new(Mutex::new(url.to_string()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let browser = Arc::new(Mutex::new(None));
-        let watcher = {
-            let url = url.clone();
-            let stop = stop.clone();
-            let browser = browser.clone();
-            thread::Builder::new()
-                .name("synara-webview".into())
-                .spawn(move || watch(surface, window, url, stop, browser))
-                .map_err(|e| Error::msg(format!("webview watcher: {e}")))?
-        };
+        if let Err(e) = ensure_gtk().and_then(|()| build_view(surface, window, url, width, height))
+        {
+            let _ = conn.destroy_window(window);
+            let _ = conn.flush();
+            return Err(e);
+        }
 
         Ok(Self {
             window,
-            url,
-            stop,
-            browser,
+            gone: AtomicBool::new(false),
             conn,
-            watcher: Some(watcher),
         })
     }
 
-    /// The child window the browser is reparented into.
+    /// The child window the web view lives in.
     pub fn handle(&self) -> NativeViewHandle {
         NativeViewHandle::from_x11_window(self.window)
     }
 
-    /// Loads a different URL: the watcher restarts the browser with it.
+    /// Loads a different URL in the running web view.
     pub fn set_url(&self, url: &str) {
-        if let Ok(mut current) = self.url.lock() {
-            *current = url.to_string();
+        if self.gone.load(Ordering::SeqCst) {
+            return;
         }
+        let window = self.window;
+        let url = url.to_string();
+        glib::idle_add_once(move || {
+            VIEWS.with(|views| {
+                if let Some(view) = views.borrow().get(&window) {
+                    let _ = view.webview.load_url(&url);
+                }
+            });
+        });
     }
 }
 
 impl Drop for LinuxWebView {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(watcher) = self.watcher.take() {
-            let _ = watcher.join();
-        }
-        kill_browser(None, &self.browser, &mut None);
+        self.gone.store(true, Ordering::SeqCst);
+        let window = self.window;
+        let (tx, rx) = mpsc::channel();
+        glib::idle_add_once(move || {
+            VIEWS.with(|views| {
+                views.borrow_mut().remove(&window);
+            });
+            let _ = tx.send(());
+        });
+        // Let the GTK thread drop the web view while its container window is
+        // still alive, then destroy the window (and the container subtree).
+        let _ = rx.recv_timeout(Duration::from_millis(500));
         let _ = self.conn.destroy_window(self.window);
         let _ = self.conn.flush();
     }
 }
 
-/// Finds a browser executable: `SYNARA_WEBVIEW_BROWSER` first, then the
-/// Chromium family in preference order.
-fn browser_binary() -> Option<String> {
-    if let Ok(custom) = std::env::var("SYNARA_WEBVIEW_BROWSER") {
-        if !custom.is_empty() {
-            return Some(custom);
+/// Starts the dedicated GTK thread once and reports `gtk::init`'s result.
+fn ensure_gtk() -> Result<()> {
+    static STARTED: Once = Once::new();
+    static INIT: Mutex<Option<Result<()>>> = Mutex::new(None);
+    STARTED.call_once(|| {
+        let (tx, rx) = mpsc::channel();
+        let tx_err = tx.clone();
+        if let Err(e) = thread::Builder::new()
+            .name("synara-webview-gtk".into())
+            .spawn(move || {
+                // Software compositing: no GPU driver, GBM or DMA-BUF buffers
+                // are touched, which keeps the web view working (and less
+                // exposed) on VMs and systems without working EGL.
+                if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+                    unsafe {
+                        libc::setenv(
+                            c"WEBKIT_DISABLE_COMPOSITING_MODE".as_ptr(),
+                            c"1".as_ptr(),
+                            0,
+                        )
+                    };
+                }
+                if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+                    unsafe {
+                        libc::setenv(c"WEBKIT_DISABLE_DMABUF_RENDERER".as_ptr(), c"1".as_ptr(), 0)
+                    };
+                }
+                let init = gtk::init().map_err(|e| Error::msg(format!("gtk::init: {e}")));
+                let ok = init.is_ok();
+                let _ = tx.send(init);
+                if ok {
+                    glib::timeout_add(POLL, poll_views);
+                    gtk::main();
+                }
+            })
+        {
+            let _ = tx_err.send(Err(Error::msg(format!("gtk thread: {e}"))));
         }
+        let result = rx
+            .recv()
+            .unwrap_or_else(|_| Err(Error::msg("gtk thread stopped before gtk::init finished")));
+        *INIT.lock().unwrap() = Some(result);
+    });
+    match &*INIT.lock().unwrap() {
+        Some(Ok(())) => Ok(()),
+        Some(Err(e)) => Err(Error::msg(e.to_string())),
+        None => Err(Error::msg("gtk::init did not complete")),
     }
-    for name in BROWSERS {
-        let found = Command::new("which")
-            .arg(name)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if found {
-            return Some((*name).to_string());
-        }
-    }
-    None
 }
 
-/// Launches the browser as a chromeless `--app` window in an isolated
-/// profile, tagged with `class` so its window is identifiable no matter how
-/// the launcher re-execs the real browser process.
-fn spawn_browser(binary: &str, class: &str, url: &str) -> Result<Child> {
-    let profile = std::env::temp_dir().join(format!("synara-webview-{}", std::process::id()));
-    Command::new(binary)
-        .args([
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-session-crashed-bubble",
-            "--disable-features=TranslateUI",
-            "--noerrdialogs",
-            "--force-device-scale-factor=1",
-            &format!("--user-data-dir={}", profile.display()),
-            &format!("--class={class}"),
-            &format!("--app={url}"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| Error::msg(format!("{binary}: {e}")))
+/// Builds the web view inside `window` on the GTK thread and blocks until it
+/// is up (or has failed).
+fn build_view(surface: u32, window: u32, url: &str, width: u32, height: u32) -> Result<()> {
+    let (tx, rx) = mpsc::channel();
+    let url = url.to_string();
+    glib::idle_add_once(move || {
+        let _ = tx.send(build_view_on_gtk(surface, window, &url, width, height));
+    });
+    rx.recv()
+        .unwrap_or_else(|_| Err(Error::msg("gtk thread stopped during web view setup")))
 }
 
-/// Kills the spawned launcher and the real browser process — found through
-/// the embedded window's `_NET_WM_PID`, since launchers re-exec.
-fn kill_browser(
-    conn: Option<&RustConnection>,
-    browser: &Mutex<Option<Child>>,
-    browser_window: &mut Option<u32>,
-) {
-    if let (Some(conn), Some(window)) = (conn, browser_window.take()) {
-        if let Some(pid) = window_pid(conn, window) {
-            // SAFETY/scope: pid owns the window we embedded, which is ours to
-            // close. A SIGTERM lets the browser shut down its profile cleanly.
-            unsafe {
-                libc::kill(pid as i32, 15);
+/// Runs on the GTK thread: builds the hardened WebKitGTK web view under
+/// `window`.
+fn build_view_on_gtk(surface: u32, window: u32, url: &str, width: u32, height: u32) -> Result<()> {
+    let parent = XlibParent {
+        window: window as std::os::raw::c_ulong,
+    };
+    let webview = WebViewBuilder::new()
+        .with_url(url)
+        .with_bounds(Rect {
+            position: LogicalPosition::new(0, 0).into(),
+            size: LogicalSize::new(width as f64, height as f64).into(),
+        })
+        .with_devtools(false)
+        .with_navigation_handler(|uri| {
+            uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("about:")
+        })
+        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        .with_download_started_handler(|_, _| false)
+        .with_permission_handler(|kind| match kind {
+            PermissionKind::Microphone | PermissionKind::Camera | PermissionKind::Geolocation => {
+                PermissionResponse::Deny
             }
-        }
-    }
-    if let Ok(mut guard) = browser.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-/// Interns `_NET_CLIENT_LIST` and `_NET_WM_PID` once.
-fn net_atoms(conn: &RustConnection) -> Option<(u32, u32)> {
-    let client_list = conn
-        .intern_atom(false, b"_NET_CLIENT_LIST")
-        .ok()?
-        .reply()
-        .ok()?
-        .atom;
-    let wm_pid = conn
-        .intern_atom(false, b"_NET_WM_PID")
-        .ok()?
-        .reply()
-        .ok()?
-        .atom;
-    Some((client_list, wm_pid))
-}
-
-/// The `_NET_WM_PID` of `window`, when set.
-fn window_pid(conn: &RustConnection, window: u32) -> Option<u32> {
-    let wm_pid = conn
-        .intern_atom(false, b"_NET_WM_PID")
-        .ok()?
-        .reply()
-        .ok()?
-        .atom;
-    let prop = conn
-        .get_property(false, window, wm_pid, AtomEnum::CARDINAL, 0, 1)
-        .ok()?
-        .reply()
-        .ok()?;
-    let value = prop.value32()?.next();
-    value
-}
-
-/// The mapped top-level window whose `WM_CLASS` contains `class`.
-fn window_for_class(
-    conn: &RustConnection,
-    root: u32,
-    client_list: u32,
-    class: &str,
-) -> Option<u32> {
-    let list = conn
-        .get_property(false, root, client_list, AtomEnum::WINDOW, 0, 2048)
-        .ok()?
-        .reply()
-        .ok()?;
-    for window in list.value32()? {
-        let wm_class = conn
-            .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
-            .ok()?
-            .reply()
-            .ok()?;
-        let value = String::from_utf8_lossy(&wm_class.value);
-        if value.split('\0').any(|part| part == class) {
-            return Some(window);
-        }
-    }
-    None
-}
-
-/// Embeds `browser_window` under `window` and sizes both to the surface.
-fn embed_window(
-    conn: &RustConnection,
-    surface: u32,
-    window: u32,
-    browser_window: u32,
-) -> Result<()> {
-    let geometry = conn
-        .get_geometry(surface)
-        .map_err(|e| Error::msg(format!("X get geometry: {e}")))?
-        .reply()
-        .map_err(|e| Error::msg(format!("X get geometry reply: {e}")))?;
-    let (width, height) = (u32::from(geometry.width), u32::from(geometry.height));
-    let aux = ConfigureWindowAux::new()
-        .x(0)
-        .y(0)
-        .width(width)
-        .height(height);
-    conn.configure_window(window, &aux)
-        .map_err(|e| Error::msg(format!("X configure child: {e}")))?;
-    conn.reparent_window(browser_window, window, 0, 0)
-        .map_err(|e| Error::msg(format!("X reparent: {e}")))?;
-    conn.configure_window(browser_window, &aux)
-        .map_err(|e| Error::msg(format!("X configure browser: {e}")))?;
-    conn.map_window(browser_window)
-        .map_err(|e| Error::msg(format!("X map browser: {e}")))?;
-    conn.flush()
-        .map_err(|e| Error::msg(format!("X flush: {e}")))
-}
-
-/// Sizes `window` and `browser_window` to the surface's current geometry.
-fn sync_geometry(conn: &RustConnection, surface: u32, window: u32, browser_window: Option<u32>) {
-    let geometry = conn
-        .get_geometry(surface)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok());
-    if let Some(geometry) = geometry {
-        let aux = ConfigureWindowAux::new()
-            .x(0)
-            .y(0)
-            .width(u32::from(geometry.width))
-            .height(u32::from(geometry.height));
-        let _ = conn.configure_window(window, &aux);
-        if let Some(browser_window) = browser_window {
-            let _ = conn.configure_window(browser_window, &aux);
-        }
-        let _ = conn.flush();
-    }
-}
-
-/// Owns the browser lifecycle: (re)spawns on URL change, embeds the browser
-/// window once it appears, keeps geometry in sync, and exits — killing the
-/// browser — when asked or when the surface window is gone.
-fn watch(
-    surface: u32,
-    window: u32,
-    url: Arc<Mutex<String>>,
-    stop: Arc<AtomicBool>,
-    browser: Arc<Mutex<Option<Child>>>,
-) {
-    let Ok((conn, screen)) = RustConnection::connect(None) else {
-        log::warn!("synara-webview: could not open an X connection");
-        return;
-    };
-    let root = conn.setup().roots[screen].root;
-    let Some((client_list, _)) = net_atoms(&conn) else {
-        log::warn!("synara-webview: _NET_CLIENT_LIST unsupported by the window manager");
-        return;
-    };
-
-    let Some(binary) = browser_binary() else {
-        log::warn!(
-            "synara-webview: no Chromium-family browser found; \
-             install one or set SYNARA_WEBVIEW_BROWSER"
+            _ => PermissionResponse::Allow,
+        })
+        .build_as_child(&parent)
+        .map_err(|e| Error::msg(format!("web view: {e}")))?;
+    VIEWS.with(|views| {
+        views.borrow_mut().insert(
+            window,
+            View {
+                webview,
+                surface,
+                width,
+                height,
+            },
         );
-        return;
-    };
+    });
+    Ok(())
+}
 
-    // Unique WM_CLASS for this embedded instance.
-    let class = format!("synara-webview-{}-{window}", std::process::id());
-    let mut browser_window: Option<u32> = None;
-    let mut loaded = String::new();
-    let mut misses = 0u32;
-
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            break;
+/// The GTK thread's X connection, opened on first use.
+fn with_xconn(f: impl FnOnce(&RustConnection)) {
+    XCONN.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = RustConnection::connect(None).map(|(conn, _)| conn).ok();
         }
-        // The host destroyed the surface: nothing to embed in anymore.
-        let surface_gone = conn
-            .get_geometry(surface)
-            .map(|c| c.reply().is_err())
-            .unwrap_or(true);
-        if surface_gone {
-            break;
+        if let Some(conn) = slot.as_ref() {
+            f(conn);
         }
+    });
+}
 
-        let wanted = url.lock().map(|u| u.clone()).unwrap_or_default();
-        if wanted != loaded {
-            kill_browser(Some(&conn), &browser, &mut browser_window);
-            loaded.clone_from(&wanted);
-            if !wanted.is_empty() {
-                match spawn_browser(&binary, &class, &wanted) {
-                    Ok(child) => {
-                        *browser.lock().unwrap() = Some(child);
-                        misses = 0;
-                    }
-                    Err(e) => {
-                        log::warn!("synara-webview: {e}");
-                        thread::sleep(POLL);
-                        continue;
-                    }
+/// GTK-thread poll: keeps each child window sized to its surface (the
+/// surface may still be tiny when the component mounts), resizes the web
+/// view to match, and drops views whose window no longer exists.
+fn poll_views() -> glib::ControlFlow {
+    with_xconn(|conn| {
+        VIEWS.with(|views| {
+            let surfaces: Vec<(u32, Option<(u32, u32)>)> = views
+                .borrow()
+                .iter()
+                .map(|(window, view)| {
+                    let size = conn
+                        .get_geometry(view.surface)
+                        .ok()
+                        .and_then(|cookie| cookie.reply().ok())
+                        .map(|geo| (u32::from(geo.width), u32::from(geo.height)));
+                    (*window, size)
+                })
+                .collect();
+            views.borrow_mut().retain(|window, view| {
+                let Some((width, height)) = surfaces
+                    .iter()
+                    .find(|(id, _)| id == window)
+                    .and_then(|(_, size)| *size)
+                else {
+                    return false;
+                };
+                if (width, height) != (view.width, view.height) {
+                    view.width = width;
+                    view.height = height;
+                    let _ = conn.configure_window(
+                        *window,
+                        &ConfigureWindowAux::new()
+                            .x(0)
+                            .y(0)
+                            .width(width)
+                            .height(height),
+                    );
+                    let _ = view.webview.set_bounds(Rect {
+                        position: LogicalPosition::new(0, 0).into(),
+                        size: LogicalSize::new(width as f64, height as f64).into(),
+                    });
                 }
-            }
-        }
-
-        match browser_window {
-            // The browser window can take a few seconds to appear.
-            None if !loaded.is_empty() => {
-                match window_for_class(&conn, root, client_list, &class) {
-                    Some(found) => match embed_window(&conn, surface, window, found) {
-                        Ok(()) => browser_window = Some(found),
-                        Err(e) => log::warn!("synara-webview: {e}"),
-                    },
-                    None => {
-                        misses += 1;
-                        if misses >= FIND_WINDOW_POLLS {
-                            log::warn!("synara-webview: browser window never appeared; restarting");
-                            kill_browser(Some(&conn), &browser, &mut browser_window);
-                            loaded.clear();
-                        }
-                    }
-                }
-            }
-            Some(embedded) => {
-                // The browser can close or crash its window: respawn then.
-                let gone = conn
-                    .get_geometry(embedded)
-                    .map(|c| c.reply().is_err())
-                    .unwrap_or(true);
-                if gone {
-                    browser_window = None;
-                    kill_browser(Some(&conn), &browser, &mut browser_window);
-                    loaded.clear();
-                } else {
-                    sync_geometry(&conn, surface, window, Some(embedded));
-                }
-            }
-            None => {}
-        }
-
-        thread::sleep(POLL);
-    }
-
-    kill_browser(Some(&conn), &browser, &mut browser_window);
+                true
+            });
+            let _ = conn.flush();
+        });
+    });
+    glib::ControlFlow::Continue
 }
