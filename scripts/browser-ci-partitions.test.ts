@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createVitest } from "vitest/node";
 
 const webRoot = fileURLToPath(new URL("../apps/web/", import.meta.url));
@@ -21,10 +21,28 @@ async function collectPartitions(config: string) {
   }
 }
 
+// Resolve the same configuration as each of the two GitHub browser steps.
+async function collectChatSlices() {
+  const slices: Awaited<ReturnType<typeof collectPartitions>> = [];
+  try {
+    for (const slice of ["a", "b"]) {
+      vi.stubEnv("VITEST_BROWSER_CHAT_SLICE", slice);
+      slices.push(...(await collectPartitions("vitest.browser.ci.config.ts")));
+    }
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  return slices.filter(
+    ({ project }) =>
+      project === "chat-projects (chromium)" || project === "chat-workflows (chromium)",
+  );
+}
+
 describe("browser CI partitions", () => {
   it("keeps every stable file and partitions ChatView without duplicating other suites", async () => {
     const stable = await collectPartitions("vitest.browser.stable.config.ts");
     const partitions = await collectPartitions("vitest.browser.ci.config.ts");
+    const pairedPartitions = await collectChatSlices();
     const stableFiles = new Set(stable.map(({ file }) => file));
 
     expect(stableFiles.size).toBeGreaterThan(0);
@@ -32,6 +50,10 @@ describe("browser CI partitions", () => {
     for (const file of stableFiles) {
       const owners = partitions.filter((partition) => partition.file === file);
       if (file.endsWith("/ChatView.browser.tsx")) {
+        const ciOwners = [
+          ...owners.filter(({ project }) => project === "chat-follow (chromium)"),
+          ...pairedPartitions.filter((partition) => partition.file === file),
+        ];
         expect(owners.map(({ project }) => project).sort()).toEqual([
           "chat-follow (chromium)",
           "chat-projects (chromium)",
@@ -65,11 +87,16 @@ describe("browser CI partitions", () => {
             selected.map(({ project }) => project),
             name,
           ).toEqual([`${lane} (chromium)`]);
+          expect(
+            ciOwners.filter(({ pattern }) => pattern?.test(name)).map(({ project }) => project),
+            name,
+          ).toEqual([`${lane} (chromium)`]);
           const quarantined = `[geometry:linux] ${name}`;
           expect(
             owners.filter(({ pattern }) => pattern?.test(quarantined)),
             quarantined,
           ).toHaveLength(0);
+          expect(ciOwners.filter(({ pattern }) => pattern?.test(quarantined))).toHaveLength(0);
         }
       } else {
         expect(owners.map(({ project }) => project)).toEqual(["components (chromium)"]);

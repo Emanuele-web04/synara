@@ -12,6 +12,25 @@ const stablePattern = testNamePattern as RegExp;
 const followPattern = "(?:restores streaming follow|anchor|scroll|tool)";
 const projectPattern =
   "(?:project|worktree|Space|approval|preserves three answers|queued|queue|sidebar|handoff)";
+const projectSlicePattern = "(?:worktree|queue|queued|handoff)";
+const workflowSlicePattern = "(?:[Cc]omposer|[Dd]raft|[Pp]icker|[Ss]hortcut|[Ee]ditor)";
+const chatSlice = process.env.VITEST_BROWSER_CHAT_SLICE;
+
+// Each paired runner uses complementary filters after the original project
+// filter. New cases stay covered even if they match neither slice's keywords.
+function sliceCondition(pattern: string): string {
+  switch (chatSlice) {
+    case "a":
+      return `(?=.*${pattern})`;
+    case "b":
+      return `(?!.*${pattern})`;
+    case undefined:
+    case "":
+      return "";
+    default:
+      throw new Error(`Invalid VITEST_BROWSER_CHAT_SLICE: ${chatSlice}`);
+  }
+}
 
 export default defineConfig({
   ...stableConfig,
@@ -39,7 +58,7 @@ export default defineConfig({
           name: "chat-projects",
           include: [chatViewFile],
           testNamePattern: new RegExp(
-            `${stablePattern.source}(?!.*${followPattern})(?=.*${projectPattern})`,
+            `${stablePattern.source}(?!.*${followPattern})(?=.*${projectPattern})${sliceCondition(projectSlicePattern)}`,
           ),
         },
       },
@@ -49,7 +68,7 @@ export default defineConfig({
           name: "chat-workflows",
           include: [chatViewFile],
           testNamePattern: new RegExp(
-            `${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})`,
+            `${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})${sliceCondition(workflowSlicePattern)}`,
           ),
         },
       },

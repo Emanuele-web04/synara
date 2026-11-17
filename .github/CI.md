@@ -240,6 +240,21 @@ caches, the four cases took 12.25 s before and 2.26 s after. The complete
 `chat-workflows` job took 116.05 s before and 106.01 s after with identical
 results for all 149 assigned cases.
 
+### ChatView name groups on the same runner
+
+Projects and workflows each keep their existing runner and run two
+complementary name filters in separate Chromium processes. The original
+project and geometry filters still apply to each half. The follow lane uses
+a single process. Each process has its own port and Vite cache
+directory, while both processes use the job's compiler cache.
+
+On the Mac mini, with fresh Vite caches and warm compiler caches, the
+`chat-projects` sample fell from 70.47 s to 42.38 s. The warm
+`chat-workflows` sample fell from 106.01 s to 58.01 s. The paired runs
+passed all 87 and 149 assigned cases respectively, matching the serial case
+names and multiplicities. The test launcher kept Vitest's environment intact
+so it reused the compiler cache in both children. Hosted timing is pending.
+
 ### Desktop lifecycle smoke during the build
 
 The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it

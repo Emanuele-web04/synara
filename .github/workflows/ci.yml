@@ -178,7 +178,8 @@ jobs:
         run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
   # ChatView is one large file, so split it by complementary test-name groups.
-  # Component jobs each run two native Vitest shards on the same runner.
+  # Projects and workflows each use two name groups on the same runner, while
+  # the component jobs each run two native Vitest file shards.
   # Each browser process still executes files serially.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
@@ -196,8 +197,12 @@ jobs:
             shard: 1/1
           - project: chat-projects
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: chat-workflows
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: components
             shard: 1/3
             shardA: 1/6
@@ -240,28 +245,30 @@ jobs:
           ./node_modules/.bin/playwright install chromium
 
       - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
-        if: matrix.project != 'components'
+        if: ${{ !matrix.shardA }}
         timeout-minutes: 20
         run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
 
       # The compiler cache uses atomic per-entry writes. Vite's optimizer cache
       # and the browser API listener need a separate directory and port.
       - parallel:
-          - name: Browser test (components ${{ matrix.shardA }})
-            if: matrix.project == 'components'
+          - name: Browser test (${{ matrix.project }} ${{ matrix.shardA }} A)
+            if: matrix.shardA
             timeout-minutes: 20
             env:
               VITEST_BROWSER_API_PORT: "51101"
-              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-components-a
-            run: bun run --cwd apps/web test:browser:ci -- --project=components --shard=${{ matrix.shardA }}
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-a
+              VITEST_BROWSER_CHAT_SLICE: a
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardA }}
 
-          - name: Browser test (components ${{ matrix.shardB }})
-            if: matrix.project == 'components'
+          - name: Browser test (${{ matrix.project }} ${{ matrix.shardB }} B)
+            if: matrix.shardB
             timeout-minutes: 20
             env:
               VITEST_BROWSER_API_PORT: "51102"
-              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-components-b
-            run: bun run --cwd apps/web test:browser:ci -- --project=components --shard=${{ matrix.shardB }}
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-b
+              VITEST_BROWSER_CHAT_SLICE: b
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardB }}
 
   build:
     name: Desktop Build

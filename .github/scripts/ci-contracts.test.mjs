@@ -327,9 +327,18 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   assert.deepEqual(
     browserMatrix
       .filter(({ project }) => project !== "components")
-      .map(({ project }) => project)
-      .sort(),
-    ["chat-follow", "chat-projects", "chat-workflows"],
+      .map(({ project, shardA, shardB }) => [project, shardA, shardB]),
+    [
+      ["chat-follow", undefined, undefined],
+      ["chat-projects", "1/1", "1/1"],
+      ["chat-workflows", "1/1", "1/1"],
+    ],
+  );
+  assert.deepEqual(
+    jobs.browser.steps
+      .find((step) => step.parallel)
+      ?.parallel.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
+    ["a", "b"],
   );
   const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
   assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
