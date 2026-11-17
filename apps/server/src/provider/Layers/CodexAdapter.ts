@@ -36,6 +36,7 @@ import {
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 import {
+  isCodexMultiAgentDeprecationWarning,
   isCodexUnstableFeaturesWarning,
   readCodexMcpSubscriptionError,
 } from "@synara/shared/codexStderr";
@@ -1888,8 +1889,14 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method)) {
-    const message = asTrimmedString(payload?.message);
+  // The manager consolidates this issue as configWarning; history consumes runtime.warning.
+  const isMultiAgentConfigWarning =
+    event.method === "configWarning" &&
+    isCodexMultiAgentDeprecationWarning(asTrimmedString(payload?.summary) ?? "");
+  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method) || isMultiAgentConfigWarning) {
+    const message = asTrimmedString(
+      isMultiAgentConfigWarning ? payload?.summary : payload?.message,
+    );
     if (event.method === "warning" && message && isCodexUnstableFeaturesWarning(message)) {
       return [];
     }
@@ -2869,7 +2876,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent || CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
+            hasUnmappedEvent ||
+              mappedRuntimeEvents.some((runtimeEvent) => runtimeEvent.type === "runtime.warning") ||
+              CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
               ? sanitizeUnmappedProviderEvent(stampedEvent)
               : stampedEvent,
           );

@@ -776,7 +776,7 @@ it.effect(
         const manager = new FakeCodexManager();
         yield* Effect.gen(function* () {
           const adapter = yield* CodexAdapter;
-          const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
+          const eventsFiber = yield* Stream.take(adapter.streamEvents, 5).pipe(
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -827,18 +827,42 @@ it.effect(
             threadId: asThreadId("review-thread"),
             payload: { message: "Hook unavailable: API_KEY=private-native-warning-key" },
           } satisfies ProviderEvent);
+          manager.emit("event", {
+            id: asEventId("mcp-failure-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "mcpServer/startupStatus/updated",
+            threadId: asThreadId("review-thread"),
+            payload: {
+              name: "fixture",
+              status: "failed",
+              error: "MCP connection failed: API_KEY=private-mcp-warning-key",
+            },
+          } satisfies ProviderEvent);
           emit("session/started", "ready");
 
           const events = Array.from(yield* Fiber.join(eventsFiber));
           assert.deepEqual(
             events.map((event) => event.type),
-            ["runtime.warning", "runtime.warning", "runtime.warning", "session.started"],
+            [
+              "runtime.warning",
+              "runtime.warning",
+              "runtime.warning",
+              "runtime.warning",
+              "session.started",
+            ],
           );
           assert.deepEqual(
             events
               .filter((event) => event.type === "runtime.warning")
               .map((event) => event.payload.message),
-            ["Review denied", "Review aborted", "Hook unavailable: API_KEY=[REDACTED]"],
+            [
+              "Review denied",
+              "Review aborted",
+              "Hook unavailable: API_KEY=[REDACTED]",
+              'MCP server "fixture" failed to start: MCP connection failed: API_KEY=[REDACTED]',
+            ],
           );
         }).pipe(
           Effect.provide(
@@ -858,6 +882,8 @@ it.effect(
         assert.ok(nativeLog.includes('"method":"warning"'));
         assert.equal(nativeLog.includes("private-native-warning-key"), false);
         assert.equal(nativeLog.includes("private-approved-key"), false);
+        assert.ok(nativeLog.includes('"method":"mcpServer/startupStatus/updated"'));
+        assert.equal(nativeLog.includes("private-mcp-warning-key"), false);
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -1079,6 +1105,32 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.summary, "Invalid MCP configuration");
       assert.equal(firstEvent.value.payload.details, "url is not supported for stdio");
       assert.equal(firstEvent.value.payload.path, "mcp_servers.synara");
+    }),
+  );
+
+  it.effect("keeps the consolidated multi-agent deprecation visible in history", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const summary =
+        "`[features].multi_agent` is deprecated. It still controls the V1 fallback. `[agents].enabled = false` disables subagent tools even when the model selects a subagent version, unless `[features].multi_agent_v2` is enabled.";
+      lifecycleManager.emit("event", {
+        id: asEventId("multi-agent-config-warning"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "configWarning",
+        payload: { summary },
+      } satisfies ProviderEvent);
+      const result = yield* Fiber.join(eventFiber);
+      assert.equal(result._tag, "Some");
+      if (result._tag !== "Some") return;
+      const [activity] = projectProviderRuntimeActivities(result.value);
+      assert.equal(activity?.kind, "runtime.warning");
+      const data = activity?.payload;
+      assert.ok(data && typeof data === "object" && "message" in data);
+      assert.equal(data.message, summary);
     }),
   );
 

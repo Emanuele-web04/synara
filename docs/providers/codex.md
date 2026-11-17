@@ -62,9 +62,9 @@ files and actual configuration errors remain visible.
 ## Startup configuration and MCP warnings
 
 Codex 0.169 can report the same `[features].multi_agent` deprecation through
-stderr, `configWarning`, and a thread `warning`. Synara keeps one configuration
-warning per app-server process. It does not rewrite that setting in the source
-config or its generated overlay: the legacy key still controls the V1 fallback,
+stderr, `configWarning`, and a thread `warning`. Synara keeps one visible runtime
+warning for this configuration issue per app-server process. It does not rewrite
+that setting in the source config or its generated overlay: the legacy key still controls the V1 fallback,
 and removing it can change the user's opt-out. Review the configuration for the
 selected Codex account, including its active profile and project layers. Modern
 `agents.enabled = false` disables subagent tools, except when
