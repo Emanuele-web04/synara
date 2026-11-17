@@ -20,7 +20,6 @@ import {
   groupActivityChildFamilies,
   mostUrgentActivityPriorityTier,
   resolveChildThreadsTier,
-  resolveChildThreadsTone,
   splitActivityFamilyChildren,
   type ActivityPriorityTier,
   findNextThreadNeedingAttention,
@@ -29,7 +28,6 @@ import {
   resolveActivityDateBucket,
   resolveActivityPriority,
   resolveActivityPriorityTier,
-  resolveActivityRowEmphasis,
   resolveActivityRowPullRequests,
   resolveActivityScope,
   resolveActivitySectionRows,
@@ -1265,13 +1263,6 @@ describe("agent-created child families", () => {
     expect(resolveChildThreadsTier(children, tiers({}))).toBeNull();
   });
 
-  it("tints the chip by the most urgent hidden child", () => {
-    expect(resolveChildThreadsTone("waiting")).toBe("waiting");
-    expect(resolveChildThreadsTone("unread")).toBe("active");
-    expect(resolveChildThreadsTone("working")).toBe("active");
-    expect(resolveChildThreadsTone(null)).toBe("quiet");
-  });
-
   it("lists a row's PRs: its own first, then the other visible links, open and newest first", () => {
     const links = [
       link(pullRequest(1, "merged"), "2026-08-01T10:00:00.000Z"),
@@ -1297,27 +1288,6 @@ describe("agent-created child families", () => {
     ).toEqual([1]);
     expect(resolveActivityRowPullRequests(pullRequest(1, "merged"), undefined)).toHaveLength(1);
     expect(resolveActivityRowPullRequests(null, links)).toEqual([]);
-  });
-
-  it("emphasizes rows that wait on the user or hold unseen news, and quiets seen replies", () => {
-    for (const label of [
-      "Pending Approval",
-      "Awaiting Input",
-      "Plan Ready",
-      "Completed",
-      "Reminder",
-    ] as const) {
-      expect(resolveActivityRowEmphasis({ label })).toEqual({
-        titleEmphasized: true,
-        replySeen: false,
-      });
-    }
-    // A running row keeps a regular title but its reply stays at full secondary ink.
-    expect(resolveActivityRowEmphasis({ label: "Working" })).toEqual({
-      titleEmphasized: false,
-      replySeen: false,
-    });
-    expect(resolveActivityRowEmphasis(null)).toEqual({ titleEmphasized: false, replySeen: true });
   });
 
   it("shows children with news and the open one, folding quiet ones into +N done", () => {
