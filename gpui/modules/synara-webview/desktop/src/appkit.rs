@@ -1063,11 +1063,11 @@ fn update_tmp_path(name: &str) -> String {
 }
 
 fn rand_u32() -> u32 {
-    std::fs::read("/dev/urandom")
-        .ok()
-        .and_then(|b| {
-            b.get(..4)
-                .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| {
+            let mut bytes = [0u8; 4];
+            std::io::Read::read_exact(&mut file, &mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
         })
         .unwrap_or_else(|| {
             let nanos = std::time::SystemTime::now()
