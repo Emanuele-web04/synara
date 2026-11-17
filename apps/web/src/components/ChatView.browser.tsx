@@ -13892,7 +13892,7 @@ describe("ChatView transcript geometry (full app)", () => {
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
-    const background = () => document.querySelector("canvas.font-mono");
+    const background = () => document.querySelector('img[src^="/onboarding/hero-ascii-"]');
     try {
       await expect.poll(background).not.toBeNull();
       await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
