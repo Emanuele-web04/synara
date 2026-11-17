@@ -208,6 +208,22 @@ Serial browser execution remains enabled inside each runner. One extra shard buy
 lower feedback latency; the full-CI measurement decides whether its added compute
 is acceptable.
 
+### Component test processes on the same runner
+
+The three component jobs now run two native Vitest shards each, pairing
+`1/6` with `2/6`, `3/6` with `4/6`, and `5/6` with `6/6`. Each Chromium
+process still runs its files serially with a separate loopback port and Vite
+cache directory. The pair uses the job's existing compiler cache, which writes
+complete entries with atomic rename. Any failed process fails the job.
+
+On the Mac mini at `5d41b9585` with Bun 1.4.4 and Node 24.21.0, a single
+`components 3/3` invocation took 129.14 s and concurrent `5/6` and `6/6`
+invocations took 88.36 s (−31.6%). Both samples started with identical warm
+compiler caches and fresh Vite caches. The JSON results matched all 440 case
+names, outcomes, and multiplicities across 84 files. Thermal pressure stayed
+nominal throughout. Linux runner time and the full hosted gate remain to be
+measured.
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { test } from "node:test";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -309,10 +310,27 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const serverConfig = read("../../apps/server/vitest.config.ts");
   assert.ok(serverConfig.includes("maxWorkers: availableParallelism()"));
   assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
-  for (const shard of ["1/3", "2/3", "3/3"])
-    assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);
-  for (const project of ["chat-follow", "chat-projects", "chat-workflows"])
-    assert.ok(workflow.includes(`project: ${project}`), project);
+  const requireFromScripts = createRequire(new URL("../../scripts/package.json", import.meta.url));
+  const { jobs } = requireFromScripts("yaml").parse(workflow);
+  const browserMatrix = jobs.browser.strategy.matrix.include;
+  const components = browserMatrix.filter(({ project }) => project === "components");
+  assert.deepEqual(components.map(({ shard }) => shard).sort(), ["1/3", "2/3", "3/3"]);
+  // Duplicating a child shard would leave its sibling's tests out of a green gate.
+  assert.deepEqual(components.flatMap(({ shardA, shardB }) => [shardA, shardB]).sort(), [
+    "1/6",
+    "2/6",
+    "3/6",
+    "4/6",
+    "5/6",
+    "6/6",
+  ]);
+  assert.deepEqual(
+    browserMatrix
+      .filter(({ project }) => project !== "components")
+      .map(({ project }) => project)
+      .sort(),
+    ["chat-follow", "chat-projects", "chat-workflows"],
+  );
   const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
   assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
   assert.ok(!browser.includes("playwright install --with-deps chromium"));

@@ -15,6 +15,8 @@ const projectPattern =
 
 export default defineConfig({
   ...stableConfig,
+  // Separate Vite's optimizer and Vitest results when two processes share a runner.
+  cacheDir: process.env.VITEST_BROWSER_CACHE_DIR ?? stableConfig.cacheDir,
   test: {
     // A root testNamePattern overrides project patterns at runtime in Vitest.
     // Keep the quarantine in each project so the ChatView split also applies.

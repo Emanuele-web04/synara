@@ -178,8 +178,8 @@ jobs:
         run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
   # ChatView is one large file, so split it by complementary test-name groups.
-  # Other browser files use native 3-way file sharding. Every runner keeps serial
-  # execution and the stable geometry quarantine; only distribution changes.
+  # Component jobs each run two native Vitest shards on the same runner.
+  # Each browser process still executes files serially.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
@@ -200,10 +200,16 @@ jobs:
             shard: 1/1
           - project: components
             shard: 1/3
+            shardA: 1/6
+            shardB: 2/6
           - project: components
             shard: 2/3
+            shardA: 3/6
+            shardB: 4/6
           - project: components
             shard: 3/3
+            shardA: 5/6
+            shardB: 6/6
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -234,8 +240,28 @@ jobs:
           ./node_modules/.bin/playwright install chromium
 
       - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
+        if: matrix.project != 'components'
         timeout-minutes: 20
         run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
+
+      # The compiler cache uses atomic per-entry writes. Vite's optimizer cache
+      # and the browser API listener need a separate directory and port.
+      - parallel:
+          - name: Browser test (components ${{ matrix.shardA }})
+            if: matrix.project == 'components'
+            timeout-minutes: 20
+            env:
+              VITEST_BROWSER_API_PORT: "51101"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-components-a
+            run: bun run --cwd apps/web test:browser:ci -- --project=components --shard=${{ matrix.shardA }}
+
+          - name: Browser test (components ${{ matrix.shardB }})
+            if: matrix.project == 'components'
+            timeout-minutes: 20
+            env:
+              VITEST_BROWSER_API_PORT: "51102"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-components-b
+            run: bun run --cwd apps/web test:browser:ci -- --project=components --shard=${{ matrix.shardB }}
 
   build:
     name: Desktop Build
