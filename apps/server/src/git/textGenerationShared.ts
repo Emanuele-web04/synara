@@ -271,6 +271,22 @@ function unwrapComposerPredictionQuotes(text: string): string {
   return text;
 }
 
+// The response object written as the suggestion text: `{"suggestion":null}`, with or without
+// braces, and with escaped quotes when the model encoded it twice.
+const COMPOSER_PREDICTION_ECHO_PATTERN = /^\{?\s*\\*["']suggestion\\*["']\s*:/iu;
+
+/**
+ * A model filling the schema-enforced `suggestion` field sometimes writes the whole response
+ * object into it, copying the prompt's `{"suggestion":null}` example. Returns the inner string
+ * of such an echo, null when its value is not a string or it does not parse, and any other
+ * text unchanged.
+ */
+function unwrapEchoedComposerPrediction(text: string): string | null {
+  if (!COMPOSER_PREDICTION_ECHO_PATTERN.test(text)) return text;
+  const inner = tryParseJsonObject(text.startsWith("{") ? text : `{${text}}`)?.suggestion;
+  return typeof inner === "string" ? inner.trim() : null;
+}
+
 function clipComposerPrediction(text: string): string {
   if (text.length <= COMPOSER_PREDICTION_MAX_CHARS) return text;
   const window = text.slice(0, COMPOSER_PREDICTION_MAX_CHARS + 1);
@@ -285,18 +301,22 @@ function clipComposerPrediction(text: string): string {
 
 /**
  * Normalizes a model's composer prediction into one short draft message:
- * strips code fences, a leading speaker label, and wrapping quotes, collapses
- * whitespace to a single line, caps the length, and maps empty or literal
- * "null" output to null.
+ * strips code fences, a leading speaker label, wrapping quotes, and a response
+ * object echoed into the field, collapses whitespace to a single line, caps the
+ * length, and maps empty or literal "null" output to null.
  */
 export function sanitizeComposerPrediction(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;
   let text = stripCodeFences(raw.trim()).replace(COMPOSER_PREDICTION_SPEAKER_LABEL_PATTERN, "");
   for (let pass = 0; pass < 3; pass += 1) {
-    const unwrapped = unwrapComposerPredictionQuotes(text);
+    const echoed = unwrapEchoedComposerPrediction(text);
+    if (echoed === null) return null;
+    const unwrapped = unwrapComposerPredictionQuotes(echoed);
     if (unwrapped === text) break;
     text = unwrapped;
   }
+  // An echo still wrapped after the last pass is dropped, never shown as the suggestion.
+  if (COMPOSER_PREDICTION_ECHO_PATTERN.test(text)) return null;
   text = text.replace(/\s+/gu, " ").trim();
   if (text.length === 0 || COMPOSER_PREDICTION_NULL_LITERALS.has(text.toLowerCase())) {
     return null;
