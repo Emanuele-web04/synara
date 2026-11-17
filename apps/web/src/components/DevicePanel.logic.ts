@@ -317,9 +317,12 @@ export function deviceEdgeForSwipeStart(
   if (from.y >= screen.height - margins.bottom) candidates.push({ edge: "bottom", score: -dy });
   if (from.x <= margins.left) candidates.push({ edge: "left", score: dx });
   if (from.x >= screen.width - margins.right) candidates.push({ edge: "right", score: -dx });
-  if (candidates.length === 0) return undefined;
-  return candidates.reduce((best, candidate) => (candidate.score > best.score ? candidate : best))
-    .edge;
+  // Only an inward drag qualifies: a start inside the margin that moves
+  // outward or parallel to the edge keeps its own direction — snapping it
+  // onto the edge would reverse the delivered swipe.
+  const inward = candidates.filter((candidate) => candidate.score > 0);
+  if (inward.length === 0) return undefined;
+  return inward.reduce((best, candidate) => (candidate.score > best.score ? candidate : best)).edge;
 }
 
 /**

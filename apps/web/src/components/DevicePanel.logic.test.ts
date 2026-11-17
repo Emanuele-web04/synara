@@ -467,6 +467,28 @@ describe("pointer gestures", () => {
     expect(gesture).toMatchObject({ kind: "swipe", edge: "bottom" });
   });
 
+  it.each([
+    ["top", { x: 200, y: 40 }, { x: 200, y: 10 }],
+    ["bottom", { x: 200, y: 845 }, { x: 200, y: 865 }],
+    ["left", { x: 25, y: 400 }, { x: 5, y: 400 }],
+    ["right", { x: 375, y: 400 }, { x: 395, y: 400 }],
+  ])("keeps an outward drag off the %s edge direction and edge-free", (_edge, from, to) => {
+    const gesture = resolveDevicePointerGesture({ from, to, durationMs: 200, screen });
+    expect(gesture).toMatchObject({ kind: "swipe", from, to });
+    expect(gesture?.kind === "swipe" ? gesture.edge : undefined).toBeUndefined();
+  });
+
+  it.each([
+    ["top", { x: 200, y: 40 }, { x: 260, y: 40 }],
+    ["bottom", { x: 200, y: 850 }, { x: 140, y: 850 }],
+    ["left", { x: 25, y: 400 }, { x: 25, y: 460 }],
+    ["right", { x: 375, y: 400 }, { x: 375, y: 340 }],
+  ])("leaves a drag parallel to the %s edge without an edge", (_edge, from, to) => {
+    const gesture = resolveDevicePointerGesture({ from, to, durationMs: 200, screen });
+    expect(gesture).toMatchObject({ kind: "swipe", from, to });
+    expect(gesture?.kind === "swipe" ? gesture.edge : undefined).toBeUndefined();
+  });
+
   it("yields no gesture when the press did not start on the screen", () => {
     expect(
       resolveDevicePointerGesture({ from: null, to: { x: 1, y: 1 }, durationMs: 50 }),
