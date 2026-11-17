@@ -7,6 +7,8 @@ use react_native_gpui::native_surface::{NativeViewHandle, NativeViewParent, Resu
 use crate::appkit;
 #[cfg(target_os = "linux")]
 use crate::linux::LinuxWebView;
+#[cfg(target_os = "windows")]
+use crate::win32::WindowsWebView;
 use crate::{SynaraWebViewChanged, SynaraWebViewContext, SynaraWebViewProps, SynaraWebViewSpec};
 
 /// A web view showing a URL.
@@ -15,6 +17,8 @@ pub struct WebView {
     url: String,
     #[cfg(target_os = "linux")]
     linux: Option<LinuxWebView>,
+    #[cfg(target_os = "windows")]
+    windows: Option<WindowsWebView>,
 }
 
 impl SynaraWebViewSpec for WebView {
@@ -24,6 +28,8 @@ impl SynaraWebViewSpec for WebView {
             url: String::new(),
             #[cfg(target_os = "linux")]
             linux: None,
+            #[cfg(target_os = "windows")]
+            windows: None,
         }
     }
 
@@ -41,6 +47,10 @@ impl SynaraWebViewSpec for WebView {
         _window: &mut Window,
         _cx: &mut SynaraWebViewContext,
     ) -> AnyElement {
+        #[cfg(target_os = "windows")]
+        if let Some(view) = &self.windows {
+            return view.element();
+        }
         div().size_full().into_any_element()
     }
 
@@ -94,7 +104,42 @@ impl SynaraWebViewSpec for WebView {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    /// Windows: a WebView2 composition controller rooted at the surface's
+    /// DirectComposition visual. The compositor places, clips and hides the
+    /// visual, so the handle is `composited`.
+    #[cfg(target_os = "windows")]
+    fn create_view(
+        &mut self,
+        props: &SynaraWebViewProps,
+        parent: &NativeViewParent<'_>,
+        window: &mut Window,
+        _cx: &mut SynaraWebViewContext,
+    ) -> Result<NativeViewHandle> {
+        let view = WindowsWebView::create(parent, window, props.url())?;
+        let handle = view.handle();
+        self.windows = Some(view);
+        self.view = Some(handle);
+        self.url = props.url().to_string();
+        Ok(handle)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn update_view(
+        &mut self,
+        _view: NativeViewHandle,
+        props: &SynaraWebViewProps,
+        changed: SynaraWebViewChanged,
+        _cx: &mut SynaraWebViewContext,
+    ) {
+        if changed.url() {
+            self.url = props.url().to_string();
+            if let Some(view) = &self.windows {
+                view.set_url(&self.url);
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     fn create_view(
         &mut self,
         _props: &SynaraWebViewProps,

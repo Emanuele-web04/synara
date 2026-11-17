@@ -7,6 +7,8 @@ mod appkit;
 #[cfg(target_os = "linux")]
 mod linux;
 mod webview;
+#[cfg(target_os = "windows")]
+mod win32;
 
 use react_native_gpui::host_component::register_component;
 

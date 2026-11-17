@@ -15,6 +15,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 /// never runs when the app dies on a signal.
 static CUA_CHILD_PID: AtomicI32 = AtomicI32::new(0);
 
+// `signal`/`kill`/`flock` are POSIX only; Windows gets its own
+// `sidecar_owner_guard` below and no signal reaper (the sidecar reaps itself
+// when the frame's pid dies, see `SYNARA_CUA_FRAME_PID`).
+#[cfg(unix)]
 unsafe extern "C" {
     fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
     fn kill(pid: i32, sig: i32) -> i32;
@@ -27,6 +31,7 @@ unsafe extern "C" {
 /// must not spawn the CUA sidecar in between, because its first act is
 /// `clearStaleCuaHostSocket` and the socket it would clear is the primary's
 /// live one. `Some` marks this process as the sidecar owner.
+#[cfg(unix)]
 fn sidecar_owner_guard() -> Option<std::fs::File> {
     use std::os::unix::io::AsRawFd;
     let path = format!("{}/synara-gpui.lock", std::env::temp_dir().display());
@@ -39,6 +44,34 @@ fn sidecar_owner_guard() -> Option<std::fs::File> {
     Some(file)
 }
 
+/// Windows sidecar guard: same exclusivity, without flock. `create_new`
+/// refuses to open while the primary's handle lives, and
+/// `FILE_FLAG_DELETE_ON_CLOSE` removes the file when the handle dies —
+/// including a crash, so no stale lock can survive.
+#[cfg(windows)]
+fn sidecar_owner_guard() -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    let path = std::env::temp_dir().join("synara-gpui.lock");
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+        .open(&path)
+    {
+        Ok(file) => Some(file),
+        Err(_) => {
+            eprintln!(
+                "[synara] another instance holds {}; cua sidecar skipped",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
 extern "C" fn reap_sidecar(sig: i32) {
     unsafe {
         let pid = CUA_CHILD_PID.load(Ordering::SeqCst);
@@ -87,7 +120,8 @@ fn spawn_cua_host() -> ChildGuard {
     let mut cmd = if is_compiled {
         Command::new(&script)
     } else {
-        let mut c = Command::new(std::env::var("SYNARA_CUA_HOST_BIN").unwrap_or_else(|_| "bun".into()));
+        let mut c =
+            Command::new(std::env::var("SYNARA_CUA_HOST_BIN").unwrap_or_else(|_| "bun".into()));
         c.arg(&script);
         c
     };
@@ -241,7 +275,11 @@ mod lifecycle {
     // thread is needed.
     extern "C" {
         static _dispatch_main_q: c_void;
-        fn dispatch_async_f(queue: *const c_void, ctx: *mut c_void, work: extern "C" fn(*mut c_void));
+        fn dispatch_async_f(
+            queue: *const c_void,
+            ctx: *mut c_void,
+            work: extern "C" fn(*mut c_void),
+        );
     }
 
     extern "C" fn lifecycle_deferred(_ctx: *mut c_void) {
@@ -315,6 +353,9 @@ fn main() {
     } else {
         ChildGuard(None)
     };
+    // POSIX only: on Windows the sidecar's `SYNARA_CUA_FRAME_PID` watch is
+    // the reaper of last resort instead of a signal handler.
+    #[cfg(unix)]
     unsafe {
         // SIGINT 2, SIGTERM 15, SIGHUP 1: reap the sidecar when the shell
         // goes down on a signal (pkill, Ctrl-C, logout).

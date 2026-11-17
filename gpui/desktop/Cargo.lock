@@ -6435,6 +6435,9 @@ dependencies = [
  "rn-gpui-module",
  "rn-gpui-module-build",
  "serde_json",
+ "webview2-com",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
  "wry",
  "x11rb",
 ]
