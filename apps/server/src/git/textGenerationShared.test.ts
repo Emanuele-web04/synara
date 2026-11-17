@@ -282,6 +282,19 @@ describe("textGenerationShared", () => {
       ["/clear", null],
       ['"/compact the thread"', null],
       ["Run src/app.ts and check the output", "Run src/app.ts and check the output"],
+      // The response object echoed into the schema-enforced field.
+      ['{"suggestion":null}', null],
+      ['{ "suggestion": null }', null],
+      ['```json\n{"suggestion":null}\n```', null],
+      ['"{\\"suggestion\\":null}"', null],
+      ['{"suggestion":"{\\"suggestion\\":null}"}', null],
+      ['{"suggestion":"Fix the fixture."} then rerun', null],
+      ['{"suggestion":"Commit it and open a PR."}', "Commit it and open a PR."],
+      ['"suggestion": "Rerun that test."', "Rerun that test."],
+      [
+        '{"payload":1} is what the API should return',
+        '{"payload":1} is what the API should return',
+      ],
     ])("sanitizes %j to %j", (raw, expected) => {
       expect(sanitizeComposerPrediction(raw)).toBe(expected);
     });
