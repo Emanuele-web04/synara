@@ -4,6 +4,8 @@ rn_gpui_module::include_specs!();
 
 #[cfg(target_os = "macos")]
 mod appkit;
+#[cfg(target_os = "linux")]
+mod linux;
 mod webview;
 
 use react_native_gpui::host_component::register_component;

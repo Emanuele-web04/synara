@@ -6048,11 +6048,14 @@ name = "synara-webview"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "libc",
  "log",
+ "raw-window-handle",
  "react-native-gpui",
  "rn-gpui-module",
  "rn-gpui-module-build",
  "serde_json",
+ "x11rb",
 ]
 
 [[package]]
