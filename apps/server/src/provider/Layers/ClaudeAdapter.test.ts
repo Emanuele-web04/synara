@@ -11641,48 +11641,55 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("does not leave Claude in plan mode when a follow-up omits interactionMode", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
+  it.effect.each([
+    { label: "omits interactionMode", interactionMode: undefined },
+    { label: "switches to Debug", interactionMode: "debug" },
+  ] as const)(
+    "does not leave Claude in plan mode when a follow-up $label",
+    ({ interactionMode }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "plan this",
-        interactionMode: "plan",
-        attachments: [],
-      });
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "plan this",
+          interactionMode: "plan",
+          attachments: [],
+        });
 
-      const turnCompletedFiber = yield* Stream.filter(
-        adapter.streamEvents,
-        (event) => event.type === "turn.completed",
-      ).pipe(Stream.runHead, Effect.forkChild);
+        const turnCompletedFiber = yield* Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "turn.completed",
+        ).pipe(Stream.runHead, Effect.forkChild);
 
-      emitSuccessResult(
-        harness.query,
-        "sdk-session-plan-omitted-reset",
-        "result-plan-omitted-reset",
+        emitSuccessResult(
+          harness.query,
+          "sdk-session-plan-omitted-reset",
+          "result-plan-omitted-reset",
+        );
+
+        yield* Fiber.join(turnCompletedFiber);
+
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "now build it",
+          ...(interactionMode ? { interactionMode } : {}),
+          attachments: [],
+        });
+
+        assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "bypassPermissions"]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
       );
-
-      yield* Fiber.join(turnCompletedFiber);
-
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "now build it",
-        attachments: [],
-      });
-
-      assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "bypassPermissions"]);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+    },
+  );
 
   it.effect("captures ExitPlanMode as a proposed plan and denies auto-exit", () => {
     const harness = makeHarness();
