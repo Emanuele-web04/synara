@@ -1,5 +1,5 @@
 // FILE: localImageFiles.ts
-// Purpose: Resolves local preview-file (image/PDF) requests without exposing arbitrary files.
+// Purpose: Resolves local preview-file (image/video/PDF) requests without exposing arbitrary files.
 // Layer: Server HTTP utility
 // Exports: local image route constants and allowlisted path resolver
 // Depends on: fs realpath/stat, Codex generated image roots, safe preview extensions
@@ -13,6 +13,7 @@ import {
   LOCAL_IMAGE_ROUTE_PATH,
   isSupportedLocalImagePath,
   isSupportedLocalPreviewFilePath,
+  isSupportedLocalVideoPath,
 } from "@synara/shared/localPreviewFiles";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
@@ -198,9 +199,18 @@ export async function resolveAllowedLocalPreviewFile(input: {
     return resolved;
   }
 
-  // The generated-image and temp-dir roots exist for agent-produced images in
-  // chat markdown; keep them image-only so they never serve documents.
-  if (!isSupportedLocalImagePath(realFilePath)) {
+  // The generated-image and temp-dir roots exist for agent-produced media in
+  // chat markdown; they never serve documents. Temp-dir roots also serve
+  // videos (agent tools write recordings such as `simulator-*.mp4` to
+  // os.tmpdir()); Codex `generated_images` roots stay image-only.
+  const isImage = isSupportedLocalImagePath(realFilePath);
+  if (!isImage && !isSupportedLocalVideoPath(realFilePath)) {
+    return null;
+  }
+  if (tempRoots.some((root) => isPathInside(realFilePath, root))) {
+    return resolved;
+  }
+  if (!isImage) {
     return null;
   }
   // A provided empty array means settings/live sessions intentionally allow no Codex homes.
@@ -226,10 +236,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
       },
     ),
   ).then((roots) => roots.filter((root): root is string => root !== null));
-  const allowed =
-    generatedImagesRoots.some((root) => isPathInside(realFilePath, root)) ||
-    tempRoots.some((root) => isPathInside(realFilePath, root));
-  return allowed ? resolved : null;
+  return generatedImagesRoots.some((root) => isPathInside(realFilePath, root)) ? resolved : null;
 }
 
 // A relative reference may recover inside its workspace or registered Git

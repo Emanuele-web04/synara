@@ -2304,6 +2304,35 @@ label:has(> select#reasoning-effort) select {
   color: var(--muted-foreground);
 }
 
+/* Local video played inline from markdown ![alt](clip.mp4). Width and the 16:9
+   box are fixed before metadata loads so the transcript row never changes
+   height when the video arrives (end-follow); the video letterboxes inside. */
+.chat-generated-image.chat-generated-video {
+  width: min(420px, 100%);
+  max-width: 100%;
+}
+
+.chat-generated-video__frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.chat-generated-video__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.chat-generated-video[data-status="loading"] .chat-generated-video__video {
+  opacity: 0;
+}
+
 @keyframes chat-generated-image-shimmer {
   0% {
     background-position: 100% 0;
