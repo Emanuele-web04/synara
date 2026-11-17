@@ -61,6 +61,18 @@ function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
   };
 }
 
+function menuItem(
+  id: string,
+  label: string,
+  icon: string,
+  dialogAction: string,
+  disabled: boolean,
+) {
+  return { id, label, disabled, icon, kind: "open_dialog", dialogAction } as ReturnType<
+    typeof buildMenuItems
+  >[number];
+}
+
 describe("when: branch is clean and has an open PR", () => {
   it("resolveQuickAction opens the existing PR", () => {
     const quick = resolveQuickAction(
@@ -80,22 +92,8 @@ describe("when: branch is clean and has an open PR", () => {
       false,
     );
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Push", "push", "push", true),
       {
         id: "pr",
         label: "Create PR",
@@ -121,30 +119,9 @@ describe("when: actions are busy", () => {
   it("buildMenuItems disables all actions", () => {
     const items = buildMenuItems(status(), true);
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: true,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Push", "push", "push", true),
+      menuItem("pr", "Create PR", "pr", "create_pr", true),
     ]);
   });
 });
@@ -192,30 +169,9 @@ describe("when: branch is clean, ahead, and has no open PR", () => {
   it("buildMenuItems enables push and create PR, with commit disabled", () => {
     const items = buildMenuItems(status({ aheadCount: 2, pr: null }), false);
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: false,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: false,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Push", "push", "push", false),
+      menuItem("pr", "Create PR", "pr", "create_pr", false),
     ]);
   });
 });
@@ -409,38 +365,10 @@ describe("when: working tree has local changes", () => {
   it("buildMenuItems enables commit and create PR while push stays disabled", () => {
     const items = buildMenuItems(status({ hasWorkingTreeChanges: true }), false);
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: false,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "commit_push",
-        label: "Commit & push",
-        disabled: false,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "commit_push",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: false,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", false),
+      menuItem("commit_push", "Commit & push", "push", "commit_push", false),
+      menuItem("push", "Push", "push", "push", true),
+      menuItem("pr", "Create PR", "pr", "create_pr", false),
     ]);
   });
 });
@@ -482,30 +410,9 @@ describe("when: on default branch without open PR", () => {
       true,
     );
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: false,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Commit & push",
-        disabled: false,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "commit_push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: false,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", false),
+      menuItem("push", "Commit & push", "push", "commit_push", false),
+      menuItem("pr", "Create PR", "pr", "create_pr", false),
     ]);
   });
 
@@ -517,30 +424,9 @@ describe("when: on default branch without open PR", () => {
       true,
     );
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Commit & push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "commit_push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: true,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Commit & push", "push", "commit_push", true),
+      menuItem("pr", "Create PR", "pr", "create_pr", true),
     ]);
   });
 });
@@ -561,38 +447,10 @@ describe("when: working tree has local changes and branch is behind upstream", (
   it("buildMenuItems enables commit and keeps push and PR disabled", () => {
     const items = buildMenuItems(status({ hasWorkingTreeChanges: true, behindCount: 2 }), false);
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: false,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "commit_push",
-        label: "Commit & push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "commit_push",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: true,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", false),
+      menuItem("commit_push", "Commit & push", "push", "commit_push", true),
+      menuItem("push", "Push", "push", "push", true),
+      menuItem("pr", "Create PR", "pr", "create_pr", true),
     ]);
   });
 });
@@ -695,30 +553,9 @@ describe("when: branch has no upstream configured", () => {
   it("buildMenuItems enables create PR when no upstream and commits are ahead", () => {
     const items = buildMenuItems(status({ hasUpstream: false, pr: null, aheadCount: 2 }), false);
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: false,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: false,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Push", "push", "push", false),
+      menuItem("pr", "Create PR", "pr", "create_pr", false),
     ]);
   });
 
@@ -729,30 +566,9 @@ describe("when: branch has no upstream configured", () => {
       false,
     );
     assert.deepEqual(items, [
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: true,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-      {
-        id: "push",
-        label: "Push",
-        disabled: true,
-        icon: "push",
-        kind: "open_dialog",
-        dialogAction: "push",
-      },
-      {
-        id: "pr",
-        label: "Create PR",
-        disabled: true,
-        icon: "pr",
-        kind: "open_dialog",
-        dialogAction: "create_pr",
-      },
+      menuItem("commit", "Commit", "commit", "commit", true),
+      menuItem("push", "Push", "push", "push", true),
+      menuItem("pr", "Create PR", "pr", "create_pr", true),
     ]);
   });
 
@@ -784,105 +600,71 @@ describe("resolveCreatePrExecution", () => {
     defaultBranchName: "main",
   };
 
-  it("runs the full commit+push+PR chain when the working tree is dirty", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ hasWorkingTreeChanges: true }),
-    });
-    assert.deepEqual(execution, { kind: "run_action", action: "commit_push_pr" });
-  });
-
-  it("runs push+PR when the branch is clean but ahead", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ aheadCount: 2 }),
-    });
-    assert.deepEqual(execution, { kind: "run_action", action: "create_pr" });
-  });
-
-  it("runs create PR for a clean published feature branch", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ aheadCount: 0 }),
-    });
-    assert.deepEqual(execution, { kind: "run_action", action: "create_pr" });
-  });
-
-  it("opens the existing PR instead of creating a new one", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ hasWorkingTreeChanges: true, pr: statusPr() }),
-    });
-    assert.deepEqual(execution, { kind: "open_pr" });
-  });
-
-  it("stays unavailable when the branch is behind upstream, even with local changes", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }),
-    });
-    assert.deepEqual(execution, {
-      kind: "unavailable",
-      hint: "Branch is behind upstream. Pull before creating a PR.",
-    });
-  });
-
-  it("stays unavailable when the branch has diverged from upstream", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ aheadCount: 2, behindCount: 1 }),
-    });
-    assert.deepEqual(execution, {
-      kind: "unavailable",
-      hint: "Branch has diverged from upstream. Rebase/merge first.",
-    });
-  });
-
-  it("stays unavailable without an origin remote", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      hasOriginRemote: false,
-      gitStatus: status({ hasWorkingTreeChanges: true, hasUpstream: false, upstreamBranch: null }),
-    });
-    assert.deepEqual(execution, {
-      kind: "unavailable",
-      hint: 'Add an "origin" remote before creating a PR.',
-    });
-  });
-
-  it("stays unavailable on a detached HEAD", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({ branch: null }),
-    });
-    assert.deepEqual(execution, {
-      kind: "unavailable",
-      hint: "Detached HEAD: checkout a branch before creating a PR.",
-    });
-  });
-
-  it("stays unavailable when a clean branch only tracks the default branch", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      gitStatus: status({
-        branch: "synara/pi-cleanup",
-        upstreamBranch: "main",
-        aheadCount: 0,
-      }),
-    });
-    assert.deepEqual(execution, {
-      kind: "unavailable",
-      hint: "No branch changes to include in a PR.",
-    });
-  });
-
-  it("stays unavailable while a git action is running", () => {
-    const execution = resolveCreatePrExecution({
-      ...baseInput,
-      isBusy: true,
-      gitStatus: status({ hasWorkingTreeChanges: true }),
-    });
-    assert.deepEqual(execution, { kind: "unavailable", hint: "Git action in progress." });
+  it.each([
+    [
+      "runs the full commit+push+PR chain when the working tree is dirty",
+      { gitStatus: status({ hasWorkingTreeChanges: true }) },
+      { kind: "run_action", action: "commit_push_pr" },
+    ],
+    [
+      "runs push+PR when the branch is clean but ahead",
+      { gitStatus: status({ aheadCount: 2 }) },
+      { kind: "run_action", action: "create_pr" },
+    ],
+    [
+      "runs create PR for a clean published feature branch",
+      { gitStatus: status({ aheadCount: 0 }) },
+      { kind: "run_action", action: "create_pr" },
+    ],
+    [
+      "opens the existing PR instead of creating a new one",
+      { gitStatus: status({ hasWorkingTreeChanges: true, pr: statusPr() }) },
+      { kind: "open_pr" },
+    ],
+    [
+      "stays unavailable when the branch is behind upstream, even with local changes",
+      { gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }) },
+      { kind: "unavailable", hint: "Branch is behind upstream. Pull before creating a PR." },
+    ],
+    [
+      "stays unavailable when the branch has diverged from upstream",
+      { gitStatus: status({ aheadCount: 2, behindCount: 1 }) },
+      { kind: "unavailable", hint: "Branch has diverged from upstream. Rebase/merge first." },
+    ],
+    [
+      "stays unavailable without an origin remote",
+      {
+        hasOriginRemote: false,
+        gitStatus: status({
+          hasWorkingTreeChanges: true,
+          hasUpstream: false,
+          upstreamBranch: null,
+        }),
+      },
+      { kind: "unavailable", hint: 'Add an "origin" remote before creating a PR.' },
+    ],
+    [
+      "stays unavailable on a detached HEAD",
+      { gitStatus: status({ branch: null }) },
+      {
+        kind: "unavailable",
+        hint: "Detached HEAD: checkout a branch before creating a PR.",
+      },
+    ],
+    [
+      "stays unavailable when a clean branch only tracks the default branch",
+      {
+        gitStatus: status({ branch: "synara/pi-cleanup", upstreamBranch: "main", aheadCount: 0 }),
+      },
+      { kind: "unavailable", hint: "No branch changes to include in a PR." },
+    ],
+    [
+      "stays unavailable while a git action is running",
+      { isBusy: true, gitStatus: status({ hasWorkingTreeChanges: true }) },
+      { kind: "unavailable", hint: "Git action in progress." },
+    ],
+  ])("%s", (_case, input, expected) => {
+    assert.deepEqual(resolveCreatePrExecution({ ...baseInput, ...input }), expected);
   });
 });
 
@@ -1281,50 +1063,33 @@ describe("requiresFeatureBranchForDefaultBranchAction", () => {
 });
 
 describe("buildGitActionProgressStages", () => {
-  it("shows push-only stages for the dedicated push action", () => {
-    const stages = buildGitActionProgressStages({
-      action: "push",
-      hasCustomCommitMessage: false,
-      hasWorkingTreeChanges: false,
-      pushTarget: "origin/feature/test",
-    });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test..."]);
-  });
-
-  it("shows push and pr stages when create-pr needs to publish first", () => {
-    const stages = buildGitActionProgressStages({
-      action: "create_pr",
-      hasCustomCommitMessage: false,
-      hasWorkingTreeChanges: false,
-      pushTarget: "origin/feature/test",
-      shouldPushBeforePr: true,
-    });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test...", "Creating PR..."]);
-  });
-
-  it("shows only push progress when push-only is forced", () => {
-    const stages = buildGitActionProgressStages({
-      action: "commit_push",
-      hasCustomCommitMessage: false,
-      hasWorkingTreeChanges: true,
-      forcePushOnly: true,
-      pushTarget: "origin/feature/test",
-    });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test..."]);
-  });
-
-  it("includes commit stages for commit+push when working tree is dirty", () => {
-    const stages = buildGitActionProgressStages({
-      action: "commit_push",
-      hasCustomCommitMessage: false,
-      hasWorkingTreeChanges: true,
-      pushTarget: "origin/feature/test",
-    });
-    assert.deepEqual(stages, [
-      "Generating commit message...",
-      "Committing...",
-      "Pushing to origin/feature/test...",
-    ]);
+  const pushTarget = "origin/feature/test";
+  it.each([
+    [
+      "shows push-only stages for the dedicated push action",
+      { action: "push", hasWorkingTreeChanges: false },
+      ["Pushing to origin/feature/test..."],
+    ],
+    [
+      "shows push and pr stages when create-pr needs to publish first",
+      { action: "create_pr", hasWorkingTreeChanges: false, shouldPushBeforePr: true },
+      ["Pushing to origin/feature/test...", "Creating PR..."],
+    ],
+    [
+      "shows only push progress when push-only is forced",
+      { action: "commit_push", hasWorkingTreeChanges: true, forcePushOnly: true },
+      ["Pushing to origin/feature/test..."],
+    ],
+    [
+      "includes commit stages for commit+push when working tree is dirty",
+      { action: "commit_push", hasWorkingTreeChanges: true },
+      ["Generating commit message...", "Committing...", "Pushing to origin/feature/test..."],
+    ],
+  ] as const)("%s", (_case, input, expected) => {
+    assert.deepEqual(
+      buildGitActionProgressStages({ hasCustomCommitMessage: false, pushTarget, ...input }),
+      [...expected],
+    );
   });
 });
 
@@ -1378,32 +1143,39 @@ describe("summarizeGitResult", () => {
 });
 
 describe("resolveAutoFeatureBranchName", () => {
-  it("uses semantic preferred branch names when available", () => {
-    const branch = resolveAutoFeatureBranchName(["main", "feature/other"], "fix toast copy");
-    assert.equal(branch, "feature/fix-toast-copy");
-  });
-
-  it("normalizes preferred names that already include a branch namespace", () => {
-    const branch = resolveAutoFeatureBranchName(["main"], "feature/refine-toolbar-actions");
-    assert.equal(branch, "feature/refine-toolbar-actions");
-  });
-
-  it("increments suffix when the preferred branch name already exists", () => {
-    const branch = resolveAutoFeatureBranchName(
+  it.each([
+    [
+      "uses semantic preferred branch names when available",
+      ["main", "feature/other"],
+      "fix toast copy",
+      "feature/fix-toast-copy",
+    ],
+    [
+      "normalizes preferred names that already include a branch namespace",
+      ["main"],
+      "feature/refine-toolbar-actions",
+      "feature/refine-toolbar-actions",
+    ],
+    [
+      "increments suffix when the preferred branch name already exists",
       ["main", "feature/fix-toast-copy", "feature/fix-toast-copy-2"],
       "fix toast copy",
-    );
-    assert.equal(branch, "feature/fix-toast-copy-3");
-  });
-
-  it("treats existing branch names as case-insensitive for collision checks", () => {
-    const branch = resolveAutoFeatureBranchName(["Feature/Ticket-1"], "feature/ticket-1");
-    assert.equal(branch, "feature/ticket-1-2");
-  });
-
-  it("falls back to feature/update when no preferred name is provided", () => {
-    const branch = resolveAutoFeatureBranchName(["main"]);
-    assert.equal(branch, "feature/update");
+      "feature/fix-toast-copy-3",
+    ],
+    [
+      "treats existing branch names as case-insensitive for collision checks",
+      ["Feature/Ticket-1"],
+      "feature/ticket-1",
+      "feature/ticket-1-2",
+    ],
+    [
+      "falls back to feature/update when no preferred name is provided",
+      ["main"],
+      undefined,
+      "feature/update",
+    ],
+  ])("%s", (_case, existing, preferred, expected) => {
+    assert.equal(resolveAutoFeatureBranchName(existing, preferred), expected);
   });
 });
 
@@ -1444,55 +1216,38 @@ describe("resolveLiveThreadBranchUpdate", () => {
 });
 
 describe("shouldOfferCreateBranchPrompt", () => {
-  const temporaryBranch = "synara/deadbeef";
+  const worktree = "/tmp/project/.worktrees/feature-test";
 
-  it("hides the create-branch prompt when the branch already has upstream", () => {
-    assert.isFalse(
-      shouldOfferCreateBranchPrompt({
-        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        gitStatus: {
-          branch: temporaryBranch,
-          hasUpstream: true,
-        },
-      }),
-    );
-  });
-
-  it("hides the create-branch prompt outside a worktree even when the branch is local-only", () => {
-    assert.isFalse(
-      shouldOfferCreateBranchPrompt({
-        activeWorktreePath: null,
-        gitStatus: {
-          branch: temporaryBranch,
-          hasUpstream: false,
-        },
-      }),
-    );
-  });
-
-  it("hides the create-branch prompt once the current branch has been finalized", () => {
-    assert.isFalse(
-      shouldOfferCreateBranchPrompt({
-        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        gitStatus: {
-          branch: "feature/test",
-          hasUpstream: false,
-        },
+  it.each([
+    [
+      "hides the prompt when the branch already has upstream",
+      { activeWorktreePath: worktree, gitStatus: { branch: "synara/deadbeef", hasUpstream: true } },
+      false,
+    ],
+    [
+      "hides the prompt outside a worktree even when the branch is local-only",
+      { activeWorktreePath: null, gitStatus: { branch: "synara/deadbeef", hasUpstream: false } },
+      false,
+    ],
+    [
+      "hides the prompt once the current branch has been finalized",
+      {
+        activeWorktreePath: worktree,
+        gitStatus: { branch: "feature/test", hasUpstream: false },
         createBranchFlowCompleted: true,
-      }),
-    );
-  });
-
-  it("keeps the create-branch prompt visible for a semantic local-only branch until the flow is completed", () => {
-    assert.isTrue(
-      shouldOfferCreateBranchPrompt({
-        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        gitStatus: {
-          branch: "feature/test",
-          hasUpstream: false,
-        },
+      },
+      false,
+    ],
+    [
+      "keeps the prompt visible for a semantic local-only branch until the flow is completed",
+      {
+        activeWorktreePath: worktree,
+        gitStatus: { branch: "feature/test", hasUpstream: false },
         createBranchFlowCompleted: false,
-      }),
-    );
+      },
+      true,
+    ],
+  ])("%s", (_case, input, expected) => {
+    assert.equal(shouldOfferCreateBranchPrompt(input), expected);
   });
 });

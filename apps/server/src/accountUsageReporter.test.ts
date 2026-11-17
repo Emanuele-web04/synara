@@ -63,6 +63,7 @@ function makeReporterHarness(
     // High debounce so only explicit flushNow calls (or explicitly small
     // overrides) drive flushes; the construction-time catch-up stays pending.
     debounceMs: 60_000,
+    pushPaceMs: 1,
     log: () => {},
     ...overrides,
   });
@@ -142,6 +143,20 @@ const seedUserMessage = (
     ${input.dispatchOrigin ?? null}, 0, 'native', ${input.createdAt}, ${input.createdAt}
   )
 `;
+
+const seedBulkUserMessages = (sql: SqlClient.SqlClient, baseMs: number, count: number) =>
+  sql.withTransaction(
+    Effect.gen(function* () {
+      for (let index = 0; index < count; index += 1) {
+        yield* seedUserMessage(sql, {
+          messageId: `msg-bulk-${index}`,
+          threadId: "thread-bulk",
+          turnId: null,
+          createdAt: new Date(baseMs + index * 60_000).toISOString(),
+        });
+      }
+    }),
+  );
 
 const seedTurn = (
   sql: SqlClient.SqlClient,
@@ -1255,15 +1270,7 @@ describe("createAccountUsageReporter", () => {
         yield* seedThread(sql, "thread-bulk", '{"provider":"codex","model":"gpt-5-codex"}');
         // 501 prompts in 501 distinct minutes → 501 model buckets.
         const baseMs = Date.parse("2026-08-10T00:00:00.000Z");
-        for (let index = 0; index < 501; index += 1) {
-          const createdAt = new Date(baseMs + index * 60_000).toISOString();
-          yield* seedUserMessage(sql, {
-            messageId: `msg-bulk-${index}`,
-            threadId: "thread-bulk",
-            turnId: null,
-            createdAt,
-          });
-        }
+        yield* seedBulkUserMessages(sql, baseMs, 501);
 
         const { reporter, pushes } = makeReporterHarness(sql, {
           now: () => baseMs + 502 * 60_000,
@@ -1309,15 +1316,7 @@ describe("createAccountUsageReporter", () => {
         yield* seedThread(sql, "thread-bulk", '{"provider":"codex","model":"gpt-5-codex"}');
         // 501 prompts in 501 distinct minutes → 2 chunks (500 + 1).
         const baseMs = Date.parse("2026-08-10T00:00:00.000Z");
-        for (let index = 0; index < 501; index += 1) {
-          const createdAt = new Date(baseMs + index * 60_000).toISOString();
-          yield* seedUserMessage(sql, {
-            messageId: `msg-bulk-${index}`,
-            threadId: "thread-bulk",
-            turnId: null,
-            createdAt,
-          });
-        }
+        yield* seedBulkUserMessages(sql, baseMs, 501);
 
         let failFromPush = 2;
         const pushes: PushUsageRequest[] = [];

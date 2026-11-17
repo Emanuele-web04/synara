@@ -110,7 +110,6 @@ it("prepends older imported messages without moving the reading position and iso
     const firstRow = () =>
       host.querySelector('[data-message-id="recent-0"]')!.getBoundingClientRect().top;
     const before = firstRow();
-    await page.screenshot({ path: "__screenshots__/import-history-before.png" });
     await page.getByRole("button", { name: "Retry loading earlier messages" }).click();
     await expect
       .element(page.getByRole("button", { name: "Load earlier messages" }))
@@ -118,7 +117,6 @@ it("prepends older imported messages without moving the reading position and iso
     await vi.waitFor(() => expect(Math.abs(firstRow() - before)).toBeLessThan(4));
     await props.listRef.current!.scrollToOffset({ offset: 0, animated: false });
     await expect.element(page.getByText("Older message 0", { exact: true })).toBeInTheDocument();
-    await page.screenshot({ path: "__screenshots__/import-history-after.png" });
     await page.getByRole("button", { name: "Load earlier messages" }).click();
     await expect
       .element(page.getByRole("button", { name: "Loading earlier messages…" }))

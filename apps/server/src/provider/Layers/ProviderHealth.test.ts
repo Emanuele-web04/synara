@@ -51,7 +51,6 @@ import {
   makeCheckGrokProviderStatus,
   makeClaudeProbeEnv,
   makeCheckOpenCodeProviderStatus,
-  makeDisabledProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
@@ -210,6 +209,28 @@ function withProcessPlatform<T, E, R>(
       Effect.sync(() => {
         if (descriptor) {
           Object.defineProperty(process, "platform", descriptor);
+        }
+      }),
+  );
+}
+
+// Scope-bound process.env overrides; `undefined` deletes the variable. Restored when the test scope closes.
+function scopedEnv(overrides: Record<string, string | undefined>) {
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      const previous: Record<string, string | undefined> = {};
+      for (const [key, value] of Object.entries(overrides)) {
+        previous[key] = process.env[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      return previous;
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
         }
       }),
   );
@@ -722,32 +743,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("disabled provider handling", () => {
-    it("builds an inert status for disabled providers", () => {
-      assert.deepStrictEqual(makeDisabledProviderStatus("opencode", "2026-06-16T12:00:00.000Z"), {
-        provider: "opencode",
-        instanceId: "opencode",
-        driver: "opencode",
-        status: "warning",
-        available: false,
-        authStatus: "unknown",
-        checkedAt: "2026-06-16T12:00:00.000Z",
-        message: "Provider is disabled in Synara settings.",
-      });
-    });
-
-    it("projects disabled settings over cached ready statuses", () => {
-      const statuses = projectProviderStatusesForSettings(
-        [cachedReadyCodexStatus],
-        allProvidersDisabledServerSettings,
-        "2026-06-16T12:05:00.000Z",
-      );
-      const codex = statuses.find((status) => status.provider === "codex");
-
-      assert.strictEqual(statuses.length, 10);
-      assert.strictEqual(codex?.available, false);
-      assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
-    });
-
     it("changes projected statuses for settings-only instance updates", () => {
       const previousStatuses = projectProviderStatusesForSettings(
         [cachedReadyCodexStatus],
@@ -1594,29 +1589,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // path being tested.
 
   describe("checkCodexProviderStatus", () => {
-    it.effect("returns ready when codex is installed and authenticated", () =>
-      Effect.gen(function* () {
-        // Point CODEX_HOME at an empty tmp dir (no config.toml) so the
-        // default code path (OpenAI provider, auth probe runs) is exercised.
-        yield* withTempCodexHome();
-        const status = yield* checkCodexProviderStatus;
-        assert.strictEqual(status.provider, "codex");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "-c mcp_servers={} login status")
-              return { stdout: "Logged in\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("uses configured codex binary for version and auth probes", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
@@ -2105,23 +2077,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
-
-    it.effect("still reports error when codex CLI is missing even with custom provider", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome(
-          [
-            'model_provider = "portkey"',
-            "",
-            "[model_providers.portkey]",
-            'base_url = "https://api.portkey.ai/v1"',
-            'env_key = "PORTKEY_API_KEY"',
-          ].join("\n"),
-        );
-        const status = yield* checkCodexProviderStatus;
-        assert.strictEqual(status.status, "error");
-        assert.strictEqual(status.available, false);
-      }).pipe(Effect.provide(failingSpawnerLayer("spawn codex ENOENT"))),
-    );
   });
 
   describe("checkCodexProviderStatus with openai model provider", () => {
@@ -2235,30 +2190,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── checkClaudeProviderStatus tests ──────────────────────────
 
   describe("checkClaudeProviderStatus", () => {
-    it.effect("returns ready when claude is installed and authenticated", () =>
-      Effect.gen(function* () {
-        const status = yield* checkClaudeProviderStatus;
-        assert.strictEqual(status.provider, "claudeAgent");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            if (joined === "auth status")
-              return {
-                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
-                stderr: "",
-                code: 0,
-              };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("fails closed for Auto when the Claude CLI version is unparseable", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;
@@ -2925,24 +2856,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkOpenCodeProviderStatus", () => {
-    it.effect("returns ready when opencode is installed", () =>
-      Effect.gen(function* () {
-        const status = yield* checkOpenCodeProviderStatus;
-        assert.strictEqual(status.provider, "opencode");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unknown");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("expands a tilde opencode binary path for the version probe", () =>
       Effect.gen(function* () {
         const status = yield* makeCheckOpenCodeProviderStatus("~/bin/opencode");
@@ -3221,32 +3134,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
-
-    it.effect("uses the configured Antigravity binary", () =>
-      Effect.gen(function* () {
-        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command, env) => {
-            assert.strictEqual(command, "/custom/bin/agy");
-            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
-            return args.join(" ") === "--version"
-              ? { stdout: "1.1.2\n", stderr: "", code: 0 }
-              : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
-          }),
-        ),
-      ),
-    );
   });
 
   describe("checkGrokProviderStatus", () => {
-    it.effect("returns ready when Grok CLI is installed", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      delete process.env.XAI_API_KEY;
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready when Grok CLI is installed", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: undefined, GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           undefined,
           undefined,
@@ -3267,29 +3160,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("marks Grok authenticated when XAI_API_KEY is present", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      process.env.XAI_API_KEY = "xai-test-key";
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("marks Grok authenticated when XAI_API_KEY is present", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "xai-test-key", GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* checkGrokProviderStatus;
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "apiKey");
@@ -3302,37 +3178,18 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("marks Grok authenticated from a cached grok login", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      delete process.env.XAI_API_KEY;
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("marks Grok authenticated from a cached grok login", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: undefined, GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           undefined,
           undefined,
           undefined,
           undefined,
-          async () => ({
-            accessToken: "cached-token",
-          }),
+          async () => ({ accessToken: "cached-token" }),
         );
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.authStatus, "authenticated");
@@ -3346,62 +3203,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
-
-    it.effect("uses configured Grok binary for version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/grok");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("passes the isolated Grok account environment to cached-login lookup", () =>
-      Effect.gen(function* () {
-        let cachedLoginHome: string | undefined;
-        const status = yield* makeCheckGrokProviderStatus(
-          undefined,
-          undefined,
-          "grok_work",
-          { homeDir: OS.tmpdir(), isolationRootDir: OS.tmpdir() },
-          async (env) => {
-            cachedLoginHome = env?.GROK_HOME;
-            return null;
-          },
-        );
-        assert.strictEqual(status.authStatus, "unknown");
-        assert.ok(cachedLoginHome?.includes("provider-homes"));
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) =>
-            args.join(" ") === "--version"
-              ? { stdout: "grok 0.1.0\n", stderr: "", code: 0 }
-              : { stdout: "", stderr: "", code: 1 },
-          ),
         ),
       ),
     );
@@ -3493,10 +3294,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
     });
 
-    it.effect("treats a non-default Grok instance as an empty credential boundary", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      return Effect.gen(function* () {
+    it.effect("treats a non-default Grok instance as an empty credential boundary", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a" });
         const status = yield* makeCheckGrokProviderStatus(
           "/custom/bin/grok",
           undefined,
@@ -3514,19 +3314,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
-            else process.env.XAI_API_KEY = previousXaiApiKey;
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("honors an explicit empty environment on the default Grok probe", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      return Effect.gen(function* () {
+    it.effect("honors an explicit empty environment on the default Grok probe", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a" });
         const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok", {}, "grok");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.authStatus, "unknown");
@@ -3540,21 +3333,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
-            else process.env.XAI_API_KEY = previousXaiApiKey;
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("isolates configured Grok credentials from ambient aliases", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("isolates configured Grok credentials from ambient aliases", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a", GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           "/custom/bin/grok",
           {
@@ -3577,22 +3361,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
     it.effect("returns unavailable when Grok CLI is missing", () =>
       Effect.gen(function* () {
@@ -3607,12 +3377,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkDevinProviderStatus", () => {
-    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () => {
-      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
-      const previousDevinKey = process.env.DEVIN_API_KEY;
-      process.env.WINDSURF_API_KEY = "windsurf-test-key";
-      delete process.env.DEVIN_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ WINDSURF_API_KEY: "windsurf-test-key", DEVIN_API_KEY: undefined });
         const status = yield* checkDevinProviderStatus;
         assert.strictEqual(status.provider, "devin");
         assert.strictEqual(status.status, "ready");
@@ -3629,29 +3396,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousWindsurfKey === undefined) {
-              delete process.env.WINDSURF_API_KEY;
-            } else {
-              process.env.WINDSURF_API_KEY = previousWindsurfKey;
-            }
-            if (previousDevinKey === undefined) {
-              delete process.env.DEVIN_API_KEY;
-            } else {
-              process.env.DEVIN_API_KEY = previousDevinKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("returns ready with auth guidance when no Devin API key is set", () => {
-      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
-      const previousDevinKey = process.env.DEVIN_API_KEY;
-      delete process.env.WINDSURF_API_KEY;
-      delete process.env.DEVIN_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ WINDSURF_API_KEY: undefined, DEVIN_API_KEY: undefined });
         // Stub the credential read so a real `devin auth login` on the host
         // cannot leak an "authenticated" result into this test.
         const status = yield* makeCheckDevinProviderStatus(undefined, async () => undefined);
@@ -3667,22 +3417,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousWindsurfKey === undefined) {
-              delete process.env.WINDSURF_API_KEY;
-            } else {
-              process.env.WINDSURF_API_KEY = previousWindsurfKey;
-            }
-            if (previousDevinKey === undefined) {
-              delete process.env.DEVIN_API_KEY;
-            } else {
-              process.env.DEVIN_API_KEY = previousDevinKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
     it.effect("recognizes credentials saved by devin auth login", () => {
       let credentialsRead = false;

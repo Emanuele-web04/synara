@@ -4,7 +4,8 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
-import { expect, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
+import os from "node:os";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
@@ -134,6 +135,13 @@ function runGit(
   });
 }
 
+// Built once per file through git, then cloned: a fresh repo costs six git spawns.
+let initialRepoTemplate: string | undefined;
+afterAll(() => {
+  if (initialRepoTemplate) fs.rmSync(initialRepoTemplate, { recursive: true, force: true });
+  initialRepoTemplate = undefined;
+});
+
 function initRepo(
   cwd: string,
 ): Effect.Effect<
@@ -142,15 +150,58 @@ function initRepo(
   FileSystem.FileSystem | Scope.Scope | GitCore
 > {
   return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
+    if (initialRepoTemplate) {
+      fs.cpSync(initialRepoTemplate, cwd, { recursive: true });
+      // Copied files carry new inode/ctime values; settle the index stat cache.
+      yield* runGit(cwd, ["update-index", "--refresh"]);
+      return;
+    }
+    const fs_ = yield* FileSystem.FileSystem;
     yield* runGit(cwd, ["init", "--initial-branch=main"]);
     yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
     yield* runGit(cwd, ["config", "user.name", "Test User"]);
-    yield* fs.writeFileString(path.join(cwd, "README.md"), "hello\n");
+    yield* fs_.writeFileString(path.join(cwd, "README.md"), "hello\n");
     yield* runGit(cwd, ["add", "README.md"]);
     yield* runGit(cwd, ["commit", "-m", "Initial commit"]);
+    const template = fs.mkdtempSync(path.join(os.tmpdir(), "git-manager-template-"));
+    fs.cpSync(cwd, template, { recursive: true });
+    initialRepoTemplate = template;
   });
 }
+
+/** A `gh pr` JSON entry for a pull request in the sample repository, based on main. */
+const prEntry = <T extends Record<string, unknown> = Record<never, never>>(
+  number: number,
+  title: string,
+  headRefName: string,
+  extra: T = {} as T,
+) => ({
+  number,
+  title,
+  url: `https://github.com/example-org/sample-repo/pull/${number}`,
+  baseRefName: "main",
+  headRefName,
+  ...extra,
+});
+
+/** The normalized pull request summary GitManager reports for `prEntry` fixtures without extras. */
+const expectedPrSummary = (number: number, title: string, headBranch: string, state: string) => ({
+  number,
+  title,
+  url: `https://github.com/example-org/sample-repo/pull/${number}`,
+  baseBranch: "main",
+  headBranch,
+  state,
+  isDraft: false,
+  mergeability: "unknown",
+  additions: null,
+  deletions: null,
+  changedFiles: null,
+});
+
+/** Trimmed stdout of a git command run through GitCore. */
+const gitOut = (cwd: string, args: readonly string[]) =>
+  runGit(cwd, args).pipe(Effect.map((result) => result.stdout.trim()));
 
 function createBareRemote(): Effect.Effect<
   string,
@@ -221,109 +272,29 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
     ...overrides,
   };
 
+  const wrapped = Object.fromEntries(
+    (Object.keys(implementation) as Array<keyof FakeGitTextGeneration>).map((operation) => [
+      operation,
+      (input: never) =>
+        (implementation[operation] as (input: never) => Effect.Effect<unknown, unknown>)(
+          input,
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "fake text generation failed",
+                ...(cause !== undefined ? { cause } : {}),
+              }),
+          ),
+        ),
+    ]),
+  );
+  // Git actions never request composer predictions.
   return {
-    generateCommitMessage: (input) =>
-      implementation.generateCommitMessage(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateCommitMessage",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generatePrContent: (input) =>
-      implementation.generatePrContent(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generatePrContent",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateDiffSummary: (input) =>
-      implementation.generateDiffSummary(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateDiffSummary",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateBranchName: (input) =>
-      implementation.generateBranchName(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateBranchName",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateThreadTitle: (input) =>
-      implementation.generateThreadTitle(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateThreadTitle",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateThreadRecap: (input) =>
-      implementation.generateThreadRecap(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateThreadRecap",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    // Git actions never request composer predictions.
+    ...wrapped,
     generateComposerPrediction: () => Effect.succeed({ suggestion: null }),
-    generateProjectDigest: (input) =>
-      implementation.generateProjectDigest(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateProjectDigest",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    generateAutomationIntent: (input) =>
-      implementation.generateAutomationIntent(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "generateAutomationIntent",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-    evaluateAutomationCompletion: (input) =>
-      implementation.evaluateAutomationCompletion(input).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: "evaluateAutomationCompletion",
-              detail: "fake text generation failed",
-              ...(cause !== undefined ? { cause } : {}),
-            }),
-        ),
-      ),
-  };
+  } as unknown as TextGenerationShape;
 }
 
 function runStackedAction(
@@ -440,14 +411,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       });
       expect(result.commit.status).toBe("created");
       expect(result.push.status).toBe("pushed");
-      const localTree = (yield* runGit(repoDir, ["rev-parse", "HEAD^{tree}"])).stdout.trim();
-      const branch = (yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim();
-      expect((yield* runGit(remote, ["rev-parse", `${branch}^{tree}`])).stdout.trim()).toBe(
-        localTree,
-      );
-      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe(
-        "?? excluded.txt",
-      );
+      const localTree = yield* gitOut(repoDir, ["rev-parse", "HEAD^{tree}"]);
+      const branch = yield* gitOut(repoDir, ["branch", "--show-current"]);
+      expect(yield* gitOut(remote, ["rev-parse", `${branch}^{tree}`])).toBe(localTree);
+      expect(yield* gitOut(repoDir, ["status", "--porcelain"])).toBe("?? excluded.txt");
       const committedCount = (yield* runGit(repoDir, ["diff", "--shortstat", "HEAD~", "HEAD"]))
         .stdout;
       expect(committedCount).toContain("6000 files changed");
@@ -549,18 +516,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           prListSequence: [
             JSON.stringify([
-              {
-                number: 13,
-                title: "Existing PR",
-                url: "https://github.com/example-org/sample-repo/pull/13",
-                baseRefName: "main",
-                headRefName: "feature/status-open-pr",
+              prEntry(13, "Existing PR", "feature/status-open-pr", {
                 isDraft: true,
                 mergeable: "CONFLICTING",
                 additions: 38,
                 deletions: 36,
                 changedFiles: 3,
-              },
+              }),
             ]),
           ],
         },
@@ -616,14 +578,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           prListByHeadSelector: {
             "feature/captured-pr": JSON.stringify([
-              {
-                number: 574,
-                title: "Captured branch PR",
-                url: "https://github.com/example-org/sample-repo/pull/574",
-                baseRefName: "main",
-                headRefName: "feature/captured-pr",
-                state: "OPEN",
-              },
+              prEntry(574, "Captured branch PR", "feature/captured-pr", { state: "OPEN" }),
             ]),
           },
         },
@@ -669,15 +624,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               JSON.stringify([]),
               JSON.stringify([]),
               JSON.stringify([
-                {
-                  number: 488,
-                  title: "Rebase this PR on latest main",
-                  url: "https://github.com/example-org/sample-repo/pull/488",
-                  baseRefName: "main",
-                  headRefName: "statemachine",
+                prEntry(488, "Rebase this PR on latest main", "statemachine", {
                   state: "OPEN",
                   updatedAt: "2026-03-10T07:00:00Z",
-                },
+                }),
               ]),
             ],
           },
@@ -685,19 +635,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         const status = yield* manager.status({ cwd: repoDir });
         expect(status.branch).toBe("synara/pr-488/statemachine");
-        expect(status.pr).toEqual({
-          number: 488,
-          title: "Rebase this PR on latest main",
-          url: "https://github.com/example-org/sample-repo/pull/488",
-          baseBranch: "main",
-          headBranch: "statemachine",
-          state: "open",
-          isDraft: false,
-          mergeability: "unknown",
-          additions: null,
-          deletions: null,
-          changedFiles: null,
-        });
+        expect(status.pr).toEqual(
+          expectedPrSummary(488, "Rebase this PR on latest main", "statemachine", "open"),
+        );
         expect(ghCalls).toContain(
           "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt",
         );
@@ -715,16 +655,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           prListSequence: [
             JSON.stringify([
-              {
-                number: 22,
-                title: "Merged PR",
-                url: "https://github.com/example-org/sample-repo/pull/22",
-                baseRefName: "main",
-                headRefName: "feature/status-merged-pr",
+              prEntry(22, "Merged PR", "feature/status-merged-pr", {
                 state: "MERGED",
                 mergedAt: "2026-01-30T10:00:00Z",
                 updatedAt: "2026-01-30T10:00:00Z",
-              },
+              }),
             ]),
           ],
         },
@@ -732,19 +667,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-merged-pr");
-      expect(status.pr).toEqual({
-        number: 22,
-        title: "Merged PR",
-        url: "https://github.com/example-org/sample-repo/pull/22",
-        baseBranch: "main",
-        headBranch: "feature/status-merged-pr",
-        state: "merged",
-        isDraft: false,
-        mergeability: "unknown",
-        additions: null,
-        deletions: null,
-        changedFiles: null,
-      });
+      expect(status.pr).toEqual(
+        expectedPrSummary(22, "Merged PR", "feature/status-merged-pr", "merged"),
+      );
     }),
   );
 
@@ -758,25 +683,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           prListSequence: [
             JSON.stringify([
-              {
-                number: 45,
-                title: "Merged PR",
-                url: "https://github.com/example-org/sample-repo/pull/45",
-                baseRefName: "main",
-                headRefName: "feature/status-open-over-merged",
+              prEntry(45, "Merged PR", "feature/status-open-over-merged", {
                 state: "MERGED",
                 mergedAt: "2026-01-31T10:00:00Z",
                 updatedAt: "2026-02-01T10:00:00Z",
-              },
-              {
-                number: 46,
-                title: "Open PR",
-                url: "https://github.com/example-org/sample-repo/pull/46",
-                baseRefName: "main",
-                headRefName: "feature/status-open-over-merged",
+              }),
+              prEntry(46, "Open PR", "feature/status-open-over-merged", {
                 state: "OPEN",
                 updatedAt: "2026-01-30T10:00:00Z",
-              },
+              }),
             ]),
           ],
         },
@@ -784,19 +699,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-open-over-merged");
-      expect(status.pr).toEqual({
-        number: 46,
-        title: "Open PR",
-        url: "https://github.com/example-org/sample-repo/pull/46",
-        baseBranch: "main",
-        headBranch: "feature/status-open-over-merged",
-        state: "open",
-        isDraft: false,
-        mergeability: "unknown",
-        additions: null,
-        deletions: null,
-        changedFiles: null,
-      });
+      expect(status.pr).toEqual(
+        expectedPrSummary(46, "Open PR", "feature/status-open-over-merged", "open"),
+      );
     }),
   );
 
@@ -840,11 +745,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("created");
       expect(result.push.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("skipped_not_requested");
-      expect(
-        yield* runGit(repoDir, ["log", "-1", "--pretty=%s"]).pipe(
-          Effect.map((result) => result.stdout.trim()),
-        ),
-      ).toBe("Implement stacked git actions");
+      expect(yield* gitOut(repoDir, ["log", "-1", "--pretty=%s"])).toBe(
+        "Implement stacked git actions",
+      );
     }),
   );
 
@@ -881,18 +784,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch.name).toBe("feature/implement-stacked-git-actions");
       expect(result.commit.status).toBe("created");
       expect(result.push.status).toBe("pushed");
-      expect(
-        yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
-          Effect.map((result) => result.stdout.trim()),
-        ),
-      ).toBe("feature/implement-stacked-git-actions");
+      expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+        "feature/implement-stacked-git-actions",
+      );
 
-      const mainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-        Effect.map((r) => r.stdout.trim()),
-      );
-      const mergeBase = yield* runGit(repoDir, ["merge-base", "main", "HEAD"]).pipe(
-        Effect.map((r) => r.stdout.trim()),
-      );
+      const mainSha = yield* gitOut(repoDir, ["rev-parse", "main"]);
+      const mergeBase = yield* gitOut(repoDir, ["merge-base", "main", "HEAD"]);
       expect(mergeBase).toBe(mainSha);
       expect(generatedCount).toBe(1);
     }),
@@ -930,11 +827,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("created");
       expect(result.commit.subject).toBe("Update README.md");
       expect(result.push.status).toBe("pushed");
-      expect(
-        yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        ),
-      ).toBe("feature/update-readme-md");
+      expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+        "feature/update-readme-md",
+      );
     }),
   );
 
@@ -970,18 +865,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("created");
       expect(result.commit.subject).toBe("feat: custom summary line");
       expect(generatedCount).toBe(0);
-      expect(
-        yield* runGit(repoDir, ["log", "-1", "--pretty=%b"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        ),
-      ).toContain("- details from user");
+      expect(yield* gitOut(repoDir, ["log", "-1", "--pretty=%b"])).toContain("- details from user");
 
-      const mainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-        Effect.map((r) => r.stdout.trim()),
-      );
-      const mergeBase = yield* runGit(repoDir, ["merge-base", "main", result.branch.name!]).pipe(
-        Effect.map((r) => r.stdout.trim()),
-      );
+      const mainSha = yield* gitOut(repoDir, ["rev-parse", "main"]);
+      const mergeBase = yield* gitOut(repoDir, ["merge-base", "main", result.branch.name!]);
       expect(mergeBase).toBe(mainSha);
     }),
   );
@@ -995,9 +882,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const remoteDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
         yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        );
+        const originalMainSha = yield* gitOut(repoDir, ["rev-parse", "main"]);
         fs.writeFileSync(path.join(repoDir, "README.md"), "hello\ncreate-pr-from-default\n");
         yield* runGit(repoDir, ["add", "README.md"]);
         yield* runGit(repoDir, ["commit", "-m", "Create PR from default branch"]);
@@ -1009,13 +894,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               "[]",
               "[]",
               JSON.stringify([
-                {
-                  number: 90,
-                  title: "Create PR from default branch",
-                  url: "https://github.com/example-org/sample-repo/pull/90",
-                  baseRefName: "main",
-                  headRefName: "feature/create-pr-from-default-branch",
-                },
+                prEntry(
+                  90,
+                  "Create PR from default branch",
+                  "feature/create-pr-from-default-branch",
+                ),
               ]),
             ],
           },
@@ -1031,21 +914,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.commit.status).toBe("skipped_not_requested");
         expect(result.push.status).toBe("pushed");
         expect(result.pr.status).toBe("created");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe("origin/feature/create-pr-from-default-branch");
+        expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+          "origin/feature/create-pr-from-default-branch",
+        );
         expect(
           ghCalls.some((call) =>
             call.includes("pr create --base main --head feature/create-pr-from-default-branch"),
           ),
         ).toBe(true);
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe(originalMainSha);
+        expect(yield* gitOut(repoDir, ["rev-parse", "main"])).toBe(originalMainSha);
       }),
     30_000,
   );
@@ -1059,9 +936,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const remoteDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
         yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        );
+        const originalMainSha = yield* gitOut(repoDir, ["rev-parse", "main"]);
         yield* runGit(repoDir, ["branch", "--unset-upstream", "main"]);
         fs.writeFileSync(path.join(repoDir, "README.md"), "hello\npush-no-upstream\n");
         yield* runGit(repoDir, ["add", "README.md"]);
@@ -1077,11 +952,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.branch.status).toBe("created");
         expect(result.branch.name).toBe("feature/push-from-default-branch-without-upstream");
         expect(result.push.status).toBe("pushed");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe(originalMainSha);
+        expect(yield* gitOut(repoDir, ["rev-parse", "main"])).toBe(originalMainSha);
       }),
     30_000,
   );
@@ -1116,24 +987,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(errorMessage).toContain("has no upstream and this repository has multiple remotes");
       }),
     30_000,
-  );
-
-  it.effect("skips commit when there are no uncommitted changes", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-
-      const { manager } = yield* makeManager();
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-      });
-
-      expect(result.branch.status).toBe("skipped_not_requested");
-      expect(result.commit.status).toBe("skipped_no_changes");
-      expect(result.push.status).toBe("skipped_not_requested");
-      expect(result.pr.status).toBe("skipped_not_requested");
-    }),
   );
 
   it.effect("featureBranch returns error when worktree is clean", () =>
@@ -1172,15 +1025,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               "[]",
               "[]",
               "[]",
-              JSON.stringify([
-                {
-                  number: 77,
-                  title: "Add no-upstream PR flow",
-                  url: "https://github.com/example-org/sample-repo/pull/77",
-                  baseRefName: "main",
-                  headRefName: "feature/no-upstream-pr",
-                },
-              ]),
+              JSON.stringify([prEntry(77, "Add no-upstream PR flow", "feature/no-upstream-pr")]),
             ],
           },
         });
@@ -1195,11 +1040,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.push.status).toBe("pushed");
         expect(result.push.setUpstream).toBe(true);
         expect(result.pr.status).toBe("created");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
-            Effect.map((result) => result.stdout.trim()),
-          ),
-        ).toBe("origin/feature/no-upstream-pr");
+        expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+          "origin/feature/no-upstream-pr",
+        );
         expect(
           ghCalls.some((call) =>
             call.includes("pr create --base main --head feature/no-upstream-pr"),
@@ -1251,11 +1094,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.commit.status).toBe("skipped_not_requested");
         expect(result.push.status).toBe("pushed");
         expect(result.push.setUpstream).toBe(true);
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe("origin/feature/push-only");
+        expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+          "origin/feature/push-only",
+        );
       }),
     30_000,
   );
@@ -1279,15 +1120,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               "[]",
               "[]",
               "[]",
-              JSON.stringify([
-                {
-                  number: 89,
-                  title: "Create PR only",
-                  url: "https://github.com/example-org/sample-repo/pull/89",
-                  baseRefName: "main",
-                  headRefName: "feature/create-pr-only",
-                },
-              ]),
+              JSON.stringify([prEntry(89, "Create PR only", "feature/create-pr-only")]),
             ],
           },
         });
@@ -1335,15 +1168,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               "[]",
               "[]",
               "[]",
-              JSON.stringify([
-                {
-                  number: 91,
-                  title: "Custom PR title",
-                  url: "https://github.com/example-org/sample-repo/pull/91",
-                  baseRefName: "main",
-                  headRefName: "feature/custom-pr-content",
-                },
-              ]),
+              JSON.stringify([prEntry(91, "Custom PR title", "feature/custom-pr-content")]),
             ],
           },
         });
@@ -1387,15 +1212,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               "[]",
               "[]",
               "[]",
-              JSON.stringify([
-                {
-                  number: 92,
-                  title: "Committed work",
-                  url: "https://github.com/example-org/sample-repo/pull/92",
-                  baseRefName: "main",
-                  headRefName: "feature/dirty-create-pr",
-                },
-              ]),
+              JSON.stringify([prEntry(92, "Committed work", "feature/dirty-create-pr")]),
             ],
           },
         });
@@ -1572,7 +1389,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const remoteDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
         yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-        const mainHead = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        const mainHead = yield* gitOut(repoDir, ["rev-parse", "main"]);
         fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nupdated\n");
         const { manager } = yield* makeManager({
           textGeneration: {
@@ -1592,8 +1409,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.pr.status).toBe("created");
         expect(result.commit.subject).toBe("Update readme");
         expect(result.branch.name).toBe("feature/update-readme");
-        expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe("");
-        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(mainHead);
+        expect(yield* gitOut(repoDir, ["status", "--porcelain"])).toBe("");
+        expect(yield* gitOut(repoDir, ["rev-parse", "main"])).toBe(mainHead);
         expect((yield* runGit(remoteDir, ["show", "feature/update-readme:README.md"])).stdout).toBe(
           "hello\nupdated\n",
         );
@@ -1611,17 +1428,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
-          prListSequence: [
-            JSON.stringify([
-              {
-                number: 42,
-                title: "Existing PR",
-                url: "https://github.com/example-org/sample-repo/pull/42",
-                baseRefName: "main",
-                headRefName: "feature/existing-pr",
-              },
-            ]),
-          ],
+          prListSequence: [JSON.stringify([prEntry(42, "Existing PR", "feature/existing-pr")])],
         },
       });
       const result = yield* runStackedAction(manager, {
@@ -1705,56 +1512,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
-    "returns existing cross-repo PR metadata using the fork owner selector",
-    () =>
-      Effect.gen(function* () {
-        const repoDir = yield* makeTempDir("synara-git-manager-");
-        yield* initRepo(repoDir);
-        yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
-        const forkDir = yield* createBareRemote();
-        yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
-        yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
-        yield* runGit(repoDir, [
-          "config",
-          "remote.fork-seed.url",
-          "git@github.com:octocat/sample-repo.git",
-        ]);
-
-        const { manager, ghCalls } = yield* makeManager({
-          ghScenario: {
-            prListSequence: [
-              JSON.stringify([]),
-              JSON.stringify([
-                {
-                  number: 142,
-                  title: "Existing fork PR",
-                  url: "https://github.com/example-org/sample-repo/pull/142",
-                  baseRefName: "main",
-                  headRefName: "statemachine",
-                },
-              ]),
-            ],
-          },
-        });
-
-        const result = yield* runStackedAction(manager, {
-          cwd: repoDir,
-          action: "commit_push_pr",
-        });
-
-        expect(result.pr.status).toBe("opened_existing");
-        expect(result.pr.number).toBe(142);
-        expect(
-          ghCalls.some((call) =>
-            call.includes("pr list --head octocat:statemachine --state open --limit 1"),
-          ),
-        ).toBe(true);
-        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
-      }),
-    30_000,
-  );
-
-  it.effect(
     "stops probing head selectors after finding an existing PR",
     () =>
       Effect.gen(function* () {
@@ -1776,13 +1533,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListByHeadSelector: {
               "octocat:statemachine": JSON.stringify([
-                {
-                  number: 142,
-                  title: "Existing fork PR",
-                  url: "https://github.com/example-org/sample-repo/pull/142",
-                  baseRefName: "main",
-                  headRefName: "statemachine",
-                },
+                prEntry(142, "Existing fork PR", "statemachine"),
               ]),
               "fork-seed:statemachine": JSON.stringify([]),
               "synara/pr-142/statemachine": JSON.stringify([]),
@@ -1846,15 +1597,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             "[]",
             "[]",
             "[]",
-            JSON.stringify([
-              {
-                number: 88,
-                title: "Add stacked git actions",
-                url: "https://github.com/example-org/sample-repo/pull/88",
-                baseRefName: "main",
-                headRefName: "feature-create-pr",
-              },
-            ]),
+            JSON.stringify([prEntry(88, "Add stacked git actions", "feature-create-pr")]),
           ],
         },
       });
@@ -1969,15 +1712,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             JSON.stringify([]),
             JSON.stringify([]),
             JSON.stringify([]),
-            JSON.stringify([
-              {
-                number: 188,
-                title: "Add stacked git actions",
-                url: "https://github.com/example-org/sample-repo/pull/188",
-                baseRefName: "main",
-                headRefName: "statemachine",
-              },
-            ]),
+            JSON.stringify([prEntry(188, "Add stacked git actions", "statemachine")]),
           ],
         },
       });
@@ -2093,14 +1828,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
-          pullRequest: {
-            number: 42,
-            title: "Resolve PR",
-            url: "https://github.com/example-org/sample-repo/pull/42",
-            baseRefName: "main",
-            headRefName: "feature/resolve-pr",
-            state: "open",
-          },
+          pullRequest: prEntry(42, "Resolve PR", "feature/resolve-pr", { state: "open" }),
         },
       });
 
@@ -2109,19 +1837,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         reference: "#42",
       });
 
-      expect(result.pullRequest).toEqual({
-        number: 42,
-        title: "Resolve PR",
-        url: "https://github.com/example-org/sample-repo/pull/42",
-        baseBranch: "main",
-        headBranch: "feature/resolve-pr",
-        state: "open",
-        isDraft: false,
-        mergeability: "unknown",
-        additions: null,
-        deletions: null,
-        changedFiles: null,
-      });
+      expect(result.pullRequest).toEqual(
+        expectedPrSummary(42, "Resolve PR", "feature/resolve-pr", "open"),
+      );
       expect(ghCalls.some((call) => call.startsWith("pr view 42 "))).toBe(true);
     }),
   );
@@ -2192,14 +1910,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       ];
       const { manager } = yield* makeManager({
         ghScenario: {
-          pullRequest: {
-            number: 43,
-            title: "Checks still visible",
-            url: "https://github.com/example-org/sample-repo/pull/43",
-            baseRefName: "main",
-            headRefName: "feature/checks-still-visible",
+          pullRequest: prEntry(43, "Checks still visible", "feature/checks-still-visible", {
             state: "open",
-          },
+          }),
           pullRequestChecks: checks,
           reviewCommentsError: new GitHubCliError({
             operation: "getPullRequestReviewComments",
@@ -2259,14 +1972,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
-          pullRequest: {
-            number: 64,
-            title: "Local PR",
-            url: "https://github.com/example-org/sample-repo/pull/64",
-            baseRefName: "main",
-            headRefName: "feature/pr-local",
-            state: "open",
-          },
+          pullRequest: prEntry(64, "Local PR", "feature/pr-local", { state: "open" }),
         },
       });
 
@@ -2278,7 +1984,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(result.branch).toBe("feature/pr-local");
       expect(result.worktreePath).toBeNull();
-      const branch = (yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim();
+      const branch = yield* gitOut(repoDir, ["branch", "--show-current"]);
       expect(branch).toBe("feature/pr-local");
       expect(ghCalls).toContain("pr checkout 64 --force");
     }),
@@ -2301,14 +2007,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         ghScenario: {
-          pullRequest: {
-            number: 77,
-            title: "Worktree PR",
-            url: "https://github.com/example-org/sample-repo/pull/77",
-            baseRefName: "main",
-            headRefName: "feature/pr-worktree",
-            state: "open",
-          },
+          pullRequest: prEntry(77, "Worktree PR", "feature/pr-worktree", { state: "open" }),
         },
       });
 
@@ -2321,10 +2020,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch).toBe("feature/pr-worktree");
       expect(result.worktreePath).not.toBeNull();
       expect(fs.existsSync(result.worktreePath as string)).toBe(true);
-      const worktreeBranch = (yield* runGit(result.worktreePath as string, [
+      const worktreeBranch = yield* gitOut(result.worktreePath as string, [
         "branch",
         "--show-current",
-      ])).stdout.trim();
+      ]);
       expect(worktreeBranch).toBe("feature/pr-worktree");
     }),
   );
@@ -2374,19 +2073,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       });
 
       expect(result.worktreePath).not.toBeNull();
-      const upstreamRef = (yield* runGit(result.worktreePath as string, [
+      const upstreamRef = yield* gitOut(result.worktreePath as string, [
         "rev-parse",
         "--abbrev-ref",
         "@{upstream}",
-      ])).stdout.trim();
+      ]);
       expect(upstreamRef).toBe("fork-seed/feature/pr-fork");
       expect(upstreamRef.startsWith("origin/")).toBe(false);
       expect(
-        (yield* runGit(result.worktreePath as string, [
-          "config",
-          "--get",
-          "remote.fork-seed.url",
-        ])).stdout.trim(),
+        yield* gitOut(result.worktreePath as string, ["config", "--get", "remote.fork-seed.url"]),
       ).toBe(forkDir);
     }),
   );
@@ -2442,9 +2137,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(result.branch).toBe("fix/git-action-default-without-origin");
       expect(result.worktreePath).toBeNull();
-      expect(
-        (yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
-      ).toBe("binbandit-seed/fix/git-action-default-without-origin");
+      expect(yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+        "binbandit-seed/fix/git-action-default-without-origin",
+      );
     }),
   );
 
@@ -2461,18 +2156,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
         yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
         fs.writeFileSync(path.join(worktreePath, "existing.txt"), "unsent changes\n");
-        const mainHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+        const mainHead = yield* gitOut(repoDir, ["rev-parse", "HEAD"]);
 
         const { manager } = yield* makeManager({
           ghScenario: {
-            pullRequest: {
-              number: 78,
-              title: "Existing worktree PR",
-              url: "https://github.com/example-org/sample-repo/pull/78",
-              baseRefName: "main",
-              headRefName: "feature/pr-existing-worktree",
+            pullRequest: prEntry(78, "Existing worktree PR", "feature/pr-existing-worktree", {
               state: "open",
-            },
+            }),
           },
         });
 
@@ -2486,8 +2176,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           fs.realpathSync.native(worktreePath),
         );
         expect(result.branch).toBe("feature/pr-existing-worktree");
-        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
-        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainHead);
+        expect(yield* gitOut(repoDir, ["branch", "--show-current"])).toBe("main");
+        expect(yield* gitOut(repoDir, ["rev-parse", "HEAD"])).toBe(mainHead);
         expect(fs.readFileSync(path.join(worktreePath, "existing.txt"), "utf8")).toBe(
           "unsent changes\n",
         );
@@ -2512,7 +2202,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         yield* runGit(repoDir, ["commit", "-m", "Fork main branch"]);
         yield* runGit(repoDir, ["push", "-u", "fork-seed", "fork-main-source:main"]);
         yield* runGit(repoDir, ["checkout", "main"]);
-        const mainBefore = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        const mainBefore = yield* gitOut(repoDir, ["rev-parse", "main"]);
 
         const { manager } = yield* makeManager({
           ghScenario: {
@@ -2544,14 +2234,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         expect(result.branch).toBe("synara/pr-91/main");
         expect(result.worktreePath).not.toBeNull();
-        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
-        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(mainBefore);
-        expect(
-          (yield* runGit(result.worktreePath as string, [
-            "branch",
-            "--show-current",
-          ])).stdout.trim(),
-        ).toBe("synara/pr-91/main");
+        expect(yield* gitOut(repoDir, ["branch", "--show-current"])).toBe("main");
+        expect(yield* gitOut(repoDir, ["rev-parse", "main"])).toBe(mainBefore);
+        expect(yield* gitOut(result.worktreePath as string, ["branch", "--show-current"])).toBe(
+          "synara/pr-91/main",
+        );
       }),
   );
 
@@ -2572,7 +2259,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         yield* runGit(repoDir, ["commit", "-m", "Fork main second branch"]);
         yield* runGit(repoDir, ["push", "-u", "fork-seed", "fork-main-source:main"]);
         yield* runGit(repoDir, ["checkout", "main"]);
-        const localMainBefore = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        const localMainBefore = yield* gitOut(repoDir, ["rev-parse", "main"]);
         yield* runGit(repoDir, ["checkout", "-b", "feature/root-branch"]);
 
         const { manager } = yield* makeManager({
@@ -2604,13 +2291,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         });
 
         expect(result.branch).toBe("synara/pr-92/main");
-        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(localMainBefore);
+        expect(yield* gitOut(repoDir, ["rev-parse", "main"])).toBe(localMainBefore);
         expect(
-          (yield* runGit(result.worktreePath as string, [
+          yield* gitOut(result.worktreePath as string, [
             "rev-parse",
             "--abbrev-ref",
             "@{upstream}",
-          ])).stdout.trim(),
+          ]),
         ).toBe("fork-seed/main");
       }),
   );
@@ -2665,9 +2352,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
         fs.realpathSync.native(worktreePath),
       );
-      expect(
-        (yield* runGit(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
-      ).toBe("fork-seed/feature/pr-reused-fork");
+      expect(yield* gitOut(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+        "fork-seed/feature/pr-reused-fork",
+      );
     }),
   );
 
@@ -2699,7 +2386,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const worktreePath = path.join(repoDir, "collision-worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/shared-name"]);
       fs.writeFileSync(path.join(worktreePath, "README.md"), "unsent other-fork work\n");
-      const worktreeHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
+      const worktreeHead = yield* gitOut(worktreePath, ["rev-parse", "HEAD"]);
 
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
@@ -2730,19 +2417,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       }).pipe(Effect.exit);
 
       expect(
-        (yield* runGit(worktreePath, [
-          "config",
-          "--get",
-          "branch.feature/shared-name.remote",
-        ])).stdout.trim(),
+        yield* gitOut(worktreePath, ["config", "--get", "branch.feature/shared-name.remote"]),
       ).toBe("other-fork");
       expect(Exit.isFailure(result)).toBe(true);
       expect(String(Exit.isFailure(result) ? result.cause : "")).toContain(
         "different GitHub repository",
       );
       expect(ghCalls.some((call) => call.startsWith("pr checkout"))).toBe(false);
-      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
-      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(worktreeHead);
+      expect(yield* gitOut(repoDir, ["branch", "--show-current"])).toBe("main");
+      expect(yield* gitOut(worktreePath, ["rev-parse", "HEAD"])).toBe(worktreeHead);
       expect(fs.readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe(
         "unsent other-fork work\n",
       );
@@ -2757,14 +2440,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         ghScenario: {
-          pullRequest: {
-            number: 79,
-            title: "Root-only PR",
-            url: "https://github.com/example-org/sample-repo/pull/79",
-            baseRefName: "main",
-            headRefName: "feature/pr-root-only",
-            state: "open",
-          },
+          pullRequest: prEntry(79, "Root-only PR", "feature/pr-root-only", { state: "open" }),
         },
       });
 
@@ -2804,18 +2480,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch).toBe("worktree/demo-handoff");
       expect(result.associatedWorktreeBranch).toBe("worktree/demo-handoff");
 
-      const worktreeBranch = (yield* runGit(result.worktreePath as string, [
+      const worktreeBranch = yield* gitOut(result.worktreePath as string, [
         "rev-parse",
         "--abbrev-ref",
         "HEAD",
-      ])).stdout.trim();
+      ]);
       expect(worktreeBranch).toBe("worktree/demo-handoff");
 
-      const localBranch = (yield* runGit(repoDir, [
-        "rev-parse",
-        "--abbrev-ref",
-        "HEAD",
-      ])).stdout.trim();
+      const localBranch = yield* gitOut(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
       expect(localBranch).toBe("main");
     }),
   );
@@ -2863,7 +2535,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         // The stash entry must have been dropped after a successful apply — otherwise
         // we would leak `stash@{0}` on every handoff that carries uncommitted work.
-        const stashList = (yield* runGit(repoDir, ["stash", "list"])).stdout.trim();
+        const stashList = yield* gitOut(repoDir, ["stash", "list"]);
         expect(stashList).toBe("");
       }),
   );
@@ -2921,7 +2593,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect((yield* runGit(remote, ["rev-parse", "refs/heads/main"])).stdout).toBe(
           (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout,
         );
-        expect((yield* runGit(repoDir, ["rev-list", "--count", "HEAD"])).stdout.trim()).toBe("2");
+        expect(yield* gitOut(repoDir, ["rev-list", "--count", "HEAD"])).toBe("2");
       }),
   );
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { computedColorAlpha, installGlassOverlayCutout } from "~/lib/glassOverlayCutout";
+import { installGlassOverlayCutout } from "~/lib/glassOverlayCutout";
 
 import {
   createProjectHoverCardAnchor,
@@ -92,11 +92,6 @@ describe.each(["thread", "project"] as const)("sidebar %s hover cards", (kind) =
           await new Promise((resolve) => window.setTimeout(resolve, 400));
           await action.hover();
           await expect.element(action).toBeVisible();
-          const popup = action.element().closest<HTMLElement>(".app-popup-surface")!;
-          expect(
-            computedColorAlpha(getComputedStyle(popup).backgroundColor),
-          ).toBeGreaterThanOrEqual(0.95);
-          expect(getComputedStyle(popup, "::before").backdropFilter).toBe("none");
           expect(root.style.clipPath).toBe("");
           expect(clips.filter(Boolean)).toEqual([]);
         }

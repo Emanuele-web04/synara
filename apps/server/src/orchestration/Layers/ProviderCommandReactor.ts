@@ -785,6 +785,7 @@ export function resolvePreTurnBaselineTimeoutMs(env: NodeJS.ProcessEnv = process
 }
 const PRE_TURN_BASELINE_REF_PROBE_TIMEOUT = Duration.seconds(1);
 const PROVIDER_CACHE_RESPONSE_TIMEOUT = Duration.minutes(15);
+const USAGE_LIMIT_BINDING_READ_TIMEOUT = Duration.seconds(8);
 const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
@@ -1077,6 +1078,7 @@ export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
   readonly preTurnBaselineTimeout?: Duration.Duration;
   readonly cacheResponseTimeout?: Duration.Duration;
+  readonly usageLimitBindingReadTimeout?: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
   readonly gatewayOperationCompletionNegativeCacheTtl?: Duration.Duration;
 }
@@ -1085,6 +1087,7 @@ interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
   readonly preTurnBaselineTimeout: Duration.Duration;
   readonly cacheResponseTimeout: Duration.Duration;
+  readonly usageLimitBindingReadTimeout: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout: Duration.Duration;
   readonly gatewayOperationCompletionNegativeCacheTtl: Duration.Duration;
 }
@@ -1114,6 +1117,7 @@ const make = Effect.gen(function* () {
     commandEventTimeout,
     preTurnBaselineTimeout,
     cacheResponseTimeout,
+    usageLimitBindingReadTimeout,
     gatewayOperationCompletionWaitTimeout,
     gatewayOperationCompletionNegativeCacheTtl,
   } = yield* ProviderCommandReactorConfig;
@@ -6727,7 +6731,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(ServerConfig, serverConfig),
       Effect.provideService(ServerSettingsService, serverSettings),
-      Effect.timeoutOption("8 seconds"),
+      Effect.timeoutOption(usageLimitBindingReadTimeout),
       Effect.catch(() => Effect.succeed(Option.none())),
     );
     const settings = yield* serverSettings.getSettings;
@@ -11634,6 +11638,8 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
   const preTurnBaselineTimeout =
     options?.preTurnBaselineTimeout ?? Duration.millis(resolvePreTurnBaselineTimeoutMs());
   const cacheResponseTimeout = options?.cacheResponseTimeout ?? PROVIDER_CACHE_RESPONSE_TIMEOUT;
+  const usageLimitBindingReadTimeout =
+    options?.usageLimitBindingReadTimeout ?? USAGE_LIMIT_BINDING_READ_TIMEOUT;
   const gatewayOperationCompletionWaitTimeout =
     options?.gatewayOperationCompletionWaitTimeout ?? GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT;
   const gatewayOperationCompletionNegativeCacheTtl =
@@ -11642,6 +11648,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
   for (const [name, duration] of Object.entries({
     preTurnBaselineTimeout,
     cacheResponseTimeout,
+    usageLimitBindingReadTimeout,
     gatewayOperationCompletionWaitTimeout,
     gatewayOperationCompletionNegativeCacheTtl,
   })) {
@@ -11659,6 +11666,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
         preTurnBaselineTimeout,
         cacheResponseTimeout,
+        usageLimitBindingReadTimeout,
         gatewayOperationCompletionWaitTimeout,
         gatewayOperationCompletionNegativeCacheTtl,
       }),

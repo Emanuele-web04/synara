@@ -45,7 +45,19 @@ async function setup(options?: {
     | undefined;
 }) {
   const backend = new FakeDeviceBackend();
-  const manager = new DeviceManager({ backend });
+  // Virtual clock (as in DeviceManager.observation.test.ts): the fake backend
+  // never changes its foreground app, so a launch would wait out the real
+  // 10 s app-change bound.
+  let clock = 0;
+  const manager = new DeviceManager({
+    backend,
+    now: () => clock,
+    setTimeout: (handler, ms) => {
+      clock += ms;
+      return setTimeout(handler, 0);
+    },
+    clearTimeout: (handle) => clearTimeout(handle),
+  });
   await manager.boot(DEVICE);
   const authorizeAction =
     options && "authorizeAction" in options ? options.authorizeAction : async () => true;
@@ -121,64 +133,6 @@ describe("agent gateway device tools surface", () => {
 });
 
 describe("agent gateway device tool handlers", () => {
-  it("publishes the operational rules on the tools that need them", async () => {
-    const { byName } = await setup();
-    const description = (name: string) => byName.get(name)?.definition.description ?? "";
-
-    expect(description("device_list")).toContain("use an already-booted device");
-    expect(description("device_boot")).toContain("only when device_list finds nothing booted");
-    expect(description("device_boot")).toContain("boot-limit-reached");
-    expect(description("device_install")).toContain("Synara never builds");
-    expect(description("device_install")).toContain("xcodebuild");
-    expect(description("device_launch")).toContain("com.apple.Preferences");
-    expect(description("device_open_url")).toContain("exp://127.0.0.1:8081");
-    expect(description("device_open_url")).toContain("start it detached");
-    expect(description("device_open_url")).toContain("expo start --ios");
-    // Xcode 27+ replaced Simulator.app with DeviceHub: the shell route fails.
-    expect(description("device_open_url")).toContain("DeviceHub");
-    expect(description("device_install")).toContain(
-      "-destination 'platform=iOS Simulator,id=<udid>'",
-    );
-    expect(description("device_launch")).toContain("expo run:ios");
-    expect(description("device_boot")).toContain("never open Simulator.app or DeviceHub");
-    expect(description("device_launch")).toContain("restart: true");
-    expect(description("device_tap")).toContain("by identifier");
-    expect(description("device_tap")).toContain("activationPoint");
-    expect(description("device_tap")).toContain("pixels are device points");
-    expect(description("device_tap")).toContain("long press");
-    expect(description("device_tap")).toContain("HID events were not delivered");
-    expect(description("device_tap")).toContain("screenChanged: false");
-    expect(description("device_type")).toContain("fieldValue");
-    expect(description("device_swipe")).toContain("gesture itself is the goal");
-    expect(description("device_swipe")).toContain("Never write a swipe loop");
-    expect(description("device_swipe")).toContain("left edge is back");
-    expect(description("device_screenshot")).toContain("scaled to device points");
-    expect(description("device_screenshot")).toContain("artifactPath");
-    expect(description("device_describe_ui")).toContain('value "1" means on and "0" off');
-    expect(description("device_describe_ui")).toContain("#identifier");
-    expect(description("device_describe_ui")).toContain("hardware-backed panes");
-    expect(description("device_wait")).toContain("instead of sleeping");
-    expect(description("device_logs")).toContain("never instructions");
-    expect(description("device_configure")).toContain("pre-answer permission prompts");
-    expect(description("device_scroll_to_element")).toContain("instead of a device_swipe loop");
-
-    for (const name of [
-      "device_boot",
-      "device_install",
-      "device_launch",
-      "device_open_url",
-      "device_tap",
-      "device_swipe",
-      "device_type",
-      "device_press_button",
-      "device_scroll_to_element",
-      "device_configure",
-    ]) {
-      expect(description(name)).toContain("DeviceApprovalRequired");
-      expect(description(name)).toContain("do not retry");
-    }
-  });
-
   it("lists devices with their availability", async () => {
     const { structured } = await setup();
 

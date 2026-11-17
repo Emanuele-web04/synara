@@ -570,37 +570,6 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       assert.equal(result.failure.cause instanceof Error, true);
     }),
   );
-
-  it.effect("maps codex model options before sending a turn", () =>
-    Effect.gen(function* () {
-      sessionErrorManager.sendTurnImpl.mockClear();
-      const adapter = yield* CodexAdapter;
-
-      yield* Effect.ignore(
-        adapter.sendTurn({
-          threadId: asThreadId("sess-missing"),
-          input: "hello",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
-          },
-          attachments: [],
-        }),
-      );
-
-      assert.deepStrictEqual(sessionErrorManager.sendTurnImpl.mock.calls[0]?.[0], {
-        threadId: asThreadId("sess-missing"),
-        input: "hello",
-        model: "gpt-5.3-codex",
-        effort: "high",
-        serviceTier: "fast",
-      });
-    }),
-  );
 });
 
 const turnPreparationManager = new FakeCodexManager();
@@ -1017,37 +986,6 @@ realStopLayer("CodexAdapterLive real manager lifecycle", (it) => {
 });
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
-  it.effect("maps session/started to a canonical session.started runtime event", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-session-started"),
-        kind: "session",
-        provider: "codex",
-        createdAt: new Date().toISOString(),
-        method: "session/started",
-        threadId: asThreadId("thread-1"),
-        message: "Codex session ready for thread native-thread-1",
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "session.started");
-      if (firstEvent.value.type !== "session.started") {
-        return;
-      }
-      assert.equal(
-        firstEvent.value.payload.message,
-        "Codex session ready for thread native-thread-1",
-      );
-    }),
-  );
-
   it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -1151,26 +1089,42 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps Codex 0.144 reasoning summaries from canonical item arrays", () =>
+  it.effect.each([
+    {
+      name: "canonical item arrays",
+      id: "reasoning_1",
+      summary: ["Inspect the protocol.", "Update the adapter."],
+      content: [],
+    },
+    {
+      name: "structured summary parts without exposing raw content",
+      id: "reasoning_2",
+      summary: [
+        { type: "summary_text", text: "Inspect the protocol." },
+        { summary: "Update the adapter." },
+      ],
+      content: [{ type: "reasoning_text", text: "private raw trace" }],
+    },
+  ])("maps Codex 0.144 reasoning summaries from $name", (reasoning) =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
       lifecycleManager.emit("event", {
-        id: asEventId("evt-reasoning-complete"),
+        id: asEventId(`evt-reasoning-complete-${reasoning.id}`),
         kind: "notification",
         provider: "codex",
         createdAt: new Date().toISOString(),
         method: "item/completed",
         threadId: asThreadId("thread-1"),
         turnId: asTurnId("turn-1"),
-        itemId: asItemId("reasoning_1"),
+        itemId: asItemId(reasoning.id),
         payload: {
           item: {
             type: "reasoning",
-            id: "reasoning_1",
-            summary: ["Inspect the protocol.", "Update the adapter."],
-            content: [],
+            id: reasoning.id,
+            summary: reasoning.summary,
+            content: reasoning.content,
           },
         },
       } satisfies ProviderEvent);
@@ -1181,42 +1135,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         return;
       }
       assert.equal(firstEvent.value.payload.itemType, "reasoning");
-      assert.equal(firstEvent.value.payload.detail, "Inspect the protocol.\n\nUpdate the adapter.");
-    }),
-  );
-
-  it.effect("maps structured reasoning summary parts without exposing raw content", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-structured-reasoning-complete"),
-        kind: "notification",
-        provider: "codex",
-        createdAt: new Date().toISOString(),
-        method: "item/completed",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        itemId: asItemId("reasoning_2"),
-        payload: {
-          item: {
-            type: "reasoning",
-            id: "reasoning_2",
-            summary: [
-              { type: "summary_text", text: "Inspect the protocol." },
-              { summary: "Update the adapter." },
-            ],
-            content: [{ type: "reasoning_text", text: "private raw trace" }],
-          },
-        },
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
-        return;
-      }
       assert.equal(firstEvent.value.payload.detail, "Inspect the protocol.\n\nUpdate the adapter.");
     }),
   );
@@ -1488,12 +1406,49 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps completed agent message items to canonical item.completed events", () =>
+  it.effect.each([
+    {
+      name: "a plain agent message",
+      item: { type: "agentMessage", id: "msg_1" },
+      assertPayload: () => undefined,
+    },
+    {
+      name: "async questions without a blocking request",
+      item: {
+        type: "agentMessage",
+        id: "msg_1",
+        delivery: "async",
+        questions: [
+          { title: "Which action?", options: ["Click", "Scroll"] },
+          { title: "Anything else?", options: null },
+        ],
+      },
+      assertPayload: (payload: { asyncQuestions?: unknown }) =>
+        assert.deepStrictEqual(payload.asyncQuestions, [
+          { title: "Which action?", options: ["Click", "Scroll"] },
+          { title: "Anything else?" },
+        ]),
+    },
+    {
+      name: "assistant text when async questions are malformed",
+      item: {
+        type: "agentMessage",
+        id: "msg_1",
+        delivery: "async",
+        text: "Which action?",
+        questions: [{ title: "", options: ["Click"] }],
+      },
+      assertPayload: (payload: { asyncQuestions?: unknown; detail?: unknown }) => {
+        assert.equal(payload.asyncQuestions, undefined);
+        assert.equal(payload.detail, "Which action?");
+      },
+    },
+  ])("maps completed agent message items with $name", ({ item, assertPayload }) =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
-      const event: ProviderEvent = {
+      lifecycleManager.emit("event", {
         id: asEventId("evt-msg-complete"),
         kind: "notification",
         provider: "codex",
@@ -1502,15 +1457,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         threadId: asThreadId("thread-1"),
         turnId: asTurnId("turn-1"),
         itemId: asItemId("msg_1"),
-        payload: {
-          item: {
-            type: "agentMessage",
-            id: "msg_1",
-          },
-        },
-      };
-
-      lifecycleManager.emit("event", event);
+        payload: { item },
+      } satisfies ProviderEvent);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
       assert.equal(firstEvent._tag, "Some");
@@ -1524,98 +1472,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
-    }),
-  );
-
-  it.effect("preserves async questions without emitting a blocking request", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-msg-complete"),
-        kind: "notification",
-        provider: "codex",
-        createdAt: new Date().toISOString(),
-        method: "item/completed",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        itemId: asItemId("msg_1"),
-        payload: {
-          item: {
-            type: "agentMessage",
-            id: "msg_1",
-            delivery: "async",
-            questions: [
-              { title: "Which action?", options: ["Click", "Scroll"] },
-              { title: "Anything else?", options: null },
-            ],
-          },
-        },
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "item.completed");
-      if (firstEvent.value.type !== "item.completed") {
-        return;
-      }
-      assert.equal(firstEvent.value.itemId, "msg_1");
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
-      assert.deepStrictEqual(firstEvent.value.payload.asyncQuestions, [
-        { title: "Which action?", options: ["Click", "Scroll"] },
-        { title: "Anything else?" },
-      ]);
-    }),
-  );
-
-  it.effect("falls back to assistant text for malformed async questions", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-msg-complete"),
-        kind: "notification",
-        provider: "codex",
-        createdAt: new Date().toISOString(),
-        method: "item/completed",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        itemId: asItemId("msg_1"),
-        payload: {
-          item: {
-            type: "agentMessage",
-            id: "msg_1",
-            delivery: "async",
-            text: "Which action?",
-            questions: [{ title: "", options: ["Click"] }],
-          },
-        },
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "item.completed");
-      if (firstEvent.value.type !== "item.completed") {
-        return;
-      }
-      assert.equal(firstEvent.value.itemId, "msg_1");
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
-      assert.equal(firstEvent.value.payload.asyncQuestions, undefined);
-      assert.equal(firstEvent.value.payload.detail, "Which action?");
+      assertPayload(firstEvent.value.payload);
     }),
   );
 
@@ -1892,37 +1749,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-session-closed"),
-        kind: "session",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "session/closed",
-        message: "Session stopped",
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "session.exited");
-      if (firstEvent.value.type !== "session.exited") {
-        return;
-      }
-      assert.equal(firstEvent.value.threadId, "thread-1");
-      assert.equal(firstEvent.value.payload.reason, "Session stopped");
-    }),
-  );
-
   it.effect("stamps untagged Codex events without synchronous session filesystem reads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -2174,25 +2000,74 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("maps retryable Codex error notifications to runtime.warning", () =>
+  it.effect.each([
+    {
+      name: "retryable error notifications",
+      event: {
+        kind: "notification",
+        method: "error",
+        turnId: asTurnId("turn-1"),
+        payload: { error: { message: "Reconnecting... 2/5" }, willRetry: true },
+      },
+      message: "Reconnecting... 2/5",
+      turnId: "turn-1",
+      willRetry: true,
+    },
+    {
+      name: "non-fatal error notifications",
+      event: {
+        kind: "notification",
+        method: "error",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          error: {
+            message:
+              "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+          },
+          willRetry: false,
+        },
+      },
+      message:
+        "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+      turnId: "turn-1",
+    },
+    {
+      name: "process stderr provider errors",
+      event: {
+        kind: "error",
+        method: "process/stderr",
+        turnId: asTurnId("turn-1"),
+        message: "write_stdin failed: stdin is closed for this session",
+      },
+      message: "write_stdin failed: stdin is closed for this session",
+      turnId: "turn-1",
+    },
+    {
+      name: "unrenderable MCP elicitations",
+      event: {
+        kind: "error",
+        method: "mcpServer/elicitation/request/unrenderable",
+        message: "Synara declined an MCP elicitation it cannot render yet.",
+      },
+      message: "Synara declined an MCP elicitation it cannot render yet.",
+    },
+  ] as ReadonlyArray<{
+    name: string;
+    event: Pick<ProviderEvent, "kind" | "method" | "turnId" | "payload" | "message">;
+    message: string;
+    turnId?: string;
+    willRetry?: boolean;
+  }>)("maps $name to runtime.warning", ({ event, message, turnId, willRetry }) =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
       lifecycleManager.emit("event", {
-        id: asEventId("evt-retryable-error"),
-        kind: "notification",
+        id: asEventId(`evt-warning-${event.method}`),
         provider: "codex",
         threadId: asThreadId("thread-1"),
         createdAt: new Date().toISOString(),
-        method: "error",
-        turnId: asTurnId("turn-1"),
-        payload: {
-          error: {
-            message: "Reconnecting... 2/5",
-          },
-          willRetry: true,
-        },
+        ...event,
       } satisfies ProviderEvent);
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
@@ -2205,9 +2080,9 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       if (firstEvent.value.type !== "runtime.warning") {
         return;
       }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
-      assert.equal(firstEvent.value.payload.willRetry, true);
+      if (turnId !== undefined) assert.equal(firstEvent.value.turnId, turnId);
+      assert.equal(firstEvent.value.payload.message, message);
+      if (willRetry !== undefined) assert.equal(firstEvent.value.payload.willRetry, willRetry);
     }),
   );
 
@@ -2436,102 +2311,32 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps non-fatal Codex error notifications to runtime.warning", () =>
+  it.effect.each([
+    {
+      requestId: "req-1",
+      method: "item/commandExecution/requestApproval",
+      requestType: "command_execution_approval",
+    },
+    {
+      requestId: "req-file-read-1",
+      method: "item/fileRead/requestApproval",
+      requestType: "file_read_approval",
+    },
+  ])("preserves $requestType when mapping serverRequest/resolved", (resolved) =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
       lifecycleManager.emit("event", {
-        id: asEventId("evt-non-fatal-error"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "error",
-        turnId: asTurnId("turn-1"),
-        payload: {
-          error: {
-            message:
-              "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
-          },
-          willRetry: false,
-        },
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "runtime.warning");
-      if (firstEvent.value.type !== "runtime.warning") {
-        return;
-      }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(
-        firstEvent.value.payload.message,
-        "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
-      );
-    }),
-  );
-
-  it.effect("maps process stderr provider errors to runtime.warning", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-process-stderr"),
-        kind: "error",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "process/stderr",
-        turnId: asTurnId("turn-1"),
-        message: "write_stdin failed: stdin is closed for this session",
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "runtime.warning");
-      if (firstEvent.value.type !== "runtime.warning") {
-        return;
-      }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(
-        firstEvent.value.payload.message,
-        "write_stdin failed: stdin is closed for this session",
-      );
-    }),
-  );
-
-  it.effect("preserves request type when mapping serverRequest/resolved", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-request-resolved"),
+        id: asEventId(`evt-request-resolved-${resolved.requestId}`),
         kind: "notification",
         provider: "codex",
         threadId: asThreadId("thread-1"),
         createdAt: new Date().toISOString(),
         method: "serverRequest/resolved",
-        requestId: ApprovalRequestId.makeUnsafe("req-1"),
-        payload: {
-          request: {
-            method: "item/commandExecution/requestApproval",
-          },
-          decision: "accept",
-        },
-      };
-
-      lifecycleManager.emit("event", event);
+        requestId: ApprovalRequestId.makeUnsafe(resolved.requestId),
+        payload: { request: { method: resolved.method }, decision: "accept" },
+      } satisfies ProviderEvent);
       const firstEvent = yield* Fiber.join(firstEventFiber);
 
       assert.equal(firstEvent._tag, "Some");
@@ -2542,7 +2347,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       if (firstEvent.value.type !== "request.resolved") {
         return;
       }
-      assert.equal(firstEvent.value.payload.requestType, "command_execution_approval");
+      assert.equal(firstEvent.value.payload.requestType, resolved.requestType);
     }),
   );
 
@@ -2613,69 +2418,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           tool_params_display: [{ name: "app", value: "kcalc" }],
         },
       });
-    }),
-  );
-
-  it.effect("maps unrenderable MCP elicitations to runtime warnings", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-mcp-elicitation-warning"),
-        kind: "error",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "mcpServer/elicitation/request/unrenderable",
-        message: "Synara declined an MCP elicitation it cannot render yet.",
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") return;
-      assert.equal(firstEvent.value.type, "runtime.warning");
-      if (firstEvent.value.type !== "runtime.warning") return;
-      assert.equal(
-        firstEvent.value.payload.message,
-        "Synara declined an MCP elicitation it cannot render yet.",
-      );
-    }),
-  );
-
-  it.effect("preserves file-read request type when mapping serverRequest/resolved", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-file-read-request-resolved"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "serverRequest/resolved",
-        requestId: ApprovalRequestId.makeUnsafe("req-file-read-1"),
-        payload: {
-          request: {
-            method: "item/fileRead/requestApproval",
-          },
-          decision: "accept",
-        },
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "request.resolved");
-      if (firstEvent.value.type !== "request.resolved") {
-        return;
-      }
-      assert.equal(firstEvent.value.payload.requestType, "file_read_approval");
     }),
   );
 

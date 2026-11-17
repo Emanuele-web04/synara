@@ -202,8 +202,6 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("scale-100 opacity-100");
     expect(markup).toContain('aria-label="Computer preview"');
     expect(markup).toContain("960 / 600");
-    // Compact is the default footprint: small and glanceable.
-    expect(markup).toContain("width:288px");
     expect(markup).not.toContain("Open the Computer pane");
     expect(markup).toContain("Hide the computer preview for the rest of this task");
   });

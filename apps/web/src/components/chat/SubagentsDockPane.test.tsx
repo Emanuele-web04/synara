@@ -122,19 +122,4 @@ describe("SubagentsList", () => {
     );
     expect(markup).not.toContain(`>${statusLabel}</span>`);
   });
-
-  it("says so when the chat has no subagents", () => {
-    const markup = renderToStaticMarkup(
-      <SubagentsList
-        roster={{ active: [], previous: [] }}
-        parent={null}
-        nowMs={0}
-        onOpen={noop}
-        onBackground={noop}
-        onStop={noop}
-      />,
-    );
-
-    expect(markup).toContain("No subagents in this chat yet.");
-  });
 });

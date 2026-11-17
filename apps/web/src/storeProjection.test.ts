@@ -8,6 +8,8 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,6 +47,119 @@ import {
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 import { applyOrchestrationEvents } from "./storeEventReducer";
+
+type ShellThread = OrchestrationShellSnapshot["threads"][number];
+type ReadModelSession = NonNullable<OrchestrationReadModel["threads"][number]["session"]>;
+
+const makeTurn = (
+  turnId: TurnId,
+  overrides: Partial<NonNullable<Thread["latestTurn"]>> = {},
+): NonNullable<Thread["latestTurn"]> => ({
+  turnId,
+  state: "running",
+  requestedAt: "2026-02-27T00:00:00.000Z",
+  startedAt: "2026-02-27T00:00:00.000Z",
+  completedAt: null,
+  assistantMessageId: null,
+  ...overrides,
+});
+
+const makeReadModelSession = (
+  threadId: ThreadId,
+  status: ReadModelSession["status"],
+  providerName: string,
+  updatedAt: string,
+  overrides: Partial<ReadModelSession> = {},
+): ReadModelSession => ({
+  threadId,
+  status,
+  providerName,
+  runtimeMode: "full-access",
+  activeTurnId: null,
+  lastError: null,
+  updatedAt,
+  ...overrides,
+});
+
+const makeLiveSession = (
+  provider: NonNullable<Thread["session"]>["provider"],
+  status: "running" | "ready",
+  createdAt: string,
+  updatedAt: string,
+  activeTurnId?: TurnId,
+): NonNullable<Thread["session"]> => ({
+  provider,
+  status,
+  orchestrationStatus: status,
+  ...(activeTurnId ? { activeTurnId } : {}),
+  createdAt,
+  updatedAt,
+});
+
+// Shell-stream thread as the server sends it for a thread with no session or turn.
+const makeShellThread = (id: ThreadId, projectId: ProjectId, title: string): ShellThread => ({
+  id,
+  projectId,
+  title,
+  modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
+  runtimeMode: DEFAULT_RUNTIME_MODE,
+  interactionMode: DEFAULT_INTERACTION_MODE,
+  envMode: "local",
+  branch: null,
+  worktreePath: null,
+  forkSourceThreadId: null,
+  sidechatSourceThreadId: null,
+  latestTurn: null,
+  createdAt: "2026-02-27T00:00:00.000Z",
+  updatedAt: "2026-02-27T00:00:30.000Z",
+  handoff: null,
+  session: null,
+});
+
+const makeUpsertedShellThread = (overrides: Partial<ShellThread> = {}): ShellThread => ({
+  ...makeShellThread(ThreadId.makeUnsafe("thread-1"), ProjectId.makeUnsafe("project-1"), "Thread"),
+  associatedWorktreePath: null,
+  associatedWorktreeBranch: null,
+  associatedWorktreeRef: null,
+  createBranchFlowCompleted: false,
+  parentThreadId: null,
+  subagentAgentId: null,
+  subagentNickname: null,
+  subagentRole: null,
+  lastKnownPr: null,
+  updatedAt: "2026-02-27T00:05:00.000Z",
+  archivedAt: null,
+  ...overrides,
+});
+
+// A thread whose only live signal is a background task that outlived its turn.
+const makeBackgroundedState = () =>
+  applyOrchestrationEvents(
+    makeState(
+      makeThread({
+        session: makeLiveSession(
+          "claudeAgent",
+          "ready",
+          "2026-10-11T10:00:00.000Z",
+          "2026-10-11T10:00:00.000Z",
+        ),
+      }),
+    ),
+    [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: makeActivity({
+          id: "moved-to-background",
+          kind: "runtime.warning",
+          sequence: 1,
+          payload: {
+            nativeEventType: "background_tasks_changed",
+            data: { tasks: [{ task_id: "task-bg" }] },
+          },
+        }),
+      }),
+    ],
+  );
 
 describe("store projection", () => {
   it("drops missed rollback messages while preserving live text within the same revision", () => {
@@ -117,33 +232,7 @@ describe("store projection", () => {
   });
 
   it("drops background work derived from detail when that detail is evicted", () => {
-    const backgrounded = applyOrchestrationEvents(
-      makeState(
-        makeThread({
-          session: {
-            provider: "claudeAgent",
-            status: "ready",
-            orchestrationStatus: "ready",
-            createdAt: "2026-10-11T10:00:00.000Z",
-            updatedAt: "2026-10-11T10:00:00.000Z",
-          },
-        }),
-      ),
-      [
-        makeDomainEvent("thread.activity-appended", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          activity: makeActivity({
-            id: "moved-to-background",
-            kind: "runtime.warning",
-            sequence: 1,
-            payload: {
-              nativeEventType: "background_tasks_changed",
-              data: { tasks: [{ task_id: "task-bg" }] },
-            },
-          }),
-        }),
-      ],
-    );
+    const backgrounded = makeBackgroundedState();
     expect(backgrounded.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(1);
 
     const evicted = evictThreadDetailFromClientState(backgrounded, ThreadId.makeUnsafe("thread-1"));
@@ -152,29 +241,9 @@ describe("store projection", () => {
   });
 
   it("trusts the server's background task count over frozen local detail", () => {
-    const session = {
-      provider: "claudeAgent" as const,
-      status: "ready" as const,
-      orchestrationStatus: "ready" as const,
-      createdAt: "2026-10-11T10:00:00.000Z",
-      updatedAt: "2026-10-11T10:00:00.000Z",
-    };
     // Local detail stopped at "Moved to background": its lease dropped before
     // the task's end arrived.
-    const frozen = applyOrchestrationEvents(makeState(makeThread({ session })), [
-      makeDomainEvent("thread.activity-appended", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: makeActivity({
-          id: "moved-to-background",
-          kind: "runtime.warning",
-          sequence: 1,
-          payload: {
-            nativeEventType: "background_tasks_changed",
-            data: { tasks: [{ task_id: "task-bg" }] },
-          },
-        }),
-      }),
-    ]);
+    const frozen = makeBackgroundedState();
     expect(frozen.sidebarThreadSummaryById["thread-1"]?.pendingBackgroundWorkCount).toBe(1);
 
     const shell = makeShellSnapshot(
@@ -624,27 +693,7 @@ describe("store projection", () => {
     const deletedState = removeDeletedProjectFromClientState(initialState, projectId);
     const afterStaleShellSnapshot = syncServerShellSnapshot(
       deletedState,
-      makeShellSnapshot({
-        id: threadId,
-        projectId,
-        title: "Stale project thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:30.000Z",
-        handoff: null,
-        session: null,
-      }),
+      makeShellSnapshot(makeShellThread(threadId, projectId, "Stale project thread")),
     );
     const afterStaleReadModel = syncServerReadModel(
       deletedState,
@@ -830,37 +879,14 @@ describe("store projection", () => {
     const next = applyShellEvent(initialState, {
       kind: "thread-upserted",
       sequence: 2,
-      thread: {
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
+      thread: makeUpsertedShellThread({
         envMode: "worktree",
         branch: "feature/semantic-branch",
         worktreePath: "/tmp/project/.worktrees/semantic-branch",
         associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
         associatedWorktreeBranch: "feature/semantic-branch",
         associatedWorktreeRef: "feature/semantic-branch",
-        createBranchFlowCompleted: false,
-        parentThreadId: null,
-        subagentAgentId: null,
-        subagentNickname: null,
-        subagentRole: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        lastKnownPr: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-        archivedAt: null,
-        handoff: null,
-        session: null,
-      },
+      }),
     });
 
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
@@ -914,40 +940,11 @@ describe("store projection", () => {
     const next = applyShellEvent(initialState, {
       kind: "thread-upserted",
       sequence: 2,
-      thread: {
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        associatedWorktreePath: null,
-        associatedWorktreeBranch: null,
-        associatedWorktreeRef: null,
-        createBranchFlowCompleted: false,
-        parentThreadId: null,
-        subagentAgentId: null,
-        subagentNickname: null,
-        subagentRole: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        lastKnownPr: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-        archivedAt: null,
-        handoff: null,
+      thread: makeUpsertedShellThread({
         goal: "Use the shell goal",
         goalStartedAt: "2026-02-27T00:03:00.000Z",
         goalPausedAt: null,
-        session: null,
-      },
+      }),
     });
 
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
@@ -1093,16 +1090,16 @@ describe("store projection", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
       makeReadModelThread({
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "error",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError:
-            "2026-04-12T23:27:41.094760Z ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
+        session: makeReadModelSession(
+          ThreadId.makeUnsafe("thread-1"),
+          "error",
+          "codex",
+          "2026-02-27T00:00:00.000Z",
+          {
+            lastError:
+              "2026-04-12T23:27:41.094760Z ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+          },
+        ),
       }),
     );
 
@@ -1120,15 +1117,13 @@ describe("store projection", () => {
           provider: "claudeAgent",
           model: "sonnet",
         },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
+        session: makeReadModelSession(
+          ThreadId.makeUnsafe("thread-1"),
+          "ready",
+          "claudeAgent",
+          "2026-02-27T00:00:00.000Z",
+          { runtimeMode: "approval-required" },
+        ),
       }),
     );
 
@@ -1145,38 +1140,23 @@ describe("store projection", () => {
           provider: "opencode",
           model: "openrouter/gpt-oss-120b:free",
         },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "opencode",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
+        session: makeReadModelSession(
+          ThreadId.makeUnsafe("thread-1"),
+          "ready",
+          "opencode",
+          "2026-02-27T00:00:00.000Z",
+          { runtimeMode: "approval-required" },
+        ),
       }),
     );
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("opencode");
+    expect(threadsOf(next)[0]?.modelSelection).toEqual({
+      provider: "opencode",
+      model: "openrouter/gpt-oss-120b:free",
+    });
     expect(threadsOf(next)[0]?.session?.provider).toBe("opencode");
-  });
-
-  it("preserves exact OpenCode thread model slugs from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "opencode",
-          model: "openai/gpt-5.4",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(threadsOf(next)[0]?.modelSelection.model).toBe("openai/gpt-5.4");
   });
 
   it("preserves exact OpenCode project default model slugs from the read model", () => {
@@ -1209,22 +1189,14 @@ describe("store projection", () => {
           provider: "claudeAgent",
           model: "claude-opus-4-7",
         },
-        session: {
-          provider: "claudeAgent",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: turnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-        latestTurn: {
+        session: makeLiveSession(
+          "claudeAgent",
+          "running",
+          "2026-02-27T00:00:00.000Z",
+          "2026-02-27T00:00:02.000Z",
           turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
+        ),
+        latestTurn: makeTurn(turnId, { assistantMessageId: assistantId }),
         messages: [
           {
             id: MessageId.makeUnsafe("user-hot-path"),
@@ -1255,14 +1227,7 @@ describe("store projection", () => {
           provider: "claudeAgent",
           model: "claude-opus-4-7",
         },
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
+        latestTurn: makeTurn(turnId),
         updatedAt: "2026-02-27T00:00:02.000Z",
         messages: [
           {
@@ -1277,15 +1242,13 @@ describe("store projection", () => {
             attachments: [],
           },
         ],
-        session: {
+        session: makeReadModelSession(
           threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "full-access",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
+          "running",
+          "claudeAgent",
+          "2026-02-27T00:00:02.000Z",
+          { activeTurnId: turnId },
+        ),
       }),
     );
 
@@ -1308,14 +1271,11 @@ describe("store projection", () => {
     const liveState = makeState(
       makeThread({
         id: threadId,
-        latestTurn: {
-          turnId,
+        latestTurn: makeTurn(turnId, {
           state: "completed",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
           completedAt: "2026-02-27T00:00:09.000Z",
           assistantMessageId: assistantId,
-        },
+        }),
         messages: [
           {
             id: assistantId,
@@ -1337,14 +1297,7 @@ describe("store projection", () => {
       liveState,
       makeReadModelThread({
         id: threadId,
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
+        latestTurn: makeTurn(turnId, { assistantMessageId: assistantId }),
         messages: [
           {
             id: assistantId,
@@ -1445,22 +1398,14 @@ describe("store projection", () => {
           provider: "codex",
           model: "gpt-5-codex",
         },
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: turnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-        latestTurn: {
+        session: makeLiveSession(
+          "codex",
+          "running",
+          "2026-02-27T00:00:00.000Z",
+          "2026-02-27T00:00:02.000Z",
           turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
+        ),
+        latestTurn: makeTurn(turnId, { assistantMessageId: assistantId }),
         messages: [
           {
             id: MessageId.makeUnsafe("user-hot-path-settled"),
@@ -1525,15 +1470,7 @@ describe("store projection", () => {
             attachments: [],
           },
         ],
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: completedAt,
-        },
+        session: makeReadModelSession(threadId, "ready", "codex", completedAt),
       }),
     );
 
@@ -1559,22 +1496,14 @@ describe("store projection", () => {
           provider: "codex",
           model: "gpt-5-codex",
         },
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: staleTurnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
-        latestTurn: {
-          turnId: staleTurnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
+        session: makeLiveSession(
+          "codex",
+          "running",
+          "2026-02-27T00:00:00.000Z",
+          "2026-02-27T00:00:02.000Z",
+          staleTurnId,
+        ),
+        latestTurn: makeTurn(staleTurnId, { assistantMessageId: assistantId }),
         messages: [
           {
             id: assistantId,
@@ -1608,15 +1537,7 @@ describe("store projection", () => {
         },
         updatedAt: completedAt,
         messages: [],
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: completedAt,
-        },
+        session: makeReadModelSession(threadId, "ready", "codex", completedAt),
       }),
     );
 
@@ -1642,22 +1563,18 @@ describe("store projection", () => {
           provider: "codex",
           model: "gpt-5-codex",
         },
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: liveTurnId,
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: sharedUpdatedAt,
-        },
-        latestTurn: {
-          turnId: liveTurnId,
-          state: "running",
+        session: makeLiveSession(
+          "codex",
+          "running",
+          "2026-02-27T00:00:00.000Z",
+          sharedUpdatedAt,
+          liveTurnId,
+        ),
+        latestTurn: makeTurn(liveTurnId, {
           requestedAt: sharedUpdatedAt,
           startedAt: sharedUpdatedAt,
-          completedAt: null,
           assistantMessageId: assistantId,
-        },
+        }),
         messages: [
           {
             id: assistantId,
@@ -1680,25 +1597,10 @@ describe("store projection", () => {
           provider: "codex",
           model: "gpt-5-codex",
         },
-        latestTurn: {
-          turnId: priorTurnId,
-          state: "completed",
-          requestedAt: "2026-02-27T00:00:00.000Z",
-          startedAt: "2026-02-27T00:00:00.000Z",
-          completedAt: sharedUpdatedAt,
-          assistantMessageId: null,
-        },
+        latestTurn: makeTurn(priorTurnId, { state: "completed", completedAt: sharedUpdatedAt }),
         updatedAt: sharedUpdatedAt,
         messages: [],
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: sharedUpdatedAt,
-        },
+        session: makeReadModelSession(threadId, "ready", "codex", sharedUpdatedAt),
       }),
     );
 
@@ -1745,14 +1647,9 @@ describe("store projection", () => {
       makeReadModelThread({
         id: threadId,
         title: "Visible while running",
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-detail-before-shell"),
-          state: "running",
-          requestedAt: "2026-02-27T00:00:00.000Z",
+        latestTurn: makeTurn(TurnId.makeUnsafe("turn-detail-before-shell"), {
           startedAt: "2026-02-27T00:00:01.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
+        }),
         updatedAt: "2026-02-27T00:00:01.000Z",
       }),
     );
@@ -1951,27 +1848,9 @@ describe("store projection", () => {
     const deletedState = removeDeletedThreadFromClientState(initialState, threadId);
     const next = syncServerShellSnapshot(
       deletedState,
-      makeShellSnapshot({
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Stale resurrected thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:30.000Z",
-        handoff: null,
-        session: null,
-      }),
+      makeShellSnapshot(
+        makeShellThread(threadId, ProjectId.makeUnsafe("project-1"), "Stale resurrected thread"),
+      ),
     );
 
     expect(next.deletedThreadIdsById?.[threadId]).toEqual(expect.any(Number));
@@ -2000,27 +1879,13 @@ describe("store projection", () => {
     } satisfies OrchestrationShellStreamEvent);
     const next = syncServerShellSnapshot(
       removedState,
-      makeShellSnapshot({
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Rehydrated shell removed thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:00:30.000Z",
-        handoff: null,
-        session: null,
-      }),
+      makeShellSnapshot(
+        makeShellThread(
+          threadId,
+          ProjectId.makeUnsafe("project-1"),
+          "Rehydrated shell removed thread",
+        ),
+      ),
     );
 
     expect(removedState.deletedThreadIdsById?.[threadId]).toBeUndefined();
@@ -2289,24 +2154,7 @@ describe("deletion tombstone retirement", () => {
     snapshotSequence: number,
     threads: readonly { readonly id: string; readonly title: string }[],
   ) {
-    const base = makeShellSnapshot({
-      id: deletedThreadId,
-      projectId,
-      title: "Base",
-      modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
-      runtimeMode: DEFAULT_RUNTIME_MODE,
-      interactionMode: DEFAULT_INTERACTION_MODE,
-      envMode: "local",
-      branch: null,
-      worktreePath: null,
-      forkSourceThreadId: null,
-      sidechatSourceThreadId: null,
-      latestTurn: null,
-      createdAt: "2026-02-27T00:00:00.000Z",
-      updatedAt: "2026-02-27T00:00:30.000Z",
-      handoff: null,
-      session: null,
-    });
+    const base = makeShellSnapshot(makeShellThread(deletedThreadId, projectId, "Base"));
     return {
       ...base,
       snapshotSequence,
@@ -2382,13 +2230,12 @@ describe("deletion tombstone retirement", () => {
     const initialState = makeState(
       makeThread({
         id: threadId,
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          createdAt: "2026-02-27T00:00:00.000Z",
-          updatedAt: "2026-02-27T00:00:02.000Z",
-        },
+        session: makeLiveSession(
+          "codex",
+          "running",
+          "2026-02-27T00:00:00.000Z",
+          "2026-02-27T00:00:02.000Z",
+        ),
       }),
     );
     expect(initialState.threadSessionById?.[threadId]).not.toBeUndefined();
@@ -2396,37 +2243,7 @@ describe("deletion tombstone retirement", () => {
     const next = applyShellEvent(initialState, {
       kind: "thread-upserted",
       sequence: 2,
-      thread: {
-        id: threadId,
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.3-codex",
-        },
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        associatedWorktreePath: null,
-        associatedWorktreeBranch: null,
-        associatedWorktreeRef: null,
-        createBranchFlowCompleted: false,
-        parentThreadId: null,
-        subagentAgentId: null,
-        subagentNickname: null,
-        subagentRole: null,
-        forkSourceThreadId: null,
-        sidechatSourceThreadId: null,
-        lastKnownPr: null,
-        latestTurn: null,
-        createdAt: "2026-02-27T00:00:00.000Z",
-        updatedAt: "2026-02-27T00:05:00.000Z",
-        archivedAt: null,
-        handoff: null,
-        session: null,
-      },
+      thread: makeUpsertedShellThread(),
     });
 
     expect(Object.keys(next.threadSessionById ?? {})).toEqual([]);
@@ -2473,64 +2290,55 @@ describe("resume cursor lifecycle in projection transitions", () => {
     return state;
   }
 
-  it("clears the cursor when the thread's detail is evicted", () => {
-    const state = makeStateWithCursor();
-    evictThreadDetailFromClientState(state, threadId);
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
+  const readModelAt60 = (threads: "retained" | "pruned") => ({
+    ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
+    snapshotSequence: 60,
+    ...(threads === "pruned" ? { threads: [] } : {}),
   });
 
-  it("clears the cursor when the thread is deleted", () => {
-    const state = makeStateWithCursor();
-    removeDeletedThreadFromClientState(state, threadId);
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
-  });
-
-  it("clears the cursor when the thread's project is deleted", () => {
-    const state = makeStateWithCursor();
-    removeDeletedProjectFromClientState(state, projectId);
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
-  });
-
-  it("clears the cursor when a shell thread-removed event drops the thread", () => {
-    const state = makeStateWithCursor();
-    applyShellEvent(state, { kind: "thread-removed", sequence: 50, threadId });
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
-  });
-
-  it("clears the cursor when a shell snapshot prunes the thread", () => {
-    const state = makeStateWithCursor();
-    syncServerShellSnapshot(state, {
-      snapshotSequence: 60,
-      updatedAt: "2026-02-27T00:10:00.000Z",
-      spaces: [],
-      projects: [],
-      threads: [],
-    });
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
-  });
-
-  it("clears the cursor when a read-model repair prunes the thread", () => {
-    // The "Repair local state" action feeds a full read model through this
-    // path; a pruned thread's cursor must fall with its wiped detail.
-    const state = makeStateWithCursor();
-    syncServerReadModel(state, {
-      ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
-      snapshotSequence: 60,
-      threads: [],
-    });
-    expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
-  });
-
-  it("clears the cursor when a full read-model sync replaces retained detail", () => {
-    // A retained thread's detail is replaced wholesale by the read model, so a
-    // cursor ahead of the replacement would resume past history the new detail
-    // does not contain. This path is route recovery and "Repair local state"
-    // only, so the cost is one snapshot on an already-degraded path.
-    const state = makeStateWithCursor();
-    syncServerReadModel(state, {
-      ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
-      snapshotSequence: 60,
-    });
+  // "Repair local state" feeds a full read model through the read-model paths: a pruned
+  // thread's cursor must fall with its wiped detail, and a retained thread's detail is
+  // replaced wholesale, so a cursor ahead of the replacement would resume past history the
+  // new detail does not contain.
+  it.each([
+    {
+      name: "the thread's detail is evicted",
+      run: (state: AppState) => evictThreadDetailFromClientState(state, threadId),
+    },
+    {
+      name: "the thread is deleted",
+      run: (state: AppState) => removeDeletedThreadFromClientState(state, threadId),
+    },
+    {
+      name: "the thread's project is deleted",
+      run: (state: AppState) => removeDeletedProjectFromClientState(state, projectId),
+    },
+    {
+      name: "a shell thread-removed event drops the thread",
+      run: (state: AppState) =>
+        applyShellEvent(state, { kind: "thread-removed", sequence: 50, threadId }),
+    },
+    {
+      name: "a shell snapshot prunes the thread",
+      run: (state: AppState) =>
+        syncServerShellSnapshot(state, {
+          snapshotSequence: 60,
+          updatedAt: "2026-02-27T00:10:00.000Z",
+          spaces: [],
+          projects: [],
+          threads: [],
+        }),
+    },
+    {
+      name: "a read-model repair prunes the thread",
+      run: (state: AppState) => syncServerReadModel(state, readModelAt60("pruned")),
+    },
+    {
+      name: "a full read-model sync replaces retained detail",
+      run: (state: AppState) => syncServerReadModel(state, readModelAt60("retained")),
+    },
+  ])("clears the cursor when $name", ({ run }) => {
+    run(makeStateWithCursor());
     expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
   });
 

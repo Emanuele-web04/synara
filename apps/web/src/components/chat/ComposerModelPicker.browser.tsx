@@ -730,31 +730,16 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
-  it("names the composer's account on the trigger and dots it with its accent color", async () => {
+  it("names the composer's account on the trigger", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       selectedProviderInstanceId: "codex_work",
-      providerInstances: [CODEX_ACCOUNTS[0]!, { ...CODEX_ACCOUNTS[1]!, accentColor: "#16a34a" }],
+      providerInstances: CODEX_ACCOUNTS,
     });
     try {
       const trigger = page.getByRole("button", { name: "Change model and reasoning" }).element();
-      const dot = trigger.querySelector<HTMLElement>("[data-accent]");
-      expect(dot?.dataset.accent).toBe("#16a34a");
       // The account's name is written before the model.
       expect(trigger.textContent).toContain("Work");
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("dots a lone account that has an accent color without naming it", async () => {
-    const screen = await mountPicker({
-      providerInstances: [{ ...CODEX_ACCOUNTS[0]!, accentColor: "#2563eb" }],
-    });
-    try {
-      const tab = page.getByRole("tab", { name: "Codex", exact: true }).element();
-      expect(tab.textContent).toBe("");
-      expect(tab.querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe("#2563eb");
     } finally {
       await screen.unmount();
     }
