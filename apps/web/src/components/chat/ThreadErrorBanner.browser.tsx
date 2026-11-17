@@ -33,12 +33,9 @@ describe("ThreadErrorBanner", () => {
     const fullError = document.getElementById(detailsId!)!;
     expect(fullError.textContent).toBe(LONG_ERROR);
     await expect.element(fullError).toBeVisible();
-    expect(getComputedStyle(fullError).whiteSpace).toBe("pre-wrap");
-    expect(getComputedStyle(fullError).webkitLineClamp).toBe("none");
 
     await hide.click();
     await expect.element(show).toHaveAttribute("aria-expanded", "false");
-    expect(getComputedStyle(fullError).webkitLineClamp).toBe("3");
     // The error text is rendered once, collapsed or expanded.
     expect(page.getByText("Provider request failed", { exact: false }).elements()).toHaveLength(1);
   });

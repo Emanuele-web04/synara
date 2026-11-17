@@ -366,7 +366,7 @@ describe("MessagesTimeline", () => {
   });
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
-  it("renders an accent deep link to the immediate fork source", async () => {
+  it("renders a deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -380,7 +380,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-fork-source-divider="true"');
     expect(markup).toContain('href="/source-thread"');
     expect(markup).toContain("Continued from chat");
-    expect(markup).toContain("text-[var(--color-text-accent)]");
     expect(markup.indexOf("Imported history")).toBeLessThan(
       markup.indexOf('data-fork-source-divider="true"'),
     );

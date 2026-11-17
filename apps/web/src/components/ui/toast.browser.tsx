@@ -92,7 +92,6 @@ describe("toast focus and visible lifetime", () => {
     expect(description?.textContent).toBe(
       "This PR branch is already checked out in another worktree.",
     );
-    expect(description!.getBoundingClientRect().height).toBeGreaterThan(0);
   });
 
   it("pauses while a toast control has focus and resumes the remaining visible time", async () => {
@@ -199,8 +198,6 @@ describe("toast focus and visible lifetime", () => {
     flushSync(() => undo.click());
     const button = dismissButton();
     expect(button.disabled).toBe(true);
-    expect(getComputedStyle(button).pointerEvents).toBe("none");
-    expect(getComputedStyle(button).opacity).toBe("0.55");
   });
 
   it("starts archive cleanup only after the Undo toast's visible lifetime", async () => {

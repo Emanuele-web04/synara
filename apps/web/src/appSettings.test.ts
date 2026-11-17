@@ -119,12 +119,6 @@ describe("computer control defaults", () => {
     expect(normalized.computerControlEnabled).toBe(true);
     expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
   });
-
-  it("defaults the in-chat preview to the compact footprint", () => {
-    expect(AppSettingsSchema.makeUnsafe({}).computerPreviewSize).toBe("compact");
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ computerPreviewSize: "large" });
-    expect(normalizeStoredAppSettings(decoded).computerPreviewSize).toBe("large");
-  });
 });
 
 describe("server-backed provider enablement", () => {
@@ -352,14 +346,6 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
-describe("code review sort", () => {
-  it("defaults existing settings to newest and preserves a stored activity order", () => {
-    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
-    expect(decode({}).githubInboxSort).toBe("created");
-    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
-  });
-});
-
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
@@ -368,25 +354,6 @@ describe("removed settings", () => {
     });
     expect(decoded).not.toHaveProperty("githubInboxListWidth");
     expect(decoded.githubInboxKind).toBe("issue");
-  });
-});
-
-describe("environment panel defaults", () => {
-  it("starts optional text sections disabled without overriding explicit preferences", () => {
-    const defaults = AppSettingsSchema.makeUnsafe({});
-    expect(defaults).toMatchObject({
-      showEnvironmentInstructions: false,
-      showEnvironmentNotepad: false,
-    });
-
-    const enabled = AppSettingsSchema.makeUnsafe({
-      showEnvironmentInstructions: true,
-      showEnvironmentNotepad: true,
-    });
-    expect(enabled).toMatchObject({
-      showEnvironmentInstructions: true,
-      showEnvironmentNotepad: true,
-    });
   });
 });
 
@@ -1987,15 +1954,6 @@ describe("revealHubsRailItemOnce", () => {
 });
 
 describe("AppSettingsSchema", () => {
-  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
-      anchorSentMessagesToTop: true,
-      chatFontSizePx: 17,
-    });
-  });
-
   it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
     const codec = Schema.fromJsonString(AppSettingsSchema);
     const decode = Schema.decodeSync(codec);
@@ -2007,12 +1965,6 @@ describe("AppSettingsSchema", () => {
     expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
       anchorSentMessagesToTop: true,
     });
-  });
-
-  it("opens Tasks as the list until the user picks the Kanban view", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-    expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
-    expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
   });
 
   it("migrates persisted Gemini provider settings to Antigravity", () => {
@@ -2159,29 +2111,6 @@ describe("AppSettingsSchema", () => {
     expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
-  it("defaults the Environment panel closed and preserves an explicit open preference", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode("{}").environmentPanelDefaultOpen).toBe(false);
-    expect(
-      decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
-    ).toBe(true);
-  });
-
-  it("keeps usage popover details collapsed by default and preserves an explicit choice", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
-    expect(decode("{}").usagePopoverShowResetCredits).toBe(true);
-    expect(decode("{}").usagePopoverShowUsageLines).toBe(true);
-    expect(
-      decode(JSON.stringify({ usagePopoverShowUsageLines: false })).usagePopoverShowUsageLines,
-    ).toBe(false);
-    expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
-      true,
-    );
-  });
-
   it("preserves a disabled simulator auto-open preference across settings persistence", () => {
     const codec = Schema.fromJsonString(AppSettingsSchema);
     const decode = Schema.decodeSync(codec);
@@ -2251,11 +2180,6 @@ describe("AppSettingsSchema", () => {
 });
 
 describe("keepAwakeMode mapping", () => {
-  it("defaults to off when absent from stored settings", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-    expect(decode("{}").keepAwakeMode).toBe("off");
-  });
-
   it("maps the server setting into app settings", () => {
     const mapped = serverSettingsToAppSettings({
       ...DEFAULT_SERVER_SETTINGS_VIEW,

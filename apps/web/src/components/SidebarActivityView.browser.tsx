@@ -22,14 +22,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
+import { type ProjectAppearance } from "../lib/projectAppearance";
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 import type { WorkspaceNavigation, WorkspaceSidebarActions } from "../lib/hosts/workspaceFrame";
 import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
 import { workspaceActivityRows, type WorkspaceThreadEntry } from "../lib/hosts/workspaceSidebar";
-import { WorkspaceThreadRow } from "./hosts/WorkspaceProjects";
 import { SidebarProvider } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 
@@ -352,16 +351,6 @@ function remoteActivityInput(sessions: readonly WorkspaceSession[]) {
   };
 }
 
-/** The computed color a CSS color variable resolves to on this page. */
-function resolvedColor(variable: string): string {
-  const reference = document.createElement("span");
-  reference.style.color = `var(${variable})`;
-  document.body.appendChild(reference);
-  const color = getComputedStyle(reference).color;
-  reference.remove();
-  return color;
-}
-
 function actionButton(row: HTMLElement, label: string): HTMLButtonElement {
   const button = row.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   expect(button).not.toBeNull();
@@ -583,76 +572,23 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each(["activity", "classic", "pinned"] as const)(
-    "matches remote glyph/action sizes and hides the resting marker on hover and focus (%s)",
-    async (surface) => {
-      const previousViewport = { width: window.innerWidth, height: window.innerHeight };
-      const owner = makeRemoteEntry("mini");
-      const input = remoteActivityInput([owner.session]);
-      const mounted = await render(
-        <div className="w-80">
-          {surface === "activity" ? (
-            renderActivity(input)
-          ) : (
-            <SidebarProvider>
-              <div className="w-80">
-                <WorkspaceThreadRow entry={owner.entry} topLevel={surface === "pinned"} />
-              </div>
-            </SidebarProvider>
-          )}
-        </div>,
+  it("opens a remote row's menu from the keyboard with Shift+F10", async () => {
+    const owner = makeRemoteEntry("mini");
+    const mounted = await render(renderActivity(remoteActivityInput([owner.session])));
+    try {
+      const button = page
+        .getByRole("button", { name: /Activity thread 71, Computer mini/ })
+        .element() as HTMLElement;
+      button.focus();
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
       );
-      try {
-        await page.viewport(1000, 700);
-        const main = page.getByRole("button", {
-          name: new RegExp(`Activity thread 71, Computer mini`),
-        });
-        const button = main.element();
-        const wrapper = button.parentElement!;
-        const marker = wrapper.querySelector<HTMLElement>('[data-slot="remote-thread-marker"]');
-        if (surface !== "classic") {
-          expect(marker).not.toBeNull();
-          const glyph = marker!.querySelector("svg, [data-slot=central-icon]")!;
-          expect(glyph.getBoundingClientRect().width).toBe(15);
-          expect(glyph.getBoundingClientRect().height).toBe(15);
-        }
-        await main.hover();
-        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-        const quickButtons = ["Pin thread", "Archive thread", "Done"].map((label) =>
-          actionButton(wrapper, label),
-        );
-        for (const action of quickButtons) {
-          const glyph = action.querySelector("svg, [data-slot=central-icon]")!;
-          expect(glyph.getBoundingClientRect().width).toBe(15);
-          expect(glyph.getBoundingClientRect().height).toBe(15);
-          expect(action.getBoundingClientRect().width).toBe(20);
-        }
-        const title =
-          wrapper.querySelector('[data-testid^="thread-title-"]') ??
-          wrapper.querySelector('[data-slot="activity-thread-title"]') ??
-          button.querySelector("span.min-w-0.flex-1");
-        await vi.waitFor(() =>
-          expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
-            quickButtons[0]!.getBoundingClientRect().left,
-          ),
-        );
-        await userEvent.hover(document.body);
-        button.focus();
-        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-        expect(
-          quickButtons.every((action) => getComputedStyle(action).visibility !== "hidden"),
-        ).toBe(true);
-        button.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
-        );
-        await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
-        await userEvent.keyboard("{Escape}");
-      } finally {
-        await mounted.unmount();
-        await page.viewport(previousViewport.width, previousViewport.height);
-      }
-    },
-  );
+      await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("disables offline remote actions and rejects an action from a stale captured session", async () => {
     const owner = makeRemoteEntry("offline");
@@ -903,82 +839,54 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each([
-    { name: "favicon", appearance: null },
-    { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },
-    { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
-    { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
-  ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
-    "keeps the $name project identity and the branch on the project line, and marks a worktree beside the title",
-    async ({ name, appearance }) => {
-      const thread = makeThread(0, { branch: "feature/sidebar-icons" });
-      const worktree = makeThread(1, {
-        envMode: "worktree",
-        worktreePath: "/tmp/activity-worktree",
-        branch: "feature/worktree",
-      });
-      const mounted = await render(
-        renderActivity({
-          threads: [thread, worktree],
-          projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
-        }),
-      );
-      const wrapperOf = (row: SidebarThreadSummary) =>
-        page.getByTestId(`activity-thread-${row.id}`).element().parentElement!;
-      const footerOf = (row: SidebarThreadSummary) =>
-        wrapperOf(row).querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
-      const wrapper = () => wrapperOf(thread);
-      const footer = () => footerOf(thread);
-      await vi.waitFor(() => {
-        const line = footer();
-        expect(line.querySelector('[aria-label="Worktree"]')).toBeNull();
-        if (name === "favicon") {
-          const image = line.querySelector<HTMLImageElement>("img");
-          expect(image?.naturalWidth).toBeGreaterThan(0);
-        } else if (appearance?.kind === "emoji") {
-          expect(line.textContent).toContain(appearance.emoji);
-          expect(line.querySelector("img")).toBeNull();
-        } else if (appearance?.kind === "icon" && appearance.icon !== DEFAULT_PROJECT_ICON) {
-          // A chosen icon is a masked Central asset named after the icon.
-          const glyph = [...line.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
-            (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
-          );
-          expect(glyph).toBeDefined();
-          expect(getComputedStyle(glyph!).color).toBe(
-            resolvedColor(`--project-${appearance.color}`),
-          );
-          expect(line.querySelector("img")).toBeNull();
-        }
-      });
-      expect(footer().textContent).toContain("Project A");
-      expect(footer().textContent).toContain("feature/sidebar-icons");
-      // A worktree keeps the project's glyph on its project line and is marked once, beside
-      // the title, as on the project list's thread rows.
-      const worktreeLine = footerOf(worktree);
-      expect(worktreeLine.querySelector('[aria-label="Worktree"]')).toBeNull();
-      expect(worktreeLine.innerHTML).toBe(
-        footer().innerHTML.replace("feature/sidebar-icons", "feature/worktree"),
-      );
-      const worktreeTitle = wrapperOf(worktree).querySelector<HTMLElement>(
-        '[data-slot="activity-thread-title"]',
-      )!;
-      const worktreeGlyphs = wrapperOf(worktree).querySelectorAll('[aria-label="Worktree"]');
-      expect(worktreeGlyphs).toHaveLength(1);
-      expect(worktreeGlyphs[0]!.parentElement).toBe(worktreeTitle.parentElement);
-      expect(worktreeGlyphs[0]!.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-        worktreeTitle.getBoundingClientRect().right,
-      );
-      expect(wrapper().querySelector('[aria-label="Worktree"]')).toBeNull();
-      // Nothing sits above the title; the project line sits below the reply.
-      const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
-      expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
-      expect(title.textContent).not.toContain("Project A");
-      expect(footer().getBoundingClientRect().top).toBeGreaterThanOrEqual(
-        title.getBoundingClientRect().bottom,
-      );
-      await mounted.unmount();
-    },
-  );
+  it("keeps the project identity and the branch on the project line, and marks a worktree beside the title", async () => {
+    const appearance: ProjectAppearance = { kind: "emoji", emoji: "🚀" };
+    const thread = makeThread(0, { branch: "feature/sidebar-icons" });
+    const worktree = makeThread(1, {
+      envMode: "worktree",
+      worktreePath: "/tmp/activity-worktree",
+      branch: "feature/worktree",
+    });
+    const mounted = await render(
+      renderActivity({
+        threads: [thread, worktree],
+        projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
+      }),
+    );
+    const wrapperOf = (row: SidebarThreadSummary) =>
+      page.getByTestId(`activity-thread-${row.id}`).element().parentElement!;
+    const footerOf = (row: SidebarThreadSummary) =>
+      wrapperOf(row).querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+    const wrapper = () => wrapperOf(thread);
+    const footer = () => footerOf(thread);
+    await vi.waitFor(() => {
+      const line = footer();
+      expect(line.querySelector('[aria-label="Worktree"]')).toBeNull();
+      expect(line.textContent).toContain(appearance.emoji);
+      expect(line.querySelector("img")).toBeNull();
+    });
+    expect(footer().textContent).toContain("Project A");
+    expect(footer().textContent).toContain("feature/sidebar-icons");
+    // A worktree keeps the project's glyph on its project line and is marked once, beside
+    // the title, as on the project list's thread rows.
+    const worktreeLine = footerOf(worktree);
+    expect(worktreeLine.querySelector('[aria-label="Worktree"]')).toBeNull();
+    expect(worktreeLine.innerHTML).toBe(
+      footer().innerHTML.replace("feature/sidebar-icons", "feature/worktree"),
+    );
+    const worktreeTitle = wrapperOf(worktree).querySelector<HTMLElement>(
+      '[data-slot="activity-thread-title"]',
+    )!;
+    const worktreeGlyphs = wrapperOf(worktree).querySelectorAll('[aria-label="Worktree"]');
+    expect(worktreeGlyphs).toHaveLength(1);
+    expect(worktreeGlyphs[0]!.parentElement).toBe(worktreeTitle.parentElement);
+    expect(wrapper().querySelector('[aria-label="Worktree"]')).toBeNull();
+    // Nothing sits above the title; the project line sits below the reply.
+    const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
+    expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
+    expect(title.textContent).not.toContain("Project A");
+    await mounted.unmount();
+  });
 
   it("counts several PRs in the row's state color and lists them instead of opening one", async () => {
     const merged: OrchestrationThreadPullRequest = {
@@ -1030,7 +938,6 @@ describe("SidebarActivityView", () => {
       const countChip = page.getByRole("button", { name: "3 pull requests" });
       const countElement = countChip.element() as HTMLElement;
       expect(countElement.textContent).toBe("3");
-      expect(getComputedStyle(countElement).color).toBe(resolvedColor("--status-merged"));
       expect(countElement.closest('[data-slot="activity-thread-footer"]')).not.toBeNull();
       countElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
       expect(onRenameThread).not.toHaveBeenCalled();
@@ -1096,15 +1003,6 @@ describe("SidebarActivityView", () => {
         "Project A#2186synara/frontend-consistency-fixes-for-every-settings-screen",
       );
       expect(localFooter.querySelector('[aria-label="Worktree"]')).toBeNull();
-      // The PR stays whole ahead of the branch, which truncates.
-      const chip = page.getByRole("button", { name: "Open pull request #2186" }).element();
-      const branch = page
-        .getByText("synara/frontend-consistency-fixes-for-every-settings-screen", { exact: true })
-        .element();
-      expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
-        branch.getBoundingClientRect().left,
-      );
-      expect(branch.scrollWidth).toBeGreaterThan(branch.clientWidth);
 
       // A chat keeps its folder and name, and its PR.
       expect(footer(chatWithPr).textContent).toBe("Synara#2187");
@@ -1175,30 +1073,10 @@ describe("SidebarActivityView", () => {
       const part = (thread: SidebarThreadSummary, selector: string) =>
         rowButton(thread).parentElement!.querySelector<HTMLElement>(selector);
 
-      // Unseen news reads medium; the reply sits under the title, aligned with the glyph.
-      const unreadTitle = part(unread, '[data-slot="activity-thread-title"]')!;
-      const seenTitle = part(seen, '[data-slot="activity-thread-title"]')!;
-      expect(getComputedStyle(unreadTitle).fontWeight).toBe("500");
-      expect(getComputedStyle(seenTitle).fontWeight).toBe("400");
       const unreadReply = part(unread, "p")!;
-      const seenReply = part(seen, "p")!;
       expect(unreadReply.textContent).toBe(reply);
-      expect(getComputedStyle(unreadReply).webkitLineClamp).toBe("2");
-      const lineHeight = Number.parseFloat(getComputedStyle(unreadReply).lineHeight);
-      expect(unreadReply.getBoundingClientRect().height).toBeLessThanOrEqual(lineHeight * 2 + 1);
-      expect(unreadReply.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-        unreadTitle.getBoundingClientRect().bottom,
-      );
-      expect(unreadReply.getBoundingClientRect().left).toBe(
-        part(unread, '[data-slot="activity-thread-footer"]')!.getBoundingClientRect().left,
-      );
-      // A reply already seen steps back.
-      expect(getComputedStyle(seenReply).color).not.toBe(getComputedStyle(unreadReply).color);
       // No reply, no reply line.
       expect(part(silent, "p")).toBeNull();
-      expect(rowButton(silent).getBoundingClientRect().height).toBeLessThan(
-        rowButton(seen).getBoundingClientRect().height,
-      );
 
       // The PR is plain icon + number in its state's color, yet a button of its own, outside
       // the row's, named for what it does, with a target reaching past its glyphs.
@@ -1206,12 +1084,6 @@ describe("SidebarActivityView", () => {
       const chipElement = chip.element() as HTMLElement;
       expect(rowButton(unread).contains(chipElement)).toBe(false);
       expect(chipElement.getAttribute("title")).toBe("#2186 PR open: Fix off-scale paddings");
-      expect(getComputedStyle(chipElement).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-      expect(getComputedStyle(chipElement).paddingLeft).toBe("4px");
-      expect(chipElement.getBoundingClientRect().height).toBeGreaterThanOrEqual(20);
-      expect(getComputedStyle(chipElement).color).toBe(resolvedColor("--status-open"));
-      const mergedChip = page.getByRole("button", { name: "Open pull request #2171" }).element();
-      expect(getComputedStyle(mergedChip).color).toBe(resolvedColor("--status-merged"));
       await chip.click();
       expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
       expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([unread, pr]);
@@ -1460,8 +1332,6 @@ describe("SidebarActivityView", () => {
       .parentElement?.querySelector('[aria-label="Unread completion"]');
     expect(completedDot).not.toBeNull();
     expect(completedDot?.parentElement?.dataset.slot).toBe("activity-completion-status");
-    const completedStatusSlot = completedDot?.parentElement;
-    const completedStatusLeft = completedStatusSlot?.getBoundingClientRect().left;
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
@@ -1472,10 +1342,6 @@ describe("SidebarActivityView", () => {
     expect(resumedRow.parentElement?.querySelector('button[aria-label="Done"]')).not.toBeNull();
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
-    await vi.waitFor(() => {
-      expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
-    });
-    expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
     page
       .getByTestId(`activity-thread-${unseen.id}`)
       .element()

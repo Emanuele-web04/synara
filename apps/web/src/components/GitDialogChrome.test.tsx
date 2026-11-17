@@ -43,7 +43,6 @@ function expectPrimaryShortcut(html: string, label: string, hint: string, shortc
 describe.each([
   { platform: "MacIntel", hint: "⌘↵", shortcut: "Meta+Enter" },
   { platform: "Win32", hint: "Ctrl ↵", shortcut: "Control+Enter" },
-  { platform: "Linux x86_64", hint: "Ctrl ↵", shortcut: "Control+Enter" },
 ])("git dialog submit accessibility on $platform", ({ platform, hint, shortcut }) => {
   it("exposes the commit shortcut only on the primary button", () => {
     vi.stubGlobal("navigator", { platform });

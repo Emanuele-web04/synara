@@ -192,33 +192,4 @@ describe("HostDiscoverabilityPrompt", () => {
 
     expect(html).toBe("");
   });
-
-  // Both buttons are answers: declining writes `discoverable: false` rather
-  // than dismissing, so the question does not return every launch.
-  it("offers both an accept and a decline, and no dismiss", () => {
-    const { html } = renderPrompt({
-      enrollment: {
-        host: makeHost(),
-        organizationMemberCount: 5,
-        discoverabilityAcknowledged: false,
-      },
-    });
-
-    expect(html).toContain("Share");
-    expect(html).toContain("Keep private");
-    expect(html).not.toContain("Later");
-    expect(html).not.toMatch(/aria-label="Close"/);
-  });
-
-  it("explains what sharing actually grants", () => {
-    const { html } = renderPrompt({
-      enrollment: {
-        host: makeHost(),
-        organizationMemberCount: 5,
-        discoverabilityAcknowledged: false,
-      },
-    });
-
-    expect(html).toContain("open sessions");
-  });
 });

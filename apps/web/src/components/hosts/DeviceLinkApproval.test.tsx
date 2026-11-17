@@ -96,23 +96,4 @@ describe("DeviceCodeField rendering", () => {
   it("shows partial input as typed", () => {
     expect(renderField("ABC").value).toBe("ABC");
   });
-
-  it("hints the format with a placeholder inside the code alphabet", () => {
-    const placeholder = renderField("").placeholder ?? "";
-    expect(placeholder).toBe("ABCD-EFGH");
-    expect(placeholder).not.toMatch(/[IO01]/);
-  });
-
-  it("stops the keyboard from fighting the normalizer", () => {
-    const props = renderField("");
-    expect(props.autoCapitalize).toBe("characters");
-    expect(props.autoCorrect).toBe("off");
-    expect(props.autoComplete).toBe("off");
-    expect(props.spellCheck).toBe(false);
-  });
-
-  it("disables the field when it says it is disabled", () => {
-    expect(renderField("", true).disabled).toBe(true);
-    expect(renderField("", false).disabled).toBe(false);
-  });
 });

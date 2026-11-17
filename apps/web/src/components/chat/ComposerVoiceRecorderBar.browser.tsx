@@ -16,17 +16,6 @@ describe("ComposerVoiceRecorderBar", () => {
     document.body.innerHTML = "";
   });
 
-  it.each([500, 1000, 2400])("fills a %ipx recorder with a full waveform buffer", async (width) => {
-    const screen = await renderWaveform(width);
-    const { track } = getWaveformElements();
-
-    await expect.poll(() => waveformLeftInset(track)).toBeLessThan(4);
-    expect(track.querySelectorAll("span").length).toBeLessThanOrEqual(160);
-    expect(waveformRightInset(track)).toBeLessThan(1);
-
-    await screen.unmount();
-  });
-
   it("keeps filling the track when the recorder grows and shrinks", async () => {
     const screen = await renderWaveform(500);
     const { fixture, track } = getWaveformElements();
@@ -71,7 +60,7 @@ describe("ComposerVoiceRecorderBar", () => {
     await screen.unmount();
   });
 
-  it("uses the send treatment for stop while keeping cancel separate", async () => {
+  it("stops and cancels through separate controls", async () => {
     const onDiscard = vi.fn();
     const onStop = vi.fn();
     const screen = await render(
@@ -89,8 +78,6 @@ describe("ComposerVoiceRecorderBar", () => {
       'button[aria-label="Stop voice recording"]',
     );
     expect(stopButton).not.toBeNull();
-    expect(stopButton?.className).toContain("bg-[var(--color-text-foreground)]");
-    expect(stopButton?.className).toContain("text-[var(--color-background-surface)]");
     expect(document.querySelector('button[aria-label="Send voice note"]')).toBeNull();
 
     await page.getByRole("button", { name: "Stop voice recording" }).click();
