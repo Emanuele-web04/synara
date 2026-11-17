@@ -544,13 +544,15 @@ export class CuaComputerBackend implements ComputerBackend {
             mutation ? "dispatched-unknown" : "not-dispatched",
             "stale_desktop_epoch",
           );
-        if (sendBaseline !== undefined && epoch < sendBaseline)
-          throw new CuaActionError(
-            "The desktop changed while this operation was in flight. Observe again before continuing.",
-            mutation ? "dispatched-unknown" : "not-dispatched",
-            "stale_desktop_epoch",
-          );
-        if (epoch !== this.desktopEpoch) {
+        // A lower epoch means the host restarted and its counter reset —
+        // adopt the new baseline instead of wedging every later call on
+        // stale_desktop_epoch. Genuine in-flight staleness is caught above
+        // by the desktopEpoch !== sendBaseline check.
+        if (sendBaseline !== undefined && epoch < sendBaseline) {
+          this.desktopEpoch = epoch;
+          this.observedGeometry.clear();
+          this.snapshotAt = 0;
+        } else if (epoch !== this.desktopEpoch) {
           this.desktopEpoch = epoch;
           this.observedGeometry.clear();
           this.snapshotAt = 0;

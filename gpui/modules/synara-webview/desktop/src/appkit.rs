@@ -233,7 +233,7 @@ const BRIDGE_JS: &str = r#"
       listPendingCaptures: function () { return call('appSnap.listPendingCaptures'); },
       acknowledgeCapture: function (captureId) { return call('appSnap.acknowledgeCapture', { captureId: captureId }); },
       listWindows: function () { return call('appSnap.listWindows'); },
-      captureWindow: function (windowId) { return call('appSnap.captureWindow', { windowId: windowId }); },
+      captureWindow: function (input) { return call('appSnap.captureWindow', input); },
       openPermissionSettings: function (pane) { return call('appSnap.openPermissionSettings', { pane: pane }); },
       restartApp: function () { return call('appSnap.restartApp'); },
       showPermissionGuide: function (pane) { return call('appSnap.showPermissionGuide', { pane: pane }); },
@@ -360,7 +360,9 @@ fn ns_string_text(string: id) -> String {
         if utf8.is_null() {
             return String::new();
         }
-        std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        std::ffi::CStr::from_ptr(utf8)
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -507,7 +509,12 @@ unsafe fn build_menu(items: id, handler: id) -> id {
 
 /// Dispatches a `desktopBridge` call. `params` is an NSDictionary (or nil).
 /// Returns the JSON literal to deliver back to the page.
-unsafe fn bridge_dispatch(handler: &Object, view: id, method: &str, params: id) -> Result<String, String> {
+unsafe fn bridge_dispatch(
+    handler: &Object,
+    view: id,
+    method: &str,
+    params: id,
+) -> Result<String, String> {
     match method {
         "ping" => Ok(json_string("pong")),
         method if method.starts_with("appSnap.") => {
@@ -572,7 +579,11 @@ unsafe fn bridge_dispatch(handler: &Object, view: id, method: &str, params: id) 
                 return Ok("null".into());
             }
             let urls: id = msg_send![panel, URLs];
-            let url_count: usize = if urls == nil { 0 } else { msg_send![urls, count] };
+            let url_count: usize = if urls == nil {
+                0
+            } else {
+                msg_send![urls, count]
+            };
             if url_count == 0 {
                 return Ok("null".into());
             }
@@ -658,8 +669,11 @@ unsafe fn bridge_dispatch(handler: &Object, view: id, method: &str, params: id) 
             let menu = build_menu(items, handler as *const Object as id);
             // Reset the selection slot before the (blocking) popup.
             (*(handler as *const Object as *mut Object)).set_ivar("menu_value", nil_id());
+            // JSON null arrives as NSNull, not nil — only a real dictionary
+            // carries coordinates.
             let position = dict_value(params, "position");
-            let point = if position != nil {
+            let position_is_dict: bool = msg_send![position, isKindOfClass: class!(NSDictionary)];
+            let point = if position_is_dict {
                 NSPoint::new(
                     ns_number_f64(position, "x").unwrap_or(0.),
                     ns_number_f64(position, "y").unwrap_or(0.),
@@ -668,14 +682,20 @@ unsafe fn bridge_dispatch(handler: &Object, view: id, method: &str, params: id) 
                 let frame: NSRect = msg_send![view, frame];
                 NSPoint::new(frame.size.width / 2., frame.size.height / 2.)
             };
-            let _: bool = msg_send![menu, popUpMenuPositioningItem: nil atLocation: point inView: view];
-            let selected: id = (*(handler as *const Object as *mut Object)).get_ivar::<usize>("menu_value").to_owned() as id;
-            let _: () = msg_send![menu, release];
+            let _: bool =
+                msg_send![menu, popUpMenuPositioningItem: nil atLocation: point inView: view];
+            let selected: id = (*(handler as *const Object as *mut Object))
+                .get_ivar::<usize>("menu_value")
+                .to_owned() as id;
+            // Read the payload before releasing the menu that owns the item.
             if selected == nil {
+                let _: () = msg_send![menu, release];
                 return Ok("null".into());
             }
             let rep: id = msg_send![selected, representedObject];
-            Ok(json_string(&ns_string_text(rep)))
+            let result = json_string(&ns_string_text(rep));
+            let _: () = msg_send![menu, release];
+            Ok(result)
         }
         "update.getState" => Ok(update_state_json()),
         "update.check" => Ok(update_check(view)),
@@ -729,9 +749,7 @@ fn keep_awake_json() -> String {
     // IOPSGetTimeRemainingEstimate: -2 = unlimited (AC power).
     let remaining = unsafe { IOPSGetTimeRemainingEstimate() };
     let on_battery = remaining >= 0.0;
-    format!(
-        "{{\"enabled\":{enabled},\"active\":{active},\"onBattery\":{on_battery}}}"
-    )
+    format!("{{\"enabled\":{enabled},\"active\":{active},\"onBattery\":{on_battery}}}")
 }
 
 unsafe fn window_state_json(window: id) -> String {
@@ -763,10 +781,18 @@ unsafe extern "C" {
     /// libdispatch exposes the main queue as a global (`&_dispatch_main_q` is
     /// what `dispatch_get_main_queue()` expands to), not a function symbol.
     static _dispatch_main_q: c_void;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    fn dispatch_async_f(
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
 }
 
 static UPDATE_STATE: OnceLock<Mutex<serde_json::Value>> = OnceLock::new();
+
+/// scheme://host[:port] of the URL the host last loaded — the privileged
+/// bridge only answers while the page still sits on it.
+static ALLOWED_ORIGIN: Mutex<String> = Mutex::new(String::new());
 
 fn update_state_cell() -> &'static Mutex<serde_json::Value> {
     UPDATE_STATE.get_or_init(|| Mutex::new(initial_update_state()))
@@ -824,9 +850,7 @@ fn runtime_arch() -> &'static str {
 }
 
 fn update_enabled() -> bool {
-    bundle_path()
-        .map(|p| p.ends_with(".app"))
-        .unwrap_or(false)
+    bundle_path().map(|p| p.ends_with(".app")).unwrap_or(false)
 }
 
 fn initial_update_state() -> serde_json::Value {
@@ -954,7 +978,11 @@ fn parse_update_manifest(text: &str) -> Option<FeedManifest> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if trimmed.starts_with("- ") || trimmed.starts_with("url:") || trimmed.starts_with("sha512:") || trimmed.starts_with("size:") {
+        if trimmed.starts_with("- ")
+            || trimmed.starts_with("url:")
+            || trimmed.starts_with("sha512:")
+            || trimmed.starts_with("size:")
+        {
             let body = trimmed.strip_prefix("- ").unwrap_or(trimmed);
             if let Some((key, value)) = body.split_once(':') {
                 let value = value.trim().trim_matches(|c| c == '\'' || c == '"');
@@ -988,13 +1016,36 @@ fn parse_update_manifest(text: &str) -> Option<FeedManifest> {
             files.push(file);
         }
         if let Some(rest) = trimmed.strip_prefix("version:") {
-            version = Some(rest.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
+            version = Some(
+                rest.trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_string(),
+            );
         }
     }
     if let Some(file) = current.take() {
         files.push(file);
     }
     version.map(|v| FeedManifest { version: v, files })
+}
+
+/// Updater staging files live in the per-user temp dir; `name` components are
+/// sanitized so feed-provided versions can't escape it.
+fn update_tmp_path(name: &str) -> String {
+    std::env::temp_dir()
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn sanitize_component(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect()
+}
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
@@ -1021,21 +1072,33 @@ fn b64_to_hex(input: &str) -> Option<String> {
         }
     }
     let bytes: Vec<u8> = input.bytes().filter(|b| !b"=\r\n\t ".contains(b)).collect();
-    if bytes.len() % 4 != 0 {
+    if bytes.is_empty() {
         return None;
     }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks(4) {
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 2);
+    let mut chunks = bytes.chunks_exact(4);
+    for chunk in &mut chunks {
         let n = ((val(chunk[0])? as u32) << 18)
             | ((val(chunk[1])? as u32) << 12)
             | ((val(chunk[2])? as u32) << 6)
             | (val(chunk[3])? as u32);
         out.extend_from_slice(&n.to_be_bytes()[1..]);
     }
-    // Padding was already stripped, so trim the over-produced tail bytes.
-    let pad = input.trim_end_matches('=').len();
-    let expected = pad / 4 * 3 + [0, 2, 1][pad % 4];
-    out.truncate(expected);
+    // A standard sha512 digest is 64 bytes → 86 base64 chars once padding is
+    // stripped, so a 2- or 3-char tail is the norm, not an error.
+    match chunks.remainder() {
+        [a, b] => {
+            let n = ((val(*a)? as u32) << 18) | ((val(*b)? as u32) << 12);
+            out.push(n.to_be_bytes()[1]);
+        }
+        [a, b, c] => {
+            let n =
+                ((val(*a)? as u32) << 18) | ((val(*b)? as u32) << 12) | ((val(*c)? as u32) << 6);
+            out.extend_from_slice(&n.to_be_bytes()[1..3]);
+        }
+        [] => {}
+        _ => return None,
+    }
     Some(out.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -1116,8 +1179,14 @@ fn update_download(view: id) -> String {
         }
         state["availableVersion"].as_str().unwrap_or("").to_string()
     };
-    update_patch(view, serde_json::json!({"status": "downloading", "downloadPercent": 0}));
-    let target = format!("/tmp/synara-update-{available}.zip");
+    update_patch(
+        view,
+        serde_json::json!({"status": "downloading", "downloadPercent": 0}),
+    );
+    let target = update_tmp_path(&format!(
+        "synara-update-{}.zip",
+        sanitize_component(&available)
+    ));
     let view = view as usize;
     std::thread::spawn(move || {
         let view = view as id;
@@ -1147,7 +1216,10 @@ fn update_download(view: id) -> String {
             .args(["-fsSL", "-o", &target_dl, &url])
             .spawn();
         let Ok(mut child) = child else {
-            update_patch(view, serde_json::json!({"status":"error","message":"download failed to start","errorContext":"download","canRetry":true}));
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"download failed to start","errorContext":"download","canRetry":true}),
+            );
             return;
         };
         while matches!(child.try_wait(), Ok(None)) {
@@ -1159,21 +1231,33 @@ fn update_download(view: id) -> String {
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
         if !child.wait().map(|s| s.success()).unwrap_or(false) {
-            update_patch(view, serde_json::json!({"status":"error","message":"download failed","errorContext":"download","canRetry":true,"downloadPercent":null}));
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"download failed","errorContext":"download","canRetry":true,"downloadPercent":null}),
+            );
             return;
         }
-        if let Some(hex) = expected_hex {
-            let got = std::process::Command::new("shasum")
-                .args(["-a", "512", &target_dl])
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|s| s.split_whitespace().next().map(|h| h.to_string()));
-            if got.as_deref() != Some(hex.as_str()) {
-                let _ = std::fs::remove_file(&target_dl);
-                update_patch(view, serde_json::json!({"status":"error","message":"sha512 mismatch","errorContext":"download","canRetry":true,"downloadPercent":null}));
-                return;
-            }
+        let Some(hex) = expected_hex else {
+            let _ = std::fs::remove_file(&target_dl);
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"integrity metadata unavailable","errorContext":"download","canRetry":true}),
+            );
+            return;
+        };
+        let got = std::process::Command::new("shasum")
+            .args(["-a", "512", &target_dl])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.split_whitespace().next().map(|h| h.to_string()));
+        if got.as_deref() != Some(hex.as_str()) {
+            let _ = std::fs::remove_file(&target_dl);
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"sha512 mismatch","errorContext":"download","canRetry":true,"downloadPercent":null}),
+            );
+            return;
         }
         update_patch(
             view,
@@ -1190,7 +1274,6 @@ fn update_download(view: id) -> String {
     update_result(true, false)
 }
 
-
 fn update_install(view: id) -> String {
     let (version, target) = {
         let state = match update_state_cell().lock() {
@@ -1200,13 +1283,25 @@ fn update_install(view: id) -> String {
         if state["status"] != serde_json::json!("downloaded") {
             return update_result(false, false);
         }
-        let version = state["downloadedVersion"].as_str().unwrap_or("").to_string();
-        (version.clone(), format!("/tmp/synara-update-{version}.zip"))
+        let version = state["downloadedVersion"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        (
+            version.clone(),
+            update_tmp_path(&format!(
+                "synara-update-{}.zip",
+                sanitize_component(&version)
+            )),
+        )
     };
     let Some(bundle) = bundle_path().filter(|p| p.ends_with(".app")) else {
         return update_result(false, false);
     };
-    update_patch(view, serde_json::json!({"message": "installing; the app will relaunch"}));
+    update_patch(
+        view,
+        serde_json::json!({"message": "installing; the app will relaunch"}),
+    );
     let pid = std::process::id();
     let view = view as usize;
     std::thread::spawn(move || {
@@ -1218,25 +1313,38 @@ fn update_install(view: id) -> String {
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
-        let new_app = ok.then(|| {
-            std::fs::read_dir(&dir)
-                .ok()?
-                .filter_map(|e| e.ok())
-                .find(|e| e.path().extension().map(|x| x == "app").unwrap_or(false))
-                .map(|e| e.path())
-        }).flatten();
+        let new_app = ok
+            .then(|| {
+                std::fs::read_dir(&dir)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .find(|e| e.path().extension().map(|x| x == "app").unwrap_or(false))
+                    .map(|e| e.path())
+            })
+            .flatten();
         let Some(new_app) = new_app else {
-            update_patch(view, serde_json::json!({"status":"error","message":"extract failed","errorContext":"install","canRetry":true}));
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"extract failed","errorContext":"install","canRetry":true}),
+            );
             return;
         };
         // Swap the running bundle out from under the process once it exits.
+        // The installed bundle is moved aside first — never deleted — so a
+        // partial or failed `ditto` restores the working app instead of
+        // leaving nothing to relaunch.
+        let bundle_q = sh_quote(&bundle);
+        let prev_q = sh_quote(&format!("{bundle}.prev"));
+        let src_q = sh_quote(&new_app.display().to_string());
         let script = format!(
-            "#!/bin/sh\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.2; done\nrm -rf '{bundle}'\nditto '{src}' '{bundle}'\nopen '{bundle}'\n",
-            src = new_app.display()
+            "#!/bin/sh\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.2; done\nmv {bundle_q} {prev_q}\nif ditto {src_q} {bundle_q}; then rm -rf {prev_q} && open {bundle_q}; else rm -rf {bundle_q}; mv {prev_q} {bundle_q}; fi\n"
         );
-        let script_path = "/tmp/synara-update-swap.sh";
+        let script_path = update_tmp_path(&format!("synara-update-swap-{pid}.sh"));
         if std::fs::write(script_path, script).is_err() {
-            update_patch(view, serde_json::json!({"status":"error","message":"swap script failed","errorContext":"install","canRetry":true}));
+            update_patch(
+                view,
+                serde_json::json!({"status":"error","message":"swap script failed","errorContext":"install","canRetry":true}),
+            );
             return;
         }
         let _ = std::process::Command::new("/usr/bin/nohup")
@@ -1268,6 +1376,13 @@ extern "C" fn did_receive_script_message(this: &Object, _cmd: Sel, _controller: 
 
         let is_dict: bool = msg_send![body, isKindOfClass: class!(NSDictionary)];
         if is_dict {
+            // Origin gate: a page that navigated away from the loaded origin
+            // must not reach native calls.
+            let current: id = msg_send![view, URL];
+            let allowed = ALLOWED_ORIGIN.lock().map(|g| g.clone()).unwrap_or_default();
+            if allowed.is_empty() || ns_url_origin(current) != allowed {
+                return;
+            }
             let call_id = ns_number_i64(body, "id").unwrap_or(0);
             let method = dict_string(body, "m").unwrap_or_default();
             let params = dict_value(body, "p");
@@ -1344,6 +1459,26 @@ fn frame_socket_path() -> Option<String> {
         .map(|socket| format!("{socket}.frames"))
 }
 
+/// The relay capability: same value the sidecar expects — env first, then
+/// the `{socket}.cap` file `spawn_cua_host` pointed the sidecar at.
+fn cua_capability() -> String {
+    if let Ok(cap) = std::env::var("SYNARA_CUA_HOST_CAPABILITY") {
+        let cap = cap.trim().to_string();
+        if !cap.is_empty() {
+            return cap;
+        }
+    }
+    std::env::var("SYNARA_CUA_HOST_SOCKET")
+        .ok()
+        .and_then(|socket| {
+            std::fs::read_to_string(format!("{socket}.cap"))
+                .ok()
+                .map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+}
+
 fn frame_relay_write(line: &str) {
     use std::io::Write;
     if let Some(stream) = &mut *frame_stream().lock().unwrap() {
@@ -1356,7 +1491,9 @@ fn frame_stream() -> &'static Mutex<Option<std::os::unix::net::UnixStream>> {
 }
 
 fn frame_relay_start() {
-    let Some(path) = frame_socket_path() else { return };
+    let Some(path) = frame_socket_path() else {
+        return;
+    };
     FRAME_RELAY_ONCE.call_once(move || {
         std::thread::spawn(move || loop {
             match std::os::unix::net::UnixStream::connect(&path) {
@@ -1364,6 +1501,10 @@ fn frame_relay_start() {
                     if let Ok(writer) = stream.try_clone() {
                         *frame_stream().lock().unwrap() = Some(writer);
                     }
+                    frame_relay_write(&format!(
+                        "{{\"capability\":\"{}\"}}\n",
+                        js_escape(&cua_capability())
+                    ));
                     frame_relay_read(&stream);
                     *frame_stream().lock().unwrap() = None;
                 }
@@ -1475,13 +1616,13 @@ fn appsnap_call(method: &str, params_json: &str) -> Result<String, String> {
     let path = appsnap_socket_path().ok_or("AppSnap relay not configured")?;
     let stream = std::os::unix::net::UnixStream::connect(&path)
         .map_err(|e| format!("AppSnap relay unreachable: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
     let id = APPSNAP_CALL_SEQ.fetch_add(1, Ordering::SeqCst);
-    let mut writer = stream
-        .try_clone()
-        .map_err(|e| format!("clone: {e}"))?;
+    let mut writer = stream.try_clone().map_err(|e| format!("clone: {e}"))?;
+    let hello = format!("{{\"capability\":\"{}\"}}\n", js_escape(&cua_capability()));
+    writer
+        .write_all(hello.as_bytes())
+        .map_err(|e| format!("write: {e}"))?;
     let line = format!(
         "{{\"id\":{id},\"method\":\"{}\",\"args\":{params_json}}}\n",
         js_escape(method)
@@ -1525,11 +1666,20 @@ fn appsnap_call(method: &str, params_json: &str) -> Result<String, String> {
 }
 
 fn appsnap_events_start() {
-    let Some(path) = appsnap_socket_path() else { return };
+    let Some(path) = appsnap_socket_path() else {
+        return;
+    };
     APPSNAP_EVENTS_ONCE.call_once(move || {
         std::thread::spawn(move || loop {
             match std::os::unix::net::UnixStream::connect(&path) {
-                Ok(stream) => appsnap_events_read(stream),
+                Ok(mut stream) => {
+                    use std::io::Write;
+                    let hello =
+                        format!("{{\"capability\":\"{}\"}}\n", js_escape(&cua_capability()));
+                    if stream.write_all(hello.as_bytes()).is_ok() {
+                        appsnap_events_read(stream);
+                    }
+                }
                 Err(_) => std::thread::sleep(std::time::Duration::from_secs(1)),
             }
         });
@@ -1581,7 +1731,11 @@ const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 fn b64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         out.push(B64_ALPHABET[(n >> 18) as usize & 63] as char);
         out.push(B64_ALPHABET[(n >> 12) as usize & 63] as char);
@@ -1609,7 +1763,8 @@ pub fn web_view() -> NativeViewHandle {
         let _: () = msg_send![configuration, setWebsiteDataStore: data_store];
 
         let allocated: id = msg_send![class!(WKWebView), alloc];
-        let view: id = msg_send![allocated, initWithFrame: zero_frame() configuration: configuration];
+        let view: id =
+            msg_send![allocated, initWithFrame: zero_frame() configuration: configuration];
         let preferences: id = msg_send![configuration, preferences];
         let key = NSString::alloc(nil).init_str("developerExtrasEnabled");
         let number: id = msg_send![class!(NSNumber), numberWithBool: YES];
@@ -1646,10 +1801,32 @@ pub fn web_view() -> NativeViewHandle {
     }
 }
 
+/// scheme://host[:port] of an `NSURL`, or "" when any component is absent.
+unsafe fn ns_url_origin(nsurl: id) -> String {
+    if nsurl == nil {
+        return String::new();
+    }
+    let scheme: id = msg_send![nsurl, scheme];
+    let host: id = msg_send![nsurl, host];
+    if scheme == nil || host == nil {
+        return String::new();
+    }
+    let mut origin = format!("{}://{}", ns_string_text(scheme), ns_string_text(host));
+    let port: id = msg_send![nsurl, port];
+    if port != nil {
+        let n: i64 = msg_send![port, integerValue];
+        origin.push_str(&format!(":{n}"));
+    }
+    origin
+}
+
 pub fn load_url(view: NativeViewHandle, url: &str) {
     unsafe {
         let url_string = NSString::alloc(nil).init_str(url);
         let nsurl: id = msg_send![class!(NSURL), URLWithString: url_string];
+        if let Ok(mut guard) = ALLOWED_ORIGIN.lock() {
+            *guard = ns_url_origin(nsurl);
+        }
         let request: id = msg_send![class!(NSURLRequest), requestWithURL: nsurl];
         let _: id = msg_send![view.as_nsview() as id, loadRequest: request];
         let _: () = msg_send![url_string, release];

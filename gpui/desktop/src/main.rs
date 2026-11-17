@@ -232,7 +232,15 @@ mod lifecycle {
                     IOAllowPowerChange(root_port, arg as isize);
                 }
             }
-            POWERED_ON => signal_sidecar(SIG_RESUME),
+            POWERED_ON => {
+                // Resume only when the session is actually usable: waking
+                // while the screen is still locked must not clear the pause
+                // the lock poll keeps holding.
+                let (locked, on_console) = screen_locked();
+                if !locked && on_console {
+                    signal_sidecar(SIG_RESUME);
+                }
+            }
             _ => {}
         }
     }
@@ -305,6 +313,11 @@ mod lifecycle {
         }
         std::thread::spawn(|| {
             let (mut was_locked, mut was_off_console) = screen_locked();
+            // Publish the initial state too: without a first signal, a frame
+            // started on a locked session never pauses the sidecar at all.
+            if was_locked || !was_off_console {
+                signal_sidecar(SIG_PAUSE);
+            }
             loop {
                 std::thread::sleep(Duration::from_secs(2));
                 let (locked, on_console) = screen_locked();

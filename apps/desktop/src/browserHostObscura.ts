@@ -304,9 +304,23 @@ function assign(threadId: string, tab: Tab): void {
 
 function threadTab(request: Json, threadId: string, args: Json): Tab {
   const explicit = typeof args.tabId === "string" ? args.tabId : undefined;
-  if (explicit) return requireTab(explicit);
+  if (explicit) {
+    const tab = requireTab(explicit);
+    for (const [owner, tabId] of assignedByThread) {
+      if (tabId === tab.tabId && owner !== threadId) {
+        throw toolError("BrowserTabScopeViolation", "tab is assigned to another conversation.");
+      }
+    }
+    assignedByThread.set(threadId, tab.tabId);
+    return tab;
+  }
   const assigned = assignedTab(threadId);
-  return requireTab(assigned ?? undefined);
+  if (!assigned) {
+    // No fallback to the globally active tab: an unassigned conversation
+    // must open its own page instead of inheriting someone else's.
+    throw toolError("BrowserTabScopeViolation", "No browser tab is bound to this thread.");
+  }
+  return requireTab(assigned);
 }
 
 function navOutput(tab: Tab, extra: Json = {}): Json {
@@ -340,6 +354,9 @@ async function toolTabs(threadId: string): Promise<Json> {
 
 async function toolOpen(threadId: string, args: Json): Promise<Json> {
   const url = typeof args.url === "string" ? args.url : "about:blank";
+  if (url !== "about:blank" && !/^https?:/u.test(url)) {
+    throw toolError("BrowserNavigationBlocked", "browser_open requires an http(s) url.");
+  }
   const reuse = args.reuse !== false;
   if (reuse) {
     const existing = assignedTab(threadId);
@@ -516,7 +533,7 @@ function toolError(code: string, message: string): Error {
 
 // ---------- browser_run via betterwright on an Obscura WebContents facade ----------
 
-async function toolRun(threadId: string, args: Json): Promise<Json> {
+async function toolRun(threadId: string, args: Json, socket?: Socket): Promise<Json> {
   const tab = threadTab({} as Json, threadId, args);
   const code = args.code;
   if (typeof code !== "string" || !code.trim()) {
@@ -537,6 +554,9 @@ async function toolRun(threadId: string, args: Json): Promise<Json> {
     adBlock: false,
     parkBackgroundPages: false,
   } as never);
+  // Closing the pipe (Stop/timeout) kills the snippet's browser so queued
+  // page actions cannot keep executing after the client went away.
+  const untrack = socket ? trackCancelable(socket, browser) : () => {};
   try {
     const result = await browser.run<unknown>(code, {
       timeout: timeoutMs / 1000,
@@ -553,19 +573,23 @@ async function toolRun(threadId: string, args: Json): Promise<Json> {
       serializedByteCount: Buffer.byteLength(serialized, "utf8"),
     };
   } finally {
+    untrack();
     await browser.close().catch(() => {});
   }
 }
 
 // ---------- executeTool dispatch ----------
 
-async function executeTool(request: {
-  sessionId: string;
-  provider: string;
-  threadId: string;
-  name: string;
-  args: Json;
-}): Promise<unknown> {
+async function executeTool(
+  request: {
+    sessionId: string;
+    provider: string;
+    threadId: string;
+    name: string;
+    args: Json;
+  },
+  socket?: Socket,
+): Promise<unknown> {
   const { threadId, name, args } = request;
   switch (name) {
     case "browser_status":
@@ -587,7 +611,7 @@ async function executeTool(request: {
     case "browser_logs":
       return toolLogs(threadId, args);
     case "browser_run":
-      return toolRun(threadId, args);
+      return toolRun(threadId, args, socket);
     case "browser_upload":
       throw toolError(
         "BrowserInputUnsupported",
@@ -610,6 +634,29 @@ interface PipeClient {
 }
 
 let server: Server | undefined;
+
+// Cancelable work bound to a pipe connection. The server transport cancels
+// a request by destroying its socket, so anything still running for that
+// socket must be torn down here — otherwise a stopped snippet keeps
+// clicking and submitting in the page.
+const inflightBySocket = new Map<Socket, Set<{ close(): Promise<unknown> }>>();
+
+function trackCancelable(socket: Socket, c: { close(): Promise<unknown> }): () => void {
+  let set = inflightBySocket.get(socket);
+  if (!set) {
+    set = new Set();
+    inflightBySocket.set(socket, set);
+  }
+  set.add(c);
+  return () => set!.delete(c);
+}
+
+function cancelSocketWork(socket: Socket): void {
+  const set = inflightBySocket.get(socket);
+  if (!set) return;
+  inflightBySocket.delete(socket);
+  for (const c of set) void c.close().catch(() => {});
+}
 
 function startPipe(capability: string): void {
   mkdirSync(join(SOCKET_PATH!, ".."), { recursive: true });
@@ -662,7 +709,8 @@ function startPipe(capability: string): void {
         }
       }
     });
-    socket.on("error", () => {});
+    socket.on("error", () => cancelSocketWork(socket));
+    socket.on("close", () => cancelSocketWork(socket));
   });
   server.listen(SOCKET_PATH, () => {
     console.error(`[obscura-host] listening on ${SOCKET_PATH}`);
@@ -717,13 +765,16 @@ function startPipe(capability: string): void {
         throw err;
       }
       client.threadId = threadId;
-      return executeTool({
-        sessionId: client.sessionId,
-        provider: String(req.provider ?? "unknown"),
-        threadId,
-        name,
-        args: (req.arguments ?? {}) as Json,
-      });
+      return executeTool(
+        {
+          sessionId: client.sessionId,
+          provider: String(req.provider ?? "unknown"),
+          threadId,
+          name,
+          args: (req.arguments ?? {}) as Json,
+        },
+        client.socket,
+      );
     }
     throw new Error(`No handler registered for method: ${method}`);
   }

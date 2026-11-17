@@ -256,9 +256,14 @@ async function main(): Promise<void> {
   // `appSnap.*` surface here instead of Electron ipcMain. One JSON request
   // per line, one JSON reply per line; manager events broadcast to every
   // connected shell the same way ipcMain.send pushes to the renderer.
+  // Typed arrays don't survive JSON.stringify: `bytes` must cross the relay
+  // as a plain array or the intake reconstructs an empty capture.
+  const wireReplacer = (_key: string, value: unknown) =>
+    value instanceof Uint8Array ? Array.from(value) : value;
+
   const appSnapClients = new Set<Socket>();
   const broadcastAppSnapEvent = (event: string, data: unknown) => {
-    const line = `${JSON.stringify({ event, data })}\n`;
+    const line = `${JSON.stringify({ event, data }, wireReplacer)}\n`;
     for (const client of appSnapClients) safeWrite(client, line);
   };
 
@@ -321,11 +326,30 @@ async function main(): Promise<void> {
   if (frameSocketPath) {
     await clearStaleCuaHostSocket(frameSocketPath);
     frameRelay = createServer((client) => {
-      frameClients.add(client);
+      // First line must be a capability hello; the socket carries raw
+      // capture frames, so unauthenticated clients never join the relay.
+      let authed = false;
+      const drop = () => client.destroy();
       client.once("close", () => frameClients.delete(client));
       client.once("error", () => frameClients.delete(client));
       createInterface({ input: client })
         .on("line", (line) => {
+          if (!authed) {
+            let hello: { capability?: unknown };
+            try {
+              hello = JSON.parse(line);
+            } catch {
+              drop();
+              return;
+            }
+            if (hello.capability !== capability) {
+              drop();
+              return;
+            }
+            authed = true;
+            frameClients.add(client);
+            return;
+          }
           if (line === "subscribe") frameSubscribers += 1;
           else if (line === "unsubscribe") frameSubscribers = Math.max(0, frameSubscribers - 1);
           else return;
@@ -435,21 +459,35 @@ async function main(): Promise<void> {
       }
     };
     appSnapRelay = createServer((client) => {
-      appSnapClients.add(client);
+      // First line must be a capability hello — anyone who can reach the
+      // socket path otherwise gets capture + control for free.
+      let authed = false;
+      const drop = () => client.destroy();
       client.once("close", () => appSnapClients.delete(client));
       client.once("error", () => appSnapClients.delete(client));
       createInterface({ input: client })
         .on("line", (line) => {
-          let request: { id?: unknown; method?: unknown; args?: unknown };
+          let request: { id?: unknown; method?: unknown; args?: unknown; capability?: unknown };
           try {
             request = JSON.parse(line);
           } catch {
             return;
           }
+          if (!authed) {
+            if (request.capability !== capability) {
+              drop();
+              return;
+            }
+            authed = true;
+            appSnapClients.add(client);
+            return;
+          }
           const id = typeof request.id === "number" ? request.id : 0;
           const method = typeof request.method === "string" ? request.method : "";
           void dispatch(method, request.args)
-            .then((result) => safeWrite(client, `${JSON.stringify({ id, result })}\n`))
+            .then((result) =>
+              safeWrite(client, `${JSON.stringify({ id, result }, wireReplacer)}\n`),
+            )
             .catch((error) =>
               safeWrite(
                 client,

@@ -267,9 +267,18 @@ fn build_view_on_gtk(surface: u32, window: u32, url: &str, width: u32, height: u
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
         .with_download_started_handler(|_, _| false)
         .with_permission_handler(|kind| match kind {
-            PermissionKind::Microphone | PermissionKind::Camera | PermissionKind::Geolocation => {
-                PermissionResponse::Deny
-            }
+            PermissionKind::Microphone
+            | PermissionKind::Camera
+            | PermissionKind::Geolocation
+            | PermissionKind::ClipboardRead
+            | PermissionKind::DisplayCapture
+            | PermissionKind::FileSystemAccess
+            | PermissionKind::AutomaticDownloads
+            | PermissionKind::WindowManagement
+            | PermissionKind::LocalFonts
+            | PermissionKind::Sensors
+            | PermissionKind::Midi
+            | PermissionKind::MediaKeySystemAccess => PermissionResponse::Deny,
             _ => PermissionResponse::Allow,
         })
         .build_as_child(&parent)

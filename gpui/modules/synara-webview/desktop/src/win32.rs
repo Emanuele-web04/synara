@@ -1,6 +1,10 @@
 //! The Windows web view: an in-process WebView2 composition controller whose
 //! root visual is the composition surface's own `IDCompositionVisual`.
 //!
+//! Scope: the frame is interactive (composition input, navigation hardening,
+//! resize) but, unlike the macOS `appkit` backend, installs no `desktopBridge`
+//! — AppSnap, updater and native IPC surfaces are macOS-only for now.
+//!
 //! The compositor places, clips and hides the surface's visual, so the native
 //! view reports `composited` and the WebView's visual tree rides along with no
 //! child window to track — `composited` is what this platform asks native
@@ -66,9 +70,13 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON,
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_SHIFT, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON1,
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON2, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
-    COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION,
-    COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
-    COREWEBVIEW2_PERMISSION_STATE_DENY,
+    COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ,
+    COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE, COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION,
+    COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+    COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES,
+    COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
+    COREWEBVIEW2_PERMISSION_KIND_OTHER_SENSORS, COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT,
+    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
 };
 use webview2_com::{
     CoreWebView2EnvironmentOptions, CreateCoreWebView2CompositionControllerCompletedHandler,
@@ -127,10 +135,12 @@ struct ViewHandle {
     /// Width<<32 | height last applied, so the per-frame prepaint skips
     /// `put_Bounds` when nothing changed.
     posted_bounds: Arc<AtomicU64>,
-    /// The element's origin in window logical pixels, written each frame by
-    /// the canvas prepaint so incoming platform input can be translated into
-    /// the web view's device-pixel space.
-    origin: Arc<Mutex<(f32, f32)>>,
+    /// The element's origin in window logical pixels plus the window scale,
+    /// written each frame by the canvas prepaint so incoming platform input
+    /// can be translated into the web view's device-pixel space. The scale
+    /// rides along because GPUI can change it when the window crosses
+    /// monitors with different display scaling.
+    origin: Arc<Mutex<(f32, f32, f32)>>,
 }
 
 /// The embedded web view. Everything lives on the UI thread; `element`
@@ -179,7 +189,7 @@ impl WindowsWebView {
             id,
             gone: Arc::new(AtomicBool::new(false)),
             posted_bounds: Arc::new(AtomicU64::new(0)),
-            origin: Arc::new(Mutex::new((0.0, 0.0))),
+            origin: Arc::new(Mutex::new((0.0, 0.0, 1.0))),
         };
         Self::attach_input(window, &shared)?;
         Ok(Self { shared })
@@ -206,10 +216,9 @@ impl WindowsWebView {
                 })
             })
             .ok_or_else(|| Error::msg("native composition surface not found"))?;
-        let scale = window.scale_factor();
         let handle = shared.clone();
         composition
-            .on_input(surface, move |input| handle.platform_input(input, scale))
+            .on_input(surface, move |input| handle.platform_input(input))
             .map_err(|e| Error::msg(format!("composition on_input: {e:#}")))
     }
 
@@ -315,8 +324,9 @@ impl ViewHandle {
     }
 
     /// A window-logical-pixel position in the web view's device-pixel space.
-    fn to_point(&self, position: gpui::Point<gpui::Pixels>, scale: f32) -> POINT {
-        let (ox, oy) = *self.origin.lock().unwrap();
+    /// Reads the latest origin and scale the prepaint published this frame.
+    fn to_point(&self, position: gpui::Point<gpui::Pixels>) -> POINT {
+        let (ox, oy, scale) = *self.origin.lock().unwrap();
         POINT {
             x: ((f32::from(position.x) - ox) * scale) as i32,
             y: ((f32::from(position.y) - oy) * scale) as i32,
@@ -327,7 +337,7 @@ impl ViewHandle {
     /// The events arrive in window logical pixels and are consumed — the
     /// compositor already kept them away from GPUI elements behind the
     /// surface, and nothing above the web view should see them either.
-    fn platform_input(&self, input: &PlatformInput, scale: f32) -> DispatchEventResult {
+    fn platform_input(&self, input: &PlatformInput) -> DispatchEventResult {
         match input {
             PlatformInput::MouseDown(event) => {
                 if let Some(kind) = down_kind(event.button) {
@@ -336,7 +346,7 @@ impl ViewHandle {
                         kind,
                         virtual_keys(event, Some(event.button)),
                         x_button_data(event.button),
-                        self.to_point(event.position, scale),
+                        self.to_point(event.position),
                     );
                 }
             }
@@ -346,7 +356,7 @@ impl ViewHandle {
                         kind,
                         virtual_keys(event, None),
                         x_button_data(event.button),
-                        self.to_point(event.position, scale),
+                        self.to_point(event.position),
                     );
                 }
             }
@@ -354,13 +364,13 @@ impl ViewHandle {
                 COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
                 virtual_keys(event, event.pressed_button),
                 0,
-                self.to_point(event.position, scale),
+                self.to_point(event.position),
             ),
             PlatformInput::MouseExited(event) => self.send_mouse(
                 COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
                 virtual_keys(event, event.pressed_button),
                 0,
-                self.to_point(event.position, scale),
+                self.to_point(event.position),
             ),
             PlatformInput::Scroll(event) => {
                 // The wheel delta rides in the data's high word, like
@@ -373,23 +383,26 @@ impl ViewHandle {
                         (f32::from(pixels.x) * 4.0, f32::from(pixels.y) * 4.0)
                     }
                 };
-                let (kind, data) = if delta_y.abs() >= delta_x.abs() {
-                    (
+                // Diagonal gestures carry both deltas: forward each nonzero
+                // axis as its own wheel event rather than keeping only the
+                // dominant one.
+                let keys = virtual_keys(event, None);
+                if delta_y != 0.0 {
+                    self.send_mouse(
                         COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL,
+                        keys,
                         (delta_y as i32 as u32) << 16,
-                    )
-                } else {
-                    (
+                        self.to_point(event.position),
+                    );
+                }
+                if delta_x != 0.0 {
+                    self.send_mouse(
                         COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL,
+                        keys,
                         (delta_x as i32 as u32) << 16,
-                    )
-                };
-                self.send_mouse(
-                    kind,
-                    virtual_keys(event, None),
-                    data,
-                    self.to_point(event.position, scale),
-                );
+                        self.to_point(event.position),
+                    );
+                }
             }
             _ => {
                 return DispatchEventResult {
@@ -420,8 +433,11 @@ impl ViewHandle {
                 canvas(
                     move |bounds, window, _cx| {
                         let scale = window.scale_factor();
-                        *view.origin.lock().unwrap() =
-                            (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                        *view.origin.lock().unwrap() = (
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            scale,
+                        );
                         view.report_bounds(
                             (f32::from(bounds.size.width) * scale) as i32,
                             (f32::from(bounds.size.height) * scale) as i32,
@@ -846,7 +862,14 @@ fn harden(webview: &ICoreWebView2) -> Result<()> {
                     let state = match kind {
                         COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
                         | COREWEBVIEW2_PERMISSION_KIND_CAMERA
-                        | COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION => {
+                        | COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION
+                        | COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ
+                        | COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE
+                        | COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS
+                        | COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS
+                        | COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT
+                        | COREWEBVIEW2_PERMISSION_KIND_OTHER_SENSORS
+                        | COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES => {
                             COREWEBVIEW2_PERMISSION_STATE_DENY
                         }
                         _ => COREWEBVIEW2_PERMISSION_STATE_ALLOW,
