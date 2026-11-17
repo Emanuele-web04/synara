@@ -1907,6 +1907,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "README.md"), "# locally edited\n");
         yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
         yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+        yield* Effect.promise(() => fs.symlink("notes.txt", path.join(tmp, "note-link")));
 
         const core = yield* GitCore;
         const expectedHead = yield* git(tmp, ["rev-parse", "HEAD"]);
@@ -1922,6 +1923,9 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe("# locally edited\n");
         expect(yield* readTextFile(path.join(wtPath, "notes.txt"))).toBe("untracked note\n");
         expect(yield* readTextFile(path.join(wtPath, ".env"))).toBe("LOCAL_ONLY=yes\n");
+        expect(yield* Effect.promise(() => fs.readlink(path.join(wtPath, "note-link")))).toBe(
+          "notes.txt",
+        );
 
         const proof = yield* core.recordWorktreeOwnership({
           path: wtPath,
@@ -1938,6 +1942,56 @@ it.layer(TestLayer)("git integration", (it) => {
           reason: "worktree state changed",
         });
         yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("retries a managed checkout copy without traversing a nested repository", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const hooks = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "ignored.txt\n");
+        yield* git(tmp, ["init", "nested"]);
+        yield* writeTextFile(path.join(tmp, "nested", "ignored.txt"), "nested private data\n");
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "source note\n");
+
+        // Create a real destination collision after Git checks out the worktree.
+        const hook = path.join(hooks, "post-checkout");
+        yield* writeTextFile(hook, "#!/bin/sh\nprintf 'hook note\\n' > notes.txt\n");
+        yield* Effect.promise(() => fs.chmod(hook, 0o755));
+        yield* git(tmp, ["config", "core.hooksPath", hooks]);
+
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-retry");
+        const input = {
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "synara/retry",
+          copyChangesFrom: tmp,
+        };
+        const failed = yield* Effect.result(core.createDetachedWorktree(input));
+        expect(failed._tag).toBe("Failure");
+        if (failed._tag === "Failure") {
+          expect(failed.failure.detail).toContain("could not copy notes.txt");
+        }
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* git(tmp, ["worktree", "list", "--porcelain"])).not.toContain("wt-retry");
+        expect(yield* git(tmp, ["branch", "--list", input.newBranch])).toBe("");
+
+        yield* Effect.promise(() => fs.unlink(hook));
+        yield* core.createDetachedWorktree(input);
+        expect(yield* readTextFile(path.join(wtPath, "notes.txt"))).toBe("source note\n");
+        expect(existsSync(path.join(wtPath, "nested"))).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "nested", "ignored.txt"))).toBe(
+          "nested private data\n",
+        );
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
       }),
     );
 
