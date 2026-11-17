@@ -249,21 +249,24 @@ it("cancels a scheduled capacity retry when switching to an ordinary chat", asyn
   const host = document.createElement("div");
   host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
   document.body.append(host);
-  const screen = await render(<ChatTranscriptPane {...props} />, { container: host });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let screen: Awaited<ReturnType<typeof render>> | undefined;
   try {
+    screen = await render(<ChatTranscriptPane {...props} />, { container: host });
     await expect
       .element(page.getByRole("button", { name: "Loading earlier messages…" }))
       .toBeDisabled();
+    expect(api.loadProjectImportHistory).toHaveBeenCalledOnce();
     await screen.rerender(
       <ChatTranscriptPane {...props} activeThreadId="ordinary" isProjectImport={false} />,
     );
-    const calls = api.loadProjectImportHistory.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(api.loadProjectImportHistory).toHaveBeenCalledTimes(calls);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(api.loadProjectImportHistory).toHaveBeenCalledOnce();
     expect(host.textContent).not.toContain("earlier messages");
     expect(page.getByRole("alert").query()).toBeNull();
   } finally {
-    await screen.unmount();
+    vi.useRealTimers();
+    await screen?.unmount();
     host.remove();
   }
 });

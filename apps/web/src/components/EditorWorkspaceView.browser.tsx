@@ -25,15 +25,15 @@ installEditorWorkspaceFixture();
 const source = () => page.getByRole("radio", { name: "Source", exact: true });
 const preview = () => page.getByRole("radio", { name: "Preview", exact: true });
 
-it.each(["light", "dark"] as const)(
-  "keeps editor surfaces glass-gated and view choices across navigation in %s",
-  async (theme) => {
-    const root = document.documentElement;
+it("gates editor glass in both themes and preserves the source choice across navigation", async () => {
+  const root = document.documentElement;
+  const view = makeView();
+  const screen = await render(view());
+  await expect.element(preview()).toHaveAttribute("aria-checked", "true");
+
+  for (const theme of ["light", "dark"] as const) {
     const originalPack = resolveThemePack(DEFAULT_THEME_STATE, theme);
     root.classList.toggle("dark", theme === "dark");
-    const view = makeView();
-    const screen = await render(view());
-    await expect.element(preview()).toHaveAttribute("aria-checked", "true");
     for (const scope of ["window", "sidebar", "none"] as const) {
       const build = buildThemeCssVariables(
         { ...originalPack, theme: { ...originalPack.theme, opaqueWindows: scope === "none" } },
@@ -51,32 +51,32 @@ it.each(["light", "dark"] as const)(
       const surfaces = [workspace, ...workspace.querySelectorAll("aside")];
       for (const surface of surfaces) {
         const clear = getComputedStyle(surface).backgroundColor === "rgba(0, 0, 0, 0)";
-        expect(clear, `${scope} ${surface.tagName}`).toBe(scope === "window");
+        expect(clear, `${theme} ${scope} ${surface.tagName}`).toBe(scope === "window");
       }
-      await source().click();
-      await screen.rerender(view("diff"));
-      await expect.element(source()).not.toBeInTheDocument();
-      await screen.rerender(view());
-      await expect.element(source()).toHaveAttribute("aria-checked", "true");
-      // Files / Diff / Search are published to the fixed rail while the view is mounted.
-      const railItem = (label: string) => {
-        const item = useEditorRailStore.getState().items?.find((entry) => entry.label === label);
-        if (!item) throw new Error(`Rail item ${label} is not published`);
-        return item;
-      };
-      const railLabels = () =>
-        useEditorRailStore.getState().items?.map((entry) => entry.label) ?? [];
-      await expect.poll(railLabels).toContain("Hide files sidebar");
-      railItem("Search files").onSelect();
-      await page.getByPlaceholder("Search files...").fill("settings");
-      await expect.element(page.getByPlaceholder("Search files...")).toHaveValue("settings");
-      await expect.poll(railLabels).toContain("Hide search sidebar");
-      railItem("Files").onSelect();
-      await expect.element(source()).toHaveAttribute("aria-checked", "true");
-      await expect.poll(railLabels).toContain("Hide files sidebar");
     }
-  },
-);
+  }
+
+  await source().click();
+  await screen.rerender(view("diff"));
+  await expect.element(source()).not.toBeInTheDocument();
+  await screen.rerender(view());
+  await expect.element(source()).toHaveAttribute("aria-checked", "true");
+  // Files / Diff / Search are published to the fixed rail while the view is mounted.
+  const railItem = (label: string) => {
+    const item = useEditorRailStore.getState().items?.find((entry) => entry.label === label);
+    if (!item) throw new Error(`Rail item ${label} is not published`);
+    return item;
+  };
+  const railLabels = () => useEditorRailStore.getState().items?.map((entry) => entry.label) ?? [];
+  await expect.poll(railLabels).toContain("Hide files sidebar");
+  railItem("Search files").onSelect();
+  await page.getByPlaceholder("Search files...").fill("settings");
+  await expect.element(page.getByPlaceholder("Search files...")).toHaveValue("settings");
+  await expect.poll(railLabels).toContain("Hide search sidebar");
+  railItem("Files").onSelect();
+  await expect.element(source()).toHaveAttribute("aria-checked", "true");
+  await expect.poll(railLabels).toContain("Hide files sidebar");
+});
 
 it("keeps independent choices for multiple files and workspaces", async () => {
   const view = makeView();

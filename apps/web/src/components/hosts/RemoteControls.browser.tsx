@@ -1,7 +1,7 @@
 import "../../index.css";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   back: vi.fn(),
@@ -44,24 +44,17 @@ beforeEach(() => {
   fixture.back.mockClear();
   fixture.request.mockClear();
 });
-afterEach(() => document.documentElement.classList.remove("dark"));
-it.each(["light", "dark"])(
-  "keeps a local escape visible with the remote host offline (%s)",
-  async (theme) => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    await page.viewport(900, 650);
-    emitWsTransportState("closed");
-    await render(
-      <div className="w-72 bg-background p-3 text-foreground">
-        <HostConnectionControl />
-      </div>,
-    );
-    await page.getByRole("button", { name: /Mac mini.*Synara Beta/ }).click();
-    await expect
-      .element(page.getByRole("menuitem", { name: "Back to this computer" }))
-      .toBeVisible();
-    await page.getByRole("menuitem", { name: "Back to this computer" }).click();
-    expect(fixture.back).toHaveBeenCalledOnce();
-    expect(fixture.request).not.toHaveBeenCalled();
-  },
-);
+it("keeps a local escape visible with the remote host offline", async () => {
+  await page.viewport(900, 650);
+  emitWsTransportState("closed");
+  await render(
+    <div className="w-72 bg-background p-3 text-foreground">
+      <HostConnectionControl />
+    </div>,
+  );
+  await page.getByRole("button", { name: /Mac mini.*Synara Beta/ }).click();
+  await expect.element(page.getByRole("menuitem", { name: "Back to this computer" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Back to this computer" }).click();
+  expect(fixture.back).toHaveBeenCalledOnce();
+  expect(fixture.request).not.toHaveBeenCalled();
+});

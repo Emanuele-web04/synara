@@ -639,22 +639,20 @@ const activityRows = (harness: ReturnType<typeof makeTestLayer>, kind: string) =
     (command) => command.type === "thread.activity.append" && command.activity.kind === kind,
   );
 
-it.effect("configures a hub and imports exactly one greeting", () => {
+it.effect("configures a hub once and replays the receipt without another greeting", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-group-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-        userDisplayName: "Dilip",
-        goal: "Ship hubs",
-        icon: "folder",
-        autoMemoryEnabled: true,
-      },
-      { kind: "user" },
-    );
+    const input = {
+      requestId: "req-group-1",
+      projectId: groupId,
+      coordinatorModelSelection: modelSelection,
+      userDisplayName: "Dilip",
+      goal: "Ship hubs",
+      icon: "folder",
+      autoMemoryEnabled: true,
+    } as const;
+    const overview = yield* service.configure(input, { kind: "user" });
     assert.equal(overview.configured, true);
     assert.equal(overview.config?.limits.maxConcurrentWorkers, 3);
     assert.equal(overview.config?.goal, "Ship hubs");
@@ -676,32 +674,9 @@ it.effect("configures a hub and imports exactly one greeting", () => {
         );
       }
     }
-  }).pipe(Effect.provide(harness.layer));
-});
 
-it.effect("replays the same requestId without importing another greeting", () => {
-  const harness = makeTestLayer();
-  return Effect.gen(function* () {
-    const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-group-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-        userDisplayName: "Dilip",
-      },
-      { kind: "user" },
-    );
     harness.dispatched.length = 0;
-    yield* service.configure(
-      {
-        requestId: "req-group-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-        userDisplayName: "Dilip",
-      },
-      { kind: "user" },
-    );
+    yield* service.configure(input, { kind: "user" });
     assert.equal(
       harness.dispatched.filter((command) => command.type === "thread.messages.import").length,
       0,
@@ -762,36 +737,24 @@ it.effect("retries first setup after a crash with one thread and one greeting", 
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("forbids configuring an ordinary project", () => {
-  const harness = makeTestLayer();
-  return Effect.gen(function* () {
-    const service = yield* ProjectAgentService;
-    const result = yield* Effect.exit(
-      configureTestGroup(service, "req-ordinary-1", { projectId: ordinaryId }),
-    );
-    assert.equal(result._tag, "Failure");
-  }).pipe(Effect.provide(harness.layer));
-});
-
-it.effect("rejects a hub row outside the Hubs root", () => {
-  const harness = makeTestLayer();
-  return Effect.gen(function* () {
-    const service = yield* ProjectAgentService;
-    const result = yield* Effect.exit(
-      configureTestGroup(service, "req-outside", { projectId: outsideGroupId }),
-    );
-    assert.equal(result._tag, "Failure");
-  }).pipe(Effect.provide(harness.layer));
-});
-
-it.effect("configures a legacy studio container", () => {
-  const harness = makeTestLayer();
-  return Effect.gen(function* () {
-    const service = yield* ProjectAgentService;
-    const overview = yield* configureTestGroup(service, "req-studio-1", { projectId: studioId });
-    assert.equal(overview.configured, true);
-  }).pipe(Effect.provide(harness.layer));
-});
+it.effect(
+  "configures legacy studio containers and rejects ordinary or out-of-root projects",
+  () => {
+    const harness = makeTestLayer();
+    return Effect.gen(function* () {
+      const service = yield* ProjectAgentService;
+      for (const [requestId, projectId] of [
+        ["req-ordinary-1", ordinaryId],
+        ["req-outside", outsideGroupId],
+      ] as const) {
+        const result = yield* Effect.exit(configureTestGroup(service, requestId, { projectId }));
+        assert.equal(result._tag, "Failure");
+      }
+      const overview = yield* configureTestGroup(service, "req-studio-1", { projectId: studioId });
+      assert.equal(overview.configured, true);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 it.effect("forbids leftover ordinary-project coordinator reads and writes", () => {
   const harness = makeTestLayer();

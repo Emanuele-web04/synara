@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import type { TimelineEntry } from "../../session-logic";
 
 const VIEWPORT_HEIGHT_PX = 480;
@@ -132,7 +133,7 @@ function RowOverlapTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   return (
     <div style={{ height: VIEWPORT_HEIGHT_PX, width: "100%" }}>
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps()}
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:29.000Z"
@@ -140,19 +141,6 @@ function RowOverlapTimeline({ handleRef }: { handleRef: { current: HarnessHandle
         tailAnchorMessageId={tailAnchorMessageId}
         followLiveOutput={followLiveOutput}
         timelineEntries={entries}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />
     </div>
   );

@@ -10,6 +10,7 @@ import { render } from "vitest-browser-react";
 
 import type { TimelineEntry } from "../../session-logic";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 
 const ASSISTANT_MESSAGE_ID = MessageId.makeUnsafe("changed-files-assistant");
 const VISIBLE_FILE_PATHS = Array.from(
@@ -50,10 +51,7 @@ function ChangedFilesTimeline({
 
   return (
     <MessagesTimeline
-      hasMessages
-      isWorking={false}
-      activeTurnInProgress={false}
-      activeTurnStartedAt={null}
+      {...makeTimelineBaseProps()}
       timelineEntries={TIMELINE_ENTRIES}
       turnDiffSummaryByAssistantMessageId={
         new Map([
@@ -68,18 +66,6 @@ function ChangedFilesTimeline({
           ],
         ])
       }
-      nowIso="2026-03-17T19:12:30.000Z"
-      expandedWorkGroups={{}}
-      onToggleWorkGroup={() => {}}
-      onOpenTurnDiff={() => {}}
-      revertTurnCountByUserMessageId={new Map()}
-      onRevertUserMessage={() => {}}
-      isRevertingCheckpoint={false}
-      onImageExpand={() => {}}
-      markdownCwd={undefined}
-      resolvedTheme="dark"
-      timestampFormat="locale"
-      workspaceRoot={undefined}
     />
   );
 }

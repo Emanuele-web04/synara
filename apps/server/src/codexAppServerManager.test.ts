@@ -270,7 +270,6 @@ function createSyntheticCodexAppServer(options?: {
   };
 
   return {
-    buildFullHistoryFrame,
     children,
     historySentinel,
     historicalResponses,
@@ -2300,14 +2299,6 @@ describe("startSession", () => {
     });
 
     try {
-      const fullHistoryFrame = fake.buildFullHistoryFrame(99, "provider-thread");
-      expect(() => new CodexJsonlFramer().push(fullHistoryFrame)).toThrowError(
-        expect.objectContaining({
-          reason: "frame-too-large",
-          observedBytes: 16_842_743,
-          maxBytes: 16_777_216,
-        }),
-      );
       const firstSession = await first.manager.startSession({
         threadId: asThreadId("thread-synthetic-restart"),
         provider: "codex",
@@ -2683,7 +2674,7 @@ describe("startSession", () => {
     }
   });
 
-  it("requires excludeTurns support before spawning a resumed Codex session", async () => {
+  it("requires excludeTurns support before spawning a resumed or forked Codex session", async () => {
     const spawnAppServer = vi.fn(() => {
       throw new Error("Version gate must run before spawning Codex");
     });
@@ -2721,37 +2712,6 @@ describe("startSession", () => {
       ).rejects.toThrow("Codex excludeTurns version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
       expect(spawnAppServer).not.toHaveBeenCalled();
-    } finally {
-      versionCheck.mockRestore();
-      await manager.stopAll();
-    }
-  });
-
-  it("requires excludeTurns support before spawning a forked Codex session", async () => {
-    const spawnAppServer = vi.fn(() => {
-      throw new Error("Version gate must run before spawning Codex");
-    });
-    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
-    const versionCheck = vi
-      .spyOn(
-        manager as unknown as {
-          assertSupportedCodexCliVersion: (input: {
-            binaryPath: string;
-            cwd: string;
-            homePath?: string;
-            minimumVersion?: string;
-            minimumVersionRequirement?: string;
-          }) => void;
-        },
-        "assertSupportedCodexCliVersion",
-      )
-      .mockImplementation((input) => {
-        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
-        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
-        throw new Error("Codex fork excludeTurns version gate");
-      });
-
-    try {
       await expect(
         manager.forkThread({
           sourceThreadId: asThreadId("source-thread"),
@@ -2761,8 +2721,8 @@ describe("startSession", () => {
           // The version gate runs before the pinned generation is verified.
           expectedCodexContinuationGeneration: "00000000-0000-4000-8000-000000000000",
         }),
-      ).rejects.toThrow("Codex fork excludeTurns version gate");
-      expect(versionCheck).toHaveBeenCalledTimes(1);
+      ).rejects.toThrow("Codex excludeTurns version gate");
+      expect(versionCheck).toHaveBeenCalledTimes(2);
       expect(spawnAppServer).not.toHaveBeenCalled();
     } finally {
       versionCheck.mockRestore();

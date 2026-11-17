@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import type { deriveTimelineEntries } from "../../session-logic";
 import type {
   WorktreeSetupResolutionAction,
@@ -62,25 +63,10 @@ function WorktreeSetupTimeline() {
       </button>
       <div style={{ height: 420 }}>
         <MessagesTimeline
-          hasMessages
+          {...makeTimelineBaseProps()}
           isWorking
-          activeTurnInProgress={false}
-          activeTurnStartedAt={null}
           worktreeSetup={worktreeSetup}
           timelineEntries={[userEntry("user-message", "Start in a worktree.")]}
-          turnDiffSummaryByAssistantMessageId={new Map()}
-          nowIso="2026-03-17T19:12:30.000Z"
-          expandedWorkGroups={{}}
-          onToggleWorkGroup={() => {}}
-          onOpenTurnDiff={() => {}}
-          revertTurnCountByUserMessageId={new Map()}
-          onRevertUserMessage={() => {}}
-          isRevertingCheckpoint={false}
-          onImageExpand={() => {}}
-          markdownCwd={undefined}
-          resolvedTheme="dark"
-          timestampFormat="locale"
-          workspaceRoot={undefined}
         />
       </div>
     </div>
@@ -91,25 +77,10 @@ function FailedSetupWithoutMessagesTimeline() {
   return (
     <div style={{ height: 420 }}>
       <MessagesTimeline
+        {...makeTimelineBaseProps()}
         hasMessages={false}
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
         worktreeSetup={setupSnapshot(["error", "pending"])}
         timelineEntries={[]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />
     </div>
   );
@@ -138,27 +109,12 @@ function ResolvableSetupTimeline({
   return (
     <div style={{ height: 420 }}>
       <MessagesTimeline
-        hasMessages
+        {...makeTimelineBaseProps()}
         isWorking
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
         worktreeSetup={snapshot}
         worktreeSetupPendingAction={pendingAction ?? null}
         onResolveWorktreeSetup={onResolve}
         timelineEntries={[userEntry("user-message", "Start in a worktree.")]}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />
     </div>
   );

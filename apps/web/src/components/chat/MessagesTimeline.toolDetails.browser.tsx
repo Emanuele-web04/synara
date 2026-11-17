@@ -12,15 +12,15 @@ import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
 import { formatTimestamp } from "../../timestampFormat";
 import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
 function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
     <MessagesTimeline
-      hasMessages
+      {...makeTimelineBaseProps()}
       isWorking={entries !== undefined}
       activeTurnInProgress={entries !== undefined}
-      activeTurnStartedAt={null}
       timelineEntries={
         entries ?? [
           {
@@ -47,19 +47,6 @@ function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
           },
         ]
       }
-      turnDiffSummaryByAssistantMessageId={new Map()}
-      nowIso="2026-03-17T19:12:30.000Z"
-      expandedWorkGroups={{}}
-      onToggleWorkGroup={() => {}}
-      onOpenTurnDiff={() => {}}
-      revertTurnCountByUserMessageId={new Map()}
-      onRevertUserMessage={() => {}}
-      isRevertingCheckpoint={false}
-      onImageExpand={() => {}}
-      markdownCwd={undefined}
-      resolvedTheme="dark"
-      timestampFormat="locale"
-      workspaceRoot={undefined}
     />
   );
 }

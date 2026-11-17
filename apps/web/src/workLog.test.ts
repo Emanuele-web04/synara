@@ -22,6 +22,18 @@ const diagnostic = (
   target = "codex_skills::interface",
 ) => JSON.stringify({ timestamp: "2026-10-15T20:05:38.509122Z", level, fields, target });
 
+const taskListActivity = (
+  fields: Pick<Parameters<typeof makeActivity>[0], "id" | "createdAt" | "sequence" | "turnId">,
+  tasks: Array<{ task: string; status: string }>,
+) =>
+  makeActivity({
+    ...fields,
+    kind: "turn.tasks.updated",
+    summary: "Tasks updated",
+    tone: "info",
+    payload: { tasks },
+  });
+
 describe("deriveSubagentTaskEnds", () => {
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
     const firstEnd = makeActivity({
@@ -1602,27 +1614,14 @@ describe("deriveWorkLogEntries", () => {
   );
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
-    const taskListActivity = (
-      id: string,
-      createdAt: string,
-      sequence: number,
-      tasks: Array<{ task: string; status: string }>,
-    ) =>
-      makeActivity({
-        id,
-        createdAt,
-        sequence,
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: { tasks },
-      });
     const activities: OrchestrationThreadActivity[] = [
-      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", 1, [
-        { task: "Implement inline editing", status: "inProgress" },
-        { task: "Run verification", status: "pending" },
-      ]),
+      taskListActivity(
+        { id: "tasks-1", createdAt: "2026-02-23T00:00:01.000Z", sequence: 1, turnId: "turn-1" },
+        [
+          { task: "Implement inline editing", status: "inProgress" },
+          { task: "Run verification", status: "pending" },
+        ],
+      ),
       makeActivity({
         id: "tool-between",
         createdAt: "2026-02-23T00:00:02.000Z",
@@ -1631,14 +1630,20 @@ describe("deriveWorkLogEntries", () => {
         summary: "Tool call",
         turnId: "turn-1",
       }),
-      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", 3, [
-        { task: "Implement inline editing", status: "completed" },
-        { task: "Run verification", status: "inProgress" },
-      ]),
-      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", 4, [
-        { task: "Implement inline editing", status: "completed" },
-        { task: "Run verification", status: "completed" },
-      ]),
+      taskListActivity(
+        { id: "tasks-2", createdAt: "2026-02-23T00:00:03.000Z", sequence: 3, turnId: "turn-1" },
+        [
+          { task: "Implement inline editing", status: "completed" },
+          { task: "Run verification", status: "inProgress" },
+        ],
+      ),
+      taskListActivity(
+        { id: "tasks-3", createdAt: "2026-02-23T00:00:04.000Z", sequence: 4, turnId: "turn-1" },
+        [
+          { task: "Implement inline editing", status: "completed" },
+          { task: "Run verification", status: "completed" },
+        ],
+      ),
     ];
 
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
@@ -1654,25 +1659,15 @@ describe("deriveWorkLogEntries", () => {
   });
 
   it("keeps separate task-list rows for separate turns", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tasks-turn-1",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
-      }),
-      makeActivity({
-        id: "tasks-turn-2",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        turnId: "turn-2",
-        payload: { tasks: [{ task: "Second turn work", status: "inProgress" }] },
-      }),
+    const activities = [
+      taskListActivity(
+        { id: "tasks-turn-1", createdAt: "2026-02-23T00:00:01.000Z", turnId: "turn-1" },
+        [{ task: "First turn work", status: "completed" }],
+      ),
+      taskListActivity(
+        { id: "tasks-turn-2", createdAt: "2026-02-23T00:00:02.000Z", turnId: "turn-2" },
+        [{ task: "Second turn work", status: "inProgress" }],
+      ),
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined, {
@@ -1682,23 +1677,13 @@ describe("deriveWorkLogEntries", () => {
   });
 
   it("keeps turnless task-list snapshots independent across unknown turn boundaries", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tasks-turnless-1",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
-      }),
-      makeActivity({
-        id: "tasks-turnless-2",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        payload: { tasks: [{ task: "Later turn work", status: "inProgress" }] },
-      }),
+    const activities = [
+      taskListActivity({ id: "tasks-turnless-1", createdAt: "2026-02-23T00:00:01.000Z" }, [
+        { task: "First turn work", status: "completed" },
+      ]),
+      taskListActivity({ id: "tasks-turnless-2", createdAt: "2026-02-23T00:00:02.000Z" }, [
+        { task: "Later turn work", status: "inProgress" },
+      ]),
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
@@ -1707,16 +1692,7 @@ describe("deriveWorkLogEntries", () => {
 
   it("keeps the generic label for a task-list snapshot without readable tasks", () => {
     const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "tasks-empty",
-          kind: "turn.tasks.updated",
-          summary: "Tasks updated",
-          tone: "info",
-          turnId: "turn-1",
-          payload: { tasks: [] },
-        }),
-      ],
+      [taskListActivity({ id: "tasks-empty", turnId: "turn-1" }, [])],
       TurnId.makeUnsafe("turn-1"),
     );
 
@@ -1724,30 +1700,18 @@ describe("deriveWorkLogEntries", () => {
   });
 
   it("keeps the progressed label when a later snapshot clears the task list", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tasks-progressed",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: {
-          tasks: [
-            { task: "Implement inline editing", status: "completed" },
-            { task: "Run verification", status: "inProgress" },
-          ],
-        },
-      }),
-      makeActivity({
-        id: "tasks-cleared",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "turn.tasks.updated",
-        summary: "Tasks updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: { tasks: [] },
-      }),
+    const activities = [
+      taskListActivity(
+        { id: "tasks-progressed", createdAt: "2026-02-23T00:00:01.000Z", turnId: "turn-1" },
+        [
+          { task: "Implement inline editing", status: "completed" },
+          { task: "Run verification", status: "inProgress" },
+        ],
+      ),
+      taskListActivity(
+        { id: "tasks-cleared", createdAt: "2026-02-23T00:00:02.000Z", turnId: "turn-1" },
+        [],
+      ),
     ];
 
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));

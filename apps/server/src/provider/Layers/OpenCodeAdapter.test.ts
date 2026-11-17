@@ -844,11 +844,7 @@ describe("OpenCode host policy delivery", () => {
     const resumeCursor = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const first = yield* adapter.sendTurn({
           threadId,
           input: "before teardown",
@@ -4631,11 +4627,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-stalled-prompt-async"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-stalled-prompt-async"));
 
         const turnReturned = yield* adapter
           .sendTurn({
@@ -4692,11 +4684,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-rejected-prompt-async"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-rejected-prompt-async"));
 
         const sendExit = yield* Effect.exit(
           adapter.sendTurn({
@@ -4755,21 +4743,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-session-idle"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-session-idle"));
 
-        const turn = yield* adapter.sendTurn({
-          threadId: asThreadId("thread-session-idle"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        const turn = yield* sendTestTurn(adapter, asThreadId("thread-session-idle"), "hello");
 
         eventQueue.push({
           type: "message.updated",
@@ -4855,12 +4831,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const threadId = asThreadId("thread-early-idle-final-assistant");
 
         yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "hello",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "hello");
 
         messageSnapshot = [
           {
@@ -4980,12 +4951,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const threadId = asThreadId("thread-final-before-parts");
 
         yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "hello",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "hello");
 
         eventQueue.push({
           type: "message.updated",
@@ -5322,12 +5288,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const threadId = asThreadId("thread-stale-recovery");
 
         yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        const firstTurn = yield* adapter.sendTurn({
-          threadId,
-          input: "first",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        const firstTurn = yield* sendTestTurn(adapter, threadId, "first");
         eventQueue.push({
           type: "session.idle",
           properties: { sessionID: "opencode-session-1" },
@@ -5347,12 +5308,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
         yield* Effect.promise(() => recoveryStarted);
         yield* adapter.interruptTurn(threadId, firstTurn.turnId);
-        const secondTurn = yield* adapter.sendTurn({
-          threadId,
-          input: "second",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        const secondTurn = yield* sendTestTurn(adapter, threadId, "second");
 
         yield* Effect.sync(() => {
           resolveRecovery?.({
@@ -5506,17 +5462,8 @@ describe("OpenCode background subagent tasks", () => {
           Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 3),
         ).pipe(Effect.forkChild);
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "spawn a background agent");
 
         const part = backgroundTaskToolPart("child-session-1");
         pushOpenCodePart(eventQueue, part);
@@ -5588,17 +5535,8 @@ describe("OpenCode background subagent tasks", () => {
           ),
         ).pipe(Effect.forkChild);
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "spawn a background agent");
 
         pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
 
@@ -5669,12 +5607,7 @@ describe("OpenCode background subagent tasks", () => {
           ),
         ).pipe(Effect.forkChild);
         yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn and resume a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "spawn and resume a background agent");
         const part = backgroundTaskToolPart("child-session-1");
         pushOpenCodePart(eventQueue, part);
         eventQueue.push({ type: "session.idle", properties: { sessionID: "child-session-1" } });
@@ -5720,12 +5653,7 @@ describe("OpenCode background subagent tasks", () => {
           ),
         ).pipe(Effect.forkChild);
         yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "spawn a background agent");
         const part = backgroundTaskToolPart("child-session-1");
         pushOpenCodePart(eventQueue, part);
         // OpenCode marks the child idle before task.ts inspects its final
@@ -5775,12 +5703,7 @@ describe("OpenCode background subagent tasks", () => {
           runtimeMode: "full-access" as const,
         };
         yield* adapter.startSession(input);
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "spawn a background agent");
         pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
         yield* Fiber.join(startedFiber);
 
@@ -5809,17 +5732,8 @@ describe("OpenCode background subagent tasks", () => {
           Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 2),
         ).pipe(Effect.forkChild);
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "spawn a background agent");
         pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
 
         const started = Array.from(yield* Fiber.join(startedFiber));

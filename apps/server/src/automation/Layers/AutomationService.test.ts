@@ -4716,36 +4716,25 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("rejects retry policies until retry attempts are modeled", () =>
+  it.effect("rejects retry policies when creating or updating an automation", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
+      const retryPolicy = { type: "fixed", maxAttempts: 3, delaySeconds: 30 } as const;
 
-      const error = yield* service
+      const createError = yield* service
         .create({
           ...createInput("local"),
-          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
+          retryPolicy,
         })
         .pipe(Effect.flip);
 
-      assert.match(error.message, /retry policies are not supported/);
-    }),
-  );
+      assert.match(createError.message, /retry policies are not supported/);
 
-  it.effect("rejects retry policies on update until retry attempts are modeled", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
       const created = yield* service.create(createInput("local"));
+      const updateError = yield* service.update({ id: created.id, retryPolicy }).pipe(Effect.flip);
 
-      const error = yield* service
-        .update({
-          id: created.id,
-          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
-        })
-        .pipe(Effect.flip);
-
-      assert.match(error.message, /retry policies are not supported/);
+      assert.match(updateError.message, /retry policies are not supported/);
     }),
   );
 

@@ -236,6 +236,9 @@ function fixture(options?: {
   });
   return {
     backend,
+    readWindowTree: () => backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    captureWindowScreenshot: () =>
+      backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
     setElements: (value: Record<string, unknown>[]) => {
       elements = value;
     },
@@ -377,8 +380,7 @@ async function observeMessageField(f: ReturnType<typeof fixture>) {
       element_token: "message-token",
     },
   ]);
-  const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-    .children[0]!;
+  const node = (await f.readWindowTree()).root!.children[0]!;
   return {
     target: { label: "Message", windowId: "cua:10:20" },
     node,
@@ -389,9 +391,7 @@ async function observeMessageField(f: ReturnType<typeof fixture>) {
 describe("Cua native boundary", () => {
   it("requests AX keyboard focus only for explicit observations, not input revalidation", async () => {
     const f = fixture({ nativeRevision: 37 });
-    await withModelDesktopObservation(() =>
-      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
-    );
+    await withModelDesktopObservation(() => f.readWindowTree());
     expect(f.calls.find((call) => call.name === "list_windows")?.args).toEqual({
       include_keyboard_focus: true,
     });
@@ -644,7 +644,7 @@ describe("Cua native boundary", () => {
         actions: ["AXPress"],
       },
     ]);
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     f.setVisible(false);
     await f.backend.performAction(
@@ -707,7 +707,7 @@ describe("Cua native boundary", () => {
     "maps public %s scrolling to Core Graphics wheel signs",
     async (direction, dx, dy, nativeX, nativeY) => {
       const f = fixture();
-      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      await f.captureWindowScreenshot();
       const result = await f.backend.scroll({ x: -275, y: 30 }, dx, dy, "cua:10:20");
       expect(result.scrollDelta).toEqual({ deltaX: dx, deltaY: dy });
       expect(f.calls.find((call) => call.name === "scroll")?.args).toMatchObject({
@@ -735,10 +735,7 @@ describe("Cua native boundary", () => {
         element_token: "canvas-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Equals" },
@@ -786,10 +783,7 @@ describe("Cua native boundary", () => {
         actions: ["AXPress", "AXShowMenu", "AXPick", "AXConfirm", "AXCancel"],
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const openNode = state.root!.children[0]!;
     const menuNode = state.root!.children[1]!;
     const openTarget = {
@@ -851,10 +845,7 @@ describe("Cua native boundary", () => {
         element_token: "passive-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const target = {
       target: { label: "Plain" },
       node: state.root!.children[0]!,
@@ -900,10 +891,7 @@ describe("Cua native boundary", () => {
         element_token: "fresh-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Display" },
@@ -932,10 +920,7 @@ describe("Cua native boundary", () => {
         element_token: "fresh-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Display" },
@@ -1063,10 +1048,7 @@ describe("Cua native boundary", () => {
           value: "seed",
         },
       ]);
-      const state = await f.backend.getState({
-        windowId: "cua:10:20",
-        includeTree: true,
-      });
+      const state = await f.readWindowTree();
       const node = state.root!.children[0]!;
       const target = {
         target: { label: "Message", windowId: "cua:10:20" },
@@ -1110,7 +1092,7 @@ describe("Cua native boundary", () => {
       value: "seed",
     };
     f.setElements([field]);
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     f.setElements([field, { ...field, element_token: "two", element_index: 3 }]);
     await expect(
@@ -1135,10 +1117,7 @@ describe("Cua native boundary", () => {
         value: "seed",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Message", windowId: "cua:10:20" },
@@ -1182,8 +1161,7 @@ describe("Cua native boundary", () => {
           value: "seed",
         },
       ]);
-      const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-        .children[0]!;
+      const node = (await f.readWindowTree()).root!.children[0]!;
       const target = {
         target: { label: "Message", windowId: "cua:10:20" },
         node,
@@ -1251,10 +1229,7 @@ describe("Cua native boundary", () => {
         element_token: "notes-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const firstNode = state.root!.children[0]!;
     const secondNode = state.root!.children[1]!;
     const firstTarget = {
@@ -1364,8 +1339,7 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const firstNode = (await f.readWindowTree()).root!.children[0]!;
     f.captureWindow(21);
     const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
       .root!.children[0]!;
@@ -1543,10 +1517,7 @@ describe("Cua native boundary", () => {
         element_token: "fresh-token",
       },
     ]);
-    const observed = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const observed = await f.readWindowTree();
     expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
 
     const resolved = await f.backend.getState({
@@ -1559,7 +1530,7 @@ describe("Cua native boundary", () => {
 
     // The freshness requirement stands on the agent-facing path: a second
     // observation without the reuse flag still pays for the walk.
-    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    await f.readWindowTree();
     expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(2);
   });
 
@@ -1573,7 +1544,7 @@ describe("Cua native boundary", () => {
         element_token: "fresh-token",
       },
     ]);
-    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    await f.readWindowTree();
     expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
 
     // A window the cache never saw cannot borrow another window's tree: the
@@ -1785,7 +1756,7 @@ describe("Cua native boundary", () => {
     expect(f.backend.health().captureAvailable).toBe(false);
     await f.backend.provision();
     expect(f.backend.health().captureAvailable).toBe(false);
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     expect(f.backend.health()).toMatchObject({
       status: "connected",
       captureAvailable: true,
@@ -1839,17 +1810,14 @@ describe("Cua native boundary", () => {
   it("marks scoped model state reads and never marks a pane still as a model observation", async () => {
     const f = fixture();
     try {
-      await f.backend.captureScreenshot({
-        kind: "window",
-        windowId: "cua:10:20",
-      });
+      await f.captureWindowScreenshot();
       expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(
         false,
       );
       await f.backend.focusWindow("cua:10:20");
       f.calls.length = 0;
       await withModelDesktopObservation(async () => {
-        await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+        await f.readWindowTree();
         await f.backend.getState({ includeScreenshot: true });
         await f.backend.attachStream(() => undefined);
       });
@@ -2048,10 +2016,7 @@ describe("Cua native boundary", () => {
   });
   it("rejects a drag if its prepared window moves before input admission", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.move();
     await expect(
       withDesktopDeliveryMode("foreground", () =>
@@ -2067,10 +2032,7 @@ describe("Cua native boundary", () => {
     "binds %s drag pixels to the exact observed native bounds as window-local points",
     async (mode) => {
       const f = fixture();
-      await f.backend.captureScreenshot({
-        kind: "window",
-        windowId: "cua:10:20",
-      });
+      await f.captureWindowScreenshot();
       const drag = () => f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
       await (mode === "foreground" ? withDesktopDeliveryMode("foreground", drag) : drag());
       expect(f.calls.filter((call) => call.name === "drag")).toEqual([
@@ -2093,10 +2055,7 @@ describe("Cua native boundary", () => {
   );
   it("preserves capture identity and rejects a different native window", async () => {
     const f = fixture();
-    const image = await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    const image = await f.captureWindowScreenshot();
     expect(Schema.decodeUnknownSync(ComputerScreenshot)(image)).toMatchObject({
       windowId: "cua:10:20",
     });
@@ -2107,20 +2066,13 @@ describe("Cua native boundary", () => {
       }),
     ).toMatchObject({ screenshot: { windowId: "cua:10:20" } });
     f.captureWindow(21);
-    await expect(
-      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
-    ).rejects.toMatchObject({ effect: "not-dispatched" });
-    await expect(
-      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
-    ).rejects.toMatchObject({ effect: "not-dispatched" });
+    await expect(f.captureWindowScreenshot()).rejects.toMatchObject({ effect: "not-dispatched" });
+    await expect(f.readWindowTree()).rejects.toMatchObject({ effect: "not-dispatched" });
     expect(f.calls.some((call) => call.name === "click")).toBe(false);
   });
   it("clears targeting after desktop pause and requires a fresh observation", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.pauseDesktop(true);
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       effect: "not-dispatched",
@@ -2132,18 +2084,12 @@ describe("Cua native boundary", () => {
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       code: "stale_geometry",
     });
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
   });
   it("dispatches logical coordinate input without a preparation PNG", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.calls.length = 0;
     await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
     await f.backend.scroll({ x: -275, y: 30 }, 0, 120, "cua:10:20");
@@ -2163,7 +2109,7 @@ describe("Cua native boundary", () => {
   it("permits advertised AXPress for plain clicks and preserves physical click gestures", async () => {
     const f = fixture();
     const point = { x: -275, y: 30 };
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     await f.backend.click(point, "cua:10:20");
     await f.backend.click(point, "cua:10:20", ["shift"]);
     await f.backend.doubleClick(point, "cua:10:20");
@@ -2182,7 +2128,7 @@ describe("Cua native boundary", () => {
     "keeps plain clicks synthetic for older or unknown native revision %s",
     async (nativeRevision) => {
       const f = fixture({ nativeRevision });
-      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      await f.captureWindowScreenshot();
       await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
       expect(f.calls.find((call) => call.name === "click")?.args).toMatchObject({
         force_synthetic: true,
@@ -2191,7 +2137,7 @@ describe("Cua native boundary", () => {
   );
   it("carries safe actuator diagnostics for uncertain clicks without replaying", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     f.onTool("click", () => ({
       isError: true,
       structuredContent: {
@@ -2222,7 +2168,7 @@ describe("Cua native boundary", () => {
   });
   it("preserves an explicit not-dispatched error and retains usable observation geometry", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     f.onTool("click", () => ({
       isError: true,
       structuredContent: {
@@ -3185,10 +3131,7 @@ describe("Cua native boundary", () => {
   });
   it("converts pixel deltas to one bounded wheel operation", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     const result = await f.backend.scroll({ x: -275, y: 30 }, 0, 250, "cua:10:20");
     expect(result.scrollDelta).toEqual({ deltaX: 0, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
@@ -3200,10 +3143,7 @@ describe("Cua native boundary", () => {
   });
   it("carries both axes and modifiers in one wheel gesture", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     const result = await f.backend.scroll({ x: -275, y: 30 }, -140, 250, "cua:10:20", [
       "meta",
       "shift",
@@ -3219,10 +3159,7 @@ describe("Cua native boundary", () => {
   });
   it("refuses a single axis beyond the 50-notch bound before dispatch", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     await expect(
       f.backend.scroll({ x: -275, y: 30 }, 0, 61 * 120, "cua:10:20"),
     ).rejects.toMatchObject({
@@ -3247,10 +3184,7 @@ describe("Cua native boundary", () => {
         element_token: "scroll-token",
       },
     ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Content", windowId: "cua:10:20" },
@@ -3259,10 +3193,7 @@ describe("Cua native boundary", () => {
     };
     // The point path is geometry-gated: a wheel scroll at a point still needs
     // a fresh observation of the window it lands in.
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     await f.backend.scroll(target.point, 0, 250, "cua:10:20", undefined, target);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
       element_token: "scroll-token",
@@ -3309,10 +3240,7 @@ describe("Cua native boundary", () => {
   it("maps negative desktop coordinates using the captured geometry and scale", async () => {
     const f = fixture();
     await f.backend.availability();
-    const image = await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    const image = await f.captureWindowScreenshot();
     expect(image).toMatchObject({
       width: 400,
       height: 200,
@@ -3330,10 +3258,7 @@ describe("Cua native boundary", () => {
   it("refuses a moved or closed window without injecting", async () => {
     const f = fixture();
     await f.backend.availability();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.move();
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       effect: "not-dispatched",
@@ -3360,10 +3285,7 @@ describe("Cua native boundary", () => {
   });
   it("refuses a background drag whose endpoint leaves the exact window", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     await expect(
       f.backend.drag({ x: -275, y: 30 }, { x: -90, y: 50 }, 500, "cua:10:20"),
     ).rejects.toMatchObject({ effect: "not-dispatched" });
@@ -3379,10 +3301,7 @@ describe("Cua native boundary", () => {
   });
   it("propagates the native background admission refusal without replay", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     // A driver that cannot admit the gesture (older builds report
     // `background_unavailable`; a stale target reports a WindowPointer refusal)
     // answers with a structured refusal. Synara surfaces it as not-dispatched
@@ -3479,9 +3398,7 @@ describe("Cua hardening", () => {
   it("flips health on capture failure without blocking input, and heals on refresh", async () => {
     const f = fixture();
     f.captureWindow(21);
-    await expect(
-      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
-    ).rejects.toMatchObject({ effect: "not-dispatched" });
+    await expect(f.captureWindowScreenshot()).rejects.toMatchObject({ effect: "not-dispatched" });
     expect(f.backend.health()).toMatchObject({
       status: "unavailable",
       captureAvailable: false,
@@ -3507,16 +3424,14 @@ describe("Cua hardening", () => {
         element_token: "fresh-token",
       },
     ]);
-    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    await f.readWindowTree();
     expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
     // The observation answers a different window: a call-level failure past
     // the target, the same shape an AX walk timeout produces.
     f.captureWindow(999);
     // A tree-only read never asked for pixels: its failure is not a capture
     // failure and must not mark capture unavailable.
-    await expect(f.backend.getState({ windowId: "cua:10:20", includeTree: true })).rejects.toThrow(
-      "belongs to a different window",
-    );
+    await expect(f.readWindowTree()).rejects.toThrow("belongs to a different window");
     expect(f.backend.health()).toMatchObject({
       status: "connected",
       captureAvailable: true,
@@ -3576,9 +3491,7 @@ describe("Cua hardening", () => {
       status: "connected",
       captureAvailable: true,
     });
-    await expect(
-      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
-    ).rejects.toMatchObject({
+    await expect(f.captureWindowScreenshot()).rejects.toMatchObject({
       code: "off_space_capture_unverified",
       effect: "not-dispatched",
     });
@@ -3590,9 +3503,7 @@ describe("Cua hardening", () => {
   it("clears window grounding when the owning task ends", async () => {
     const f = fixture();
     const task = { threadId: "thread", turnId: "turn" };
-    await withComputerTask(task, () =>
-      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
-    );
+    await withComputerTask(task, () => f.captureWindowScreenshot());
     await withComputerTask(task, () =>
       expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined(),
     );
@@ -3605,10 +3516,7 @@ describe("Cua hardening", () => {
   it("degrades blind on a mid-task Screen Recording revoke without replaying input", async () => {
     const f = fixture();
     // Grounded and driving before the revoke lands.
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
     const clicks = f.calls.filter((call) => call.name === "click").length;
 
@@ -3621,9 +3529,7 @@ describe("Cua hardening", () => {
     // ...perception goes blind but stays available: no pixels, no throw, tree intact...
     const blind = await f.backend.getState({ includeScreenshot: true });
     expect(blind.screenshot).toBeUndefined();
-    await expect(
-      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
-    ).resolves.toMatchObject({ computerId: "desktop" });
+    await expect(f.readWindowTree()).resolves.toMatchObject({ computerId: "desktop" });
     expect(f.backend.health().captureAvailable).toBe(false);
     // ...and the desktop stays driveable: exactly one native input, never a replay.
     await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
@@ -3662,10 +3568,7 @@ describe("Cua hardening", () => {
   });
   it("drops grounding after uncertain delivery but keeps it after a clean refusal", async () => {
     const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.fail(new CuaTransportError("timeout", "dispatched-unknown"));
     await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
       effect: "dispatched-unknown",
@@ -3675,10 +3578,7 @@ describe("Cua hardening", () => {
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       code: "stale_geometry",
     });
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
+    await f.captureWindowScreenshot();
     f.refuse();
     f.unfail();
     await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
@@ -4052,7 +3952,7 @@ describe("host-reported platform and native revision", () => {
 describe("Linux native input dialect", () => {
   it("uses the strict upstream pixel and keyboard schemas only in authorized foreground mode", async () => {
     const f = fixture({ hostPlatform: "linux" });
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     await withDesktopDeliveryMode("foreground", async () => {
       await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
       await f.backend.typeText("visible input", "cua:10:20");
@@ -4099,7 +3999,7 @@ describe("Linux native input dialect", () => {
 
   it("translates an unmodified single-axis scroll without dropping unsupported gesture semantics", async () => {
     const f = fixture({ hostPlatform: "linux" });
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.captureWindowScreenshot();
     await withDesktopDeliveryMode("foreground", () =>
       f.backend.scroll({ x: -275, y: 30 }, 0, 240, "cua:10:20"),
     );
@@ -4136,7 +4036,7 @@ describe("Linux native input dialect", () => {
         frame: { x: -290, y: 30, width: 20, height: 20 },
       },
     ]);
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.readWindowTree();
     const node = state.root!.children[0]!;
     const target = { target: { label: "Fixture input" }, node, point: node.activationPoint! };
     await expect(

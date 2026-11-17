@@ -310,6 +310,12 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
+function mockHttpNegotiation(result: WsBootstrapNegotiateResult = NEGOTIATION_RESULT) {
+  const fetch = vi.fn(async () => jsonResponse(200, result));
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
 // vi.waitFor polls on a real 50 ms interval even under fake timers, so a 500 ms
 // reconnect backoff costs real time. Under fake timers advance the clock instead.
 async function waitUntil(
@@ -347,6 +353,11 @@ async function settleWithClock<T>(promise: Promise<T>): Promise<T> {
 
 async function waitForSockets(count: number): Promise<void> {
   await waitUntil(() => expect(sockets.length).toBeGreaterThanOrEqual(count));
+}
+
+async function openRpcSocket(transport: WsTransport, socket: MockWebSocket): Promise<void> {
+  socket.serveVoidRpc();
+  await waitUntil(() => expect(transport.getState()).toBe("open"));
 }
 
 // Reconnect backoff waits (500 ms and up) run on fake time so tests do not sleep.
@@ -398,14 +409,12 @@ it("keeps a silent open socket and RPC alive until a late response", async () =>
       ),
     ),
   );
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
+  useFakeClock();
   const transport = new WsTransport("ws://localhost:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
-    socket.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, socket);
     socket.onSend = null;
     const start = socket.sent.length;
     const pending = transport.request(
@@ -437,8 +446,7 @@ it("keeps a silent open socket and RPC alive until a late response", async () =>
     expect(await verdict).toBeUndefined();
     socket.close(1006, "real connection loss after recovery");
     await waitUntil(() => expect(sockets).toHaveLength(2));
-    sockets[1]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[1]!);
     await vi.advanceTimersByTimeAsync(1000);
     expect(sockets).toHaveLength(2);
   } finally {
@@ -450,18 +458,13 @@ it("keeps a silent open socket and RPC alive until a late response", async () =>
 it.each([false, true])(
   "waits for a silent feature probe without reconnect loops (recovery: %s)",
   async (recovery) => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-    );
+    useFakeClock();
+    mockHttpNegotiation();
     const transport = new WsTransport("ws://localhost:3020");
     try {
       await waitUntil(() => expect(sockets).toHaveLength(1));
       if (recovery) {
-        sockets[0]!.serveVoidRpc();
-        await waitUntil(() => expect(transport.getState()).toBe("open"));
+        await openRpcSocket(transport, sockets[0]!);
         const recovering = (transport as unknown as WsTransportInternals).reconnect();
         void recovering.catch(() => undefined);
         await waitUntil(() => expect(sockets).toHaveLength(2));
@@ -495,20 +498,15 @@ it.each([false, true])(
 );
 
 it("allows a slow WebSocket upgrade without a short handshake reconnect loop", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-  );
+  useFakeClock();
+  mockHttpNegotiation();
   const transport = new WsTransport("ws://localhost:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(70_000);
     expect(sockets).toHaveLength(1);
     expect(sockets[0]!.readyState).toBe(MockWebSocket.CONNECTING);
-    sockets[0]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[0]!);
   } finally {
     await transport.dispose();
     vi.useRealTimers();
@@ -516,12 +514,8 @@ it("allows a slow WebSocket upgrade without a short handshake reconnect loop", a
 });
 
 it("disposes a silent feature probe and stops its keepalives promptly", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-  );
+  useFakeClock();
+  mockHttpNegotiation();
   const transport = new WsTransport("ws://localhost:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
@@ -542,8 +536,7 @@ it("disposes a silent feature probe and stops its keepalives promptly", async ()
 });
 
 it("recovers a failed thread subscription on a responsive session using its latest cursor", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
+  useFakeClock();
   const { internals } = makeBareTransport();
   const threadId = ThreadId.makeUnsafe("healthy-session-failed-subscription");
   const input = { threadId, afterSequence: 5 };
@@ -577,10 +570,7 @@ it.each([false, true])(
       toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
     });
     bindWindowTimersToCurrentGlobals();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-    );
+    mockHttpNegotiation();
     resetThreadDetailResumeCursorsForTests();
     const transport = new WsTransport("ws://remote.synara.test:3020");
     const threadId = ThreadId.makeUnsafe("half-open-resume");
@@ -589,8 +579,7 @@ it.each([false, true])(
       const socket = sockets[0]!;
       if (probePending) socket.open();
       else {
-        socket.serveVoidRpc();
-        await waitUntil(() => expect(transport.getState()).toBe("open"));
+        await openRpcSocket(transport, socket);
         // Leave a real stream pending on the multiplexed socket. The cursor
         // represents successfully applied events, not unacknowledged input.
         socket.onSend = null;
@@ -647,16 +636,12 @@ it("uses any inbound server frame as liveness evidence even when pongs are absen
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
   });
   bindWindowTimersToCurrentGlobals();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-  );
+  mockHttpNegotiation();
   const transport = new WsTransport("ws://remote.synara.test:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
-    socket.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, socket);
     socket.onSend = null;
     for (let interval = 0; interval < 3; interval++) {
       await vi.advanceTimersByTimeAsync(120_000);
@@ -685,8 +670,7 @@ it("uses any inbound server frame as liveness evidence even when pongs are absen
 it.each(["orchestration.shell", "orchestration.thread:capped-overflow"])(
   "surfaces exhausted overflow retries for %s without dropping the applied cursor",
   async (key) => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     resetThreadDetailResumeCursorsForTests();
     const { transport, internals } = makeBareTransport();
     const threadId = ThreadId.makeUnsafe("capped-overflow");
@@ -739,12 +723,8 @@ it.each(["orchestration.shell", "orchestration.thread:capped-overflow"])(
 );
 
 it("bounds the feature probe even when server pongs keep arriving without its RPC reply", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-  );
+  useFakeClock();
+  mockHttpNegotiation();
   const transport = new WsTransport("ws://remote.synara.test:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
@@ -759,8 +739,7 @@ it("bounds the feature probe even when server pongs keep arriving without its RP
     await vi.advanceTimersByTimeAsync(10000);
     await waitUntil(() => expect(sockets).toHaveLength(2));
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
-    sockets[1]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[1]!);
   } finally {
     await transport.dispose();
     vi.useRealTimers();
@@ -804,101 +783,89 @@ describe("WsTransport", () => {
   it.each(["completed", "rejected", "older-server", "downgraded-server"])(
     "recovers an interrupted Git action safely: %s",
     async (outcome) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
-      try {
-        const { transport, internals } = makeBareTransport();
-        const params = { actionId: "push-once", cwd: "/repo", action: "push" };
-        const result = { action: "push", push: { status: "pushed" } };
-        const run = vi
-          .fn()
-          .mockImplementationOnce(() => Stream.fromEffect(Effect.interrupt))
-          .mockImplementation(() =>
-            outcome === "rejected"
-              ? Stream.fail(new Error("remote rejected push"))
-              : Stream.make({ ...params, kind: "action_finished", result }),
-          );
-        const client = { [WS_METHODS.gitRunStackedAction]: run };
-        let connections = 0;
-        Object.assign(internals, {
-          emit: vi.fn(),
-          compatibility: {
-            ...NEGOTIATION_RESULT,
-            capabilities: outcome === "older-server" ? [] : [WS_GIT_ACTION_RECOVERY_CAPABILITY],
-          },
-          getClient: async () => {
-            if (++connections > 1 && outcome === "downgraded-server") {
-              Object.assign(internals, { compatibility: NEGOTIATION_RESULT });
-            }
-            return client;
-          },
-          getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-        });
-        const request = transport.request(WS_METHODS.gitRunStackedAction, params, {
-          timeoutMs: null,
-        });
-        const verdict =
-          outcome === "completed"
-            ? expect(request).resolves.toEqual(result)
-            : expect(request).rejects.toThrow(
-                outcome === "rejected"
-                  ? "remote rejected push"
-                  : outcome === "older-server"
-                    ? "transport reconnect"
-                    : "cannot recover",
-              );
-        await vi.advanceTimersByTimeAsync(1000);
-        await verdict;
-        expect(run).toHaveBeenCalledTimes(
-          outcome === "completed" || outcome === "rejected" ? 2 : 1,
+      useFakeClock();
+      const { transport, internals } = makeBareTransport();
+      const params = { actionId: "push-once", cwd: "/repo", action: "push" };
+      const result = { action: "push", push: { status: "pushed" } };
+      const run = vi
+        .fn()
+        .mockImplementationOnce(() => Stream.fromEffect(Effect.interrupt))
+        .mockImplementation(() =>
+          outcome === "rejected"
+            ? Stream.fail(new Error("remote rejected push"))
+            : Stream.make({ ...params, kind: "action_finished", result }),
         );
-        expect(run).toHaveBeenNthCalledWith(
-          1,
-          outcome === "older-server" ? params : { ...params, recoverable: true },
-        );
-        if (run.mock.calls.length === 2)
-          expect(run).toHaveBeenNthCalledWith(2, { ...params, recoverable: true, resume: true });
-      } finally {
-        vi.useRealTimers();
-      }
+      const client = { [WS_METHODS.gitRunStackedAction]: run };
+      let connections = 0;
+      Object.assign(internals, {
+        emit: vi.fn(),
+        compatibility: {
+          ...NEGOTIATION_RESULT,
+          capabilities: outcome === "older-server" ? [] : [WS_GIT_ACTION_RECOVERY_CAPABILITY],
+        },
+        getClient: async () => {
+          if (++connections > 1 && outcome === "downgraded-server") {
+            Object.assign(internals, { compatibility: NEGOTIATION_RESULT });
+          }
+          return client;
+        },
+        getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+      });
+      const request = transport.request(WS_METHODS.gitRunStackedAction, params, {
+        timeoutMs: null,
+      });
+      const verdict =
+        outcome === "completed"
+          ? expect(request).resolves.toEqual(result)
+          : expect(request).rejects.toThrow(
+              outcome === "rejected"
+                ? "remote rejected push"
+                : outcome === "older-server"
+                  ? "transport reconnect"
+                  : "cannot recover",
+            );
+      await vi.advanceTimersByTimeAsync(1000);
+      await verdict;
+      expect(run).toHaveBeenCalledTimes(outcome === "completed" || outcome === "rejected" ? 2 : 1);
+      expect(run).toHaveBeenNthCalledWith(
+        1,
+        outcome === "older-server" ? params : { ...params, recoverable: true },
+      );
+      if (run.mock.calls.length === 2)
+        expect(run).toHaveBeenNthCalledWith(2, { ...params, recoverable: true, resume: true });
     },
   );
 
   it.each(["caller", "transport"])(
     "stops Git recovery when the %s stops waiting",
     async (source) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
-      try {
-        const { transport, internals } = makeBareTransport();
-        const lifetime = new AbortController();
-        const caller = new AbortController();
-        const run = vi.fn(() => Stream.fromEffect(Effect.interrupt));
-        Object.assign(internals, {
-          lifetime,
-          compatibility: {
-            ...NEGOTIATION_RESULT,
-            capabilities: [WS_GIT_ACTION_RECOVERY_CAPABILITY],
-          },
-          getClient: async () => ({ [WS_METHODS.gitRunStackedAction]: run }),
-          getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-        });
-        const request = transport.request(
-          WS_METHODS.gitRunStackedAction,
-          { actionId: "cancel-wait", cwd: "/repo", action: "push" },
-          { signal: caller.signal, timeoutMs: null },
-        );
-        const verdict = expect(request).rejects.toThrow();
-        await vi.advanceTimersByTimeAsync(1000);
-        (source === "caller" ? caller : lifetime).abort();
-        await verdict;
-        const attempts = run.mock.calls.length;
-        expect(attempts).toBeGreaterThan(1);
-        await vi.advanceTimersByTimeAsync(10_000);
-        expect(run).toHaveBeenCalledTimes(attempts);
-      } finally {
-        vi.useRealTimers();
-      }
+      useFakeClock();
+      const { transport, internals } = makeBareTransport();
+      const lifetime = new AbortController();
+      const caller = new AbortController();
+      const run = vi.fn(() => Stream.fromEffect(Effect.interrupt));
+      Object.assign(internals, {
+        lifetime,
+        compatibility: {
+          ...NEGOTIATION_RESULT,
+          capabilities: [WS_GIT_ACTION_RECOVERY_CAPABILITY],
+        },
+        getClient: async () => ({ [WS_METHODS.gitRunStackedAction]: run }),
+        getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+      });
+      const request = transport.request(
+        WS_METHODS.gitRunStackedAction,
+        { actionId: "cancel-wait", cwd: "/repo", action: "push" },
+        { signal: caller.signal, timeoutMs: null },
+      );
+      const verdict = expect(request).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(1000);
+      (source === "caller" ? caller : lifetime).abort();
+      await verdict;
+      const attempts = run.mock.calls.length;
+      expect(attempts).toBeGreaterThan(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(run).toHaveBeenCalledTimes(attempts);
     },
   );
 
@@ -941,8 +908,7 @@ describe("WsTransport", () => {
   it.each(["caller", "transport"])(
     "keeps an unacknowledged send pending through settlement failures until %s cancellation",
     async (cancelSource) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
+      useFakeClock();
       const lifetime = new AbortController();
       const caller = new AbortController();
       try {
@@ -1013,8 +979,7 @@ describe("WsTransport", () => {
   );
 
   it("releases settlement ownership when recovery loses the optional capability", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const lifetime = new AbortController();
     try {
       const { transport, internals } = makeBareTransport();
@@ -1073,8 +1038,7 @@ describe("WsTransport", () => {
   });
 
   it("releases uncertain send ownership when the recovery circuit breaker trips", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const lifetime = new AbortController();
     let verdict: Promise<void> | undefined;
     try {
@@ -1143,10 +1107,7 @@ describe("WsTransport", () => {
 
   it("keeps recovery connecting when the detached feature probe rejects", async () => {
     useFakeClock();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
-    );
+    mockHttpNegotiation();
     const transport = new WsTransport();
     const runtimeOwner = transport as unknown as {
       closeRuntime: (...args: unknown[]) => Promise<void>;
@@ -1170,8 +1131,7 @@ describe("WsTransport", () => {
       expect(transport.getState()).toBe("connecting");
       releaseClose();
       await waitUntil(() => expect(sockets.length).toBe(2));
-      sockets[1]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[1]!);
     } finally {
       releaseClose();
       await transport.dispose();
@@ -1179,12 +1139,8 @@ describe("WsTransport", () => {
   });
 
   it("recovers an unopened feature socket without reporting it as connected", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
-    );
+    useFakeClock();
+    mockHttpNegotiation();
     const transport = new WsTransport();
     try {
       await vi.advanceTimersByTimeAsync(1);
@@ -1299,10 +1255,7 @@ describe("WsTransport", () => {
 
   it("replaces a failed feature socket even when no streams are subscribed", async () => {
     useFakeClock();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
-    );
+    mockHttpNegotiation();
     const transport = new WsTransport();
     transport.onStateChange((state) => {
       if (state === "open" && sockets.length === 2) {
@@ -1312,15 +1265,13 @@ describe("WsTransport", () => {
     });
     try {
       await waitForSockets(1);
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       sockets[0]!.close(1006, "connection lost");
       await waitUntil(() => expect(transport.getState()).toBe("connecting"));
       await waitUntil(() => expect(sockets.length).toBe(2));
       sockets[1]!.serveVoidRpc();
       await waitUntil(() => expect(sockets.length).toBe(3));
-      sockets[2]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[2]!);
     } finally {
       await transport.dispose();
     }
@@ -1374,94 +1325,68 @@ describe("WsTransport", () => {
     expect(internals.projectFileSubscriptions.size).toBe(0);
   });
 
-  it("returns the completed GitHub provisioning result and emits each progress event", async () => {
-    const phase = {
-      operationId: "operation-1",
-      kind: "phase" as const,
-      phase: "cloning" as const,
-      message: "Cloning openai/codex",
-    };
-    const completed = {
-      operationId: "operation-1",
-      kind: "completed" as const,
-      result: {
+  it.each([
+    {
+      name: "GitHub provisioning",
+      method: WS_METHODS.projectsProvisionFromGitHub,
+      channel: WS_CHANNELS.projectProvisionProgress,
+      params: { repository: "openai/codex" },
+      phase: {
         operationId: "operation-1",
-        repository: "openai/codex",
-        workspaceRoot: "/projects/codex",
-        projectId: "project-1",
-        checkout: "created" as const,
+        kind: "phase",
+        phase: "cloning",
+        message: "Cloning openai/codex",
       },
-    };
-    const emit = vi.fn();
-    const transport = Object.create(WsTransport.prototype) as WsTransport;
-    Object.assign(transport, {
-      emit,
-      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-    });
-    const runProjectProvisionStream = (
-      transport as unknown as {
-        runProjectProvisionStream: (
-          client: Record<string, () => Stream.Stream<typeof phase | typeof completed>>,
-          params: unknown,
-        ) => Promise<typeof completed.result>;
-      }
-    ).runProjectProvisionStream.bind(transport);
-
-    await expect(
-      runProjectProvisionStream(
-        {
-          [WS_METHODS.projectsProvisionFromGitHub]: () => Stream.make(phase, completed),
-        },
-        { repository: "openai/codex" },
-      ),
-    ).resolves.toEqual(completed.result);
-    expect(emit).toHaveBeenNthCalledWith(1, WS_CHANNELS.projectProvisionProgress, phase);
-    expect(emit).toHaveBeenNthCalledWith(2, WS_CHANNELS.projectProvisionProgress, completed);
-  });
-
-  it("returns the completed worktree setup result and emits each progress event", async () => {
-    const phase = {
-      progressId: "progress-1",
-      kind: "phase_started" as const,
-      phase: "worktree" as const,
-    };
-    const completed = {
-      progressId: "progress-1",
-      kind: "completed" as const,
-      result: {
-        worktree: {
-          path: "/repo/.codex/worktrees/generated/synara",
-          ref: "0123456789abcdef0123456789abcdef01234567",
-          branch: "synara/abcd1234",
+      completed: {
+        operationId: "operation-1",
+        kind: "completed",
+        result: {
+          operationId: "operation-1",
+          repository: "openai/codex",
+          workspaceRoot: "/projects/codex",
+          projectId: "project-1",
+          checkout: "created",
         },
       },
-    };
-    const emit = vi.fn();
-    const transport = Object.create(WsTransport.prototype) as WsTransport;
-    Object.assign(transport, {
-      emit,
-      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-    });
-    const runWorktreeSetupStream = (
-      transport as unknown as {
-        runWorktreeSetupStream: (
-          client: Record<string, () => Stream.Stream<typeof phase | typeof completed>>,
-          params: unknown,
-        ) => Promise<typeof completed.result>;
-      }
-    ).runWorktreeSetupStream.bind(transport);
-
-    await expect(
-      runWorktreeSetupStream(
-        {
-          [WS_METHODS.gitCreateDetachedWorktree]: () => Stream.make(phase, completed),
+    },
+    {
+      name: "worktree setup",
+      method: WS_METHODS.gitCreateDetachedWorktree,
+      channel: WS_CHANNELS.gitWorktreeSetupProgress,
+      params: { cwd: "/repo", ref: "main" },
+      phase: { progressId: "progress-1", kind: "phase_started", phase: "worktree" },
+      completed: {
+        progressId: "progress-1",
+        kind: "completed",
+        result: {
+          worktree: {
+            path: "/repo/.codex/worktrees/generated/synara",
+            ref: "0123456789abcdef0123456789abcdef01234567",
+            branch: "synara/abcd1234",
+          },
         },
-        { cwd: "/repo", ref: "main" },
-      ),
-    ).resolves.toEqual(completed.result);
-    expect(emit).toHaveBeenNthCalledWith(1, WS_CHANNELS.gitWorktreeSetupProgress, phase);
-    expect(emit).toHaveBeenNthCalledWith(2, WS_CHANNELS.gitWorktreeSetupProgress, completed);
-  });
+      },
+    },
+  ])(
+    "returns the $name result and emits progress in order",
+    async ({ method, channel, params, phase, completed }) => {
+      const { transport, internals } = makeBareTransport();
+      const emit = vi.fn();
+      const run = vi.fn(() => Stream.fromIterable([phase, completed]));
+      Object.assign(internals, {
+        emit,
+        getClient: async () => ({ [method]: run }),
+        getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+      });
+
+      await expect(transport.request(method, params)).resolves.toEqual(completed.result);
+      expect(run).toHaveBeenCalledExactlyOnceWith(params);
+      expect(emit.mock.calls).toEqual([
+        [channel, phase],
+        [channel, completed],
+      ]);
+    },
+  );
 
   it("does not reconnect the socket for typed stream-admission failures", () => {
     expect(
@@ -1514,34 +1439,29 @@ describe("WsTransport", () => {
   });
 
   it("retries a failed project file watcher in place without reconnecting the socket", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "projects.file-change:/repo\0src/app.ts";
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "projects.file-change:/repo\0src/app.ts";
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream(
-        {},
-        key,
-        Stream.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
-        () => undefined,
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(499);
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({ code: "PROJECT_FILE_WATCH_FAILED", retryable: false }),
+      () => undefined,
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(499);
 
-      expect(restart).not.toHaveBeenCalled();
-      expect(reconnect).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(restart).toHaveBeenCalledTimes(1);
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(internals.projectFileWatchRetries.get(key)).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(internals.projectFileWatchRetries.get(key)).toBe(1);
   });
 
   it("retries resnapshot demands in place with bounded attempts", () => {
@@ -1574,8 +1494,7 @@ describe("WsTransport", () => {
   it("clears the thread resume cursor and retries in place on a resnapshot demand", async () => {
     // The retried subscription must request a fresh full snapshot: resending
     // the stale cursor would demand the same overflowing gap replay again.
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     resetThreadDetailResumeCursorsForTests();
     try {
       const { internals } = makeBareTransport();
@@ -1612,8 +1531,7 @@ describe("WsTransport", () => {
   it.each(["orchestration.shell", "orchestration.thread:thread-overflow"])(
     "retries an overflowing %s stream locally and preserves the thread resume cursor",
     async (key) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
+      useFakeClock();
       resetThreadDetailResumeCursorsForTests();
       try {
         const { internals } = makeBareTransport();
@@ -1647,30 +1565,11 @@ describe("WsTransport", () => {
   );
 
   it("backs off repeated overflow locally and cancels the pending retry on unsubscribe", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const { internals } = makeBareTransport();
     const key = "orchestration.shell";
     const restart = vi.fn();
-    try {
-      for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000]) {
-        internals.startStream(
-          {},
-          key,
-          Stream.fail({
-            code: "ORCHESTRATION_STREAM_OVERFLOW",
-            retryable: true,
-          }),
-          () => undefined,
-          restart,
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        const before = restart.mock.calls.length;
-        await vi.advanceTimersByTimeAsync(delay - 1);
-        expect(restart).toHaveBeenCalledTimes(before);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(restart).toHaveBeenCalledTimes(before + 1);
-      }
+    for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000]) {
       internals.startStream(
         {},
         key,
@@ -1682,111 +1581,110 @@ describe("WsTransport", () => {
         restart,
       );
       await vi.advanceTimersByTimeAsync(0);
-      await internals.stopStream(key);
-      await vi.advanceTimersByTimeAsync(16000);
-      expect(restart).toHaveBeenCalledTimes(7);
-      expect(internals.reconnect).not.toHaveBeenCalled();
-      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
-      expect(internals.streamOverflowRetries.has(key)).toBe(false);
-    } finally {
-      vi.useRealTimers();
+      const before = restart.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(restart).toHaveBeenCalledTimes(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(before + 1);
     }
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({
+        code: "ORCHESTRATION_STREAM_OVERFLOW",
+        retryable: true,
+      }),
+      () => undefined,
+      restart,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await internals.stopStream(key);
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(restart).toHaveBeenCalledTimes(7);
+    expect(internals.reconnect).not.toHaveBeenCalled();
+    expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+    expect(internals.streamOverflowRetries.has(key)).toBe(false);
   });
 
   it("surfaces a stalled-snapshot verdict as a thread stream failure without reconnecting", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const threadId = "thread-stalled";
-      const key = `orchestration.thread:${threadId}`;
-      internals.threadSubscriptions.set(threadId, { threadId });
-      const failures: WsThreadStreamFailure[] = [];
-      internals.threadStreamFailureListeners.add((failure) => failures.push(failure));
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const threadId = "thread-stalled";
+    const key = `orchestration.thread:${threadId}`;
+    internals.threadSubscriptions.set(threadId, { threadId });
+    const failures: WsThreadStreamFailure[] = [];
+    internals.threadStreamFailureListeners.add((failure) => failures.push(failure));
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream(
-        {},
-        key,
-        Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
-        () => undefined,
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+      () => undefined,
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
 
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(restart).not.toHaveBeenCalled();
-      expect(failures).toHaveLength(1);
-      expect(failures[0]?.code).toBe("ORCHESTRATION_SNAPSHOT_STALLED");
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.code).toBe("ORCHESTRATION_SNAPSHOT_STALLED");
 
-      // A snapshot fault clears only when the server heals; a slow in-place
-      // retry converges then without the user resubscribing.
-      await vi.advanceTimersByTimeAsync(1);
-      expect(restart).toHaveBeenCalledTimes(1);
-      expect(reconnect).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    // A snapshot fault clears only when the server heals; a slow in-place
+    // retry converges then without the user resubscribing.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it("slow-retries a shell stream killed by a projection-state fault instead of leaving it dead", async () => {
     // The shell stream has no route-level fallback: without a retry the
     // sidebar silently freezes until an unrelated explicit resubscribe.
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.shell";
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.shell";
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream(
-        {},
-        key,
-        Stream.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
-        () => undefined,
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+      () => undefined,
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(restart).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS);
-      expect(restart).toHaveBeenCalledTimes(1);
-      expect(reconnect).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it("cancels a pending snapshot-fault retry when the stream is stopped", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.shell";
-      const restart = vi.fn();
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.shell";
+    const restart = vi.fn();
 
-      internals.startStream(
-        {},
-        key,
-        Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
-        () => undefined,
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      await internals.stopStream(key);
-      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS * 2);
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+      () => undefined,
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await internals.stopStream(key);
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS * 2);
 
-      expect(restart).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
@@ -1796,32 +1694,27 @@ describe("WsTransport", () => {
     // escalates to STALLED). Once the fast retries are spent, the stream must
     // fall back to the slow recovery path rather than dying while the server
     // is actively healing.
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.shell";
-      internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.shell";
+    internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream(
-        {},
-        key,
-        Stream.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
-        () => undefined,
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
-      expect(restart).not.toHaveBeenCalled();
+    internals.startStream(
+      {},
+      key,
+      Stream.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+      () => undefined,
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
+    expect(restart).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(restart).toHaveBeenCalledTimes(1);
-      expect(reconnect).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it("forgets resnapshot retry state when a stream is explicitly stopped", async () => {
@@ -2070,8 +1963,7 @@ describe("WsTransport", () => {
   });
 
   it("does not poll a subscribed channel after the defect breaker trips", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const { transport, internals } = makeBareTransport();
     Object.assign(internals, { listeners: new Map(), latestPushByChannel: new Map() });
     const session = { id: 2, failed: false };
@@ -2128,8 +2020,7 @@ describe("WsTransport", () => {
   });
 
   it("logs one recovery diagnostic after twenty seconds while reconnect is still pending", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const { internals } = makeBareTransport();
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const reconnect = vi.fn(() => new Promise(() => undefined));
@@ -2174,8 +2065,7 @@ describe("WsTransport", () => {
   it.each(["adoption", "trip", "dispose"] as const)(
     "cancels the pending recovery diagnostic on %s",
     async (ending) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
+      useFakeClock();
       const { transport, internals } = makeBareTransport();
       const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       internals.reconnect = vi.fn(() => new Promise(() => undefined));
@@ -2319,68 +2209,58 @@ describe("WsTransport", () => {
   });
 
   it("fails a request that waited out the capacity budget without ever sending it", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const runPromise = vi.fn(() => new Promise(() => undefined));
-      Object.assign(internals, {
-        state: "open",
-        openedAtMs: Number.NEGATIVE_INFINITY,
-        getClient: vi.fn(async () => ({
-          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
-        })),
-        getClientRuntime: () => ({ runPromise }),
-      });
+    useFakeClock();
+    const { transport, internals } = makeBareTransport();
+    const runPromise = vi.fn(() => new Promise(() => undefined));
+    Object.assign(internals, {
+      state: "open",
+      openedAtMs: Number.NEGATIVE_INFINITY,
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
 
-      void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-      void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-      // No deadline of its own: the queue still bounds the wait.
-      const queued = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-      const rejected = expect(queued).rejects.toMatchObject({
-        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-        retryable: true,
-      });
-      await vi.advanceTimersByTimeAsync(2_999);
-      expect(runPromise).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      await rejected;
-      expect(runPromise).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    // No deadline of its own: the queue still bounds the wait.
+    const queued = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    const rejected = expect(queued).rejects.toMatchObject({
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+    });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(runPromise).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(runPromise).toHaveBeenCalledTimes(2);
   });
 
   it("does not spend the queue budget while the transport is still connecting", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { transport, internals } = makeBareTransport();
-      let connect!: (client: unknown) => void;
-      const connected = new Promise((resolve) => {
-        connect = resolve;
-      });
-      const runPromise = vi.fn(async () => ({ contents: "ok" }));
-      Object.assign(internals, {
-        state: "connecting",
-        getClient: vi.fn(() => connected),
-        getClientRuntime: () => ({ runPromise }),
-      });
+    useFakeClock();
+    const { transport, internals } = makeBareTransport();
+    let connect!: (client: unknown) => void;
+    const connected = new Promise((resolve) => {
+      connect = resolve;
+    });
+    const runPromise = vi.fn(async () => ({ contents: "ok" }));
+    Object.assign(internals, {
+      state: "connecting",
+      getClient: vi.fn(() => connected),
+      getClientRuntime: () => ({ runPromise }),
+    });
 
-      const reads = [0, 1, 2, 3].map(() =>
-        transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
-      );
-      // A slow reconnect is not capacity: nothing may fail while it lasts.
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(runPromise).not.toHaveBeenCalled();
+    const reads = [0, 1, 2, 3].map(() =>
+      transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
+    );
+    // A slow reconnect is not capacity: nothing may fail while it lasts.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runPromise).not.toHaveBeenCalled();
 
-      Object.assign(internals, { state: "open", openedAtMs: Date.now() });
-      connect({ "projects.readFile": () => Effect.succeed({ contents: "ok" }) });
-      await expect(Promise.all(reads)).resolves.toHaveLength(4);
-      expect(runPromise).toHaveBeenCalledTimes(4);
-    } finally {
-      vi.useRealTimers();
-    }
+    Object.assign(internals, { state: "open", openedAtMs: Date.now() });
+    connect({ "projects.readFile": () => Effect.succeed({ contents: "ok" }) });
+    await expect(Promise.all(reads)).resolves.toHaveLength(4);
+    expect(runPromise).toHaveBeenCalledTimes(4);
   });
 
   it("reports a deadline spent in the queue as capacity, not as an uncertain turn", async () => {
@@ -2503,119 +2383,104 @@ describe("WsTransport", () => {
   });
 
   it("retries capacity-rejected unary requests in place with the server-provided delay", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const capacityError = {
-        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-        retryable: true,
-        retryAfterMs: 250,
-        message: "WebSocket expensive-read request capacity exceeded.",
-      };
-      const runPromise = vi
-        .fn()
-        .mockRejectedValueOnce(capacityError)
-        .mockResolvedValueOnce({ contents: "ok" });
-      Object.assign(internals, {
-        getClient: vi.fn(async () => ({
-          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
-        })),
-        getClientRuntime: () => ({ runPromise }),
-      });
+    useFakeClock();
+    const { transport, internals } = makeBareTransport();
+    const capacityError = {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+      message: "WebSocket expensive-read request capacity exceeded.",
+    };
+    const runPromise = vi
+      .fn()
+      .mockRejectedValueOnce(capacityError)
+      .mockResolvedValueOnce({ contents: "ok" });
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
 
-      const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runPromise).toHaveBeenCalledTimes(1);
+    const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runPromise).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(249);
-      expect(runPromise).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(runPromise).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(pending).resolves.toEqual({ contents: "ok" });
-      expect(runPromise).toHaveBeenCalledTimes(2);
-      expect(getUnaryRpcCapacityRetryDelayMs(capacityError, 0)).toBe(250);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ contents: "ok" });
+    expect(runPromise).toHaveBeenCalledTimes(2);
+    expect(getUnaryRpcCapacityRetryDelayMs(capacityError, 0)).toBe(250);
   });
 
   it("stops retrying a unary capacity rejection after the bounded attempt budget", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const capacityError = {
-        code: "RPC_REQUEST_CAPACITY_EXCEEDED",
-        retryable: true,
-        retryAfterMs: 250,
-        message: "WebSocket standard request capacity exceeded.",
-      };
-      const runPromise = vi.fn().mockRejectedValue(capacityError);
-      Object.assign(internals, {
-        getClient: vi.fn(async () => ({
-          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
-        })),
-        getClientRuntime: () => ({ runPromise }),
-      });
+    useFakeClock();
+    const { transport, internals } = makeBareTransport();
+    const capacityError = {
+      code: "RPC_REQUEST_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+      message: "WebSocket standard request capacity exceeded.",
+    };
+    const runPromise = vi.fn().mockRejectedValue(capacityError);
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
 
-      const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-      const rejected = expect(pending).rejects.toMatchObject({
-        code: "RPC_REQUEST_CAPACITY_EXCEEDED",
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      for (let attempt = 0; attempt < MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS; attempt += 1) {
-        await vi.advanceTimersByTimeAsync(250);
-      }
-
-      await rejected;
-      expect(runPromise).toHaveBeenCalledTimes(MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS + 1);
-    } finally {
-      vi.useRealTimers();
+    const pending = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "RPC_REQUEST_CAPACITY_EXCEEDED",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let attempt = 0; attempt < MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(250);
     }
+
+    await rejected;
+    expect(runPromise).toHaveBeenCalledTimes(MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS + 1);
   });
 
   it("aborts an in-place unary capacity retry when the request signal aborts", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const capacityError = {
-        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-        retryable: true,
-        retryAfterMs: 250,
-        message: "WebSocket expensive-read request capacity exceeded.",
-      };
-      const runPromise = vi.fn().mockRejectedValue(capacityError);
-      Object.assign(internals, {
-        getClient: vi.fn(async () => ({
-          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
-        })),
-        getClientRuntime: () => ({ runPromise }),
-      });
+    useFakeClock();
+    const { transport, internals } = makeBareTransport();
+    const capacityError = {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+      message: "WebSocket expensive-read request capacity exceeded.",
+    };
+    const runPromise = vi.fn().mockRejectedValue(capacityError);
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
 
-      const controller = new AbortController();
-      const pending = transport.request(
-        WS_METHODS.projectsReadFile,
-        {},
-        {
-          timeoutMs: null,
-          signal: controller.signal,
-        },
-      );
-      const rejected = expect(pending).rejects.toMatchObject({
-        code: "WS_REQUEST_ABORTED",
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runPromise).toHaveBeenCalledTimes(1);
+    const controller = new AbortController();
+    const pending = transport.request(
+      WS_METHODS.projectsReadFile,
+      {},
+      {
+        timeoutMs: null,
+        signal: controller.signal,
+      },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "WS_REQUEST_ABORTED",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runPromise).toHaveBeenCalledTimes(1);
 
-      controller.abort();
-      await rejected;
-      await vi.advanceTimersByTimeAsync(250);
-      expect(runPromise).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    controller.abort();
+    await rejected;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(runPromise).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry a non-capacity unary failure in place", async () => {
@@ -2643,84 +2508,69 @@ describe("WsTransport", () => {
   });
 
   it("reconnects after an unexpected normal completion instead of reopening a zombie stream", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.domain";
-      const snapshots: string[] = [];
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.domain";
+    const snapshots: string[] = [];
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream<string>(
-        {},
-        key,
-        Stream.make("snapshot"),
-        (event) => snapshots.push(event),
-        restart,
-      );
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+    internals.startStream<string>(
+      {},
+      key,
+      Stream.make("snapshot"),
+      (event) => snapshots.push(event),
+      restart,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
-      expect(internals.streamCompletionRetryTimers.has(key)).toBe(true);
-      expect(internals.streamCleanups.has(key)).toBe(false);
-      expect(snapshots).toEqual(["snapshot"]);
+    expect(internals.streamCompletionRetryTimers.has(key)).toBe(true);
+    expect(internals.streamCleanups.has(key)).toBe(false);
+    expect(snapshots).toEqual(["snapshot"]);
 
-      expect(reconnect).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(99);
-      expect(reconnect).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(99);
+    expect(reconnect).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(reconnect).toHaveBeenCalledTimes(1);
-      expect(restart).not.toHaveBeenCalled();
-      expect(snapshots).toEqual(["snapshot"]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(restart).not.toHaveBeenCalled();
+    expect(snapshots).toEqual(["snapshot"]);
   });
 
   it("cancels a pending normal-completion restart when the stream is unsubscribed", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.domain";
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.domain";
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream({}, key, Stream.empty, () => undefined, restart);
-      await Promise.resolve();
-      await internals.stopStream(key);
-      await vi.advanceTimersByTimeAsync(5_000);
+    internals.startStream({}, key, Stream.empty, () => undefined, restart);
+    await Promise.resolve();
+    await internals.stopStream(key);
+    await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(restart).not.toHaveBeenCalled();
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(internals.streamCompletionRetryTimers.has(key)).toBe(false);
-      expect(internals.streamCompletionRetries.has(key)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restart).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(internals.streamCompletionRetryTimers.has(key)).toBe(false);
+    expect(internals.streamCompletionRetries.has(key)).toBe(false);
   });
 
   it("does not restart a normally-completed stream from a superseded session generation", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const { internals } = makeBareTransport();
-      const key = "orchestration.domain";
-      const restart = vi.fn();
-      const reconnect = vi.mocked(internals.reconnect);
+    useFakeClock();
+    const { internals } = makeBareTransport();
+    const key = "orchestration.domain";
+    const restart = vi.fn();
+    const reconnect = vi.mocked(internals.reconnect);
 
-      internals.startStream({}, key, Stream.empty, () => undefined, restart);
-      await Promise.resolve();
-      internals.sessionVersion += 1;
-      await vi.advanceTimersByTimeAsync(5_000);
+    internals.startStream({}, key, Stream.empty, () => undefined, restart);
+    await Promise.resolve();
+    internals.sessionVersion += 1;
+    await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(restart).not.toHaveBeenCalled();
-      expect(reconnect).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restart).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it("retries duplicate-rejected streams in place despite the non-retryable marker", () => {
@@ -2873,27 +2723,23 @@ describe("WsTransport", () => {
 
   it("cancels owned capacity retry timers when a stream stops", async () => {
     vi.useFakeTimers();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const key = "orchestration.thread:thread-cancel-retry";
-      const retry = vi.fn();
-      const timeoutId = window.setTimeout(retry, 1_000);
-      internals.streamCapacityRetries.set(key, 2);
-      internals.projectFileWatchRetries.set(key, 2);
-      internals.streamCapacityRetryTimers.set(key, timeoutId);
+    const { transport, internals } = makeBareTransport();
+    const key = "orchestration.thread:thread-cancel-retry";
+    const retry = vi.fn();
+    const timeoutId = window.setTimeout(retry, 1_000);
+    internals.streamCapacityRetries.set(key, 2);
+    internals.projectFileWatchRetries.set(key, 2);
+    internals.streamCapacityRetryTimers.set(key, timeoutId);
 
-      await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, {
-        threadId: "thread-cancel-retry",
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
+    await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, {
+      threadId: "thread-cancel-retry",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(retry).not.toHaveBeenCalled();
-      expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
-      expect(internals.streamCapacityRetries.has(key)).toBe(false);
-      expect(internals.projectFileWatchRetries.has(key)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(retry).not.toHaveBeenCalled();
+    expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
+    expect(internals.streamCapacityRetries.has(key)).toBe(false);
+    expect(internals.projectFileWatchRetries.has(key)).toBe(false);
   });
 
   it("does not let stale or duplicate thread restarts replace the active stream", async () => {
@@ -2974,30 +2820,26 @@ describe("WsTransport", () => {
 
   it("retains shell and thread subscription intent while the initial connection is unavailable", async () => {
     vi.useFakeTimers();
-    try {
-      const { transport, internals } = makeBareTransport();
-      const threadId = "thread-slow-start";
-      Object.assign(internals, {
-        shellSubscribed: false,
-        getClient: vi.fn(() => new Promise(() => {})),
-      });
+    const { transport, internals } = makeBareTransport();
+    const threadId = "thread-slow-start";
+    Object.assign(internals, {
+      shellSubscribed: false,
+      getClient: vi.fn(() => new Promise(() => {})),
+    });
 
-      const shellRequest = transport
-        .request(ORCHESTRATION_WS_METHODS.subscribeShell, {}, { timeoutMs: 25 })
-        .catch((error: unknown) => error);
-      const threadRequest = transport
-        .request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId }, { timeoutMs: 25 })
-        .catch((error: unknown) => error);
+    const shellRequest = transport
+      .request(ORCHESTRATION_WS_METHODS.subscribeShell, {}, { timeoutMs: 25 })
+      .catch((error: unknown) => error);
+    const threadRequest = transport
+      .request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId }, { timeoutMs: 25 })
+      .catch((error: unknown) => error);
 
-      await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(25);
 
-      await expect(shellRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
-      await expect(threadRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
-      expect(internals.shellSubscribed).toBe(true);
-      expect(internals.threadSubscriptions.get(threadId)).toEqual({ threadId });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(shellRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+    await expect(threadRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+    expect(internals.shellSubscribed).toBe(true);
+    expect(internals.threadSubscriptions.get(threadId)).toEqual({ threadId });
   });
 
   it("does not start the project-agent stream when unsubscribe lands during the connect wait", async () => {
@@ -3109,113 +2951,103 @@ describe("WsTransport", () => {
   });
 
   it("keeps reconnecting and restores shell, thread and file subscriptions after recovery", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const transport = Object.create(WsTransport.prototype) as WsTransport;
-      const internals = transport as unknown as WsTransportInternals;
-      const threadId = "thread-reconnect";
-      const input = { threadId };
-      const client = { connected: true };
-      const createSession = vi
-        .fn()
-        .mockImplementationOnce(() => ({
-          clientPromise: Promise.reject(new Error("starting-1")),
-          featureSession: { id: 1, failed: false },
-        }))
-        .mockImplementationOnce(() => ({
-          clientPromise: Promise.reject(new Error("starting-2")),
-          featureSession: { id: 2, failed: false },
-        }))
-        .mockImplementationOnce(() => ({
-          clientPromise: Promise.resolve(client),
-          featureSession: { id: 3, failed: false },
-        }));
-      const startChannelStream = vi.fn();
-      const startShellStream = vi.fn(async () => undefined);
-      const startThreadStream = vi.fn(async () => undefined);
-      const startProjectFileChangeStream = vi.fn();
-      const watchedFile = {
-        input: { cwd: "/repo", relativePath: "app.ts" },
-        listeners: new Set([vi.fn()]),
-      };
-      const fileKey = projectFileChangeStreamKey(watchedFile.input);
-      Object.assign(internals, {
-        disposed: false,
-        state: "closed",
-        stateListeners: new Set(),
-        reconnectFailures: 0,
-        lifetime: new AbortController(),
-        listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
-        shellSubscribed: true,
-        threadSubscriptions: new Map([[threadId, input]]),
-        projectFileSubscriptions: new Map([[fileKey, watchedFile]]),
-        projectAgentSubscriptions: new Map(),
-        startProjectFileChangeStream,
-        runtime: null,
-        clientScope: null,
-        createSession,
-        takeCurrentRuntime: () => null,
-        closeRuntime: vi.fn(async () => undefined),
-        startChannelStream,
-        startShellStream,
-        refreshThreadSubscriptionInput: () => input,
-        startThreadStream,
-        recovery: makeRecoveryState(),
-      });
+    useFakeClock();
+    const transport = Object.create(WsTransport.prototype) as WsTransport;
+    const internals = transport as unknown as WsTransportInternals;
+    const threadId = "thread-reconnect";
+    const input = { threadId };
+    const client = { connected: true };
+    const createSession = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        clientPromise: Promise.reject(new Error("starting-1")),
+        featureSession: { id: 1, failed: false },
+      }))
+      .mockImplementationOnce(() => ({
+        clientPromise: Promise.reject(new Error("starting-2")),
+        featureSession: { id: 2, failed: false },
+      }))
+      .mockImplementationOnce(() => ({
+        clientPromise: Promise.resolve(client),
+        featureSession: { id: 3, failed: false },
+      }));
+    const startChannelStream = vi.fn();
+    const startShellStream = vi.fn(async () => undefined);
+    const startThreadStream = vi.fn(async () => undefined);
+    const startProjectFileChangeStream = vi.fn();
+    const watchedFile = {
+      input: { cwd: "/repo", relativePath: "app.ts" },
+      listeners: new Set([vi.fn()]),
+    };
+    const fileKey = projectFileChangeStreamKey(watchedFile.input);
+    Object.assign(internals, {
+      disposed: false,
+      state: "closed",
+      stateListeners: new Set(),
+      reconnectFailures: 0,
+      lifetime: new AbortController(),
+      listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
+      shellSubscribed: true,
+      threadSubscriptions: new Map([[threadId, input]]),
+      projectFileSubscriptions: new Map([[fileKey, watchedFile]]),
+      projectAgentSubscriptions: new Map(),
+      startProjectFileChangeStream,
+      runtime: null,
+      clientScope: null,
+      createSession,
+      takeCurrentRuntime: () => null,
+      closeRuntime: vi.fn(async () => undefined),
+      startChannelStream,
+      startShellStream,
+      refreshThreadSubscriptionInput: () => input,
+      startThreadStream,
+      recovery: makeRecoveryState(),
+    });
 
-      const recovery = internals.openReconnectSession();
-      await vi.advanceTimersByTimeAsync(500);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.advanceTimersByTimeAsync(2_000);
+    const recovery = internals.openReconnectSession();
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
 
-      await expect(recovery).resolves.toBe(client);
-      expect(createSession).toHaveBeenCalledTimes(3);
-      expect(startChannelStream).toHaveBeenCalledOnce();
-      expect(startShellStream).toHaveBeenCalledOnce();
-      expect(startThreadStream).toHaveBeenCalledOnce();
-      expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input);
-      expect(startProjectFileChangeStream).toHaveBeenCalledExactlyOnceWith(
-        client,
-        fileKey,
-        watchedFile,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(recovery).resolves.toBe(client);
+    expect(createSession).toHaveBeenCalledTimes(3);
+    expect(startChannelStream).toHaveBeenCalledOnce();
+    expect(startShellStream).toHaveBeenCalledOnce();
+    expect(startThreadStream).toHaveBeenCalledOnce();
+    expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input);
+    expect(startProjectFileChangeStream).toHaveBeenCalledExactlyOnceWith(
+      client,
+      fileKey,
+      watchedFile,
+    );
   });
 
   it("cancels a pending reconnect delay during transport shutdown", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const transport = Object.create(WsTransport.prototype) as WsTransport;
-      const internals = transport as unknown as WsTransportInternals & {
-        disposed: boolean;
-        lifetime: AbortController;
-      };
-      const lifetime = new AbortController();
-      const createSession = vi.fn();
-      Object.assign(internals, {
-        disposed: false,
-        state: "closed",
-        stateListeners: new Set(),
-        reconnectFailures: 0,
-        lifetime,
-        createSession,
-        recovery: makeRecoveryState(),
-      });
+    useFakeClock();
+    const transport = Object.create(WsTransport.prototype) as WsTransport;
+    const internals = transport as unknown as WsTransportInternals & {
+      disposed: boolean;
+      lifetime: AbortController;
+    };
+    const lifetime = new AbortController();
+    const createSession = vi.fn();
+    Object.assign(internals, {
+      disposed: false,
+      state: "closed",
+      stateListeners: new Set(),
+      reconnectFailures: 0,
+      lifetime,
+      createSession,
+      recovery: makeRecoveryState(),
+    });
 
-      const recovery = internals.openReconnectSession();
-      internals.disposed = true;
-      lifetime.abort(new Error("Transport disposed"));
+    const recovery = internals.openReconnectSession();
+    internals.disposed = true;
+    lifetime.abort(new Error("Transport disposed"));
 
-      await expect(recovery).rejects.toThrow("Transport disposed");
-      expect(createSession).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(recovery).rejects.toThrow("Transport disposed");
+    expect(createSession).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("latches terminal compatibility guidance for late UI subscribers", () => {
@@ -3244,29 +3076,25 @@ describe("WsTransport", () => {
 
   it("owns request deadlines and external aborts without leaving timers active", async () => {
     vi.useFakeTimers();
-    try {
-      const deadline = makeRequestAbortScope({ timeoutMs: 25 });
-      expect(deadline.signal?.aborted).toBe(false);
-      expect(deadline.didTimeout()).toBe(false);
+    const deadline = makeRequestAbortScope({ timeoutMs: 25 });
+    expect(deadline.signal?.aborted).toBe(false);
+    expect(deadline.didTimeout()).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(25);
-      expect(deadline.signal?.aborted).toBe(true);
-      expect(deadline.didTimeout()).toBe(true);
-      deadline.cleanup();
-      deadline.cleanup();
+    await vi.advanceTimersByTimeAsync(25);
+    expect(deadline.signal?.aborted).toBe(true);
+    expect(deadline.didTimeout()).toBe(true);
+    deadline.cleanup();
+    deadline.cleanup();
 
-      const external = new AbortController();
-      const cancelled = makeRequestAbortScope({ timeoutMs: 1_000, signal: external.signal });
-      external.abort(new Error("cancelled by caller"));
-      expect(cancelled.signal?.aborted).toBe(true);
-      expect(cancelled.didTimeout()).toBe(false);
+    const external = new AbortController();
+    const cancelled = makeRequestAbortScope({ timeoutMs: 1_000, signal: external.signal });
+    external.abort(new Error("cancelled by caller"));
+    expect(cancelled.signal?.aborted).toBe(true);
+    expect(cancelled.didTimeout()).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(cancelled.didTimeout()).toBe(false);
-      cancelled.cleanup();
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(cancelled.didTimeout()).toBe(false);
+    cancelled.cleanup();
   });
 
   it("keeps the shared lifecycle stream while either lifecycle channel is active", () => {
@@ -3302,8 +3130,7 @@ describe("WsTransport", () => {
     await waitForSockets(1);
 
     expect(transport.getState()).toBe("connecting");
-    sockets[0]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[0]!);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const negotiateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
@@ -3324,10 +3151,7 @@ describe("WsTransport", () => {
 
   it("starts one recovery when an unsubscribed feature socket fails before opening", async () => {
     useFakeClock();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
-    );
+    mockHttpNegotiation();
 
     const transport = new WsTransport("ws://localhost:3020");
     await waitForSockets(1);
@@ -3536,8 +3360,7 @@ describe("WsTransport", () => {
       compatibility: WsBootstrapNegotiateResult | null;
     };
     await waitForSockets(1);
-    sockets[0]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[0]!);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
 
@@ -3571,8 +3394,7 @@ describe("WsTransport", () => {
       sequence: number;
     };
     await waitForSockets(1);
-    sockets[0]!.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, sockets[0]!);
     internals.latestPushByChannel.set("server.welcome", { stale: true });
     internals.sequence = 7;
 
@@ -3656,28 +3478,22 @@ describe("WsTransport", () => {
 });
 
 it("times out a stuck unary request with the default deadline and retry guidance", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
+  useFakeClock();
   const { transport, internals } = makeBareTransport();
   Object.assign(internals, {
     getClient: async () => ({ [WS_METHODS.gitStatus]: () => Effect.never }),
     getClientRuntime: () => ({ runPromise: Effect.runPromise }),
   });
-  try {
-    const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(await verdict).toMatchObject({
-      code: "WS_REQUEST_TIMEOUT",
-      message: expect.stringContaining("Try again when the server responds"),
-    });
-  } finally {
-    vi.useRealTimers();
-  }
+  const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(await verdict).toMatchObject({
+    code: "WS_REQUEST_TIMEOUT",
+    message: expect.stringContaining("Try again when the server responds"),
+  });
 });
 
 it("lets providerCompactThread outlive the default deadline until its caller cancels", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
+  useFakeClock();
   const { transport, internals } = makeBareTransport();
   const caller = new AbortController();
   Object.assign(internals, {
@@ -3714,14 +3530,12 @@ it("does not poll server runtime status on an open socket that advertises it", a
       ),
     ),
   );
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
+  useFakeClock();
   const transport = new WsTransport("ws://localhost:3020");
   try {
     await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
-    socket.serveVoidRpc();
-    await waitUntil(() => expect(transport.getState()).toBe("open"));
+    await openRpcSocket(transport, socket);
     await vi.advanceTimersByTimeAsync(30_000);
     const requestedTags = socket.sent
       .map((data) => JSON.parse(String(data)) as { _tag?: string; tag?: string })
@@ -3749,8 +3563,7 @@ describe("terminal remote recovery", () => {
     try {
       await waitUntil(() => expect(sockets).toHaveLength(1));
       expect(track).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "succeeded" }));
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       expect(track).toHaveBeenCalledWith({
         event: "remote.connection-succeeded",
         outcome: "succeeded",
@@ -3763,8 +3576,7 @@ describe("terminal remote recovery", () => {
   it.each(["revoked", "needs-sign-in", "incompatible", "stopped"] as const)(
     "pauses %s without replaying failed work when the controller resumes the same transport",
     async (state) => {
-      vi.useFakeTimers();
-      bindWindowTimersToCurrentGlobals();
+      useFakeClock();
       const fetch = vi.fn().mockResolvedValue(unavailable(state));
       const track = vi.fn();
       Object.assign(window, { desktopBridge: { productAnalytics: { track } } });
@@ -3797,8 +3609,7 @@ describe("terminal remote recovery", () => {
         transport.resumeRemoteConnection();
         await expect(recovery).resolves.toBe(true);
         await waitUntil(() => expect(sockets).toHaveLength(1));
-        sockets[0]!.serveVoidRpc();
-        await waitUntil(() => expect(transport.getState()).toBe("open"));
+        await openRpcSocket(transport, sockets[0]!);
         expect(fetch).toHaveBeenCalledTimes(2);
         expect(
           sockets[0]!.sent.some((frame) => String(frame).includes(WS_METHODS.terminalClose)),
@@ -3811,8 +3622,7 @@ describe("terminal remote recovery", () => {
   );
 
   it("requires manual recovery for a renderer protocol refusal even when the controller remains healthy", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const refusal = new WsCompatibilityError({
       message: "Update this client.",
       code: "WS_PROTOCOL_INCOMPATIBLE",
@@ -3837,8 +3647,7 @@ describe("terminal remote recovery", () => {
       fetch.mockResolvedValue(ready());
       transport.resumeRemoteConnection();
       await waitUntil(() => expect(sockets).toHaveLength(1));
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await transport.dispose();
@@ -3864,15 +3673,13 @@ describe("terminal remote recovery", () => {
   });
 
   it("starts a fresh recovery after a terminal reconnect is still settling", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const fetch = vi.fn().mockResolvedValue(ready());
     vi.stubGlobal("fetch", fetch);
     const transport = new WsTransport(remoteUrl);
     try {
       await waitUntil(() => expect(sockets).toHaveLength(1));
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       let resumed = false;
       transport.onStateChange((state) => {
         if (state !== "closed" || resumed) return;
@@ -3883,8 +3690,7 @@ describe("terminal remote recovery", () => {
       fetch.mockResolvedValue(unavailable("needs-sign-in"));
       sockets[0]!.close(1006, "lost connection");
       await waitUntil(() => expect(sockets).toHaveLength(2), { timeout: 5_000 });
-      sockets[1]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[1]!);
       expect(resumed).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(3);
     } finally {
@@ -3906,8 +3712,7 @@ describe("terminal remote recovery", () => {
       transport.resumeRemoteConnection();
       refuse(unavailable("revoked"));
       await waitUntil(() => expect(sockets).toHaveLength(1), { timeout: 5_000 });
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await transport.dispose();
@@ -3915,16 +3720,14 @@ describe("terminal remote recovery", () => {
   });
 
   it("preserves the normal environment-read deadline on a connected but silent host", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const track = vi.fn();
     Object.assign(window, { desktopBridge: { productAnalytics: { track } } });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
     const transport = new WsTransport(remoteUrl);
     try {
       await waitUntil(() => expect(sockets).toHaveLength(1));
-      sockets[0]!.serveVoidRpc();
-      await waitUntil(() => expect(transport.getState()).toBe("open"));
+      await openRpcSocket(transport, sockets[0]!);
       sockets[0]!.onSend = null;
       let settled = false;
       const pending = transport.request(WS_METHODS.serverGetEnvironment).catch((error) => {
@@ -4029,8 +3832,7 @@ describe("terminal remote recovery", () => {
   });
 
   it("keeps retrying older controllers' generic offline responses", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
+    useFakeClock();
     const fetch = vi.fn().mockResolvedValue(jsonResponse(503, null));
     vi.stubGlobal("fetch", fetch);
     const transport = new WsTransport(remoteUrl);

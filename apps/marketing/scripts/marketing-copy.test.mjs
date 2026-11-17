@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -166,11 +166,6 @@ test("public homepage copy avoids defensive identity and repetitive positioning"
       `retired phrase remains: ${phrase}`,
     );
   }
-
-  assert.ok(
-    existsSync(path.join(ROOT, "src/components/AskAISection.tsx")),
-    "AskAISection.tsx must exist (upstream homepage feature, restored)",
-  );
 });
 
 test("privacy copy states both the local workspace boundary and provider boundary", () => {

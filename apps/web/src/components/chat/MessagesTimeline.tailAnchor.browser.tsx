@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import type { deriveTimelineEntries } from "../../session-logic";
 
 type TimelineEntries = ReturnType<typeof deriveTimelineEntries>;
@@ -130,27 +131,14 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   return (
     <div style={{ height: VIEWPORT_HEIGHT_PX }}>
       <MessagesTimeline
+        {...makeTimelineBaseProps()}
         hasMessages={entries.length > 0}
         isWorking={isWorking}
-        activeTurnInProgress={false}
         activeTurnStartedAt={activeTurnStartedAt}
         listRef={listRef}
         tailAnchorMessageId={tailAnchorMessageId}
         followLiveOutput={followLiveOutput}
         timelineEntries={entries}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />
     </div>
   );

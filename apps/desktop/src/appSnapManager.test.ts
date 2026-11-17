@@ -1714,15 +1714,17 @@ describe("AppSnap permission guide", () => {
 
   it("writes close and SIGTERMs the guide when hidden", async () => {
     const { manager, guideChild, dispose } = await createGuideManager();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       manager.hidePermissionGuide();
       await flushPromises();
       expect(guideChild.stdin.read()?.toString().trimEnd()).toBe("close");
+      await vi.advanceTimersByTimeAsync(499);
       expect(guideChild.kill).not.toHaveBeenCalled();
-      // Wait for the 500 ms SIGTERM delay to elapse.
-      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      await vi.advanceTimersByTimeAsync(1);
       expect(guideChild.kill).toHaveBeenCalledWith("SIGTERM");
     } finally {
+      vi.useRealTimers();
       dispose();
     }
   });
@@ -2200,6 +2202,7 @@ describe("AppSnap permission setup sessions", () => {
     const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
     const { manager, guideChildren, requests, openSettingsPane, closeSettingsApp, dispose } =
       createSessionManager(state);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       // Callers may pass kinds out of order with dupes: the queue build sorts
       // into [accessibility, inputMonitoring, screenRecording] and dedupes, so
@@ -2215,16 +2218,18 @@ describe("AppSnap permission setup sessions", () => {
       // The grant watch sees Accessibility flip: the first coach closes and the
       // session advances to Screen Recording on its own.
       state.accessibility = "granted";
-      await vi.waitFor(() => expect(guideChildren).toHaveLength(2), { timeout: 4000 });
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      await flushPromises();
+      expect(guideChildren).toHaveLength(2);
       expect(guideChildren[0]!.stdin.read()?.toString().trimEnd()).toBe("close");
       expect(openSettingsPane).toHaveBeenLastCalledWith("screen-recording");
       expect(requests).toEqual([]);
 
       state.screenRecording = "granted";
-      await vi.waitFor(
-        () => expect(guideChildren[1]!.stdin.read()?.toString().trimEnd()).toBe("close"),
-        { timeout: 4000 },
-      );
+      await vi.advanceTimersByTimeAsync(800);
+      await flushPromises();
+      expect(guideChildren[1]!.stdin.read()?.toString().trimEnd()).toBe("close");
       await flushPromises();
       // The session is done: two panes opened, two coaches, no OS prompts, and
       // the Settings the session opened is closed again.
@@ -2233,6 +2238,7 @@ describe("AppSnap permission setup sessions", () => {
       expect(closeSettingsApp).toHaveBeenCalledTimes(1);
     } finally {
       dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2257,52 +2263,50 @@ describe("AppSnap permission setup sessions", () => {
     }
   });
 
-  it("ends the session when the coach is dismissed instead of respawning", async () => {
-    const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
-    const { manager, guideChildren, requests, closeSettingsApp, onPermissionGuideState, dispose } =
-      createSessionManager(state);
-    try {
-      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
-      await flushPromises();
-      expect(guideChildren).toHaveLength(1);
-      // The user dismisses the first coach: the exit is not a grant, so the
-      // session must stop rather than open the next pane over their dismissal.
-      // A dismissed session never closes the user's Settings either.
-      guideChildren[0]!.emit("exit", 0, null);
-      guideChildren[0]!.stdout.end();
-      guideChildren[0]!.stderr.end();
-      guideChildren[0]!.emit("close", 0, null);
-      await flushPromises();
-      await new Promise<void>((resolve) => setTimeout(resolve, 900));
-      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
-      expect(guideChildren).toHaveLength(1);
-      expect(requests).toEqual([]);
-      expect(closeSettingsApp).not.toHaveBeenCalled();
-    } finally {
-      dispose();
-    }
-  });
-
-  it("reports closed and ends the session when the guide helper fails to spawn", async () => {
-    const state = { accessibility: "denied", screenRecording: "denied", inputMonitoring: "denied" };
-    const { manager, guideChildren, requests, closeSettingsApp, onPermissionGuideState, dispose } =
-      createSessionManager(state);
-    try {
-      await manager.startPermissionSetup(["accessibility", "screenRecording"]);
-      await flushPromises();
-      expect(guideChildren).toHaveLength(1);
-      // A spawn-level failure (EACCES/ENOENT) emits `error` without `exit`.
-      guideChildren[0]!.emit("error", new Error("spawn EACCES"));
-      await flushPromises();
-      await new Promise<void>((resolve) => setTimeout(resolve, 900));
-      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
-      expect(guideChildren).toHaveLength(1);
-      expect(requests).toEqual([]);
-      expect(closeSettingsApp).not.toHaveBeenCalled();
-    } finally {
-      dispose();
-    }
-  });
+  it.each(["dismissed", "spawn failure"] as const)(
+    "ends the setup session without reopening the coach after %s",
+    async (outcome) => {
+      const state = {
+        accessibility: "denied",
+        screenRecording: "denied",
+        inputMonitoring: "denied",
+      };
+      const {
+        manager,
+        guideChildren,
+        requests,
+        closeSettingsApp,
+        onPermissionGuideState,
+        dispose,
+      } = createSessionManager(state);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        await manager.startPermissionSetup(["accessibility", "screenRecording"]);
+        await flushPromises();
+        expect(guideChildren).toHaveLength(1);
+        const coach = guideChildren[0]!;
+        if (outcome === "dismissed") {
+          coach.emit("exit", 0, null);
+          coach.stdout.end();
+          coach.stderr.end();
+          coach.emit("close", 0, null);
+        } else {
+          // A spawn failure emits an error without an exit.
+          coach.emit("error", new Error("spawn EACCES"));
+        }
+        await flushPromises();
+        await vi.advanceTimersByTimeAsync(800);
+        await flushPromises();
+        expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
+        expect(guideChildren).toHaveLength(1);
+        expect(requests).toEqual([]);
+        expect(closeSettingsApp).not.toHaveBeenCalled();
+      } finally {
+        dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("opens and closes nothing when every grant is already held", async () => {
     const { manager, guideChildren, openSettingsPane, closeSettingsApp, dispose } =
