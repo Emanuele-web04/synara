@@ -1221,5 +1221,12 @@
   "image_retryPreview": "Retry image preview",
   "appSnapHeroAddedToChat": "Added to chat",
   "account_viewPublicProfile": "View public profile",
-  "account_makeYourProfilePublic": "Make your profile public"
+  "account_makeYourProfilePublic": "Make your profile public",
+  "video_couldNotPlay": "Couldn’t play this video",
+  "video_couldNotPlayDescription": "The format may be unsupported, or the file may have moved.",
+  "video_inlinePlaybackUnavailable": "Inline playback isn’t available for this host",
+  "video_inlinePlaybackUnavailableDescription": "Download the video to watch it.",
+  "video_downloadVideo": "Download video",
+  "video_couldNotDownload": "Could not download video",
+  "video_retryPreview": "Retry video preview"
 }

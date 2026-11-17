@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildLocalImageUrl,
   isLocalImageMarkdownSrc,
+  isLocalVideoMarkdownSrc,
   normalizeMarkdownImagePath,
 } from "./localImageUrls";
 
@@ -20,6 +21,20 @@ describe("local image URL helpers", () => {
     expect(isLocalImageMarkdownSrc("D:/codex/generated_images/thread/call.png")).toBe(true);
     expect(isLocalImageMarkdownSrc("https://example.com/image.png")).toBe(false);
     expect(isLocalImageMarkdownSrc("/Users/me/file.txt")).toBe(false);
+  });
+
+  it("detects local markdown video paths with the same locality rules", () => {
+    expect(isLocalVideoMarkdownSrc("out/clip.mp4")).toBe(true);
+    expect(isLocalVideoMarkdownSrc("./demo.WEBM")).toBe(true);
+    expect(isLocalVideoMarkdownSrc("/tmp/simulator-recording.mov")).toBe(true);
+    expect(isLocalVideoMarkdownSrc("C:\\Users\\me\\clip.m4v")).toBe(true);
+    expect(isLocalVideoMarkdownSrc("file:///C:/Users/me/clip%20one.ogv")).toBe(true);
+    expect(isLocalVideoMarkdownSrc("https://example.com/clip.mp4")).toBe(false);
+    expect(isLocalVideoMarkdownSrc("/Users/me/file.mkv")).toBe(false);
+    // Kinds never overlap: a video is never an <img> source and vice versa.
+    expect(isLocalImageMarkdownSrc("out/clip.mp4")).toBe(false);
+    expect(isLocalVideoMarkdownSrc("out/shot.png")).toBe(false);
+    expect(isLocalVideoMarkdownSrc("out/spec.pdf")).toBe(false);
   });
 
   it("drops the leading slash from Windows file URLs", () => {
