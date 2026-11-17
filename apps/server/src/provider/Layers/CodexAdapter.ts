@@ -35,7 +35,10 @@ import {
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
-import { isCodexUnstableFeaturesWarning } from "@synara/shared/codexStderr";
+import {
+  isCodexUnstableFeaturesWarning,
+  readCodexMcpSubscriptionError,
+} from "@synara/shared/codexStderr";
 
 import {
   ProviderAdapterProcessError,
@@ -1908,6 +1911,28 @@ function mapToRuntimeEvents(
         },
       },
     ];
+  }
+
+  // The startup notification owns the server name; rmcp worker stderr does not carry it.
+  if (event.method === "mcpServer/startupStatus/updated") {
+    const name = asTrimmedString(payload?.name);
+    const error = asTrimmedString(payload?.error);
+    if (payload?.status === "failed" && name && error) {
+      const subscriptionError = readCodexMcpSubscriptionError(error);
+      return [
+        {
+          type: "runtime.warning",
+          ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+          payload: {
+            message: sanitizeUnmappedProviderDetail(
+              `MCP server "${name}" failed to start${subscriptionError ? " (HTTP 403)" : ""}: ${subscriptionError ?? error}`,
+              2_000,
+            )!,
+            detail: sanitizeUnmappedProviderData(event.payload),
+          },
+        },
+      ];
+    }
   }
 
   if (event.method === "configWarning") {

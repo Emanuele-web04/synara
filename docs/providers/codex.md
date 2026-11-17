@@ -59,6 +59,32 @@ loads those settings from its user-level overlay, so this duplicate diagnostic
 does not add a runtime-warning row. Warnings for other project configuration
 files and actual configuration errors remain visible.
 
+## Startup configuration and MCP warnings
+
+Codex 0.169 can report the same `[features].multi_agent` deprecation through
+stderr, `configWarning`, and a thread `warning`. Synara keeps one configuration
+warning per app-server process. It does not rewrite that setting in the source
+config or its generated overlay: the legacy key still controls the V1 fallback,
+and removing it can change the user's opt-out. Review the configuration for the
+selected Codex account, including its active profile and project layers. Modern
+`agents.enabled = false` disables subagent tools, except when
+`features.multi_agent_v2` is explicitly enabled. Keep older CLI compatibility in
+mind when changing a config shared with other Codex installations.
+
+An MCP HTTP 403 with `subscription_inactive` or `subscription_required` means
+the configured service refused access. Synara leaves the connection, credentials,
+and subscription untouched. A failed MCP startup notification supplies the server
+name and state for the existing runtime-warning history. The anonymous `rmcp`
+worker error remains visible too; its body alone does not identify a server.
+Identical subscription worker errors are collapsed within a startup attempt;
+a later retry or ready update allows them to be reported again. Other transport,
+authorization, and configuration failures remain visible.
+
+For a canceled or missing SuperX subscription, review that service's subscription
+or disable/remove its server in the effective Codex configuration if it is no
+longer wanted. Reinstalling Synara or changing an unrelated provider account does
+not grant service access.
+
 ## Adding a second account
 
 1. In the **Codex accounts** list, choose **Add account**.

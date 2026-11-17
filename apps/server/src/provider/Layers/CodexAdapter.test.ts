@@ -1082,6 +1082,64 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("reports named MCP startup failures without hiding other transport errors", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const sentinel = "MCP fixture complete";
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "runtime.warning" && event.payload.message === sentinel,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+      const failures = [
+        ["billing-a", "subscription_inactive: Subscription status: canceled"],
+        ["billing-b", "subscription_required: The SuperX API requires an active subscription"],
+        ["other", "permission_denied: Workspace access denied"],
+      ];
+      for (const [name, error] of failures) {
+        for (const status of ["starting", "failed"]) {
+          lifecycleManager.emit("event", {
+            id: asEventId(`${name}-${status}`),
+            kind: "notification",
+            provider: "codex",
+            threadId: asThreadId("thread-1"),
+            createdAt: new Date().toISOString(),
+            method: "mcpServer/startupStatus/updated",
+            payload: {
+              name,
+              status,
+              error:
+                status === "failed"
+                  ? `MCP startup failed: HTTP 403: ${JSON.stringify({ error })}`
+                  : null,
+            },
+          } satisfies ProviderEvent);
+        }
+      }
+      lifecycleManager.emit("event", {
+        id: asEventId("mcp-fixture-complete"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "warning",
+        payload: { message: sentinel },
+      } satisfies ProviderEvent);
+      const events = Array.from(yield* Fiber.join(eventsFiber))
+        .slice(0, -1)
+        .filter((event) => event.type === "runtime.warning");
+      assert.equal(events.length, 3);
+      for (const [index, event] of events.entries()) {
+        assert.equal(event.type, "runtime.warning");
+        if (event.type !== "runtime.warning") continue;
+        assert.ok(event.payload.message.includes(failures[index]![0]!));
+        assert.ok(event.payload.message.includes(failures[index]![1]!));
+        const [activity] = projectProviderRuntimeActivities(event);
+        assert.equal(activity?.kind, "runtime.warning");
+        assert.match(JSON.stringify(activity?.payload), /failed/);
+      }
+    }),
+  );
+
   it.effect("retains Codex guardian and runtime warning messages as warning activities", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
