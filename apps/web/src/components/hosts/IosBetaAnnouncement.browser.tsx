@@ -4,15 +4,15 @@ import type { AccountStatus } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "vitest-browser-react";
+import { cleanup, render } from "vitest-browser-react";
 
 import { useAnnouncementSheetSlotStore } from "../announcementSheetSlot";
 import { useOnboardingDialogStore } from "../../onboarding/onboardingDialogStore";
 import {
+  ConnectionLaunchAnnouncements,
   IOS_BETA_ANNOUNCEMENT_STORAGE_KEY,
-  IOS_BETA_PAGE_URL,
-  IosBetaAnnouncement,
 } from "./IosBetaAnnouncement";
+import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "./RemoteConnectionsAnnouncement";
 
 const fixture = vi.hoisted(() => ({
   openExternal: vi.fn(async () => {}),
@@ -40,6 +40,7 @@ vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
 }));
 
 const TITLE = "Introducing Synara for iPhone";
+const REMOTE_TITLE = "Introducing Remote Connections";
 const clients: QueryClient[] = [];
 const acknowledged = () =>
   JSON.parse(localStorage.getItem(IOS_BETA_ANNOUNCEMENT_STORAGE_KEY) ?? "null");
@@ -49,7 +50,7 @@ async function renderAnnouncement() {
   clients.push(client);
   return render(
     <QueryClientProvider client={client}>
-      <IosBetaAnnouncement />
+      <ConnectionLaunchAnnouncements />
     </QueryClientProvider>,
   );
 }
@@ -57,6 +58,7 @@ async function renderAnnouncement() {
 describe("IosBetaAnnouncement", () => {
   beforeEach(() => {
     localStorage.removeItem(IOS_BETA_ANNOUNCEMENT_STORAGE_KEY);
+    localStorage.removeItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY);
     fixture.openExternal.mockClear();
     fixture.remoteConnections = true;
     fixture.remote = null;
@@ -73,30 +75,46 @@ describe("IosBetaAnnouncement", () => {
       pending: [],
     });
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanup();
     for (const client of clients.splice(0)) client.clear();
     localStorage.removeItem(IOS_BETA_ANNOUNCEMENT_STORAGE_KEY);
+    localStorage.removeItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY);
+    useOnboardingDialogStore.setState(useOnboardingDialogStore.getInitialState(), true);
+    useAnnouncementSheetSlotStore.setState(useAnnouncementSheetSlotStore.getInitialState(), true);
   });
 
   it("opens the iPhone page from the call to action, once", async () => {
     await renderAnnouncement();
     await page.getByRole("button", { name: "Join the beta" }).click();
 
-    expect(fixture.openExternal).toHaveBeenCalledExactlyOnceWith(IOS_BETA_PAGE_URL);
+    expect(fixture.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://testflight.apple.com/join/56E3Edeu",
+    );
     expect(acknowledged()).toEqual({ acknowledged: true });
     await expect.element(page.getByRole("dialog", { name: TITLE })).not.toBeInTheDocument();
   });
 
-  it("stays dismissed after Not now without opening the page", async () => {
+  it("defers the Remote Connections sheet until the next launch after dismissing iPhone", async () => {
     const first = await renderAnnouncement();
-    await page.getByRole("button", { name: "Not now" }).click();
+    const iphone = page.getByRole("dialog", { name: TITLE });
+    const remote = page.getByRole("dialog", { name: REMOTE_TITLE });
+    await expect.element(iphone).toBeVisible();
+    await expect.element(remote).not.toBeInTheDocument();
+    await iphone.getByRole("button", { name: "Not now" }).click();
     expect(fixture.openExternal).not.toHaveBeenCalled();
     expect(acknowledged()).toEqual({ acknowledged: true });
+    await expect.element(iphone).not.toBeInTheDocument();
+    await expect.element(remote).not.toBeInTheDocument();
+    expect(localStorage.getItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY)).toBeNull();
     await first.unmount();
 
     useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
     await renderAnnouncement();
-    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await expect
+      .element(remote.getByText("The iPhone app is now in beta.", { exact: false }))
+      .toBeVisible();
+    await expect.element(iphone).not.toBeInTheDocument();
   });
 
   it("stays hidden where this computer cannot pair an iPhone", async () => {
@@ -110,6 +128,9 @@ describe("IosBetaAnnouncement", () => {
     useOnboardingDialogStore.setState({ isOpen: true });
     await renderAnnouncement();
     await expect.poll(acknowledged).toEqual({ acknowledged: true });
+    expect(
+      JSON.parse(localStorage.getItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY) ?? "null"),
+    ).toEqual({ acknowledged: true });
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   });
 });

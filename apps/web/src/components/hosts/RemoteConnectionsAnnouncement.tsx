@@ -85,20 +85,21 @@ export function useClearOfOutsideDialogs(wanted: boolean): boolean {
   return enrollment.data === undefined ? enrollment.isError : !enrollment.data;
 }
 
-export function RemoteConnectionsAnnouncement() {
+export function RemoteConnectionsAnnouncement({ deferred = false }: { deferred?: boolean }) {
   const navigate = useNavigate();
   const openPlans = useOpenSynaraPlan();
   const [storage, setStorage] = useAnnouncementStorage();
   const onboardingOpen = useOnboardingDialogStore((state) => state.isOpen);
   const available = useRemoteConnectionsAvailable();
   const unseen = available && !storage.acknowledged;
-  const clear = useClearOfOutsideDialogs(unseen);
+  const wanted = unseen && !deferred;
+  const clear = useClearOfOutsideDialogs(wanted);
 
   const { status, statusQuery } = useAccount();
   const billingOptions = accountBillingQueryOptions(status);
   const billing = useQuery({
     ...billingOptions,
-    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && unseen,
+    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && wanted,
   });
   const checkingAccess =
     ACCOUNT_BILLING_ENABLED &&
@@ -113,15 +114,15 @@ export function RemoteConnectionsAnnouncement() {
 
   return (
     <AnnouncementSheet
-      open={unseen && clear && !checkingAccess}
+      open={wanted && clear && !checkingAccess}
       order="last"
       presentation="feature"
       hero={<RemoteConnectionsAnnouncementHero />}
       title="Introducing Remote Connections"
       description={
         offerPlans
-          ? "Control Synara on one computer from another. Included with Synara Alto; iPhone and iPad are coming soon."
-          : "Control Synara on one computer from another. Pair a device to start; iPhone and iPad are coming soon."
+          ? "Control Synara on one computer from another with Synara Alto. The iPhone app is now in beta."
+          : "Control Synara on one computer from another. Pair a device to start. The iPhone app is now in beta."
       }
       dismissLabel="Not now"
       confirmLabel={offerPlans ? "View Alto plans" : "Connect a device"}

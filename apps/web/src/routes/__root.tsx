@@ -47,8 +47,7 @@ import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
-import { IosBetaAnnouncement } from "../components/hosts/IosBetaAnnouncement";
-import { RemoteConnectionsAnnouncement } from "../components/hosts/RemoteConnectionsAnnouncement";
+import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
@@ -410,8 +409,7 @@ function RootRouteView() {
               </SafariAccessOnboarding>
               <GlobalOnboardingDialog />
               <ProjectImportAnnouncementDialog />
-              <RemoteConnectionsAnnouncement />
-              <IosBetaAnnouncement />
+              <ConnectionLaunchAnnouncements />
             </>
           )}
           <GlobalProjectImportDialog />

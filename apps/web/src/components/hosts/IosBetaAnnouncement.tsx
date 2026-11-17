@@ -1,8 +1,7 @@
 // FILE: IosBetaAnnouncement.tsx
-// Purpose: One-time launch sheet for the Synara for iPhone beta. The call to action opens
-//          the iPhone page on the website, which covers TestFlight, Alto and pairing.
+// Purpose: Shows at most one connection launch sheet per startup and links to TestFlight.
 // Layer: Root web overlay
-// Exports: IosBetaAnnouncement, IOS_BETA_ANNOUNCEMENT_STORAGE_KEY, IOS_BETA_PAGE_URL
+// Exports: ConnectionLaunchAnnouncements, IOS_BETA_ANNOUNCEMENT_STORAGE_KEY
 //
 // Shown only where this computer can pair an iPhone, with the same rules as the Remote
 // Connections sheet: ordered last among startup surfaces, kept clear of the team sharing
@@ -10,7 +9,7 @@
 // the iPhone app.
 
 import { Schema } from "effect";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useTranslation } from "~/i18n";
@@ -19,6 +18,7 @@ import { cn } from "~/lib/utils";
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 import { AnnouncementSheet } from "../AnnouncementSheet";
 import {
+  RemoteConnectionsAnnouncement,
   useClearOfOutsideDialogs,
   useRemoteConnectionsAvailable,
 } from "./RemoteConnectionsAnnouncement";
@@ -28,14 +28,14 @@ import {
 } from "./RemoteConnectionsAnnouncementHero";
 
 export const IOS_BETA_ANNOUNCEMENT_STORAGE_KEY = "synara:ios-beta-announcement:v1";
-export const IOS_BETA_PAGE_URL = "https://trysynara.com/ios";
+const IOS_BETA_PAGE_URL = "https://testflight.apple.com/join/56E3Edeu";
 // The top of the iPhone Inbox; the band crops the rest of the phone.
 const IPHONE_SCREEN_SRC = "/announcements/ios-beta-iphone.png";
 
 const StorageSchema = Schema.Struct({ acknowledged: Schema.Boolean });
 const INITIAL_STORAGE: typeof StorageSchema.Type = { acknowledged: false };
 
-export function IosBetaAnnouncement() {
+export function ConnectionLaunchAnnouncements() {
   const { t } = useTranslation();
   const [storage, setStorage] = useLocalStorage(
     IOS_BETA_ANNOUNCEMENT_STORAGE_KEY,
@@ -45,28 +45,33 @@ export function IosBetaAnnouncement() {
   const onboardingOpen = useOnboardingDialogStore((state) => state.isOpen);
   const available = useRemoteConnectionsAvailable();
   const unseen = available && !storage.acknowledged;
-  const clear = useClearOfOutsideDialogs(unseen);
+  // Keep the startup choice after dismissal so the other sheet stays deferred until relaunch.
+  const [prioritizeIos] = useState(() => !storage.acknowledged);
+  const clear = useClearOfOutsideDialogs(prioritizeIos && unseen);
 
   useEffect(() => {
     if (onboardingOpen && unseen) setStorage({ acknowledged: true });
   }, [onboardingOpen, setStorage, unseen]);
 
   return (
-    <AnnouncementSheet
-      open={unseen && clear}
-      order="last"
-      presentation="feature"
-      hero={<IosBetaAnnouncementHero />}
-      title={t("workspace:introducingSynaraForIphone")}
-      description={t("workspace:iosBetaAnnouncementDescription")}
-      dismissLabel={t("common:notNow")}
-      confirmLabel={t("workspace:joinTheBeta")}
-      onDismiss={() => setStorage({ acknowledged: true })}
-      onConfirm={() => {
-        setStorage({ acknowledged: true });
-        openExternalLink(IOS_BETA_PAGE_URL);
-      }}
-    />
+    <>
+      <RemoteConnectionsAnnouncement deferred={prioritizeIos} />
+      <AnnouncementSheet
+        open={unseen && clear}
+        order="last"
+        presentation="feature"
+        hero={<IosBetaAnnouncementHero />}
+        title={t("workspace:introducingSynaraForIphone")}
+        description={t("workspace:iosBetaAnnouncementDescription")}
+        dismissLabel={t("common:notNow")}
+        confirmLabel={t("workspace:joinTheBeta")}
+        onDismiss={() => setStorage({ acknowledged: true })}
+        onConfirm={() => {
+          setStorage({ acknowledged: true });
+          openExternalLink(IOS_BETA_PAGE_URL);
+        }}
+      />
+    </>
   );
 }
 
