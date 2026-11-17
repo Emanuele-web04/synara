@@ -4,13 +4,20 @@
   "private": true,
   "files": [
     "src",
+    "ios",
     "desktop",
-    "react-native.config.js"
+    "react-native.config.js",
+    "synara-webview.podspec"
   ],
   "main": "src/index.ts",
   "codegenConfig": {
     "name": "SynaraWebViewSpec",
     "type": "all",
-    "jsSrcsDir": "src"
+    "jsSrcsDir": "src",
+    "ios": {
+      "componentProvider": {
+        "SynaraWebView": "SynaraWebViewComponentView"
+      }
+    }
   }
 }
