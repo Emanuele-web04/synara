@@ -4,7 +4,8 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
-import { expect, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
+import os from "node:os";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
@@ -134,6 +135,13 @@ function runGit(
   });
 }
 
+// Built once per file through git, then cloned: a fresh repo costs six git spawns.
+let initialRepoTemplate: string | undefined;
+afterAll(() => {
+  if (initialRepoTemplate) fs.rmSync(initialRepoTemplate, { recursive: true, force: true });
+  initialRepoTemplate = undefined;
+});
+
 function initRepo(
   cwd: string,
 ): Effect.Effect<
@@ -142,13 +150,22 @@ function initRepo(
   FileSystem.FileSystem | Scope.Scope | GitCore
 > {
   return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
+    if (initialRepoTemplate) {
+      fs.cpSync(initialRepoTemplate, cwd, { recursive: true });
+      // Copied files carry new inode/ctime values; settle the index stat cache.
+      yield* runGit(cwd, ["update-index", "--refresh"]);
+      return;
+    }
+    const fs_ = yield* FileSystem.FileSystem;
     yield* runGit(cwd, ["init", "--initial-branch=main"]);
     yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
     yield* runGit(cwd, ["config", "user.name", "Test User"]);
-    yield* fs.writeFileString(path.join(cwd, "README.md"), "hello\n");
+    yield* fs_.writeFileString(path.join(cwd, "README.md"), "hello\n");
     yield* runGit(cwd, ["add", "README.md"]);
     yield* runGit(cwd, ["commit", "-m", "Initial commit"]);
+    const template = fs.mkdtempSync(path.join(os.tmpdir(), "git-manager-template-"));
+    fs.cpSync(cwd, template, { recursive: true });
+    initialRepoTemplate = template;
   });
 }
 

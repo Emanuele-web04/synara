@@ -2,7 +2,9 @@
 // Purpose: Exercises GitCore repository operations, branch/worktree flows, and status summaries.
 // Layer: Server Git service tests
 // Depends on: Effect test layers plus real temporary Git repositories.
+import * as fsSync from "node:fs";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 
@@ -19,7 +21,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { describe, expect, vi } from "vitest";
+import { afterAll, describe, expect, vi } from "vitest";
 import { TestClock } from "effect/testing";
 
 import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
@@ -90,7 +92,17 @@ const makeIsolatedGitCore = (executeOverride: GitCoreShape["execute"]) =>
     Effect.provide(Layer.provideMerge(ServerConfigLayer, NodeServices.layer)),
   );
 
-/** Create a repo with an initial commit so branches work. */
+let committedRepoTemplate: { readonly dir: string; readonly initialBranch: string } | undefined;
+afterAll(() => {
+  if (committedRepoTemplate)
+    fsSync.rmSync(committedRepoTemplate.dir, { recursive: true, force: true });
+  committedRepoTemplate = undefined;
+});
+
+/**
+ * Create a repo with an initial commit so branches work. The first call per
+ * file builds the repo through GitCore; later calls clone that template.
+ */
 function initRepoWithCommit(
   cwd: string,
 ): Effect.Effect<
@@ -99,6 +111,13 @@ function initRepoWithCommit(
   GitCore | FileSystem.FileSystem
 > {
   return Effect.gen(function* () {
+    if (committedRepoTemplate) {
+      fsSync.cpSync(committedRepoTemplate.dir, cwd, { recursive: true });
+      // Copied files carry new inode/ctime values; refresh the index stat cache so
+      // tests that compare raw index bytes see a settled index like a fresh repo.
+      yield* git(cwd, ["update-index", "--refresh"]);
+      return { initialBranch: committedRepoTemplate.initialBranch };
+    }
     const core = yield* GitCore;
     yield* core.initRepo({ cwd });
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
@@ -107,6 +126,9 @@ function initRepoWithCommit(
     yield* git(cwd, ["add", "."]);
     yield* git(cwd, ["commit", "-m", "initial commit"]);
     const initialBranch = yield* git(cwd, ["branch", "--show-current"]);
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-core-template-"));
+    fsSync.cpSync(cwd, dir, { recursive: true });
+    committedRepoTemplate = { dir, initialBranch };
     return { initialBranch };
   });
 }
@@ -3932,10 +3954,15 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["remote", "add", "origin", remote]);
         yield* writeTextFile(
           path.join(tmp, ".git/hooks/pre-push"),
-          '#!/bin/sh\nsleep 31\nhead -c 1100000 /dev/zero | tr "\\000" x >&2\n',
+          '#!/bin/sh\nsleep 1\nhead -c 1100000 /dev/zero | tr "\\000" x >&2\n',
         );
         yield* Effect.promise(() => fs.chmod(path.join(tmp, ".git/hooks/pre-push"), 0o755));
-        const result = yield* TestClock.withLive((yield* GitCore).pushCurrentBranch(tmp, null));
+        // The command deadline runs on the Effect clock, so push past it on the
+        // test clock while the hook is still running instead of sleeping 31 s.
+        const push = yield* Effect.forkChild((yield* GitCore).pushCurrentBranch(tmp, null));
+        yield* TestClock.withLive(Effect.sleep("300 millis"));
+        yield* TestClock.adjust("31 seconds");
+        const result = yield* Fiber.join(push);
         expect(result.status).toBe("pushed");
         expect(yield* git(remote, ["rev-parse", initialBranch])).toBe(
           yield* git(tmp, ["rev-parse", "HEAD"]),

@@ -46,6 +46,10 @@ import {
   runAntigravityHelperProcess,
 } from "./AntigravityAdapter";
 
+/** Polls hook files every 10 ms instead of 75 ms; sleeps below are scaled by the same factor. */
+const makeFastAdapterLive = (dependencies: AntigravityAdapterDependencies = {}) =>
+  makeAntigravityAdapterLive({ pollIntervalMs: 10, ...dependencies });
+
 function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEnv) {
   const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
   const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
@@ -372,7 +376,7 @@ describe("Antigravity CLI integration helpers", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -929,7 +933,7 @@ describe("Antigravity CLI integration helpers", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -1098,7 +1102,7 @@ describe("Antigravity CLI integration helpers", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -1278,7 +1282,7 @@ describe("Antigravity CLI integration helpers", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -1386,7 +1390,7 @@ describe("Antigravity CLI integration helpers", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -1525,7 +1529,7 @@ describe("Antigravity CLI integration helpers", () => {
           );
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+            makeFastAdapterLive({ ensurePlugin: async () => undefined }).pipe(
               Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-bootstrap-detail-test-" }),
@@ -1654,7 +1658,7 @@ describe("Antigravity CLI integration helpers", () => {
             expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2", "turn-session-3"]);
           }).pipe(
             Effect.provide(
-              makeAntigravityAdapterLive({
+              makeFastAdapterLive({
                 ensurePlugin: async () => undefined,
                 spawnProcess,
               }).pipe(
@@ -1762,7 +1766,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           expect(yield* adapter.hasRetainedSession!(threadId)).toBe(false);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess: makeSpawnProcess(children),
               teardownProcessTree,
@@ -1872,7 +1876,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             yield* adapter.stopSession(threadId);
           }).pipe(
             Effect.provide(
-              makeAntigravityAdapterLive({
+              makeFastAdapterLive({
                 ensurePlugin: async () => undefined,
                 spawnProcess: makeSpawnProcess(children),
               }).pipe(
@@ -2051,7 +2055,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess: makeSpawnProcess(children),
               teardownProcessTree: async () => {
@@ -2128,7 +2132,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
               teardownProcessTree: failTeardown,
@@ -2196,7 +2200,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -2447,7 +2451,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
             }).pipe(
@@ -2811,7 +2815,7 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
               teardownProcessTree: async () => {
@@ -2946,18 +2950,18 @@ describe("Antigravity background task helpers (#752)", () => {
             taskEvents,
             taskStarts,
           });
-          yield* Effect.sleep("200 millis");
+          yield* Effect.sleep("40 millis");
           expect(counts.teardowns).toBe(1);
 
           child?.emit("close", 0, null);
           yield* waitUntil(() => turnsCompleted === 1);
-          yield* Effect.sleep("100 millis");
+          yield* Effect.sleep("20 millis");
           expect(turnsCompleted).toBe(1);
           yield* Fiber.interrupt(eventsFiber);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
               teardownProcessTree: async () => {
@@ -2985,7 +2989,7 @@ describe("Antigravity background task helpers (#752)", () => {
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         io.hooks('stop\t{"stepIdx":998}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3006,7 +3010,7 @@ describe("Antigravity background task helpers (#752)", () => {
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         io.hooks('stop	{"stepIdx":998}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3026,7 +3030,7 @@ describe("Antigravity background task helpers (#752)", () => {
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         io.hooks('stop	{"stepIdx":998}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
@@ -3048,7 +3052,7 @@ describe("Antigravity background task helpers (#752)", () => {
         const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
         const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
         io.hooks(`pre-tool	{"stepIdx":996,${toolCall}}`, 'stop	{"stepIdx":998}');
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3068,7 +3072,7 @@ describe("Antigravity background task helpers (#752)", () => {
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         io.hooks('stop	{"stepIdx":998}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3124,7 +3128,7 @@ describe("Antigravity background task helpers (#752)", () => {
           `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}},"toolOutput":"The command exited with code 0."}`,
           'stop	{"stepIdx":998}',
         );
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3163,7 +3167,7 @@ describe("Antigravity background task helpers (#752)", () => {
           `post-tool\t{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}},"toolOutput":"Command sent to the background"}`,
           'stop\t{"stepIdx":998}',
         );
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
@@ -3214,7 +3218,7 @@ describe("Antigravity background task helpers (#752)", () => {
               `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall, toolOutput: index === 0 ? "The command exited with code 0." : "Command sent to the background" })}`,
           );
           io.hooks(...(foregroundFirst ? post : post.toReversed()), 'stop\t{"stepIdx":998}');
-          yield* Effect.sleep("200 millis");
+          yield* Effect.sleep("40 millis");
           expect(io.counts.teardowns).toBe(0);
           expect(io.taskEvents).toEqual([{ type: "task.started", taskId: agyTaskId }]);
 
@@ -3255,7 +3259,8 @@ describe("Antigravity background task helpers (#752)", () => {
         io.transcript(agyCompletionStep(999), agyText(1000, "The build is still running."));
         io.hooks('stop\t{"stepIdx":1000}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-        yield* Effect.sleep("150 millis");
+        yield* io.waitUntil(() => io.taskEvents.length >= 3);
+        yield* Effect.sleep("30 millis");
         expect(io.counts.teardowns).toBe(0);
         expect(io.taskEvents).toEqual([
           { type: "task.started", taskId: agyTaskId },
@@ -3302,7 +3307,7 @@ describe("Antigravity background task helpers (#752)", () => {
             },
           ]);
           io.hooks('stop\t{"stepIdx":998}');
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           io.transcript(agyCompletionStep(999), agyText(1000, "Done."));
           io.hooks('stop\t{"stepIdx":1000}');
@@ -3369,7 +3374,7 @@ describe("Antigravity background task helpers (#752)", () => {
           `post-tool\t{"stepIdx":5,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run build","WaitMsBeforeAsync":"5000"}},"toolOutput":"Task id 'task-6' is running in the background"}`,
           'stop\t{"stepIdx":7}',
         );
-        yield* Effect.sleep("200 millis");
+        yield* Effect.sleep("40 millis");
         expect(io.counts.teardowns).toBe(0);
 
         io.transcript(agyCompletionStep(8, "session-a/task-6"), agyText(9, "Build done."));
@@ -3407,7 +3412,7 @@ describe("Antigravity background task helpers (#752)", () => {
           agyText(10, "Command finished."),
         );
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("250 millis");
+        yield* Effect.sleep("50 millis");
         expect(io.counts.teardowns).toBe(1);
         expect(io.taskEvents).toEqual([
           { type: "task.started", taskId: "session-b/task-8" },
@@ -3440,7 +3445,7 @@ describe("Antigravity background task helpers (#752)", () => {
           expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
             { type: "task.completed", taskId: "session/task-8" },
           ]);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           io.transcript(
             agyCompletionStep(21, "session/task-18"),
@@ -3475,7 +3480,7 @@ describe("Antigravity background task helpers (#752)", () => {
           expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
             { type: "task.completed", taskId: "session/task-18" },
           ]);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           io.transcript(
             ...(!anonymousNamedFirst ? [agyRunningStep(8, "session/task-8")] : []),
@@ -3506,7 +3511,7 @@ describe("Antigravity background task helpers (#752)", () => {
           io.transcript(agyText(20, "The anonymous command is still running."));
           io.hooks('stop\t{"stepIdx":20}');
           yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           expect(io.taskEvents).toEqual([]);
 
@@ -3514,7 +3519,7 @@ describe("Antigravity background task helpers (#752)", () => {
           io.transcript(agyRunningStep(18, "session/task-18"), agyText(21, "Still waiting."));
           io.hooks('stop\t{"stepIdx":21}');
           yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
 
           io.transcript(
@@ -3557,7 +3562,7 @@ describe("Antigravity background task helpers (#752)", () => {
           );
           io.hooks('stop\t{"stepIdx":30}');
           yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           io.transcript(
             agyRunningStep(18, "session/task-18"),
@@ -3595,7 +3600,7 @@ describe("Antigravity background task helpers (#752)", () => {
         expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
           { type: "task.completed", taskId: "session/task-8" },
         ]);
-        yield* Effect.sleep("150 millis");
+        yield* Effect.sleep("30 millis");
         expect(io.counts.teardowns).toBe(0);
         io.transcript(
           agyCompletionStep(21, "session/task-18"),
@@ -3652,7 +3657,7 @@ describe("Antigravity background task helpers (#752)", () => {
           );
           io.hooks('stop\t{"stepIdx":20}');
           yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-          yield* Effect.sleep("150 millis");
+          yield* Effect.sleep("30 millis");
           expect(io.counts.teardowns).toBe(0);
           expect(io.taskEvents).toEqual([]);
           const remainingStep = killedStep === 8 ? 18 : 8;
@@ -3770,13 +3775,13 @@ describe("Antigravity background task helpers (#752)", () => {
           expect(teardowns).toEqual([0]);
           yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
           release();
-          yield* Effect.sleep("200 millis");
+          yield* Effect.sleep("40 millis");
           expect(teardowns).toEqual([0]);
           yield* adapter.stopSession(threadId);
           yield* Fiber.interrupt(events);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
               readCompleteLines,
@@ -3909,7 +3914,7 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               readCompleteLines,
               spawnProcess,
@@ -4021,7 +4026,7 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               readCompleteLines,
               spawnProcess,
@@ -4215,7 +4220,7 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
-            makeAntigravityAdapterLive({
+            makeFastAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
               teardownProcessTree: completeProcessTeardown,

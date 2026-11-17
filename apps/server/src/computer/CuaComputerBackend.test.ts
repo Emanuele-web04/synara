@@ -21,6 +21,7 @@ function fixture(options?: {
   readonly semanticTextLaneHoldMs?: number;
   readonly semanticTextLaneGapMs?: number;
   readonly stillIntervalMs?: number;
+  readonly permissionReprobeDelayMs?: number;
   readonly hostPlatform?: string;
   readonly nativeRevision?: number | null;
 }) {
@@ -224,6 +225,7 @@ function fixture(options?: {
   const backend = new CuaComputerBackend({
     endpoint: "/fixture-only",
     request,
+    permissionReprobeDelayMs: options?.permissionReprobeDelayMs ?? 1,
     ...(options?.semanticTextLaneHoldMs !== undefined
       ? { semanticTextLaneHoldMs: options.semanticTextLaneHoldMs }
       : {}),
@@ -1751,6 +1753,7 @@ describe("Cua native boundary", () => {
     const backend = new CuaComputerBackend({
       endpoint: "/fixture-only",
       request,
+      permissionReprobeDelayMs: 1,
     });
     await backend.provision();
     expect(requests.find((request) => request.method === "setup")?.timeoutMs).toBe(
@@ -1924,7 +1927,8 @@ describe("Cua native boundary", () => {
   });
 
   it("keeps re-probing until a delayed grant lands", async () => {
-    const f = fixture();
+    // The test's 10 ms ticks must stay shorter than the re-probe delay.
+    const f = fixture({ permissionReprobeDelayMs: 100 });
     f.denyPermissions();
     const gates: Array<() => void> = [];
     const arm = () =>

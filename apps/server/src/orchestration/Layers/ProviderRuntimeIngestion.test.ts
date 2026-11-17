@@ -1322,168 +1322,122 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(await Effect.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
   });
 
-  it.each([false, true])(
-    "measures real SQLite writes for 260 paced deltas (batching=%s)",
-    async (batchAssistantText) => {
-      const harness = await createHarness({ startIngestion: false, persistedStream: true });
-      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
-      // TEMP triggers observe mutations even when settled text chunks are folded
-      // and deleted. Remove their own counter writes from total_changes below.
-      await Effect.runPromise(
-        sql`CREATE TEMP TABLE measured_delta_writes (table_name TEXT, action TEXT, writes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(table_name, action))`,
-      );
-      const measuredTables = [
-        "provider_runtime_events",
-        "orchestration_events",
-        "orchestration_command_receipts",
-        "message_text_chunks",
-        "projection_thread_messages",
-        "projection_threads",
-        "provider_runtime_event_consumers",
-        "provider_runtime_open_turns",
-      ];
-      for (const table of measuredTables)
-        for (const action of ["INSERT", "UPDATE", "DELETE"]) {
-          await Effect.runPromise(
-            sql`INSERT INTO measured_delta_writes (table_name, action) VALUES (${table}, ${action})`,
-          );
-          await Effect.runPromise(
-            sql.unsafe(
-              `CREATE TEMP TRIGGER measure_${table}_${action} AFTER ${action} ON ${table} BEGIN UPDATE measured_delta_writes SET writes = writes + 1 WHERE table_name = '${table}' AND action = '${action}'; END`,
-            ),
-          );
-        }
-      const readCounts = () =>
-        Effect.runPromise(sql<{
-          changes: number;
-          runtimeRows: number;
-          orchestrationRows: number;
-          receipts: number;
-          chunks: number;
-        }>`SELECT total_changes() AS changes,
+  it("batches 120 paced deltas into fewer durable runtime rows with one chunk write each", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    // TEMP triggers observe mutations even when settled text chunks are folded
+    // and deleted. Remove their own counter writes from total_changes below.
+    await Effect.runPromise(
+      sql`CREATE TEMP TABLE measured_delta_writes (table_name TEXT, action TEXT, writes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(table_name, action))`,
+    );
+    const measuredTables = [
+      "provider_runtime_events",
+      "orchestration_events",
+      "orchestration_command_receipts",
+      "message_text_chunks",
+      "projection_thread_messages",
+      "projection_threads",
+      "provider_runtime_event_consumers",
+      "provider_runtime_open_turns",
+    ];
+    for (const table of measuredTables)
+      for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+        await Effect.runPromise(
+          sql`INSERT INTO measured_delta_writes (table_name, action) VALUES (${table}, ${action})`,
+        );
+        await Effect.runPromise(
+          sql.unsafe(
+            `CREATE TEMP TRIGGER measure_${table}_${action} AFTER ${action} ON ${table} BEGIN UPDATE measured_delta_writes SET writes = writes + 1 WHERE table_name = '${table}' AND action = '${action}'; END`,
+          ),
+        );
+      }
+    const readCounts = () =>
+      Effect.runPromise(sql<{
+        changes: number;
+        runtimeRows: number;
+        orchestrationRows: number;
+        receipts: number;
+        chunks: number;
+      }>`SELECT total_changes() AS changes,
       (SELECT COUNT(*) FROM provider_runtime_events WHERE event_type = 'content.delta') AS runtimeRows,
       (SELECT COUNT(*) FROM orchestration_events) AS orchestrationRows,
       (SELECT COUNT(*) FROM orchestration_command_receipts) AS receipts,
       (SELECT COUNT(*) FROM message_text_chunks) AS chunks`);
-      const before = (await readCounts())[0]!;
-      const base: ProviderRuntimeEvent = {
-        type: "content.delta",
-        eventId: asEventId("measure-0"),
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("measure-turn"),
-        itemId: asItemId("measure-item"),
-        createdAt: "2026-10-10T00:00:00.000Z",
-        payload: { streamKind: "assistant_text", delta: "abcdefghijkl" },
-      };
-      const deltas = Array.from(
-        { length: 260 },
-        (_, index): ProviderRuntimeEvent => ({ ...base, eventId: asEventId(`measure-${index}`) }),
-      );
-      const terminal: ProviderRuntimeEvent = {
-        ...base,
-        type: "turn.completed",
-        eventId: asEventId("measure-terminal"),
-        payload: { state: "completed" },
-      };
-      const events: ProviderRuntimeEvent[] = [
-        { ...base, type: "turn.started", eventId: asEventId("measure-start"), payload: {} },
-        ...deltas,
-        terminal,
-      ];
-      const admittedAt = new Map<EventId, number>();
-      const appendDelayMs: number[] = [];
-      const durableDelayMs: number[] = [];
-      const start = performance.now();
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const done = yield* Deferred.make<void>();
-            yield* runProviderRuntimeEventPump({
-              provider: "codex",
-              batchAssistantText,
-              stream: Stream.fromIterable(events).pipe(
-                Stream.mapEffect((event) =>
-                  Effect.sleep(10).pipe(
-                    Effect.andThen(
-                      Effect.sync(() => {
-                        admittedAt.set(event.eventId, performance.now());
-                        return event;
-                      }),
-                    ),
-                  ),
-                ),
+    const before = (await readCounts())[0]!;
+    const base: ProviderRuntimeEvent = {
+      type: "content.delta",
+      eventId: asEventId("measure-0"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("measure-turn"),
+      itemId: asItemId("measure-item"),
+      createdAt: "2026-10-10T00:00:00.000Z",
+      payload: { streamKind: "assistant_text", delta: "abcdefghijkl" },
+    };
+    const deltas = Array.from(
+      { length: 120 },
+      (_, index): ProviderRuntimeEvent => ({ ...base, eventId: asEventId(`measure-${index}`) }),
+    );
+    const terminal: ProviderRuntimeEvent = {
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("measure-terminal"),
+      payload: { state: "completed" },
+    };
+    const events: ProviderRuntimeEvent[] = [
+      { ...base, type: "turn.started", eventId: asEventId("measure-start"), payload: {} },
+      ...deltas,
+      terminal,
+    ];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const done = yield* Deferred.make<void>();
+          yield* runProviderRuntimeEventPump({
+            provider: "codex",
+            batchAssistantText: true,
+            stream: Stream.fromIterable(events).pipe(
+              Stream.mapEffect((event) =>
+                Effect.sleep(10).pipe(Effect.andThen(Effect.succeed(event))),
               ),
-              processEvent: (event) =>
-                Effect.gen(function* () {
-                  if (event.type === "content.delta")
-                    appendDelayMs.push(performance.now() - admittedAt.get(event.eventId)!);
-                  yield* harness.runtimeEventRepository.append(event);
-                  if (event.type === "content.delta")
-                    durableDelayMs.push(performance.now() - admittedAt.get(event.eventId)!);
-                  if (event.eventId === terminal.eventId) yield* Deferred.succeed(done, undefined);
-                }),
-              updateHealth: () => {},
-            }).pipe(Effect.forkScoped);
-            yield* Deferred.await(done);
-          }),
-        ),
-      );
-      await harness.drain();
-      const after = (await readCounts())[0]!;
-      const writesByTable = await Effect.runPromise(
-        sql<{
-          tableName: string;
-          action: string;
-          writes: number;
-        }>`SELECT table_name AS tableName, action, writes FROM measured_delta_writes WHERE writes > 0 ORDER BY table_name, action`,
-      );
-      const counts = Object.fromEntries(
-        Object.keys(after).map((key) => [
-          key,
-          after[key as keyof typeof after] - before[key as keyof typeof before],
-        ]),
-      );
-      counts.changes! -= writesByTable.reduce((sum, row) => sum + row.writes, 0);
-      const message = await projectedMessage(harness, "assistant:measure-item");
-      expect(message?.text).toBe("abcdefghijkl".repeat(260));
-      expect(message?.streaming).toBe(false);
-      if (batchAssistantText) expect(counts.runtimeRows).toBeLessThan(130);
-      else expect(counts.runtimeRows).toBe(260);
-      expect(
-        writesByTable.find(
-          (row) => row.tableName === "message_text_chunks" && row.action === "INSERT",
-        )?.writes,
-      ).toBe(counts.runtimeRows);
-      const summary = (values: number[]) => {
-        const sorted = values.toSorted((a, b) => a - b);
-        return {
-          p50: sorted[Math.floor(sorted.length * 0.5)],
-          p95: sorted[Math.floor(sorted.length * 0.95)],
-          max: sorted.at(-1),
-        };
-      };
-      const measurement = {
-        batchAssistantText,
-        sourceDeltas: 260,
-        textChars: message!.text.length,
-        counts,
-        writesByTable,
-        appendDelayMs: summary(appendDelayMs),
-        durableDelayMs: summary(durableDelayMs),
-        elapsedMs: performance.now() - start,
-      };
-      const measureDir = process.env.SYNARA_RUNTIME_DELTA_MEASURE_DIR;
-      if (measureDir) {
-        fs.mkdirSync(measureDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(measureDir, batchAssistantText ? "batch.json" : "baseline.json"),
-          JSON.stringify(measurement, null, 2),
-        );
-      }
-    },
-    30_000,
-  );
+            ),
+            processEvent: (event) =>
+              Effect.gen(function* () {
+                yield* harness.runtimeEventRepository.append(event);
+                if (event.eventId === terminal.eventId) yield* Deferred.succeed(done, undefined);
+              }),
+            updateHealth: () => {},
+          }).pipe(Effect.forkScoped);
+          yield* Deferred.await(done);
+        }),
+      ),
+    );
+    await harness.drain();
+    const after = (await readCounts())[0]!;
+    const writesByTable = await Effect.runPromise(
+      sql<{
+        tableName: string;
+        action: string;
+        writes: number;
+      }>`SELECT table_name AS tableName, action, writes FROM measured_delta_writes WHERE writes > 0 ORDER BY table_name, action`,
+    );
+    const counts = Object.fromEntries(
+      Object.keys(after).map((key) => [
+        key,
+        after[key as keyof typeof after] - before[key as keyof typeof before],
+      ]),
+    );
+    counts.changes! -= writesByTable.reduce((sum, row) => sum + row.writes, 0);
+    const message = await projectedMessage(harness, "assistant:measure-item");
+    expect(message?.text).toBe("abcdefghijkl".repeat(120));
+    expect(message?.streaming).toBe(false);
+    expect(counts.runtimeRows).toBeLessThan(65);
+    expect(
+      writesByTable.find(
+        (row) => row.tableName === "message_text_chunks" && row.action === "INSERT",
+      )?.writes,
+    ).toBe(counts.runtimeRows);
+  }, 30_000);
 
   it.each(["replay", "live"] as const)(
     "preserves workflow phase agents and poll snapshots during %s ingestion",

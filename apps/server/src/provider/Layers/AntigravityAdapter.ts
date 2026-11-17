@@ -1108,6 +1108,8 @@ type AntigravityChildProcess = ChildProcess & {
 
 export interface AntigravityAdapterDependencies {
   readonly ensurePlugin?: typeof ensureCapturePlugin;
+  /** Hook-file poll cadence; injectable so tests need not sleep several real 75 ms ticks. */
+  readonly pollIntervalMs?: number;
   readonly readCompleteLines?: typeof readCompleteAntigravityLines;
   readonly teardownProcessTree?: typeof teardownChildProcessTree;
   readonly spawnProcess?: (
@@ -2678,7 +2680,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         });
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
-        }, POLL_INTERVAL_MS);
+        }, dependencies.pollIntervalMs ?? POLL_INTERVAL_MS);
         child.once("error", (cause) => {
           clearInterval(timer);
           if (!ownsTurn()) return;

@@ -394,6 +394,8 @@ export class CuaComputerBackend implements ComputerBackend {
       semanticTextLaneHoldMs?: number;
       /** Test injection so lane tests do not sleep for real. */
       semanticTextLaneGapMs?: number;
+      /** Test injection so permission re-probes do not wait out the real tccd settle delay. */
+      permissionReprobeDelayMs?: number;
       /**
        * Still-capture cadence for the pane preview; defaults to
        * `SYNARA_CUA_PREVIEW_STILL_MS`, then 1000 ms. Injectable so tests can
@@ -407,6 +409,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.request = options.request ?? cuaRequest;
     this.semanticTextLaneHoldMs = options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
     this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
+    this.permissionReprobeDelayMs = options.permissionReprobeDelayMs ?? 600;
     this.stills = new StillFramePublisher({
       capture: () => this.captureStill(),
       prepare: async () => {
@@ -426,6 +429,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly request: typeof cuaRequest;
   private readonly semanticTextLaneHoldMs: number;
   private readonly semanticTextLaneGapMs: number;
+  private readonly permissionReprobeDelayMs: number;
   /**
    * One tail promise per (pid, window) lane. Tails only ever resolve, so a
    * failed write never wedges its lane-mates; entries are pruned when their
@@ -781,7 +785,7 @@ export class CuaComputerBackend implements ComputerBackend {
         !this.hadMissingPermissions
       ) {
         for (let attempt = 0; attempt < 4; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 600));
+          await new Promise((resolve) => setTimeout(resolve, this.permissionReprobeDelayMs));
           permission =
             (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
           if (missingComputerPermissions(permission, hostPlatform).length === 0) break;

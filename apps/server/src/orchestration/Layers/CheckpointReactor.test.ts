@@ -34,7 +34,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as projectImportPaths from "../projectImportPaths.ts";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
@@ -449,18 +449,32 @@ function listRevertRescueRefs(cwd: string): ReadonlyArray<string> {
     .filter((ref) => ref.includes("/revert-rescue/"));
 }
 
+// Building a repo costs several git spawns; clone a per-file template instead.
+const gitRepositoryTemplates = new Map<boolean, string>();
 function createGitRepository(hasInitialCommit = true) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
-  runGit(cwd, ["init", "--initial-branch=main"]);
-  runGit(cwd, ["config", "user.email", "test@example.com"]);
-  runGit(cwd, ["config", "user.name", "Test User"]);
-  if (hasInitialCommit) {
-    fs.writeFileSync(path.join(cwd, "README.md"), "v1\n", "utf8");
-    runGit(cwd, ["add", "."]);
-    runGit(cwd, ["commit", "-m", "Initial"]);
+  let template = gitRepositoryTemplates.get(hasInitialCommit);
+  if (template === undefined) {
+    template = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-template-"));
+    runGit(template, ["init", "--initial-branch=main"]);
+    runGit(template, ["config", "user.email", "test@example.com"]);
+    runGit(template, ["config", "user.name", "Test User"]);
+    if (hasInitialCommit) {
+      fs.writeFileSync(path.join(template, "README.md"), "v1\n", "utf8");
+      runGit(template, ["add", "."]);
+      runGit(template, ["commit", "-m", "Initial"]);
+    }
+    gitRepositoryTemplates.set(hasInitialCommit, template);
   }
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
+  fs.cpSync(template, cwd, { recursive: true });
   return cwd;
 }
+afterAll(() => {
+  for (const template of gitRepositoryTemplates.values()) {
+    fs.rmSync(template, { recursive: true, force: true });
+  }
+  gitRepositoryTemplates.clear();
+});
 
 function gitRefExists(cwd: string, ref: string): boolean {
   try {

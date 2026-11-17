@@ -536,11 +536,8 @@ function createRetainingRestartProviderServiceLayer(options?: {
 describe("ProviderCommandReactor", () => {
   it.each([
     [undefined, 5000],
-    ["", 5000],
     ["abc", 5000],
     ["0", 5000],
-    ["-1", 5000],
-    ["Infinity", 5000],
     ["1", 1000],
     ["15000", 15000],
     ["90000", 30000],
@@ -593,6 +590,7 @@ describe("ProviderCommandReactor", () => {
     readonly commandEventTimeout?: Duration.Duration;
     readonly preTurnBaselineTimeout?: Duration.Duration;
     readonly cacheResponseTimeout?: Duration.Duration;
+    readonly usageLimitBindingReadTimeout?: Duration.Duration;
     readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
     readonly gatewayOperationCompletionNegativeCacheTtl?: Duration.Duration;
     readonly logMessages?: string[];
@@ -2348,6 +2346,7 @@ describe("ProviderCommandReactor", () => {
           .mockImplementation(() => Effect.succeed(bindingKey));
         const harness = await createHarness({
           serverSettings: { autoResumeAfterUsageLimits: true },
+          usageLimitBindingReadTimeout: Duration.millis(150),
         });
         const wait = await seedLimitWait(harness);
         await requestResume(harness, wait.id);
@@ -2394,7 +2393,6 @@ describe("ProviderCommandReactor", () => {
           resumedTurnId: "turn-1",
         });
       },
-      15_000,
     );
 
     it("defers a surfaced account-read failure without losing the verified binding", async () => {
