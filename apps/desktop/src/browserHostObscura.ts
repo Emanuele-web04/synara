@@ -546,12 +546,17 @@ async function toolRun(threadId: string, args: Json, socket?: Socket): Promise<J
   if (socket?.destroyed) {
     throw toolError("BrowserEvaluationFailed", "browser_run was cancelled.");
   }
-  // The worker talks to Obscura's browser-level CDP endpoint directly — it owns
-  // its page context (the facade path stalls inside the vendored worker's
-  // post-eval channel). Same storage dir, so page state is shared.
+  // The worker attaches to the page-level CDP endpoint of the tab the caller
+  // selected — HostConnection requires an endpoint exposing exactly one tab,
+  // and the browser-wide endpoint would let a snippet reach every leased page.
+  // Same storage dir, so page state is shared.
+  const pageCdpUrl = cdpWsUrl.replace(
+    /\/devtools\/browser\/[^/]+$/,
+    `/devtools/page/${tab.targetId}`,
+  );
   const browser = new BetterWright({
     home: join(STORAGE_DIR, "browser-engine"),
-    provider: { cdpUrl: cdpWsUrl },
+    provider: { cdpUrl: pageCdpUrl },
     headless: true,
     downloadPolicy: "deny",
     vault: false,
