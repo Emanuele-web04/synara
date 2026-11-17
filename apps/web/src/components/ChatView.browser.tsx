@@ -9124,16 +9124,19 @@ describe("ChatView transcript geometry (full app)", () => {
         );
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
       const searchbox = page.getByRole("searchbox", { name: "Search models" });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       pressShortcut();
       await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
       await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
       shortcutTarget = searchbox.element() as HTMLElement;
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      await vi.advanceTimersByTimeAsync(900);
       pressShortcut();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      // Cross the original deadline, then reach the renewed deadline.
+      await vi.advanceTimersByTimeAsync(900);
       await expect.element(slider).toBeVisible();
+      await vi.advanceTimersByTimeAsync(600);
       await vi.waitFor(
         () => {
           expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
@@ -9142,6 +9145,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       await vi.waitFor(() => expect(document.activeElement).toBe(composerEditor));
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9168,6 +9172,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       composerEditor.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -9184,11 +9189,12 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
       dispatchComposerPickerShortcut(searchbox.element(), "m");
       await waitForComposerPickerSurfaceOpen();
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await vi.advanceTimersByTimeAsync(1_700);
       await expect
         .element(page.getByRole("searchbox", { name: "Search models" }), { timeout: 1_000 })
         .toBeVisible();
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9215,6 +9221,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       composerEditor.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -9247,10 +9254,11 @@ describe("ChatView transcript geometry (full app)", () => {
         useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
           .codex,
       ).toMatchObject({ model: "gpt-5.5", options: { reasoningEffort: "medium" } });
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await vi.advanceTimersByTimeAsync(1_700);
       await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
       await expect.element(slider, { timeout: 1_000 }).toBeVisible();
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9357,14 +9365,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const editor = await waitForComposerEditor();
       await userEvent.click(editor);
-      const phrase = "Keep this unsent draft while moving the caret. ";
-      const draft = phrase.repeat(8);
-      // Exercise caret/history behavior while allowing React to finish a frame between
-      // typing bursts, rather than hundreds of automation keys in one update batch.
-      for (let index = 0; index < 8; index += 1) {
-        await userEvent.keyboard(phrase);
-        await nextFrame();
-      }
+      const draft = "Keep this unsent draft while moving the caret. ".repeat(8);
+      // Set up the draft in one input action. Use real keys for the caret and history.
+      await userEvent.fill(editor, draft);
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
       const prompt = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt;
       await userEvent.keyboard("{ArrowUp>10/}");

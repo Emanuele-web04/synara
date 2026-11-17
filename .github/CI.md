@@ -222,7 +222,23 @@ invocations took 88.36 s (−31.6%). Both samples started with identical warm
 compiler caches and fresh Vite caches. The JSON results matched all 440 case
 names, outcomes, and multiplicities across 84 files. Thermal pressure stayed
 nominal throughout. Linux runner time and the full hosted gate remain to be
-measured.
+measured in a comparable cohort.
+
+The first hosted [draft run 44190364513](https://github.com/Emanuele-web04/synara/actions/runs/44190364513)
+passed the gate in 318 s including queue. Its no-queue critical path was 308 s,
+and it used 40.77 runner-minutes. All six browser compiler caches restored. The
+three component jobs completed in 171 s, 180 s, and 205 s. The
+`chat-workflows` job took 294 s and was the longest job on the critical path.
+
+### Chat workflow fixture setup
+
+The draft history test fills its long input in one action and uses real keys for
+the caret and history checks. Three model picker tests advance the browser
+clock through their original expiry windows while keeping the DOM and focus
+assertions. On the same Mac mini with fresh Vite caches and equal warm compiler
+caches, the four cases took 12.25 s before and 2.26 s after. The complete
+`chat-workflows` job took 116.05 s before and 106.01 s after with identical
+results for all 149 assigned cases.
 
 ## November 2026 critical-path rebalance
 
