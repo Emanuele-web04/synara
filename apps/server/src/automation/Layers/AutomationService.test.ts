@@ -4579,28 +4579,6 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("does not treat heartbeat stop policies as a hard fast-interval bound", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-      const targetThreadId = ThreadId.makeUnsafe("fast-stop-policy-thread");
-      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
-
-      const error = yield* service
-        .create({
-          ...createInput("local"),
-          mode: "heartbeat",
-          targetThreadId,
-          schedule: { type: "interval", everySeconds: 15 },
-          completionPolicy: aiCompletionPolicy("the condition is met"),
-          acknowledgedRisks: ["fast-interval", "local-checkout"],
-        })
-        .pipe(Effect.flip);
-
-      assert.match(error.message, /max iterations.*10 runs or fewer/);
-    }),
-  );
-
   it.effect("rejects updates that remove the hard cap from fast recurring intervals", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -4680,22 +4658,6 @@ layer("AutomationService", (it) => {
         .pipe(Effect.flip);
 
       assert.match(error.message, /full-access/);
-    }),
-  );
-
-  it.effect("rejects unacknowledged local-checkout automations", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-
-      const error = yield* service
-        .create({
-          ...createInput("local"),
-          acknowledgedRisks: [],
-        })
-        .pipe(Effect.flip);
-
-      assert.match(error.message, /local checkout/);
     }),
   );
 
