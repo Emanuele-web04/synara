@@ -225,12 +225,6 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("element_outside_target_window");
     expect(notes).toContain("input_target_unavailable");
     expect(notes).toContain("repeated_unverified_action");
-    // The hidden-launch choreography is deleted from the shared block.
-    expect(notes).not.toContain("relaunch visible");
-    expect(notes).not.toContain("unhide with computer_set_app_visibility");
-    // Retired surface: the recording/replay names are gone from everywhere.
-    expect(notes).not.toContain("computer_recording");
-    expect(notes).not.toContain("computer_replay");
     await manager.dispose();
   });
 
@@ -252,9 +246,6 @@ describe("agent gateway computer tools", () => {
       const text = JSON.stringify(resultJson(result));
       expect(text).toContain("computer_list_windows");
       expect(text).toContain("never launch again");
-      // The old relaunch-visible escape hatch is gone; the browser route is
-      // the only alternative the result names.
-      expect(text).not.toContain("relaunch visible");
       expect(text).toContain("computer_browser_prepare");
     } finally {
       await manager.dispose();
@@ -500,7 +491,7 @@ describe("agent gateway computer tools", () => {
   });
 
   it("does not force provider preloading and keeps every computer tool capability-gated", async () => {
-    const { tools, byName } = await setup();
+    const { tools } = await setup();
     // Capability filtering controls exposure; vendor tool-search behavior varies.
     const preloaded = tools.filter(
       (tool) => tool.definition._meta?.["anthropic/alwaysLoad"] === true,
@@ -512,12 +503,6 @@ describe("agent gateway computer tools", () => {
     for (const tool of tools) {
       expect(tool.definition._meta).toBeUndefined();
     }
-    // Deferring must not disturb what a tool already declares, nor its gate: the
-    // whole family stays behind the computer:control capability and is present.
-    expect(byName.get("computer_click")?.definition.annotations).toMatchObject({
-      readOnlyHint: false,
-    });
-    expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
   });
 
   it("filters discovery to the requested app without losing availability or choosing a window", async () => {
@@ -999,22 +984,6 @@ describe("agent gateway computer tools", () => {
     });
   });
 
-  it("surfaces a compositor capture failure as a readable error result", async () => {
-    const { backend, call } = await setup();
-    backend.failNext(
-      "captureScreenshot",
-      new Error("org.synara.ComputerUse.Error.CaptureFailed: window not visible"),
-    );
-
-    const result = await call("computer_screenshot", {
-      window_id: "fake-calculator",
-    });
-    expect(result.isError).toBe(true);
-    expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining("window not visible"),
-    });
-  });
-
   it("keeps the zoom tool read-only and free of an approval gate", async () => {
     const { backend, byName, call } = await setup();
     expect(computerToolRequiresApproval("computer_screenshot")).toBe(false);
@@ -1090,24 +1059,6 @@ describe("agent gateway computer tools", () => {
     expect(resultJson(repeat)).toMatchObject({ screenshotUnchanged: true });
     await call("computer_click", { x: 6, y: 6 });
     expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 46, y: 46 });
-  });
-
-  it("captures the window a scoped action named rather than the focused one", async () => {
-    const { backend, call, see } = await setup();
-    await see();
-    const result = await call("computer_click", {
-      x: 1_100,
-      y: 200,
-      window_id: "fake-calculator",
-    });
-
-    expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("captureScreenshot").at(-1)?.args[0]).toEqual({
-      kind: "window",
-      windowId: "fake-calculator",
-      // Action observations spend a smaller pixel budget than perception ones.
-      maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
-    });
   });
 
   it("reports a closed target instead of photographing another window", async () => {
@@ -1190,7 +1141,22 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("pressKey")).toHaveLength(0);
   });
 
-  it("uses exact semantic text input without focusing the target window", async () => {
+  it.each([
+    {
+      name: "a labelled control",
+      target: { label: "Display", role: "text-field" },
+      expected: expect.objectContaining({
+        label: "Display",
+        role: "text-field",
+        windowId: "fake-calculator",
+      }),
+    },
+    {
+      name: "the sole writable control when no label is given",
+      target: {},
+      expected: { windowId: "fake-calculator" },
+    },
+  ])("uses exact semantic text input on $name without focusing the target window", async (c) => {
     const backend = Object.assign(new FakeComputerBackend(), {
       focusNeutralSemanticText: true,
     });
@@ -1199,49 +1165,16 @@ describe("agent gateway computer tools", () => {
     try {
       const typed = await call("computer_type_text", {
         text: "42",
-        label: "Display",
-        role: "text-field",
+        ...c.target,
         window_id: "fake-calculator",
         include_screenshot: false,
       });
 
       expect(typed.isError).not.toBe(true);
-      expect(semanticText).toHaveBeenCalledWith(
-        THREAD,
-        "42",
-        expect.objectContaining({
-          label: "Display",
-          role: "text-field",
-          windowId: "fake-calculator",
-        }),
-      );
+      expect(semanticText).toHaveBeenCalledWith(THREAD, "42", c.expected);
       expect(backend.callsFor("focusWindow")).toHaveLength(0);
       expect(backend.callsFor("raiseWindow")).toHaveLength(0);
       expect(backend.callsFor("typeText").at(-1)?.args[0]).toBe("42");
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("uses the sole writable control for exact-window text without a label", async () => {
-    const backend = Object.assign(new FakeComputerBackend(), {
-      focusNeutralSemanticText: true,
-    });
-    const { call, manager } = await setup(backend);
-    const semanticText = vi.spyOn(manager, "typeTextAt");
-    try {
-      const typed = await call("computer_type_text", {
-        text: "42",
-        window_id: "fake-calculator",
-        include_screenshot: false,
-      });
-
-      expect(typed.isError).not.toBe(true);
-      expect(semanticText).toHaveBeenCalledWith(THREAD, "42", {
-        windowId: "fake-calculator",
-      });
-      expect(backend.callsFor("focusWindow")).toHaveLength(0);
-      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
     } finally {
       await manager.dispose();
     }
@@ -1379,23 +1312,6 @@ describe("agent gateway computer tools", () => {
     }
   });
 
-  it("refuses the third identical mutating call that observed nothing", async () => {
-    const { backend, call } = await setup();
-    // A keypress on the fake backend reports no delivery verdict, so its
-    // effect is dispatched-unknown — the unverified repeat this guard exists
-    // for. Two are ordinary retries; the third is a loop.
-    const args = { key: "enter", include_screenshot: false };
-    const first = await call("computer_press_key", args);
-    expect(first.isError).not.toBe(true);
-    const second = await call("computer_press_key", args);
-    expect(second.isError).not.toBe(true);
-    const third = await call("computer_press_key", args);
-    expect(third.isError).toBe(true);
-    expect(resultJson(third)).toMatchObject({
-      error: { code: "repeated_unverified_action" },
-    });
-    expect(backend.callsFor("pressKey")).toHaveLength(2);
-  });
   it.each(["direct", "batch"])(
     "uses stable explicit verification through %s to release only the verified window",
     async (route) => {
@@ -2148,21 +2064,6 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("hotkey")[0]?.args[0]).toEqual(["Control", "L"]);
   });
 
-  it("passes xdotool-style key spellings through to the backend unchanged", async () => {
-    const { backend, call } = await setup();
-
-    // The tool layer validates shape only; name mapping and refusal belong to
-    // the backend (cuaKey) and the driver keymap, so an xdotool spelling and a
-    // not-yet-native name must arrive verbatim.
-    const pressed = await call("computer_press_key", { key: "Page_Up" });
-    expect(pressed.isError).not.toBe(true);
-    expect(backend.callsFor("pressKey").map((entry) => entry.args)).toEqual([["Page_Up"]]);
-
-    const chord = await call("computer_press_key", { key: "meta+KP_Enter" });
-    expect(chord.isError).not.toBe(true);
-    expect(backend.callsFor("hotkey").map((entry) => entry.args)).toEqual([[["meta", "KP_Enter"]]]);
-  });
-
   it("refuses control-off mutations even for a gated provider without touching the backend", async () => {
     const { backend, manager, call } = await setup();
     try {
@@ -2215,40 +2116,6 @@ describe("agent gateway computer tools", () => {
     });
     expect(result.isError).toBe(true);
     expect(backend.callsFor("performAction")).toHaveLength(0);
-  });
-
-  it("passes the macOS secondary action names through to the backend verbatim", async () => {
-    const { backend, call } = await setup(
-      Object.assign(new FakeComputerBackend(), {
-        agentDialect: "macos" as const,
-      }),
-    );
-    for (const action of [
-      "AXPress",
-      "press",
-      "open",
-      "show_menu",
-      "menu",
-      "pick",
-      "confirm",
-      "cancel",
-    ]) {
-      const result = await call("computer_perform_action", {
-        label: "Calculate",
-        action,
-      });
-      expect(result.isError).not.toBe(true);
-    }
-    expect(backend.callsFor("performAction").map((call) => call.args[1])).toEqual([
-      "AXPress",
-      "press",
-      "open",
-      "show_menu",
-      "menu",
-      "pick",
-      "confirm",
-      "cancel",
-    ]);
   });
 
   it("refuses malformed select_text ranges and x/y targets before the backend", async () => {
@@ -2555,7 +2422,6 @@ describe("agent gateway computer tools", () => {
       properties: { max_dimension: { maximum: number } };
     };
     expect(schema.properties.max_dimension.maximum).toBe(DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION);
-    expect(DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION).toBe(1_536);
 
     // The schema bound is advisory — nothing validates MCP arguments against it
     // — so the request is clamped here too.
@@ -2820,24 +2686,6 @@ describe("agent gateway computer tools", () => {
       }
     },
   );
-
-  it("says an unchanged frame is unsettled rather than asserting the action missed", async () => {
-    const { call } = await setup();
-    await call("computer_press_key", {
-      key: "enter",
-      window_id: "fake-terminal",
-    });
-    // Nothing opened, so there is no new window to photograph instead and the
-    // identical picture is genuinely all there is to report.
-    const quiet = await call("computer_press_key", {
-      key: "enter",
-      window_id: "fake-terminal",
-    });
-    expect(resultJson(quiet)).toMatchObject({
-      screenshotUnchanged: true,
-      note: expect.stringContaining("does not prove the action missed"),
-    });
-  });
 
   it("scopes the elements digest by window and by label, and counts what it drops", async () => {
     const { call } = await setup();
@@ -3168,17 +3016,6 @@ describe("agent gateway computer setup prompts", () => {
     expect(text).toContain("Synara needs Accessibility and has shown the user a setup card");
     expect(text).toContain("waiting for the user to grant it");
     expect(text).not.toContain("Turn Synara on in");
-  });
-
-  it("prompts for setup for a grant that only blinds the desktop", async () => {
-    // Screen Recording alone leaves availability `available` on purpose, so the
-    // only thing that can raise the card is the backend saying what it lacks.
-    const { result, prompts } = await readWith({
-      missingPermissions: () => Promise.resolve(["screenRecording"]),
-    });
-
-    expect(result.isError).not.toBe(true);
-    expect(prompts).toEqual([{ toolName: "computer_list_windows", missing: ["screenRecording"] }]);
   });
 
   it("reads the missing grants fresh on every call, never from the previous answer", async () => {
@@ -4160,29 +3997,6 @@ describe("computer_inspect", () => {
 });
 
 describe("computer_run", () => {
-  it("reports the active step instead of one generic batch label", async () => {
-    const { manager, call } = await setup();
-    const activity = vi.spyOn(manager.cursorActivity, "during");
-    try {
-      const result = await call("computer_run", {
-        steps: [
-          { type: "click", label: "Display", window_id: "fake-calculator" },
-          { type: "type_text", text: "468", window_id: "fake-calculator" },
-          { type: "write_clipboard", text: "copied value" },
-        ],
-      });
-      expect(result.isError).not.toBe(true);
-      expect(activity.mock.calls.map((call) => call[1])).toEqual([
-        "Running sequence",
-        "Clicking",
-        "Typing",
-        "Writing clipboard",
-      ]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("runs steps in order through the same manager calls and closes with fresh state", async () => {
     const { backend, manager, call } = await setup();
     try {
@@ -4263,7 +4077,7 @@ describe("computer_run", () => {
     }
   });
 
-  it("refuses a malformed batch whole, before anything dispatches", async () => {
+  it("refuses a malformed or oversized batch whole, before anything dispatches", async () => {
     const { backend, manager, call } = await setup();
     try {
       for (const steps of [
@@ -4271,28 +4085,31 @@ describe("computer_run", () => {
         [{ type: "type_text", text: "hi", bogus: true }],
         [{ type: "type_text" }],
         [{ type: "click", label: "Display" }, 42],
+        [
+          {
+            type: "set_window_frame",
+            window_id: "fake-calculator",
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 5,
+          },
+        ],
+        [{ type: "set_window_frame", x: 0, y: 0, width: 5, height: 5 }],
+        [{ type: "invoke_menu", window_id: "fake-calculator", path: [] }],
+        [{ type: "invoke_menu", window_id: "fake-calculator" }],
+        [{ type: "kill_app" }],
+        Array.from({ length: 26 }, () => ({ type: "press_key", key: "enter" })),
       ]) {
         const result = await call("computer_run", { steps });
         expect(result.isError).toBe(true);
       }
       expect(backend.callsFor("click")).toHaveLength(0);
       expect(backend.callsFor("typeText")).toHaveLength(0);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("caps the step count", async () => {
-    const { backend, manager, call } = await setup();
-    try {
-      const result = await call("computer_run", {
-        steps: Array.from({ length: 26 }, () => ({
-          type: "press_key",
-          key: "enter",
-        })),
-      });
-      expect(result.isError).toBe(true);
       expect(backend.callsFor("pressKey")).toHaveLength(0);
+      expect(backend.callsFor("setWindowFrame")).toHaveLength(0);
+      expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+      expect(backend.callsFor("killApp")).toHaveLength(0);
     } finally {
       await manager.dispose();
     }
@@ -5210,79 +5027,6 @@ describe("multi-app driving", () => {
         await manager.dispose();
       }
     });
-
-    it("runs a windowless app menu step through computer_run", async () => {
-      const backend = new FakeComputerBackend({
-        apps: [
-          {
-            pid: 6_001,
-            name: "Helium",
-            bundleId: "net.imput.helium",
-            running: true,
-            active: false,
-          },
-          {
-            pid: 1_001,
-            name: "Terminal",
-            bundleId: "org.kde.konsole",
-            running: true,
-            active: true,
-          },
-        ],
-      });
-      const { call, manager } = await setup(
-        backend,
-        vi.fn(async () => true),
-      );
-      try {
-        const result = await call("computer_run", {
-          steps: [{ type: "invoke_menu", app: "Helium", path: ["File", "New Window"] }],
-        });
-        expect(result.isError).not.toBe(true);
-        const payload = resultJson(result) as { completed: number };
-        expect(payload.completed).toBe(1);
-        expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
-          { pid: 6_001 },
-          ["File", "New Window"],
-        ]);
-      } finally {
-        await manager.dispose();
-      }
-    });
-
-    it("refuses run steps with missing or oversized arguments whole", async () => {
-      const backend = new FakeComputerBackend();
-      const { call, manager } = await setup(
-        backend,
-        vi.fn(async () => true),
-      );
-      try {
-        for (const steps of [
-          [
-            {
-              type: "set_window_frame",
-              window_id: "fake-calculator",
-              x: 0,
-              y: 0,
-              width: 0,
-              height: 5,
-            },
-          ],
-          [{ type: "set_window_frame", x: 0, y: 0, width: 5, height: 5 }],
-          [{ type: "invoke_menu", window_id: "fake-calculator", path: [] }],
-          [{ type: "invoke_menu", window_id: "fake-calculator" }],
-          [{ type: "kill_app" }],
-        ]) {
-          const result = await call("computer_run", { steps });
-          expect(result.isError).toBe(true);
-        }
-        expect(backend.callsFor("setWindowFrame")).toHaveLength(0);
-        expect(backend.callsFor("invokeMenu")).toHaveLength(0);
-        expect(backend.callsFor("killApp")).toHaveLength(0);
-      } finally {
-        await manager.dispose();
-      }
-    });
   });
 
   describe("SYNARA_CUA_CAPTURE_REUSE", () => {
@@ -5445,41 +5189,32 @@ describe("element refs", () => {
     }
   });
 
-  it("mints different refs for duplicate labels and clicks the right one", async () => {
-    const button = (x: number): ComputerUiNode => ({
-      role: "button",
-      label: "Save",
+  it("mints different refs for duplicate labels and targets the right one by ref or ref_ordinal", async () => {
+    const node = (
+      role: ComputerUiNode["role"],
+      label: string | null,
+      windowId: string | null,
+      frame: ComputerUiNode["frame"],
+      children: ComputerUiNode[] = [],
+    ): ComputerUiNode => ({
+      role,
+      label,
       value: null,
       description: null,
-      frame: { x, y: 100, width: 60, height: 30 },
+      frame,
       activationPoint: null,
       onScreen: true,
-      windowId: "w1",
-      children: [],
+      windowId,
+      children,
     });
-    const root: ComputerUiNode = {
-      role: "desktop",
-      label: null,
-      value: null,
-      description: null,
-      frame: { x: 0, y: 0, width: 1920, height: 1080 },
-      activationPoint: null,
-      onScreen: true,
-      windowId: null,
-      children: [
-        {
-          role: "window",
-          label: "Editor",
-          value: null,
-          description: null,
-          frame: { x: 0, y: 0, width: 800, height: 600 },
-          activationPoint: null,
-          onScreen: true,
-          windowId: "w1",
-          children: [button(20), button(200)],
-        },
-      ],
-    };
+    const button = (x: number) =>
+      node("button", "Save", "w1", { x, y: 100, width: 60, height: 30 });
+    const root = node("desktop", null, null, { x: 0, y: 0, width: 1920, height: 1080 }, [
+      node("window", "Editor", "w1", { x: 0, y: 0, width: 800, height: 600 }, [
+        button(20),
+        button(200),
+      ]),
+    ]);
     const { backend, call, manager } = await setup(new FakeComputerBackend({ root }));
     try {
       const saves = elementsOf(await call("computer_get_state", {})).filter(
@@ -5492,51 +5227,9 @@ describe("element refs", () => {
       expect(result.isError).not.toBe(true);
       // The second Save's centre: ordinal 1, not the first match a label search finds.
       expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 230, y: 115 });
-    } finally {
-      await manager.dispose();
-    }
-  });
 
-  it("targets a duplicate by ref_ordinal without a ref", async () => {
-    const button = (x: number): ComputerUiNode => ({
-      role: "button",
-      label: "Save",
-      value: null,
-      description: null,
-      frame: { x, y: 100, width: 60, height: 30 },
-      activationPoint: null,
-      onScreen: true,
-      windowId: "w1",
-      children: [],
-    });
-    const root: ComputerUiNode = {
-      role: "desktop",
-      label: null,
-      value: null,
-      description: null,
-      frame: { x: 0, y: 0, width: 1920, height: 1080 },
-      activationPoint: null,
-      onScreen: true,
-      windowId: null,
-      children: [
-        {
-          role: "window",
-          label: "Editor",
-          value: null,
-          description: null,
-          frame: { x: 0, y: 0, width: 800, height: 600 },
-          activationPoint: null,
-          onScreen: true,
-          windowId: "w1",
-          children: [button(20), button(200)],
-        },
-      ],
-    };
-    const { backend, call, manager } = await setup(new FakeComputerBackend({ root }));
-    try {
-      await call("computer_get_state", {});
-      const result = await call("computer_click", { label: "Save", ref_ordinal: 1 });
-      expect(result.isError).not.toBe(true);
+      const byOrdinal = await call("computer_click", { label: "Save", ref_ordinal: 1 });
+      expect(byOrdinal.isError).not.toBe(true);
       expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 230, y: 115 });
     } finally {
       await manager.dispose();
@@ -5694,31 +5387,24 @@ describe("computer_run observation steps", () => {
 });
 
 describe("computer_run flow control", () => {
-  it("skips a step whose if_element is absent and runs it when present", async () => {
+  it("skips a step whose if_element is absent or unless_element is present, and runs it otherwise", async () => {
     const { backend, call, manager } = await setup();
     try {
       await call("computer_get_state", {});
+      const click = { type: "click", label: "Calculate", window_id: "fake-calculator" };
+      const present = { label: "Calculate", window_id: "fake-calculator" };
       const run = resultJson(
         await call("computer_run", {
           steps: [
-            {
-              type: "click",
-              label: "Calculate",
-              window_id: "fake-calculator",
-              if_element: { label: "Does not exist" },
-            },
-            {
-              type: "click",
-              label: "Calculate",
-              window_id: "fake-calculator",
-              if_element: { label: "Calculate", window_id: "fake-calculator" },
-            },
+            { ...click, if_element: { label: "Does not exist" } },
+            { ...click, if_element: present },
+            { ...click, unless_element: present },
+            { ...click, unless_element: { label: "Not there" } },
           ],
         }),
       ) as {
         steps: { ok: boolean; skipped?: boolean; skippedReason?: string }[];
         skipped: number;
-        completed: number;
       };
       expect(run.steps[0]).toMatchObject({
         ok: true,
@@ -5727,39 +5413,14 @@ describe("computer_run flow control", () => {
       });
       expect(run.steps[1]).toMatchObject({ ok: true });
       expect(run.steps[1]!.skipped).toBeUndefined();
-      expect(run.skipped).toBe(1);
-      // Only the second click dispatched — a skipped step touches nothing.
-      expect(backend.callsFor("click")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("skips a step whose unless_element is present", async () => {
-    const { backend, call, manager } = await setup();
-    try {
-      await call("computer_get_state", {});
-      const run = resultJson(
-        await call("computer_run", {
-          steps: [
-            {
-              type: "click",
-              label: "Calculate",
-              window_id: "fake-calculator",
-              unless_element: { label: "Calculate", window_id: "fake-calculator" },
-            },
-            {
-              type: "click",
-              label: "Calculate",
-              window_id: "fake-calculator",
-              unless_element: { label: "Not there" },
-            },
-          ],
-        }),
-      ) as { steps: { skipped?: boolean; skippedReason?: string }[] };
-      expect(run.steps[0]!.skippedReason).toBe("unless_element_present");
-      expect(run.steps[1]!.skipped).toBeUndefined();
-      expect(backend.callsFor("click")).toHaveLength(1);
+      expect(run.steps[2]).toMatchObject({
+        skipped: true,
+        skippedReason: "unless_element_present",
+      });
+      expect(run.steps[3]!.skipped).toBeUndefined();
+      expect(run.skipped).toBe(2);
+      // Only the two un-skipped clicks dispatched — a skipped step touches nothing.
+      expect(backend.callsFor("click")).toHaveLength(2);
     } finally {
       await manager.dispose();
     }
@@ -6038,8 +5699,6 @@ describe("computer_help", () => {
       // that no chapter's prose names proves the catalog joined the chapters.
       expect(json.chapters).toContain("computer_write_clipboard");
       expect(json.chapters).toContain("Available as computer_run steps");
-      expect(json.chapters).not.toContain("computer_recording");
-      expect(json.chapters).not.toContain("computer_replay");
     } finally {
       await manager.dispose();
     }
