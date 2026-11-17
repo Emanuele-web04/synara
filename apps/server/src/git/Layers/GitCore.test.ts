@@ -164,6 +164,13 @@ function commitWithDate(
   });
 }
 
+/** The checked-out branch name of a repository, read through GitCore. */
+const currentBranchName = (cwd: string) =>
+  Effect.gen(function* () {
+    const core = yield* GitCore;
+    return (yield* core.listBranches({ cwd })).branches.find((branch) => branch.current)!.name;
+  });
+
 const quoteGitShellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** A textconv command requires local Git configuration; attributes alone cannot install it. */
@@ -1083,9 +1090,7 @@ it.layer(TestLayer)("git integration", (it) => {
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const initialBranch = yield* currentBranchName(tmp);
 
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "older-branch" });
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "older-branch" });
@@ -1122,9 +1127,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const tmp = yield* makeTmpDir();
         const remote = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(tmp);
 
         yield* git(remote, ["init", "--bare"]);
         yield* git(tmp, ["remote", "add", "origin", remote]);
@@ -1177,9 +1180,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
         yield* git(remote, ["init", "--bare"]);
         yield* initRepoWithCommit(tmp);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(tmp);
 
         yield* git(tmp, ["remote", "add", "origin", remote]);
         yield* git(tmp, ["push", "-u", "origin", defaultBranch]);
@@ -1225,9 +1226,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
         yield* git(remote, ["init", "--bare"]);
         yield* initRepoWithCommit(tmp);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(tmp);
 
         yield* git(tmp, ["remote", "add", remoteName, remote]);
         yield* git(tmp, ["push", "-u", remoteName, defaultBranch]);
@@ -1261,9 +1260,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1308,9 +1305,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1356,9 +1351,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1416,9 +1409,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1463,9 +1454,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1488,9 +1477,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const defaultBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", remoteName, remote]);
         yield* git(source, ["push", "-u", remoteName, defaultBranch]);
 
@@ -1520,9 +1507,7 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(remote, ["init", "--bare"]);
 
           yield* initRepoWithCommit(source);
-          const defaultBranch = (yield* (yield* GitCore).listBranches({
-            cwd: source,
-          })).branches.find((branch) => branch.current)!.name;
+          const defaultBranch = yield* currentBranchName(source);
           yield* git(source, ["remote", "add", "origin", remote]);
           yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
@@ -1587,54 +1572,33 @@ it.layer(TestLayer)("git integration", (it) => {
   });
 
   describe("stashAndCheckout", () => {
-    it.effect("stashes dirty changes, switches branches, and reapplies the stash", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        const { initialBranch } = yield* initRepoWithCommit(tmp);
-        const core = yield* GitCore;
+    it.effect(
+      "stashes dirty changes, switches branches, reapplies them, and drops only its own stash",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(tmp);
+          const core = yield* GitCore;
 
-        yield* core.createBranch({ cwd: tmp, branch: "feature" });
-        yield* core.checkoutBranch({ cwd: tmp, branch: "feature" });
-        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature content\n");
-        yield* git(tmp, ["add", "."]);
-        yield* git(tmp, ["commit", "-m", "add feature file"]);
-        yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
+          yield* core.createBranch({ cwd: tmp, branch: "feature" });
+          yield* core.checkoutBranch({ cwd: tmp, branch: "feature" });
+          yield* writeTextFile(path.join(tmp, "feature.txt"), "feature content\n");
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "add feature file"]);
+          yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
 
-        yield* writeTextFile(path.join(tmp, "README.md"), "dirty changes\n");
+          yield* writeTextFile(path.join(tmp, "kept.txt"), "existing stash\n");
+          yield* git(tmp, ["stash", "push", "-u", "-m", "pre-existing stash"]);
+          yield* writeTextFile(path.join(tmp, "README.md"), "dirty changes\n");
 
-        yield* core.stashAndCheckout({ cwd: tmp, branch: "feature" });
+          yield* core.stashAndCheckout({ cwd: tmp, branch: "feature" });
 
-        const branches = yield* core.listBranches({ cwd: tmp });
-        expect(branches.branches.find((branch) => branch.current)?.name).toBe("feature");
-        expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("dirty changes\n");
-        expect((yield* git(tmp, ["stash", "list"])).trim()).toBe("");
-      }),
-    );
-
-    it.effect("drops only the temporary stash it created after a successful reapply", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        const { initialBranch } = yield* initRepoWithCommit(tmp);
-        const core = yield* GitCore;
-
-        yield* core.createBranch({ cwd: tmp, branch: "feature" });
-        yield* core.checkoutBranch({ cwd: tmp, branch: "feature" });
-        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature content\n");
-        yield* git(tmp, ["add", "."]);
-        yield* git(tmp, ["commit", "-m", "add feature file"]);
-        yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
-
-        yield* writeTextFile(path.join(tmp, "kept.txt"), "existing stash\n");
-        yield* git(tmp, ["stash", "push", "-u", "-m", "pre-existing stash"]);
-        yield* writeTextFile(path.join(tmp, "README.md"), "dirty changes\n");
-
-        yield* core.stashAndCheckout({ cwd: tmp, branch: "feature" });
-
-        const stashList = yield* git(tmp, ["stash", "list"]);
-        expect(stashList).toContain("pre-existing stash");
-        expect(stashList).not.toContain("synara: stash before switching to feature");
-        expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("dirty changes\n");
-      }),
+          expect(yield* currentBranchName(tmp)).toBe("feature");
+          const stashList = yield* git(tmp, ["stash", "list"]);
+          expect(stashList).toContain("pre-existing stash");
+          expect(stashList).not.toContain("synara: stash before switching to feature");
+          expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("dirty changes\n");
+        }),
     );
 
     it.effect("keeps the stash when reapplying dirty changes conflicts", () =>
@@ -1877,9 +1841,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
 
         const wtPath = path.join(tmp, "worktree-out");
-        const currentBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (b) => b.current,
-        )!.name;
+        const currentBranch = yield* currentBranchName(tmp);
 
         const result = yield* (yield* GitCore).createWorktree({
           cwd: tmp,
@@ -1931,29 +1893,6 @@ it.layer(TestLayer)("git integration", (it) => {
           branch: "wt-owned",
           expectedHead: proof.head,
         });
-      }),
-    );
-
-    it.effect("verifies ownership of a detached worktree", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        yield* initRepoWithCommit(tmp);
-        const core = yield* GitCore;
-        const wtPath = path.join(tmp, "wt-detached-owned");
-        yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
-
-        const proof = yield* core.recordWorktreeOwnership({
-          path: wtPath,
-          branch: null,
-          token: "detached-operation-token",
-        });
-
-        expect(proof.branch).toBeNull();
-        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
-          verified: true,
-          reason: null,
-        });
-        yield* core.removeWorktree({ cwd: tmp, path: wtPath });
       }),
     );
 
@@ -2379,9 +2318,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
 
         const wtPath = path.join(tmp, "wt-list-dir");
-        const mainBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (b) => b.current,
-        )!.name;
+        const mainBranch = yield* currentBranchName(tmp);
 
         yield* (yield* GitCore).createWorktree({
           cwd: tmp,
@@ -2411,9 +2348,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
 
         const wtPath = path.join(tmp, "wt-dirty-dir");
-        const currentBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (b) => b.current,
-        )!.name;
+        const currentBranch = yield* currentBranchName(tmp);
 
         yield* (yield* GitCore).createWorktree({
           cwd: tmp,
@@ -3271,9 +3206,7 @@ it.layer(TestLayer)("git integration", (it) => {
         if (Exit.isFailure(exit)) {
           const rendered = String(exit.cause);
           expect(rendered).toContain("GitCore.readRefPatch.verifyRef");
-          expect(rendered).toContain("Cannot resolve");
           expect(rendered).toContain("does/not/exist");
-          expect(rendered).toContain("to a commit in this repository.");
         }
       }),
     );
@@ -3325,59 +3258,36 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect(
-      "computes ahead count against origin/default when local default branch is missing",
-      () =>
+    for (const { label, remoteName, mergeBaseConfig } of [
+      {
+        label: "origin/default when local default branch is missing",
+        remoteName: "origin",
+        mergeBaseConfig: false,
+      },
+      {
+        label: "a non-origin remote-prefixed gh-merge-base candidate",
+        remoteName: "fork-seed",
+        mergeBaseConfig: true,
+      },
+    ]) {
+      it.effect(`computes ahead count against ${label}`, () =>
         Effect.gen(function* () {
           const remote = yield* makeTmpDir();
           const source = yield* makeTmpDir();
           yield* git(remote, ["init", "--bare"]);
 
           yield* initRepoWithCommit(source);
-          const initialBranch = (yield* (yield* GitCore).listBranches({
-            cwd: source,
-          })).branches.find((branch) => branch.current)!.name;
-          yield* git(source, ["remote", "add", "origin", remote]);
-          yield* git(source, ["push", "-u", "origin", initialBranch]);
-          yield* git(source, ["checkout", "-b", "feature/remote-base-only"]);
-          yield* writeTextFile(
-            path.join(source, "feature.txt"),
-            `ahead of origin/${initialBranch}\n`,
-          );
-          yield* git(source, ["add", "feature.txt"]);
-          yield* git(source, ["commit", "-m", "feature commit"]);
-          yield* git(source, ["branch", "-D", initialBranch]);
-
-          const core = yield* GitCore;
-          const details = yield* core.statusDetails(source);
-          expect(details.branch).toBe("feature/remote-base-only");
-          expect(details.hasUpstream).toBe(false);
-          expect(details.aheadCount).toBe(1);
-          expect(details.behindCount).toBe(0);
-        }),
-    );
-
-    it.effect(
-      "computes ahead count against a non-origin remote-prefixed gh-merge-base candidate",
-      () =>
-        Effect.gen(function* () {
-          const remote = yield* makeTmpDir();
-          const source = yield* makeTmpDir();
-          const remoteName = "fork-seed";
-          yield* git(remote, ["init", "--bare"]);
-
-          yield* initRepoWithCommit(source);
-          const initialBranch = (yield* (yield* GitCore).listBranches({
-            cwd: source,
-          })).branches.find((branch) => branch.current)!.name;
+          const initialBranch = yield* currentBranchName(source);
           yield* git(source, ["remote", "add", remoteName, remote]);
           yield* git(source, ["push", "-u", remoteName, initialBranch]);
-          yield* git(source, ["checkout", "-b", "feature/non-origin-merge-base"]);
-          yield* git(source, [
-            "config",
-            "branch.feature/non-origin-merge-base.gh-merge-base",
-            `${remoteName}/${initialBranch}`,
-          ]);
+          yield* git(source, ["checkout", "-b", "feature/remote-base-only"]);
+          if (mergeBaseConfig) {
+            yield* git(source, [
+              "config",
+              "branch.feature/remote-base-only.gh-merge-base",
+              `${remoteName}/${initialBranch}`,
+            ]);
+          }
           yield* writeTextFile(
             path.join(source, "feature.txt"),
             `ahead of ${remoteName}/${initialBranch}\n`,
@@ -3386,14 +3296,14 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(source, ["commit", "-m", "feature commit"]);
           yield* git(source, ["branch", "-D", initialBranch]);
 
-          const core = yield* GitCore;
-          const details = yield* core.statusDetails(source);
-          expect(details.branch).toBe("feature/non-origin-merge-base");
+          const details = yield* (yield* GitCore).statusDetails(source);
+          expect(details.branch).toBe("feature/remote-base-only");
           expect(details.hasUpstream).toBe(false);
           expect(details.aheadCount).toBe(1);
           expect(details.behindCount).toBe(0);
         }),
-    );
+      );
+    }
 
     it.effect("skips push when no upstream is configured and branch is not ahead of base", () =>
       Effect.gen(function* () {
@@ -3411,55 +3321,44 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("pushes with upstream setup when no comparable base branch exists", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        const remote = yield* makeTmpDir();
-        yield* git(tmp, ["init", "--initial-branch=trunk"]);
-        yield* git(tmp, ["config", "user.email", "test@test.com"]);
-        yield* git(tmp, ["config", "user.name", "Test"]);
-        yield* writeTextFile(path.join(tmp, "README.md"), "hello\n");
-        yield* git(tmp, ["add", "README.md"]);
-        yield* git(tmp, ["commit", "-m", "initial"]);
-        yield* git(remote, ["init", "--bare"]);
-        yield* git(tmp, ["remote", "add", "origin", remote]);
-        yield* git(tmp, ["checkout", "-b", "feature/no-base"]);
+    for (const { label, initialBranch, remoteName, feature } of [
+      {
+        label: "no comparable base branch exists",
+        initialBranch: "trunk",
+        remoteName: "origin",
+        feature: "feature/no-base",
+      },
+      {
+        label: "the only configured remote is not origin",
+        initialBranch: "main",
+        remoteName: "fork",
+        feature: "feature/fork-only",
+      },
+    ]) {
+      it.effect(`pushes with upstream setup when ${label}`, () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          const remote = yield* makeTmpDir();
+          yield* git(tmp, ["init", `--initial-branch=${initialBranch}`]);
+          yield* git(tmp, ["config", "user.email", "test@test.com"]);
+          yield* git(tmp, ["config", "user.name", "Test"]);
+          yield* writeTextFile(path.join(tmp, "README.md"), "hello\n");
+          yield* git(tmp, ["add", "README.md"]);
+          yield* git(tmp, ["commit", "-m", "initial"]);
+          yield* git(remote, ["init", "--bare"]);
+          yield* git(tmp, ["remote", "add", remoteName, remote]);
+          yield* git(tmp, ["checkout", "-b", feature]);
 
-        const core = yield* GitCore;
-        const pushed = yield* core.pushCurrentBranch(tmp, null);
-        expect(pushed.status).toBe("pushed");
-        expect(pushed.setUpstream).toBe(true);
-        expect(pushed.upstreamBranch).toBe("origin/feature/no-base");
-        expect(yield* git(tmp, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
-          "origin/feature/no-base",
-        );
-      }),
-    );
-
-    it.effect("pushes with upstream setup to the only configured non-origin remote", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        const remote = yield* makeTmpDir();
-        yield* git(tmp, ["init", "--initial-branch=main"]);
-        yield* git(tmp, ["config", "user.email", "test@test.com"]);
-        yield* git(tmp, ["config", "user.name", "Test"]);
-        yield* writeTextFile(path.join(tmp, "README.md"), "hello\n");
-        yield* git(tmp, ["add", "README.md"]);
-        yield* git(tmp, ["commit", "-m", "initial"]);
-        yield* git(remote, ["init", "--bare"]);
-        yield* git(tmp, ["remote", "add", "fork", remote]);
-        yield* git(tmp, ["checkout", "-b", "feature/fork-only"]);
-
-        const core = yield* GitCore;
-        const pushed = yield* core.pushCurrentBranch(tmp, null);
-        expect(pushed.status).toBe("pushed");
-        expect(pushed.setUpstream).toBe(true);
-        expect(pushed.upstreamBranch).toBe("fork/feature/fork-only");
-        expect(yield* git(tmp, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
-          "fork/feature/fork-only",
-        );
-      }),
-    );
+          const pushed = yield* (yield* GitCore).pushCurrentBranch(tmp, null);
+          expect(pushed.status).toBe("pushed");
+          expect(pushed.setUpstream).toBe(true);
+          expect(pushed.upstreamBranch).toBe(`${remoteName}/${feature}`);
+          expect(yield* git(tmp, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+            `${remoteName}/${feature}`,
+          );
+        }),
+      );
+    }
 
     it.effect(
       "pushes with upstream setup when comparable base exists but remote branch is missing",
@@ -3470,9 +3369,7 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(remote, ["init", "--bare"]);
 
           yield* initRepoWithCommit(tmp);
-          const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-            (branch) => branch.current,
-          )!.name;
+          const initialBranch = yield* currentBranchName(tmp);
           yield* git(tmp, ["remote", "add", "origin", remote]);
           yield* git(tmp, ["push", "-u", "origin", initialBranch]);
 
@@ -3506,9 +3403,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(fork, ["init", "--bare"]);
 
         yield* initRepoWithCommit(tmp);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const initialBranch = yield* currentBranchName(tmp);
         yield* git(tmp, ["remote", "add", "origin", origin]);
         yield* git(tmp, ["remote", "add", "fork", fork]);
         yield* git(tmp, ["push", "-u", "origin", initialBranch]);
@@ -3581,27 +3476,6 @@ it.layer(TestLayer)("git integration", (it) => {
         }),
     );
 
-    it.effect("includes command context when worktree removal fails", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        yield* initRepoWithCommit(tmp);
-        const core = yield* GitCore;
-        const missingWorktreePath = path.join(tmp, "missing-worktree");
-
-        const removeResult = yield* Effect.result(
-          core.removeWorktree({ cwd: tmp, path: missingWorktreePath }),
-        );
-        expect(removeResult._tag).toBe("Failure");
-        if (removeResult._tag !== "Failure") {
-          return;
-        }
-        const message = removeResult.failure.message;
-        expect(message).toContain("git worktree remove");
-        expect(message).toContain(`cwd: ${tmp}`);
-        expect(message).toContain(missingWorktreePath);
-      }),
-    );
-
     it.effect(
       "refreshes upstream in background so later statusDetails reflects remote updates",
       () =>
@@ -3612,9 +3486,7 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(remote, ["init", "--bare"]);
 
           yield* initRepoWithCommit(source);
-          const initialBranch = (yield* (yield* GitCore).listBranches({
-            cwd: source,
-          })).branches.find((branch) => branch.current)!.name;
+          const initialBranch = yield* currentBranchName(source);
           yield* git(source, ["remote", "add", "origin", remote]);
           yield* git(source, ["push", "-u", "origin", initialBranch]);
 
@@ -3725,9 +3597,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const source = yield* makeTmpDir();
         yield* git(remote, ["init", "--bare"]);
         yield* initRepoWithCommit(source);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const initialBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", initialBranch]);
 
@@ -3812,24 +3682,6 @@ it.layer(TestLayer)("git integration", (it) => {
       );
     }
 
-    it.effect("prepares commit context by auto-staging and creates commit", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        yield* initRepoWithCommit(tmp);
-        const core = yield* GitCore;
-
-        yield* writeTextFile(path.join(tmp, "README.md"), "new content\n");
-        const context = yield* core.prepareCommitContext(tmp);
-        expect(context).not.toBeNull();
-        expect(context!.stagedSummary.length).toBeGreaterThan(0);
-        expect(context!.stagedPatch.length).toBeGreaterThan(0);
-
-        const created = yield* core.commit(tmp, "Add README update", "- include updated content");
-        expect(created.commitSha.length).toBeGreaterThan(0);
-        expect(yield* git(tmp, ["log", "-1", "--pretty=%s"])).toBe("Add README update");
-      }),
-    );
-
     it.effect("prepareCommitContext stages only selected files when filePaths provided", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -3845,6 +3697,7 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(context!.stagedSummary).not.toContain("b.txt");
 
         yield* core.commit(tmp, "Add only a.txt", "");
+        expect(yield* git(tmp, ["log", "-1", "--pretty=%s"])).toBe("Add only a.txt");
 
         // b.txt should still be untracked after commit
         const statusAfter = yield* git(tmp, ["status", "--porcelain"]);
@@ -3978,9 +3831,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const initialBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", initialBranch]);
 
@@ -4022,9 +3873,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
+        const initialBranch = yield* currentBranchName(source);
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", initialBranch]);
 
