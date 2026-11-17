@@ -15,6 +15,15 @@ import {
 const capability = "isolated-fixture-authority-00000000000000";
 const cuaRequest: typeof rawCuaRequest = (path, request, options) =>
   rawCuaRequest(path, { ...(request as object), capability }, options);
+function callHostTool<T = unknown>(
+  endpoint: string,
+  name: string,
+  payload: Record<string, unknown> = {},
+  options?: Parameters<typeof cuaRequest>[2],
+): Promise<T> {
+  return cuaRequest<T>(endpoint, { method: "call", name, ...payload }, options);
+}
+
 const cleanups: Array<() => Promise<unknown>> = [];
 const realDateNow = Date.now;
 let cooldownClockOffsetMs = 0;
@@ -127,6 +136,7 @@ async function fixture(
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const log = join(directory, "events.jsonl");
   const binary = join(directory, "driver");
+  const fixtureCleanup = join(directory, "fixture-cleanup");
   options = { ...options, deathFlag: join(directory, "session-died") };
   await writeFile(
     binary,
@@ -242,7 +252,14 @@ net.createServer(s=>{
   s.on('error',()=>{});
 }).listen(socket);
 let retiring=false;
-function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},150)}
+function retire(){
+  if(retiring)return;
+  retiring=true;
+  write('retiring');
+  const exit=()=>{write('exit');process.exit(0)};
+  if(fs.existsSync(${JSON.stringify(fixtureCleanup)}))setImmediate(exit);
+  else setTimeout(exit,150);
+}
 process.on('SIGTERM',retire);
 process.stdin.resume(); process.stdin.on('end',retire);
 `,
@@ -273,6 +290,9 @@ process.stdin.resume(); process.stdin.on('end',retire);
       .split("\n")
       .map((row) => JSON.parse(row));
   cleanups.push(async () => {
+    // Explicit retirement inside a test keeps the delayed exit. Only fixture
+    // teardown skips the wait, after the scenario has finished asserting order.
+    await writeFile(fixtureCleanup, "").catch(() => undefined);
     try {
       await host.dispose();
     } catch (error) {
@@ -303,11 +323,10 @@ async function foregroundCollision(
   task: { threadId: string; turnId: string },
   target: { pid: number; window_id: number },
 ): Promise<void> {
-  const typing = cuaRequest(
+  const typing = callHostTool(
     f.endpoint,
+    "type_text",
     {
-      method: "call",
-      name: "type_text",
       args: { ...target, delivery_mode: "foreground", text: "fixture" },
       task,
     },
@@ -347,9 +366,7 @@ describe("Cua macOS host retirement", () => {
   it("starts the compact cursor once per generation and owns the observation budget", async () => {
     const f = await fixture();
     for (let i = 0; i < 2; i++) {
-      const reply = await cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      const reply = await callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { key: "enter", _synara_foreground_observation_ms: 0 },
       });
       expect(reply.ok).toBe(true);
@@ -374,10 +391,7 @@ describe("Cua macOS host retirement", () => {
           return pending.promise;
         },
       });
-      const check = cuaRequest(f.endpoint, {
-        method: "call",
-        name: "check_permissions",
-      });
+      const check = callHostTool(f.endpoint, "check_permissions");
       await entered.promise;
       await f.host[method]("screen-lock");
       await expect(check).resolves.toMatchObject({
@@ -404,21 +418,20 @@ describe("Cua macOS host retirement", () => {
       },
     });
     const controller = new AbortController();
-    const check = cuaRequest(
+    const check = callHostTool(
       f.endpoint,
-      { method: "call", name: "check_permissions" },
+      "check_permissions",
+      {},
       { signal: controller.signal },
     ).catch((error: unknown) => error);
     await entered.promise;
     controller.abort();
     await check;
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" }, { timeoutMs: 2_000 }),
+      callHostTool(f.endpoint, "get_screen_size", {}, { timeoutMs: 2_000 }),
     ).resolves.toMatchObject({ ok: true });
     pending.resolve({ accessibility: true, screenRecording: true });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 
@@ -428,9 +441,7 @@ describe("Cua macOS host retirement", () => {
       checkPermissions: async () => permissions,
     });
     const check = () =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "check_permissions",
+      callHostTool(f.endpoint, "check_permissions", {
         args: { prompt: true },
       });
     await expect(check()).resolves.toMatchObject({
@@ -464,9 +475,9 @@ describe("Cua macOS host retirement", () => {
         return { accessibility: granted, screenRecording: granted };
       },
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     granted = true;
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     expect(checks).toEqual([false, false, true]);
   });
 
@@ -478,9 +489,9 @@ describe("Cua macOS host retirement", () => {
         screenRecording: granted,
       }),
     });
-    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => callHostTool(f.endpoint, "check_permissions");
     await check();
-    await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
+    await callHostTool(f.endpoint, "get_screen_size");
     granted = false;
     await expect(check()).resolves.toMatchObject({
       desktopEpoch: 1,
@@ -491,17 +502,13 @@ describe("Cua macOS host retirement", () => {
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     granted = true;
     await check();
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({
+      result: { isError: true },
+    });
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
 
@@ -514,23 +521,19 @@ describe("Cua macOS host retirement", () => {
         screenRecording: granted,
       }),
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
-    await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
+    await callHostTool(f.endpoint, "check_permissions");
+    await callHostTool(f.endpoint, "get_screen_size");
     // A dispatched action makes this generation's input state unprovable, so
     // the failed cleanup must keep the driver alive and admission closed.
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    await callHostTool(f.endpoint, "press_key", {
       args: { key: "enter" },
     });
     granted = false;
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: false,
+    });
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false });
-    await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         modelObservation: true,
       }),
     ).resolves.toMatchObject({ ok: false });
@@ -541,7 +544,7 @@ describe("Cua macOS host retirement", () => {
     await f.host.pauseDesktop("screen-lock");
     await f.host.pauseDesktop("system-sleep");
     f.host.resume(); // A backend restart cannot unlock the desktop.
-    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
+    const press = () => callHostTool(f.endpoint, "press_key");
     await expect(press()).resolves.toMatchObject({
       result: {
         isError: true,
@@ -552,11 +555,9 @@ describe("Cua macOS host retirement", () => {
     f.host.resumeDesktop("screen-lock");
     await expect(press()).resolves.toMatchObject({ result: { isError: true } });
     f.host.resumeDesktop("system-sleep");
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     await expect(press()).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
       args: { pid: 1, window_id: 2 },
     });
@@ -570,9 +571,7 @@ describe("Cua macOS host retirement", () => {
     const f = await fixture();
     await f.host.pauseDesktop("screen-lock");
     const launch = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "launch_app",
+      callHostTool<CuaReply>(f.endpoint, "launch_app", {
         args: { name: "Calculator" },
       });
     await expect(launch()).resolves.toMatchObject({
@@ -583,9 +582,7 @@ describe("Cua macOS host retirement", () => {
     expect(launched.ok).toBe(true);
     expect(launched.result?.structuredContent?.code).toBeUndefined();
     // Acting on something on screen still needs the fresh look.
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
     });
   });
@@ -605,9 +602,7 @@ describe("Cua macOS host retirement", () => {
     expect(paused.desktopInterruptions).toBe(2);
     // Refusals carry the same state: a paused action reports the reasons and
     // the count alongside its computer_input_paused result.
-    await expect(
-      cuaRequest<CuaReply>(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({
+    await expect(callHostTool<CuaReply>(f.endpoint, "press_key")).resolves.toMatchObject({
       desktopPauses: ["screen-lock", "system-sleep"],
       desktopInterruptions: 2,
       result: { structuredContent: { code: "computer_input_paused" } },
@@ -632,9 +627,7 @@ describe("Cua macOS host retirement", () => {
     // retry can recover. The driver confirms nothing dispatched, so one
     // retire-plus-retry is replay-safe.
     const f = await fixture(capability, { sessionDeathOnce: true });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "press_key", {
       args: { key: "enter" },
     });
     expect(reply.ok).toBe(true);
@@ -650,9 +643,7 @@ describe("Cua macOS host retirement", () => {
     // The live driver surfaced session death as an ok:false reply rather than
     // an isError result: undetected, every later call died on the same id.
     const f = await fixture(capability, { sessionDeathTransport: true });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "press_key", {
       args: { key: "enter" },
     });
     expect(reply.ok).toBe(true);
@@ -664,9 +655,7 @@ describe("Cua macOS host retirement", () => {
 
   it("locking cancels active native input and rejects waiting input before dispatch", async () => {
     const f = await fixture();
-    const active = cuaRequest(f.endpoint, {
-      method: "call",
-      name: "type_text",
+    const active = callHostTool(f.endpoint, "type_text", {
       args: { text: "fixture" },
     });
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -674,10 +663,7 @@ describe("Cua macOS host retirement", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect((await f.events()).some((event) => event.event === "dispatch")).toBe(true);
-    const queued = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
-    });
+    const queued = callHostTool<CuaReply>(f.endpoint, "press_key");
     await f.host.pauseDesktop("screen-lock");
     expect(await active).toMatchObject({ ok: false });
     const queuedReply = await queued;
@@ -689,19 +675,17 @@ describe("Cua macOS host retirement", () => {
 
   it("unlock does not bypass an unacknowledged cleanup barrier", async () => {
     const f = await fixture(capability, { cleanup: "incomplete" });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    await callHostTool(f.endpoint, "check_permissions");
+    await callHostTool(f.endpoint, "press_key", {
       args: { key: "enter" },
     });
     await expect(f.host.pauseDesktop("screen-lock")).rejects.toThrow(
       "did not confirm native input cleanup",
     );
     f.host.resumeDesktop("screen-lock");
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "get_window_state" }),
-    ).resolves.toMatchObject({ ok: false });
+    await expect(callHostTool(f.endpoint, "get_window_state")).resolves.toMatchObject({
+      ok: false,
+    });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 
@@ -709,24 +693,21 @@ describe("Cua macOS host retirement", () => {
     const f = await fixture();
     await f.host.pauseDesktop("screen-lock");
     f.host.resumeDesktop("screen-lock");
-    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "get_desktop_state" }),
-    ).resolves.toMatchObject({ ok: true, desktopEpoch: 1 });
-    await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    const press = () => callHostTool(f.endpoint, "press_key");
+    await expect(callHostTool(f.endpoint, "get_desktop_state")).resolves.toMatchObject({
+      ok: true,
+      desktopEpoch: 1,
+    });
+    await callHostTool(f.endpoint, "get_window_state");
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
       args: { empty: true },
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_input_ready" }),
-    ).resolves.toMatchObject({ result: { isError: true } });
+    await expect(callHostTool(f.endpoint, "check_input_ready")).resolves.toMatchObject({
+      result: { isError: true },
+    });
     await expect(press()).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
     });
     await expect(press()).resolves.toMatchObject({ ok: true });
@@ -738,11 +719,10 @@ describe("Cua macOS host retirement", () => {
     await f.host.pauseDesktop("screen-lock");
     f.host.resumeDesktop("screen-lock");
     const controller = new AbortController();
-    const observation = cuaRequest(
+    const observation = callHostTool(
       f.endpoint,
+      "get_window_state",
       {
-        method: "call",
-        name: "get_window_state",
         modelObservation: true,
       },
       { signal: controller.signal },
@@ -751,9 +731,9 @@ describe("Cua macOS host retirement", () => {
     controller.abort();
     expect(await observation).toBeInstanceOf(Error);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ result: { isError: true } });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({
+      result: { isError: true },
+    });
     expect((await f.events()).some((event) => event.event === "key")).toBe(false);
   });
 
@@ -769,16 +749,14 @@ describe("Cua macOS host retirement", () => {
         return { accessibility: true, screenRecording: probes !== 2 };
       },
     });
-    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => callHostTool(f.endpoint, "check_permissions");
     await expect(check()).resolves.toMatchObject({ desktopEpoch: 0 });
     await expect(check()).resolves.toMatchObject({
       desktopEpoch: 0,
       result: { structuredContent: { screen_recording: true } },
     });
     expect(probes).toBe(3);
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
   });
 
   it("a flapping permission helper cannot deadlock input behind the observation gate", async () => {
@@ -789,11 +767,9 @@ describe("Cua macOS host retirement", () => {
         return { accessibility: true, screenRecording: probes % 2 === 1 };
       },
     });
-    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => callHostTool(f.endpoint, "check_permissions");
     const observe = () =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         modelObservation: true,
         args: { pid: 1, window_id: 2 },
       });
@@ -803,9 +779,7 @@ describe("Cua macOS host retirement", () => {
     for (let i = 0; i < 3; i += 1) {
       await observe();
       await check();
-      await expect(
-        cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
     }
   });
 
@@ -814,9 +788,7 @@ describe("Cua macOS host retirement", () => {
     await f.host.pauseDesktop("screen-lock");
     f.host.resumeDesktop("screen-lock");
     const observe = () =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         modelObservation: true,
         args: { pid: 1, window_id: 2 },
       });
@@ -835,9 +807,7 @@ describe("Cua macOS host retirement", () => {
       },
     });
     await observe();
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
   });
 
   it("preserves multibyte UTF-8 across incoming socket chunks", async () => {
@@ -871,23 +841,20 @@ describe("Cua macOS host retirement", () => {
   });
   it("releases uncertain input before termination and waits for exit before replacement", async () => {
     const f = await fixture();
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "check_permissions",
+    await callHostTool(f.endpoint, "check_permissions", {
       args: {},
     });
     await expect(
-      cuaRequest(
+      callHostTool(
         f.endpoint,
-        { method: "call", name: "type_text", args: { text: "fixture" } },
+        "type_text",
+        { args: { text: "fixture" } },
         { timeoutMs: 120, mutation: true },
       ),
     ).rejects.toMatchObject({ effect: "dispatched-unknown" });
     await f.host.stop();
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "check_permissions",
+      callHostTool(f.endpoint, "check_permissions", {
         args: {},
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -920,13 +887,14 @@ describe("Cua macOS host retirement", () => {
       crash: true,
       releaseHeldInput: released,
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     // The fake driver exits on dispatch, so the call's retire runs the
     // OS-level release before the request reports its failure.
     await expect(
-      cuaRequest(
+      callHostTool(
         f.endpoint,
-        { method: "call", name: "type_text", args: { text: "fixture" } },
+        "type_text",
+        { args: { text: "fixture" } },
         { timeoutMs: 300, mutation: true },
       ),
     ).resolves.toMatchObject({ ok: false });
@@ -934,9 +902,9 @@ describe("Cua macOS host retirement", () => {
     // A confirmed release makes the desktop provably clean: the dead
     // generation clears, so the next request spawns a replacement instead of
     // poisoning admission for the host's lifetime.
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: true,
+    });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
   it("keeps admission closed for the host's lifetime when held-input release fails", async () => {
@@ -945,17 +913,19 @@ describe("Cua macOS host retirement", () => {
       releaseHeldInput: () => Promise.reject(new Error("helper gone")),
     });
     await expect(
-      cuaRequest(
+      callHostTool(
         f.endpoint,
-        { method: "call", name: "type_text", args: { text: "fixture" } },
+        "type_text",
+        { args: { text: "fixture" } },
         { timeoutMs: 1_000, mutation: true },
       ),
     ).resolves.toMatchObject({ ok: false });
     // Without a confirmed release the held state is unprovable — no
     // replacement generation may spawn over it, now or later.
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: false,
+      effect: "not-dispatched",
+    });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     await expect(f.host.stop()).rejects.toThrow("admission is closed");
   });
@@ -969,17 +939,15 @@ describe("Cua macOS host retirement", () => {
     // retirement cannot confirm cleanup (the socket drops mid-request), but
     // no action ever reached this generation so nothing can be held.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         args: { key: "enter" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     // Terminating the provably input-free generation clears it, so the next
     // request spawns a fresh driver instead of failing closed forever.
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: true,
+    });
     const events = await f.events();
     const starts = events.filter((event) => event.event === "start");
     expect(starts).toHaveLength(2);
@@ -993,12 +961,10 @@ describe("Cua macOS host retirement", () => {
   });
   it("rejects later backend requests throughout suspension and resumes only on explicit restart", async () => {
     const f = await fixture();
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     const stopping = f.host.suspend();
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      callHostTool(f.endpoint, "type_text", {
         args: { text: "must not arrive" },
       }),
     ).resolves.toMatchObject({
@@ -1007,15 +973,16 @@ describe("Cua macOS host retirement", () => {
       error: expect.stringContaining("suspended"),
     });
     await stopping;
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: false,
+      effect: "not-dispatched",
+    });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
     f.host.resume();
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: true,
+    });
     const events = await f.events();
     const starts = events.filter((event) => event.event === "start");
     expect(starts).toHaveLength(2);
@@ -1025,18 +992,14 @@ describe("Cua macOS host retirement", () => {
   });
   it("does not let resume bypass failed cleanup during backend suspension", async () => {
     const f = await fixture(capability, { cleanup: "incomplete" });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    await callHostTool(f.endpoint, "check_permissions");
+    await callHostTool(f.endpoint, "press_key", {
       args: { key: "enter" },
     });
     await expect(f.host.suspend()).rejects.toThrow("did not confirm native input cleanup");
     f.host.resume();
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      callHostTool(f.endpoint, "type_text", {
         args: { text: "must not arrive" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
@@ -1047,21 +1010,17 @@ describe("Cua macOS host retirement", () => {
     "keeps the process alive and blocks replacement after %s cleanup",
     async (cleanup) => {
       const f = await fixture(capability, { cleanup });
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "check_permissions",
-      });
+      await callHostTool(f.endpoint, "check_permissions");
       // An input-dispatched generation can hold OS state the acknowledgement
       // cannot account for, so the driver stays alive and unreplaced.
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      await callHostTool(f.endpoint, "press_key", {
         args: { key: "enter" },
       });
       await expect(f.host.stop()).rejects.toThrow("did not confirm native input cleanup");
-      await expect(
-        cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-      ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+        ok: false,
+        effect: "not-dispatched",
+      });
       const events = await f.events();
       expect(events.map((e) => e.event)).toEqual([
         "start",
@@ -1080,9 +1039,7 @@ describe("Cua macOS host retirement", () => {
       failAction: true,
     });
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      callHostTool(f.endpoint, "type_text", {
         args: { text: "fixture" },
       }),
     ).resolves.toMatchObject({
@@ -1095,15 +1052,14 @@ describe("Cua macOS host retirement", () => {
   it("blocks replacement when a driver crashes during input", async () => {
     const f = await fixture(capability, { crash: true });
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      callHostTool(f.endpoint, "type_text", {
         args: { text: "fixture" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: false,
+      effect: "not-dispatched",
+    });
     expect((await f.events()).filter((e) => e.event === "start")).toHaveLength(1);
   });
   it("rejects an upstream binary before native input is admitted", async () => {
@@ -1113,9 +1069,7 @@ describe("Cua macOS host retirement", () => {
     // cannot parse, which refuses the call before any input is dispatched.
     // Even a binary that tolerated them would fail the revision handshake.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      callHostTool(f.endpoint, "type_text", {
         args: { text: "fixture" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
@@ -1131,9 +1085,7 @@ describe("Cua macOS host retirement", () => {
     // report the observed driver as unpatched — the backend's cue to narrow
     // advertised capabilities.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "list_windows",
+      callHostTool(f.endpoint, "list_windows", {
         args: {},
         capability,
       }),
@@ -1146,9 +1098,7 @@ describe("Cua macOS host retirement", () => {
   });
   it("refuses unlisted driver operations before starting a daemon", async () => {
     const f = await fixture();
-    const response = await cuaRequest<{ ok: boolean }>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const response = await callHostTool<{ ok: boolean }>(f.endpoint, "browser_navigate", {
       args: { url: "https://example.com" },
     });
     expect(response.ok).toBe(false);
@@ -1159,9 +1109,7 @@ describe("Cua macOS host retirement", () => {
     // The fixture driver answers any listed name {}; the allowlist is what a
     // refused name would have failed inside the host before ever spawning.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "wait_for_settle",
+      callHostTool(f.endpoint, "wait_for_settle", {
         args: { pid: 42, window_id: 10, timeout_ms: 5_000, quiet_ms: 1_000 },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -1178,9 +1126,7 @@ function stylePayloads(events: Array<{ event: string }>): Array<Record<string, u
 
 describe("agent cursor style", () => {
   const pressKey = (endpoint: string) =>
-    cuaRequest<CuaReply>(endpoint, {
-      method: "call",
-      name: "press_key",
+    callHostTool<CuaReply>(endpoint, "press_key", {
       args: { key: "enter", _synara_foreground_observation_ms: 0 },
     });
 
@@ -1238,9 +1184,10 @@ describe("agent cursor style", () => {
       nativeRevision: null,
       cursorStyle: () => ({ fill: "#101010" }),
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "list_windows", args: {} }),
-    ).resolves.toMatchObject({ ok: true, driverNativeRevision: 0 });
+    await expect(callHostTool(f.endpoint, "list_windows", { args: {} })).resolves.toMatchObject({
+      ok: true,
+      driverNativeRevision: 0,
+    });
     const events = await f.events();
     expect(events.some((row) => row.event === "motion-100-0")).toBe(true);
     expect(stylePayloads(events)).toHaveLength(0);
@@ -1291,9 +1238,7 @@ describe("agent cursor style", () => {
     const f = await fixture(capability, { cursorStyle: () => ({ fill: "#101010" }) });
     const task = { threadId: "thread", turnId: "turn" };
     const press = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { key: "enter", _synara_foreground_observation_ms: 0 },
         task,
       });
@@ -1312,9 +1257,7 @@ describe("agent cursor style", () => {
     const f = await fixture(capability, { cursorStyle: () => style });
     const task = { threadId: "thread", turnId: "turn" };
     const press = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { key: "enter", _synara_foreground_observation_ms: 0 },
         task,
       });
@@ -1338,9 +1281,7 @@ describe("agent cursor style", () => {
   it("sends no style call for a stock task session", async () => {
     const f = await fixture();
     await expect(
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { key: "enter", _synara_foreground_observation_ms: 0 },
         task: { threadId: "thread", turnId: "turn" },
       }),
@@ -1365,9 +1306,7 @@ describe("task-owned user stop", () => {
       });
       const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
       const clipboard = (args: Record<string, unknown>, owner = task) =>
-        cuaRequest<CuaReply>(f.endpoint, {
-          method: "call",
-          name: "clipboard_write",
+        callHostTool<CuaReply>(f.endpoint, "clipboard_write", {
           task: owner,
           args,
         });
@@ -1397,9 +1336,7 @@ describe("task-owned user stop", () => {
       });
       await expect(clipboard({ restore_token: token })).resolves.toMatchObject({ ok: false });
       await expect(
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "press_key",
+        callHostTool(f.endpoint, "press_key", {
           task,
           args: { key: "enter" },
         }),
@@ -1416,17 +1353,13 @@ describe("task-owned user stop", () => {
   it("never starts a replacement driver to restore an old clipboard token", async () => {
     const f = await fixture(capability, { clipboardPreservation: true });
     const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "clipboard_write",
+    await callHostTool(f.endpoint, "clipboard_write", {
       task,
       args: { text: "temporary", preserve: true, preserve_token: token },
     });
     await f.host.stop();
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "clipboard_write",
+      callHostTool(f.endpoint, "clipboard_write", {
         task,
         args: { restore_token: token },
       }),
@@ -1440,17 +1373,13 @@ describe("task-owned user stop", () => {
     const f = await fixture(capability, { clipboardPreservation: true, clipboardReplyLost: true });
     const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "clipboard_write",
+      callHostTool(f.endpoint, "clipboard_write", {
         task,
         args: { text: "temporary", preserve: true, preserve_token: token },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "clipboard_write",
+      callHostTool(f.endpoint, "clipboard_write", {
         task,
         args: { restore_token: token },
       }),
@@ -1475,18 +1404,14 @@ describe("task-owned user stop", () => {
     async (interruptCleanup) => {
       const f = await fixture(capability, { clipboardPreservation: true, interruptCleanup });
       const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "clipboard_write",
+      await callHostTool(f.endpoint, "clipboard_write", {
         task,
         args: { text: "temporary", preserve: true, preserve_token: token },
       });
       await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({
         ok: false,
       });
-      const restored = await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "clipboard_write",
+      const restored = await callHostTool(f.endpoint, "clipboard_write", {
         task,
         args: { restore_token: token },
       });
@@ -1519,18 +1444,14 @@ describe("task-owned user stop", () => {
   it("user Stop refuses subsequent calls from the same turn", async () => {
     const f = await fixture();
     await f.host.stopTaskByUser(task);
-    const blocked = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const blocked = await callHostTool<CuaReply>(f.endpoint, "press_key", {
       task,
       args: { key: "enter", pid: 42, window_id: 10 },
     });
     expect(blocked).toMatchObject({ ok: false, effect: "not-dispatched" });
     expect(blocked.error).toContain("user stopped");
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
-    const next = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    const next = await callHostTool<CuaReply>(f.endpoint, "get_window_state", {
       task: { ...task, turnId: "next" },
       modelObservation: true,
       args: { pid: 42, window_id: 10 },
@@ -1545,16 +1466,12 @@ describe("task-owned user stop", () => {
     "stopping queued $threadId/$turnId's sibling preserves its native input",
     async (activeTask) => {
       const f = await fixture(capability, { inputDelayMs: 300, logSessions: true });
-      const active = cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      const active = callHostTool<CuaReply>(f.endpoint, "type_text", {
         task: activeTask,
         args: { text: "fixture" },
       });
       await waitForEvent(f, "dispatch");
-      const queued = cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      const queued = callHostTool<CuaReply>(f.endpoint, "press_key", {
         task,
         args: { key: "enter" },
       });
@@ -1565,9 +1482,7 @@ describe("task-owned user stop", () => {
       await expect(queued).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
       await expect(active).resolves.toMatchObject({ ok: true });
       await expect(
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "press_key",
+        callHostTool(f.endpoint, "press_key", {
           task: activeTask,
           args: { key: "enter" },
         }),
@@ -1583,17 +1498,13 @@ describe("task-owned user stop", () => {
 
   it("drains matching native input and reports that queued siblings share the generation fence", async () => {
     const f = await fixture();
-    const active = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "type_text",
+    const active = callHostTool<CuaReply>(f.endpoint, "type_text", {
       task,
       args: { text: "fixture" },
     });
     await waitForEvent(f, "dispatch");
     const sibling = { threadId: "other-thread", turnId: "turn" };
-    const queued = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const queued = callHostTool<CuaReply>(f.endpoint, "press_key", {
       task: sibling,
       args: { key: "enter" },
     });
@@ -1604,9 +1515,7 @@ describe("task-owned user stop", () => {
     await expect(active).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
     await expect(queued).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         task: sibling,
         args: { key: "enter" },
       }),
@@ -1621,17 +1530,13 @@ describe("task-owned user stop", () => {
 
   it("cancels only the matching observation without interrupting queued sibling input", async () => {
     const f = await fixture(capability, { delayObservation: true });
-    const observation = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    const observation = callHostTool<CuaReply>(f.endpoint, "get_window_state", {
       task,
       modelObservation: true,
       args: { pid: 42, window_id: 10 },
     });
     await waitForEvent(f, "observe");
-    const sibling = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const sibling = callHostTool<CuaReply>(f.endpoint, "press_key", {
       task: { threadId: "other-thread", turnId: "turn" },
       args: { key: "enter" },
     });
@@ -1653,16 +1558,14 @@ describe("task-owned user stop", () => {
         return pending.promise;
       },
     });
-    const check = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "check_permissions",
+    const check = callHostTool<CuaReply>(f.endpoint, "check_permissions", {
       task,
     });
     await entered.promise;
     await f.host.stopTaskByUser(task);
     await expect(check).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+      callHostTool(f.endpoint, "press_key", { args: { key: "enter" } }),
     ).resolves.toMatchObject({ ok: true });
     pending.resolve({ accessibility: true, screenRecording: true });
     expect((await f.events()).some((row) => row.event === "interrupt")).toBe(false);
@@ -1670,9 +1573,7 @@ describe("task-owned user stop", () => {
 
   it("revokes a task during native startup without retiring the sibling's shared generation", async () => {
     const f = await fixture(capability, { metadataDelayMs: 100 });
-    const starting = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    const starting = callHostTool<CuaReply>(f.endpoint, "press_key", {
       task,
       args: { key: "enter" },
     });
@@ -1683,7 +1584,7 @@ describe("task-owned user stop", () => {
     });
     await expect(starting).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+      callHostTool(f.endpoint, "press_key", { args: { key: "enter" } }),
     ).resolves.toMatchObject({ ok: true });
     const events = (await f.events()).map((row) => row.event);
     expect(events.filter((event) => event === "key")).toHaveLength(1);
@@ -1702,16 +1603,12 @@ describe("task-owned user stop", () => {
         dispose: async () => {},
       },
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "launch_app",
+    await callHostTool(f.endpoint, "launch_app", {
       task: { threadId: "launching-thread", turnId: "turn" },
       args: { name: "Calculator" },
     });
     await waitForEvent(f, "list-windows");
-    const active = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "type_text",
+    const active = callHostTool<CuaReply>(f.endpoint, "type_text", {
       task,
       args: { text: "fixture" },
     });
@@ -1730,9 +1627,7 @@ describe("task-owned user stop", () => {
 
   it("drains its thread's active native input when Stop omits a turn identity", async () => {
     const f = await fixture();
-    const active = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "type_text",
+    const active = callHostTool<CuaReply>(f.endpoint, "type_text", {
       task,
       args: { text: "fixture" },
     });
@@ -1757,15 +1652,11 @@ describe("task-owned user stop", () => {
           activations += 1;
         },
       });
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      await callHostTool(f.endpoint, "get_window_state", {
         task,
         args: { pid: 42, window_id: 10 },
       });
-      const sibling = cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "type_text",
+      const sibling = callHostTool<CuaReply>(f.endpoint, "type_text", {
         task: { threadId: "other-thread", turnId: "turn" },
         args: { text: "fixture" },
       });
@@ -1773,9 +1664,7 @@ describe("task-owned user stop", () => {
       const queued =
         state === "queued"
           ? ["queued-turn", "other-queued-turn"].map((turnId) =>
-              cuaRequest<CuaReply>(f.endpoint, {
-                method: "call",
-                name: "press_key",
+              callHostTool<CuaReply>(f.endpoint, "press_key", {
                 task: { threadId: task.threadId, turnId },
                 args: { key: "enter" },
               }),
@@ -1789,17 +1678,13 @@ describe("task-owned user stop", () => {
         await expect(call).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
       await expect(sibling).resolves.toMatchObject({ ok: true });
       await expect(
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "press_key",
+        callHostTool(f.endpoint, "press_key", {
           task,
           args: { key: "enter" },
         }),
       ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
       await expect(
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "press_key",
+        callHostTool(f.endpoint, "press_key", {
           task: { threadId: task.threadId, turnId: "new-turn-after-stop" },
           args: { key: "enter" },
         }),
@@ -1843,9 +1728,7 @@ describe("frame tap launch prime", () => {
       frameTap: tap.host,
       listWindows: [calculator],
     });
-    const launched = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "launch_app",
+    const launched = await callHostTool<CuaReply>(f.endpoint, "launch_app", {
       task,
       args: { name: "Calculator" },
     });
@@ -1859,9 +1742,7 @@ describe("frame tap launch prime", () => {
       frameTap: tap.host,
       listWindows: [calculator],
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "launch_app",
+    await callHostTool(f.endpoint, "launch_app", {
       task,
       args: { bundle_id: "com.apple.Calculator" },
     });
@@ -1874,9 +1755,7 @@ describe("frame tap launch prime", () => {
       frameTap: tap.host,
       listWindows: [calculator],
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "launch_app",
+    await callHostTool(f.endpoint, "launch_app", {
       task,
       args: { name: "TextEdit" },
     });
@@ -1890,9 +1769,7 @@ describe("frame tap launch prime", () => {
       listWindows: [calculator],
     });
     await cuaRequest(f.endpoint, { method: "end_task", task });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "launch_app",
+    await callHostTool(f.endpoint, "launch_app", {
       task,
       args: { name: "Calculator" },
     });
@@ -1920,9 +1797,7 @@ describe("frame tap browser targeting", () => {
   it("points the tap at the window a browser bind call names", async () => {
     const tap = tapDouble();
     const f = await fixture(capability, { frameTap: tap.host });
-    const bound = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    const bound = await callHostTool<CuaReply>(f.endpoint, "get_browser_state", {
       task,
       args: { pid: 101, window_id: 202 },
     });
@@ -1933,9 +1808,7 @@ describe("frame tap browser targeting", () => {
   it("keeps the tap parked on target-id-only browser calls", async () => {
     const tap = tapDouble();
     const f = await fixture(capability, { frameTap: tap.host });
-    const navigated = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const navigated = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       task,
       args: { target_id: "cua:1:2", tab_id: "tab-1", url: "https://example.test" },
     });
@@ -1946,9 +1819,7 @@ describe("frame tap browser targeting", () => {
   it("a refused bind call proves nothing and leaves the tap parked", async () => {
     const tap = tapDouble();
     const f = await fixture(capability, { frameTap: tap.host, browserRefusal: true });
-    const refused = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    const refused = await callHostTool<CuaReply>(f.endpoint, "get_browser_state", {
       task,
       args: { pid: 101, window_id: 202 },
     });
@@ -1993,9 +1864,9 @@ describe("driver warm-up on first touch", () => {
     await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
       ok: true,
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: true,
+    });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -2014,9 +1885,7 @@ describe("driver warm-up on first touch", () => {
     // The first real call reuses the warmed generation: no second spawn, and
     // the once-per-generation cursor setup runs exactly once now.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         args: { key: "enter" },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -2033,10 +1902,10 @@ describe("driver warm-up on first touch", () => {
       checkPermissions: async () => ({ accessibility: granted, screenRecording: granted }),
     });
     await cuaRequest(f.endpoint, { method: "probe" });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
     granted = true;
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     expect(
       (await waitForEvent(f, "start")).filter((event) => event.event === "start"),
     ).toHaveLength(1);
@@ -2050,12 +1919,12 @@ describe("driver warm-up on first touch", () => {
         screenRecording: true,
       }),
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     await waitForEvent(f, "start");
     // Later first-touch requests do not spawn again — warm is once-only even
     // while it is still in flight.
     await cuaRequest(f.endpoint, { method: "probe" });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     // A stop retires the warmed generation; the next probe must not conjure a
@@ -2065,9 +1934,7 @@ describe("driver warm-up on first touch", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     // Real work still starts a driver on demand, paying the cold start then.
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "press_key")).resolves.toMatchObject({ ok: true });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
 
@@ -2103,9 +1970,7 @@ describe("driver warm-up on first touch", () => {
     // The warm failure retired its generation cleanly; the real call spawns
     // again and fails on the same handshake, not on anything warm poisoned.
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         args: { key: "enter" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
@@ -2147,7 +2012,7 @@ describe("per-agent cursor identity", () => {
     try {
       const f = await fixture(capability, { logCursorState: true });
       const task = { threadId: "cursor-thread", turnId: "turn-1", label: "PRIVATE LABEL" };
-      await cuaRequest(f.endpoint, { method: "call", name: "get_window_state", args: {}, task });
+      await callHostTool(f.endpoint, "get_window_state", { args: {}, task });
       await press(f.endpoint, task);
       await press(f.endpoint, task);
       expect((await f.events()).filter((e) => e.event.startsWith("cursor-state:"))).toHaveLength(2);
@@ -2205,9 +2070,7 @@ describe("per-agent cursor identity", () => {
         dispose: async () => {},
       },
     });
-    const action = cuaRequest(f.endpoint, {
-      method: "call",
-      name: "type_text",
+    const action = callHostTool(f.endpoint, "type_text", {
       args: { text: "fixture" },
       task,
     });
@@ -2341,9 +2204,7 @@ describe("per-agent cursor identity", () => {
   it("a caller session arg can never override the minted agent label", async () => {
     const f = await fixture(capability, { logSessions: true });
     await expect(
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         task: { threadId: "t-1", label: "Research run" },
         args: { key: "enter", session: "forged" },
       }),
@@ -2377,9 +2238,7 @@ describe("browser surface", () => {
   const task = { threadId: "thread", turnId: "turn" };
   it("attributes browser calls to a per-thread lifecycle session under the control transport", async () => {
     const f = await fixture();
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       task,
       args: { url: "https://example.com" },
     });
@@ -2394,9 +2253,7 @@ describe("browser surface", () => {
       ),
     ).toBe(true);
     // A caller-supplied session can never override the minted label.
-    const forged = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_click",
+    const forged = await callHostTool<CuaReply>(f.endpoint, "browser_click", {
       task,
       args: { target_id: "t", tab_id: "tab", ref: "p1:0", session: "forged" },
     });
@@ -2416,9 +2273,7 @@ describe("browser surface", () => {
   });
   it("refuses browser calls without task attribution before starting a daemon", async () => {
     const f = await fixture();
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: { url: "https://example.com" },
     });
     expect(reply.ok).toBe(false);
@@ -2428,9 +2283,7 @@ describe("browser surface", () => {
   it("ends the thread's browser session on end_browser_thread and revives it on the next call", async () => {
     const f = await fixture();
     const click = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "browser_click",
+      callHostTool<CuaReply>(f.endpoint, "browser_click", {
         task,
         args: { target_id: "t", tab_id: "tab", ref: "p1:0" },
       });
@@ -2463,9 +2316,7 @@ describe("browser surface", () => {
   });
   it("refuses a browser bind that names one of this app's own pids", async () => {
     const f = await fixture(capability, { ownPids: () => new Set([424242]) });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "get_browser_state", {
       task,
       args: { pid: 424242, window_id: 20 },
     });
@@ -2478,9 +2329,7 @@ describe("browser surface", () => {
     // The refusal is decided at admission: no daemon ever started.
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
     // An unrelated pid still dispatches normally.
-    const other = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    const other = await callHostTool<CuaReply>(f.endpoint, "get_browser_state", {
       task,
       args: { pid: 777, window_id: 20 },
     });
@@ -2493,9 +2342,7 @@ describe("browser surface", () => {
 
 describe("physical Escape interrupt", () => {
   const pressKey = (endpoint: string) =>
-    cuaRequest<CuaReply>(endpoint, {
-      method: "call",
-      name: "press_key",
+    callHostTool<CuaReply>(endpoint, "press_key", {
       args: { key: "enter" },
     });
 
@@ -2519,9 +2366,10 @@ describe("physical Escape interrupt", () => {
 
     // The fake driver holds a type_text reply for 10s — the wedged-provider
     // shape the interrupt exists for. The press must not wait on it.
-    const hung = cuaRequest(
+    const hung = callHostTool(
       f.endpoint,
-      { method: "call", name: "type_text", args: { text: "fixture" } },
+      "type_text",
+      { args: { text: "fixture" } },
       { timeoutMs: 5_000, mutation: true },
     );
     await waitForEvent(f, "dispatch");
@@ -2548,9 +2396,7 @@ describe("physical Escape interrupt", () => {
         structuredContent: { effect: "refused", code: "computer_input_paused" },
       },
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "list_windows" }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(callHostTool(f.endpoint, "list_windows")).resolves.toMatchObject({ ok: true });
 
     // Time alone cannot make the model's old target state fresh. A preview
     // or target-readiness probe cannot clear the model-observation gate.
@@ -2559,13 +2405,11 @@ describe("physical Escape interrupt", () => {
       result: { structuredContent: { code: "computer_input_paused" } },
       desktopInterruptions: 0,
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_input_ready" }),
-    ).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state");
+    await expect(callHostTool(f.endpoint, "check_input_ready")).resolves.toMatchObject({
+      result: { isError: true },
+    });
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
     });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true, result: {} });
@@ -2583,9 +2427,10 @@ describe("physical Escape interrupt", () => {
       },
     });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
-    const hung = cuaRequest(
+    const hung = callHostTool(
       f.endpoint,
-      { method: "call", name: "type_text", args: { text: "fixture" } },
+      "type_text",
+      { args: { text: "fixture" } },
       { timeoutMs: 5_000, mutation: true },
     );
     await waitForEvent(f, "dispatch");
@@ -2624,9 +2469,10 @@ describe("physical Escape interrupt", () => {
     // either way the crashed generation is still the host's live reference
     // when Escape lands) — and the request's reply is legitimately blocked
     // on that cleanup, which is why it is not awaited yet.
-    const crashing = cuaRequest(
+    const crashing = callHostTool(
       f.endpoint,
-      { method: "call", name: "type_text", args: { text: "fixture" } },
+      "type_text",
+      { args: { text: "fixture" } },
       { timeoutMs: 5_000, mutation: true },
     );
     await waitForEvent(f, "crash");
@@ -2641,9 +2487,7 @@ describe("physical Escape interrupt", () => {
     // The replacement generation still needs a fresh model observation;
     // successful crash cleanup does not validate the interrupted model state.
     elapseInputCooldown();
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
     });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true, result: {} });
@@ -2655,9 +2499,10 @@ describe("physical Escape interrupt", () => {
       releaseHeldInput: () => Promise.reject(new Error("helper gone")),
     });
     await expect(
-      cuaRequest(
+      callHostTool(
         f.endpoint,
-        { method: "call", name: "type_text", args: { text: "fixture" } },
+        "type_text",
+        { args: { text: "fixture" } },
         { timeoutMs: 1_000, mutation: true },
       ),
     ).resolves.toMatchObject({ ok: false });
@@ -2665,9 +2510,10 @@ describe("physical Escape interrupt", () => {
     // the generation stays referenced, and the interrupt cannot reopen what
     // the unprovable held-input state is closing.
     expect(f.host.emergencyStopInput()).toBe(true);
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
+      ok: false,
+      effect: "not-dispatched",
+    });
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 
@@ -2706,7 +2552,7 @@ describe("physical Escape interrupt", () => {
     const f = await fixture();
     const task = { threadId: "background", turnId: "turn" };
     const args = { pid: 700, window_id: 900, key: "enter" };
-    await cuaRequest(f.endpoint, { method: "call", name: "press_key", args, task });
+    await callHostTool(f.endpoint, "press_key", { args, task });
     // Keys in the controlled app (⌘-Tab included), clicks on its window, and
     // input anywhere else: none of it touches background work.
     expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(
@@ -2718,20 +2564,20 @@ describe("physical Escape interrupt", () => {
     expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 701 })).toBe(
       false,
     );
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "press_key", args, task }),
-    ).resolves.toMatchObject({ ok: true, result: {} });
+    await expect(callHostTool(f.endpoint, "press_key", { args, task })).resolves.toMatchObject({
+      ok: true,
+      result: {},
+    });
     expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(0);
     expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(2);
   });
 
   it("interrupts foreground input even when the physical event belongs to a different app", async () => {
     const f = await fixture();
-    const hung = cuaRequest(
+    const hung = callHostTool(
       f.endpoint,
+      "type_text",
       {
-        method: "call",
-        name: "type_text",
         args: { pid: 700, window_id: 900, delivery_mode: "foreground", text: "fixture" },
       },
       { mutation: true },
@@ -2749,11 +2595,10 @@ describe("physical Escape interrupt", () => {
       const f = await fixture(capability, { delayObservation: true });
       const task = { threadId: "foreground-recovery", turnId: "turn" };
       const target = scoped ? { pid: 700, window_id: 900 } : {};
-      const typing = cuaRequest(
+      const typing = callHostTool(
         f.endpoint,
+        "type_text",
         {
-          method: "call",
-          name: "type_text",
           args: { ...target, delivery_mode: "foreground", text: "fixture" },
           task,
         },
@@ -2768,17 +2613,13 @@ describe("physical Escape interrupt", () => {
       elapseInputCooldown();
 
       const observe = () =>
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "get_window_state",
+        callHostTool(f.endpoint, "get_window_state", {
           args: target,
           modelObservation: true,
           task,
         });
       const act = () =>
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "press_key",
+        callHostTool(f.endpoint, "press_key", {
           args: { ...target, delivery_mode: "foreground", key: "enter" },
           task,
         });
@@ -2822,18 +2663,14 @@ describe("physical Escape interrupt", () => {
     });
     expect(activateInputMonitor).not.toHaveBeenCalled();
     const task = { threadId: "activation", turnId: "turn" };
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    await callHostTool(f.endpoint, "press_key", {
       args: { key: "enter" },
       task,
     });
     expect(activateInputMonitor).toHaveBeenCalledTimes(1);
     await cuaRequest(f.endpoint, { method: "end_task", task });
     expect(onInputMonitorArmedChange).toHaveBeenLastCalledWith(false);
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
+    await callHostTool(f.endpoint, "press_key", {
       args: { key: "enter" },
       task: { ...task, turnId: "next" },
     });
@@ -2861,17 +2698,12 @@ describe("physical Escape interrupt", () => {
     });
     for (let i = 0; i < 3; i += 1) {
       await cuaRequest(f.endpoint, { method: "probe" });
-      const status = await cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "check_permissions",
-      });
+      const status = await callHostTool<CuaReply>(f.endpoint, "check_permissions");
       expect(status.result?.structuredContent).not.toHaveProperty("input_monitor_ready");
       expect(status.result?.structuredContent).not.toHaveProperty("input_monitor_error");
     }
     const task = { threadId: "passive-preview", turnId: "turn" };
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       args: { pid: 700, window_id: 900 },
       task,
       modelObservation: false,
@@ -2879,9 +2711,7 @@ describe("physical Escape interrupt", () => {
     expect(activateInputMonitor).not.toHaveBeenCalled();
     expect(onInputMonitorArmedChange).not.toHaveBeenCalled();
     expect(f.host.isInputMonitorRequested).toBe(false);
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       args: { pid: 700, window_id: 900 },
       task,
       modelObservation: true,
@@ -2889,7 +2719,7 @@ describe("physical Escape interrupt", () => {
     expect(activateInputMonitor).toHaveBeenCalledTimes(1);
     expect(f.host.isInputMonitorRequested).toBe(true);
     await cuaRequest(f.endpoint, { method: "end_task", task });
-    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await callHostTool(f.endpoint, "check_permissions");
     expect(activateInputMonitor).toHaveBeenCalledTimes(1);
     expect(f.host.isInputMonitorRequested).toBe(false);
     expect(onInputMonitorArmedChange).toHaveBeenLastCalledWith(false);
@@ -2908,9 +2738,7 @@ describe("physical Escape interrupt", () => {
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
       result: { structuredContent: { effect: "refused", code: "input_monitor_unavailable" } },
     });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({
+    await expect(callHostTool(f.endpoint, "check_permissions")).resolves.toMatchObject({
       result: {
         structuredContent: {
           input_monitoring: true,
@@ -2932,9 +2760,7 @@ describe("physical Escape interrupt", () => {
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
+    await callHostTool(f.endpoint, "get_window_state", {
       modelObservation: true,
     });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true, result: {} });
@@ -2943,16 +2769,17 @@ describe("physical Escape interrupt", () => {
   it("drains an interrupted browser mutation and uses the new epoch without retiring its binding", async () => {
     const f = await fixture(capability, { browserHang: true });
     const task = { threadId: "browser-stop", turnId: "turn" };
-    const hung = cuaRequest(
+    const hung = callHostTool(
       f.endpoint,
-      { method: "call", name: "browser_type", args: { text: "fixture" }, task },
+      "browser_type",
+      { args: { text: "fixture" }, task },
       { mutation: true },
     );
     await waitForEvent(f, "browser-dispatch");
     await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({ ok: true });
     await expect(hung).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: {}, task }),
+      callHostTool(f.endpoint, "browser_navigate", { args: {}, task }),
     ).resolves.toMatchObject({ ok: true, result: {} });
     const events = (await f.events()).map((event) => event.event);
     expect(events.filter((event) => event === "release")).toHaveLength(1);
@@ -2995,13 +2822,12 @@ describe("physical Escape interrupt", () => {
     let state: ComputerInputMonitorState = { ready: false, error: "event_tap_unavailable" };
     const f = await fixture(capability, { inputMonitorState: () => state });
     const task = { threadId: "listener-browser", turnId: "turn" };
-    const action = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: {}, task });
+    const action = () => callHostTool(f.endpoint, "browser_navigate", { args: {}, task });
     await expect(action()).resolves.toMatchObject({
       result: { structuredContent: { code: "input_monitor_unavailable" } },
     });
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "get_browser_state", args: {}, task }),
+      callHostTool(f.endpoint, "get_browser_state", { args: {}, task }),
     ).resolves.toMatchObject({ ok: true, result: {} });
     state = { ready: true };
     await expect(action()).resolves.toMatchObject({ ok: true, result: {} });
@@ -3017,9 +2843,7 @@ describe("physical Escape interrupt", () => {
         ++checks === 1 ? { ready: true } : { ready: false, error: "event_tap_unavailable" },
     });
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "browser_navigate",
+      callHostTool(f.endpoint, "browser_navigate", {
         args: {},
         task: { threadId: "late-listener-failure", turnId: "turn" },
       }),
@@ -3036,11 +2860,11 @@ describe("physical Escape interrupt", () => {
     const f = await fixture(capability, { browserCleanupUnconfirmed: true, releaseHeldInput });
     const task = { threadId: "browser-cleanup", turnId: "turn" };
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "browser_type", args: {}, task }),
+      callHostTool(f.endpoint, "browser_type", { args: {}, task }),
     ).resolves.toMatchObject({
       result: { isError: true, structuredContent: { input_cleanup_unconfirmed: true } },
     });
-    await cuaRequest(f.endpoint, { method: "call", name: "get_browser_state", args: {}, task });
+    await callHostTool(f.endpoint, "get_browser_state", { args: {}, task });
     await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({ ok: false });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
       ok: false,
@@ -3057,17 +2881,13 @@ describe("physical Escape interrupt", () => {
     const windowA = { pid: 701, window_id: 901 };
     const windowB = { pid: 700, window_id: 900 };
     const observe = (task: typeof taskA, args: Record<string, unknown>, modelObservation = true) =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         args,
         modelObservation,
         task,
       });
     const click = (task: typeof taskA, args: Record<string, unknown>) =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         args: { ...args, key: "enter" },
         task,
       });
@@ -3078,9 +2898,7 @@ describe("physical Escape interrupt", () => {
     await observe(taskB, windowA);
     await observe(taskB, windowB, false);
     await observe(taskB, { ...windowB, fixture_wrong_window: true });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_desktop_state",
+    await callHostTool(f.endpoint, "get_desktop_state", {
       modelObservation: true,
       task: taskB,
     });
@@ -3103,16 +2921,12 @@ describe("physical Escape interrupt", () => {
     const task = { threadId: "restore-failure", turnId: "turn" };
     const target = { pid: 700, window_id: 900 };
     const act = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { ...target, key: "enter" },
         task,
       });
     const read = (modelObservation: boolean) =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         args: target,
         modelObservation,
         task,
@@ -3131,17 +2945,13 @@ describe("physical Escape interrupt", () => {
     const f = await fixture();
     const task = { threadId: "sibling-recovery", turnId: "turn" };
     const observe = (args: Record<string, unknown>) =>
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      callHostTool(f.endpoint, "get_window_state", {
         args,
         modelObservation: true,
         task,
       });
     const act = () =>
-      cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool<CuaReply>(f.endpoint, "press_key", {
         args: { pid: 700, window_id: 901, key: "enter" },
         task,
       });
@@ -3172,17 +2982,13 @@ describe("physical Escape interrupt", () => {
       const window = { pid: 700, window_id: 900 };
       const browser = { target_id: "target-700-900", tab_id: "tab-a", snapshot_format };
       const observe = (args: Record<string, unknown>, modelObservation = true, owner = task) =>
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "get_browser_state",
+        callHostTool(f.endpoint, "get_browser_state", {
           args,
           modelObservation,
           task: owner,
         });
       const action = () =>
-        cuaRequest<CuaReply>(f.endpoint, {
-          method: "call",
-          name: "browser_click",
+        callHostTool<CuaReply>(f.endpoint, "browser_click", {
           args: browser,
           task,
         });
@@ -3199,9 +3005,7 @@ describe("physical Escape interrupt", () => {
       // tab must not unlock input through the still-valid old capability.
       await observe({ ...window, fixture_target_id: "target-rebound" });
       await observe({ target_id: "target-rebound", tab_id: "new-tab", snapshot_format });
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_window_state",
+      await callHostTool(f.endpoint, "get_window_state", {
         args: window,
         modelObservation: true,
         task,
@@ -3224,25 +3028,19 @@ describe("physical Escape interrupt", () => {
     const task = { threadId: "browser-escape", turnId: "turn" };
     const window = { pid: 700, window_id: 900 };
     const browser = { target_id: "target-700-900", tab_id: "tab-a" };
-    await cuaRequest(f.endpoint, { method: "call", name: "get_browser_state", args: window, task });
+    await callHostTool(f.endpoint, "get_browser_state", { args: window, task });
     expect(f.host.emergencyStopInput()).toBe(true);
     await waitForEvent(f, "interrupt-ack");
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_desktop_state",
+    await callHostTool(f.endpoint, "get_desktop_state", {
       modelObservation: true,
       task,
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    await callHostTool(f.endpoint, "get_browser_state", {
       args: window,
       modelObservation: true,
       task,
     });
-    const reading = cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    const reading = callHostTool(f.endpoint, "get_browser_state", {
       args: browser,
       modelObservation: true,
       task,
@@ -3254,20 +3052,16 @@ describe("physical Escape interrupt", () => {
     });
     elapseInputCooldown();
     await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: browser, task }),
+      callHostTool(f.endpoint, "browser_navigate", { args: browser, task }),
     ).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    await callHostTool(f.endpoint, "get_browser_state", {
       args: browser,
       modelObservation: true,
       task,
     });
     expect(
       (
-        await cuaRequest<CuaReply>(f.endpoint, {
-          method: "call",
-          name: "browser_navigate",
+        await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
           args: browser,
           task,
         })
@@ -3337,9 +3131,7 @@ describe("verified Linux browser input capability", () => {
     { reportedRevision: CUA_NATIVE_REVISION - 1 },
   ])("refuses browser input with an unverified child capability %j", async (options) => {
     const f = await linuxFixture(options);
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: { synara_browser_input_control: 1, browserInputControlVerified: true },
       browserInputControlVerified: true,
       task,
@@ -3356,9 +3148,7 @@ describe("verified Linux browser input capability", () => {
 
   it("requires the embedded metadata PID to match the child before trusting its marker", async () => {
     const f = await linuxFixture({ metadataPidOffset: 1 });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
       task,
     });
@@ -3376,18 +3166,17 @@ describe("verified Linux browser input capability", () => {
   it("carries verified epochs and native browser drain across disconnect without a cold restart", async () => {
     const f = await linuxFixture({ browserHang: true, inputDelayMs: 150 });
     const controller = new AbortController();
-    const call = cuaRequest(
+    const call = callHostTool(
       f.endpoint,
-      { method: "call", name: "browser_type", args: { text: "fixture" }, task },
+      "browser_type",
+      { args: { text: "fixture" }, task },
       { mutation: true, signal: controller.signal },
     ).catch((error: unknown) => error);
     await waitForEvent(f, "browser-dispatch");
     controller.abort();
     expect(await call).toMatchObject({ effect: "dispatched-unknown" });
     await waitForEvent(f, "interrupt");
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
       task,
     });
@@ -3402,9 +3191,7 @@ describe("verified Linux browser input capability", () => {
     ).toBeGreaterThan(events.indexOf("interrupt-ack"));
     expect(events).not.toContain("browser-effect");
     await expect(
-      cuaRequest(f.endpoint, {
-        method: "call",
-        name: "press_key",
+      callHostTool(f.endpoint, "press_key", {
         args: { key: "enter" },
         deliveryMode: "foreground",
         task,
@@ -3417,9 +3204,7 @@ describe("verified Linux browser input capability", () => {
 
   it("does not dispatch a cold browser call stopped while its capability handshake is pending", async () => {
     const f = await linuxFixture({ metadataDelayMs: 100 });
-    const call = cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const call = callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
       task,
     }).catch((error: unknown) => error);
@@ -3499,15 +3284,11 @@ describe("verified Linux browser input capability", () => {
     host = f.host;
     // Reproduce the real startup order: passive discovery has already warmed
     // the driver, so a failed listener activation invalidates its input epoch.
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    await callHostTool(f.endpoint, "get_browser_state", {
       args: {},
       task,
     });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_prepare",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_prepare", {
       args: { allow_launch: true, windowed: false },
       task,
     });
@@ -3541,15 +3322,11 @@ describe("verified Linux browser input capability", () => {
           await activationFinished.promise;
         },
       });
-      await cuaRequest(f.endpoint, {
-        method: "call",
-        name: "get_browser_state",
+      await callHostTool(f.endpoint, "get_browser_state", {
         args: {},
         task,
       });
-      const call = cuaRequest<CuaReply>(f.endpoint, {
-        method: "call",
-        name: "browser_prepare",
+      const call = callHostTool<CuaReply>(f.endpoint, "browser_prepare", {
         args: { allow_launch: true, windowed: false },
         task,
       }).catch((error: unknown) => error);
@@ -3587,31 +3364,23 @@ describe("verified Linux browser input capability", () => {
       onInputMonitorArmedChange,
     });
     await cuaRequest(f.endpoint, { method: "probe" });
-    await cuaRequest(f.endpoint, { method: "call", name: "clipboard_read", args: {} });
-    const unattributed = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    await callHostTool(f.endpoint, "clipboard_read", { args: {} });
+    const unattributed = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
     });
     expect(unattributed.error).toContain("task attribution");
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "browser_prepare",
+    await callHostTool(f.endpoint, "browser_prepare", {
       args: { pid: 700, allow_launch: false },
       task,
     });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_browser_state",
+    await callHostTool(f.endpoint, "get_browser_state", {
       args: {},
       modelObservation: false,
       task,
     });
     expect(activateInputMonitor).not.toHaveBeenCalled();
     expect(onInputMonitorArmedChange).not.toHaveBeenCalled();
-    const action = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const action = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
       task,
     });
@@ -3628,9 +3397,7 @@ describe("verified Linux browser input capability", () => {
       inputMonitorState: () =>
         ++checks === 1 ? { ready: true } : { ready: false, error: "linux_escape_shortcut_lost" },
     });
-    const reply = await cuaRequest<CuaReply>(f.endpoint, {
-      method: "call",
-      name: "browser_navigate",
+    const reply = await callHostTool<CuaReply>(f.endpoint, "browser_navigate", {
       args: {},
       task,
     });

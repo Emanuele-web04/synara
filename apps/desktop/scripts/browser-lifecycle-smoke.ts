@@ -86,7 +86,12 @@ async function checkCookieImportMetadata(contents: WebContents) {
 }
 
 // Exercise Synara's actual call boundary, which tears down each CDP worker.
-async function checkRunRequestLifetime(contents: WebContents, url: string) {
+async function checkRunRequestLifetime(
+  contents: WebContents,
+  url: string,
+  releaseXhr: () => void,
+  releaseNavigation: () => void,
+) {
   const run = (code: string, signal = new AbortController().signal, timeoutMs = 10_000) =>
     runBetterwright({ home: join(home, "request-worker"), contents, code, signal, timeoutMs });
   const started = Date.now();
@@ -102,6 +107,8 @@ async function checkRunRequestLifetime(contents: WebContents, url: string) {
       "await page.getByRole('button', { name: 'Request' }).click(); throw new Error('fixture failure')",
     ),
   );
+  // The real requests must survive successful and failed worker teardown.
+  releaseXhr();
   const requests = (await contents.executeJavaScript(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => requests.every(item => item.status !== null) ? resolve(requests)
@@ -118,6 +125,7 @@ async function checkRunRequestLifetime(contents: WebContents, url: string) {
   await run(
     "await page.evaluate(() => { location.href = '/slow-document'; }); return 'navigating'",
   );
+  releaseNavigation();
   await navigation;
   assert.equal(contents.getTitle(), "Navigation survived");
   await contents.loadURL(url);
@@ -175,20 +183,20 @@ async function smoke() {
   await once(blocked, "listening");
   const blockedPort = (blocked.address() as { port: number }).port;
   const blockedUrl = `http://127.0.0.1:${blockedPort}`;
-  const allowed = createServer((request, response) => {
+  const xhrResponse = Promise.withResolvers<void>();
+  const navigationResponse = Promise.withResolvers<void>();
+  const allowed = createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     if (request.url?.startsWith("/slow")) {
-      setTimeout(() => {
-        response.setHeader(
-          "Content-Type",
-          request.url === "/slow-document" ? "text/html" : "application/json",
-        );
-        response.end(
-          request.url === "/slow-document"
-            ? "<!doctype html><title>Navigation survived</title>"
-            : JSON.stringify({ data: "a".repeat(4_900_000) }),
-        );
-      }, 1_000);
+      const navigation = request.url === "/slow-document";
+      await (navigation ? navigationResponse.promise : xhrResponse.promise);
+      if (response.destroyed) return;
+      response.setHeader("Content-Type", navigation ? "text/html" : "application/json");
+      response.end(
+        navigation
+          ? "<!doctype html><title>Navigation survived</title>"
+          : JSON.stringify({ data: "a".repeat(4_900_000) }),
+      );
     } else if (request.url === "/redirect") {
       response.writeHead(302, { location: `${blockedUrl}/redirected` }).end();
     } else if (request.url === "/sw.js") {
@@ -348,7 +356,12 @@ async function smoke() {
     await assert.rejects(session.fetch(`${blockedUrl}/between-runs`, { cache: "no-store" }));
     await checkCookieImportMetadata(contents);
     assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
-    await checkRunRequestLifetime(contents, allowedUrl);
+    await checkRunRequestLifetime(
+      contents,
+      allowedUrl,
+      xhrResponse.resolve,
+      navigationResponse.resolve,
+    );
 
     // Install the real upstream capture sensor into a live Electron isolated
     // world, then verify its script, scoped binding, and disposal.
@@ -387,6 +400,8 @@ async function smoke() {
       "PASS: 4.9 MB XHRs across six ephemeral workers, pending XHR across completed failure, navigation after run end, abort/timeout recovery, PNG base64, session shutdown, real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, persistent guard, cookie import metadata, and capture sensor.",
     );
   } finally {
+    xhrResponse.resolve();
+    navigationResponse.resolve();
     await siblingTarget.revokeAll(true);
     await siblingBrowser.close();
     await target.revokeAll(true);
@@ -406,14 +421,23 @@ async function smoke() {
   }
 }
 
-void smoke().then(
-  async () => {
-    clearTimeout(deadline);
-    await rm(home, { recursive: true, force: true });
-    app.exit(0);
-  },
-  (error) => {
+async function main(): Promise<void> {
+  let exitCode = 0;
+  try {
+    await smoke();
+  } catch (error) {
     console.error(error);
-    app.exit(1);
-  },
-);
+    exitCode = 1;
+  }
+  try {
+    await rm(home, { recursive: true, force: true });
+  } catch (error) {
+    console.error(error);
+    exitCode = 1;
+  } finally {
+    clearTimeout(deadline);
+    app.exit(exitCode);
+  }
+}
+
+void main();

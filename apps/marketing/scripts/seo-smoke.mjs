@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,10 +23,6 @@ for (const stream of [server.stdout, server.stderr]) {
     output += chunk;
     process.stdout.write(chunk);
   });
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function waitForServer() {
@@ -65,15 +62,22 @@ async function readRoute(pathname, expectedContentType) {
 }
 
 async function stopServer() {
-  if (server.exitCode !== null) return;
+  if (server.exitCode !== null || server.signalCode !== null) return;
 
-  const exited = new Promise((resolve) => server.once("exit", resolve));
+  const exited = new Promise((resolve) => server.once("exit", () => resolve(true)));
+  const waitForExit = async (milliseconds) => {
+    const timeout = new AbortController();
+    try {
+      return await Promise.race([exited, delay(milliseconds, false, { signal: timeout.signal })]);
+    } finally {
+      timeout.abort();
+    }
+  };
+
   server.kill("SIGTERM");
-  await Promise.race([exited, delay(5_000)]);
-
-  if (server.exitCode === null) {
+  if (!(await waitForExit(5_000))) {
     server.kill("SIGKILL");
-    await Promise.race([exited, delay(2_000)]);
+    await waitForExit(2_000);
   }
 
   server.stdout.destroy();
@@ -122,7 +126,6 @@ try {
   assert.ok(homepage.includes('"@type":"FAQPage"'));
 
   const install = await readRoute("/install", /text\/html/i);
-  assert.ok(install.includes("Download Synara"));
   assert.ok(install.includes("coding-agent runtime already authenticated"));
   assert.match(install, /<title>Download Synara — Coding Agent Workspace<\/title>/);
 

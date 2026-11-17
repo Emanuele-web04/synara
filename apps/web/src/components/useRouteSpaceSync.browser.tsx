@@ -39,10 +39,13 @@ describe("route Space synchronization", () => {
   it("does not let an unchanged route revert a manual Space selection", async () => {
     const screen = await render(<RouteSpaceSyncFixture />);
 
-    await page.getByRole("button").click();
-    await new Promise((resolve) => window.setTimeout(resolve, 1_600));
-
-    await expect.element(page.getByRole("button")).toHaveTextContent(selectedSpaceId);
-    await screen.unmount();
+    try {
+      await page.getByRole("button").click();
+      // Commit the unchanged route inputs after the store update so its effect has run.
+      await screen.rerender(<RouteSpaceSyncFixture />);
+      await expect.element(page.getByRole("button")).toHaveTextContent(selectedSpaceId);
+    } finally {
+      await screen.unmount();
+    }
   });
 });

@@ -36,7 +36,7 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { DevinAdapter } from "../Services/DevinAdapter.ts";
+import { DevinAdapter, type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import {
   applyDevinSessionConfiguration,
   buildDevinPromptMeta,
@@ -58,6 +58,19 @@ import {
 } from "./DevinAdapter.ts";
 
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+function startFullAccessSession(adapter: DevinAdapterShape, threadId: ThreadId) {
+  return adapter.startSession({
+    provider: "devin",
+    threadId,
+    runtimeMode: "full-access",
+    cwd: process.cwd(),
+  });
+}
+
+function sendTextTurn(adapter: DevinAdapterShape, threadId: ThreadId, input: string) {
+  return adapter.sendTurn({ threadId, input, attachments: [] });
+}
 
 function makeFakeAcpRuntime(initialModeState?: {
   currentModeId: string;
@@ -423,17 +436,8 @@ describe("Devin wedge auto-recovery", () => {
             ),
             Effect.forkScoped,
           );
-          yield* adapter.startSession({
-            provider: "devin",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: process.cwd(),
-          });
-          const wedgedTurn = yield* adapter.sendTurn({
-            threadId,
-            input: "do the task",
-            attachments: [],
-          });
+          yield* startFullAccessSession(adapter, threadId);
+          const wedgedTurn = yield* sendTextTurn(adapter, threadId, "do the task");
           yield* flushTimers();
           expect(factory.stderrTaps.length).toBe(1);
           factory.stderrTaps[0]!(STALL_WATCH_LINE);
@@ -499,12 +503,7 @@ describe("Devin wedge auto-recovery", () => {
           Stream.runForEach((event) => Effect.sync(() => events.push(event))),
           Effect.forkScoped,
         );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const turn = yield* adapter.sendTurn({ threadId, input: "run tasks", attachments: [] });
         yield* factory.emitToolCall("recovery-agent-call", "inProgress", {
           metadata: {
@@ -558,12 +557,7 @@ describe("Devin wedge auto-recovery", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-wedge-spawn");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         yield* adapter.sendTurn({ threadId, input: "run it", attachments: [] });
         yield* flushTimers();
         factory.stderrTaps[0]!(SPAWN_START_LINE);
@@ -585,12 +579,7 @@ describe("Devin wedge auto-recovery", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-wedge-quiet");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
         yield* flushTimers();
         factory.stderrTaps[0]!(SPAWN_START_LINE);
@@ -619,12 +608,7 @@ describe("Devin wedge auto-recovery", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-wedge-budget");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         for (let wedge = 0; wedge < 4; wedge++) {
           yield* adapter.sendTurn({ threadId, input: `task ${wedge}`, attachments: [] });
           yield* flushTimers();
@@ -736,12 +720,7 @@ describe("Devin wedge auto-recovery", () => {
         Effect.gen(function* () {
           const adapter = yield* DevinAdapter;
           const threadId = ThreadId.makeUnsafe(`thread-wedge-replay-${action}`);
-          yield* adapter.startSession({
-            provider: "devin",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: process.cwd(),
-          });
+          yield* startFullAccessSession(adapter, threadId);
           const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
           yield* flushTimers();
           factory.stderrTaps[0]!(STALL_WATCH_LINE);
@@ -751,9 +730,7 @@ describe("Devin wedge auto-recovery", () => {
           expect(factory.promptInputs.map(stripHarnessPrefix)).toEqual(["task"]);
           const userAction = yield* (
             action === "user-turn"
-              ? adapter
-                  .sendTurn({ threadId, input: "new user task", attachments: [] })
-                  .pipe(Effect.asVoid)
+              ? sendTextTurn(adapter, threadId, "new user task").pipe(Effect.asVoid)
               : adapter.interruptTurn(
                   threadId,
                   action === "interrupt" ? turn.turnId : asTurnId("unrelated-turn"),
@@ -795,12 +772,7 @@ describe("Devin wedge auto-recovery", () => {
           Effect.forkScoped,
         );
         const threadId = ThreadId.makeUnsafe("thread-wedge-cancel-notification");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
         yield* flushTimers();
         factory.stderrTaps[0]!(STALL_WATCH_LINE);
@@ -851,12 +823,7 @@ describe("Devin wedge auto-recovery", () => {
           ),
           Effect.forkScoped,
         );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const turn = yield* adapter.sendTurn({ threadId, input: "task", attachments: [] });
         yield* flushTimers();
         factory.stderrTaps[0]!(STALL_WATCH_LINE);
@@ -928,17 +895,12 @@ describe("Devin adapter lifecycle", () => {
           Stream.runForEach((event) => Effect.sync(() => events.push(event))),
           Effect.forkScoped,
         );
-        yield* adapter.startSession({
-          provider: "devin",
+        yield* startFullAccessSession(adapter, threadId);
+        const turn = yield* sendTextTurn(
+          adapter,
           threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
-        const turn = yield* adapter.sendTurn({
-          threadId,
-          input: "delegate and run a background command",
-          attachments: [],
-        });
+          "delegate and run a background command",
+        );
 
         yield* eventRuntime.emitToolCall("agent-launch-call", "inProgress", {
           metadata: {
@@ -1101,12 +1063,7 @@ describe("Devin adapter lifecycle", () => {
           Stream.runForEach((event) => Effect.sync(() => events.push(event))),
           Effect.forkScoped,
         );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const firstTurn = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
         yield* eventRuntime.emitToolCall("old-shell-call", "inProgress", {
           metadata: {
@@ -1210,12 +1167,7 @@ describe("Devin adapter lifecycle", () => {
         // its synthetic lifecycle events (there is no preceding ACP update in
         // this regression case to yield to the collector).
         yield* flushTimers();
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         yield* adapter.sendTurn({
           threadId,
           input: "background the child",
@@ -1320,12 +1272,7 @@ describe("Devin adapter lifecycle", () => {
           Stream.runForEach((event) => Effect.sync(() => events.push(event))),
           Effect.forkScoped,
         );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         yield* adapter.sendTurn({ threadId, input: "run concurrent work", attachments: [] });
 
         yield* eventRuntime.emitToolCall("agent-race-call", "inProgress", {
@@ -1662,17 +1609,12 @@ describe("Devin adapter lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-overlap");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const firstTurn = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
         yield* Deferred.await(promptStarted);
-        const duplicateError = yield* adapter
-          .sendTurn({ threadId, input: "second", attachments: [] })
-          .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }));
+        const duplicateError = yield* sendTextTurn(adapter, threadId, "second").pipe(
+          Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+        );
         expect(duplicateError).toMatchObject({
           _tag: "ProviderAdapterValidationError",
           operation: "sendTurn",
@@ -1710,12 +1652,7 @@ describe("Devin adapter lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-tool-budget");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const turn = yield* adapter.sendTurn({ threadId, input: "run tools", attachments: [] });
         for (const [toolCallId, status] of [
           ["tool-a", "pending"],
@@ -1754,12 +1691,7 @@ describe("Devin adapter lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-stale-tool");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
         yield* emitToolCall("old-tool", "pending");
         yield* Deferred.succeed(firstPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
@@ -1791,12 +1723,7 @@ describe("Devin adapter lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-retained-turn-items");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const first = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
         yield* Deferred.succeed(firstPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
         yield* advanceTimers(1);
@@ -1826,12 +1753,7 @@ describe("Devin adapter lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* DevinAdapter;
         const threadId = ThreadId.makeUnsafe("thread-devin-progress-clock");
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-        });
+        yield* startFullAccessSession(adapter, threadId);
         const turn = yield* adapter.sendTurn({ threadId, input: "progress", attachments: [] });
         yield* advanceTimers(15);
         yield* emitProgress();
@@ -1861,12 +1783,7 @@ describe("Devin adapter lifecycle", () => {
         Effect.gen(function* () {
           const adapter = yield* DevinAdapter;
           const threadId = ThreadId.makeUnsafe(`thread-devin-clear-${outcome}`);
-          yield* adapter.startSession({
-            provider: "devin",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: process.cwd(),
-          });
+          yield* startFullAccessSession(adapter, threadId);
           const turn = yield* adapter.sendTurn({ threadId, input: outcome, attachments: [] });
           yield* emitToolCall("tool", "pending");
           if (outcome === "settle") {
@@ -2614,14 +2531,7 @@ describe("Devin startup timeout recovery", () => {
         Effect.gen(function* () {
           const adapter = yield* DevinAdapter;
           const threadId = ThreadId.makeUnsafe("devin-startup-timeout");
-          const exit = yield* adapter
-            .startSession({
-              provider: "devin",
-              threadId,
-              runtimeMode: "full-access",
-              cwd: process.cwd(),
-            })
-            .pipe(Effect.exit);
+          const exit = yield* startFullAccessSession(adapter, threadId).pipe(Effect.exit);
           expect(Exit.isFailure(exit)).toBe(true);
           if (Exit.isFailure(exit)) {
             if (cleanupFails) {
@@ -3509,12 +3419,7 @@ describe("Devin retained background task ownership", () => {
             Stream.runForEach((event) => Effect.sync(() => events.push(event))),
             Effect.forkScoped,
           );
-          yield* adapter.startSession({
-            provider: "devin",
-            threadId,
-            runtimeMode: "full-access",
-            cwd: process.cwd(),
-          });
+          yield* startFullAccessSession(adapter, threadId);
           const firstTurn = yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
           yield* runtime.emitToolCall("old-task-call", "inProgress", {
             metadata: {
@@ -3548,11 +3453,7 @@ describe("Devin retained background task ownership", () => {
           yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
           yield* Deferred.succeed(secondPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
           yield* advanceTimers(1);
-          const thirdTurn = yield* adapter.sendTurn({
-            threadId,
-            input: "third unrelated",
-            attachments: [],
-          });
+          const thirdTurn = yield* sendTextTurn(adapter, threadId, "third unrelated");
           yield* runtime.emitProgress("The third answer is healthy.");
           const beforeLateUpdate = events.length;
           // Neither original turn nor parent metadata remains in this sparse

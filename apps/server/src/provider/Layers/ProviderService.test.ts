@@ -85,7 +85,7 @@ import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { OmpAdapter } from "../Services/OmpAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
-import { ProviderService } from "../Services/ProviderService.ts";
+import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
   type ProviderSessionDirectoryShape,
@@ -144,6 +144,25 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderInstanceId = (value: string): ProviderInstanceId => value as ProviderInstanceId;
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+function startTestSession(
+  service: ProviderServiceShape,
+  threadId: ThreadId,
+  provider: ProviderSessionStartInput["provider"],
+  runtimeMode: ProviderSessionStartInput["runtimeMode"],
+  cwd?: string,
+) {
+  return service.startSession(threadId, {
+    provider,
+    threadId,
+    runtimeMode,
+    ...(cwd === undefined ? {} : { cwd }),
+  });
+}
+
+function sendTextTurn(service: ProviderServiceShape, threadId: ThreadId, input: string) {
+  return service.sendTurn({ threadId, input, attachments: [] });
+}
 
 async function makeSharedCodexContinuationFixture(
   accountIds: readonly string[],
@@ -851,13 +870,12 @@ replacementRouting.layer("Claude replacement preparation", (it) => {
                 });
               }),
           );
-          const rejected = yield* provider
-            .startSession(threadId, {
-              threadId,
-              provider: "claudeAgent",
-              runtimeMode: failure === "background" ? "full-access" : "auto",
-            })
-            .pipe(Effect.result);
+          const rejected = yield* startTestSession(
+            provider,
+            threadId,
+            "claudeAgent",
+            failure === "background" ? "full-access" : "auto",
+          ).pipe(Effect.result);
           assert.equal(rejected._tag, "Failure");
           assert.equal(replacementRouting.claude.startSession.mock.calls.length, starts);
           assert.equal(replacementRouting.claude.stopSession.mock.calls.length, stops);
@@ -1249,13 +1267,9 @@ it.effect.each([
     } else if (operation === "failed start" || operation === "new runtime") {
       if (operation === "failed start")
         claude.startSession.mockImplementationOnce(() => Effect.fail(failure));
-      outcome = yield* provider
-        .startSession(threadId, {
-          threadId,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        })
-        .pipe(Effect.exit);
+      outcome = yield* startTestSession(provider, threadId, "claudeAgent", "full-access").pipe(
+        Effect.exit,
+      );
     } else if (operation === "failed steer") {
       claude.steerTurn.mockImplementationOnce(() => Effect.fail(failure));
       outcome = yield* provider.steerTurn({ threadId, input: "Synthetic steer" }).pipe(Effect.exit);
@@ -1404,12 +1418,7 @@ it.effect(
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-          threadId,
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         codex.updateSession(threadId, (existing) => ({
           ...existing,
           status: "running",
@@ -1644,12 +1653,7 @@ function verifyShutdownCursorOrdering(scenario: ShutdownCursorOrderingScenario) 
 
     yield* Effect.gen(function* () {
       const provider = yield* ProviderService;
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-        threadId,
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       codex.updateSession(threadId, (session) => ({
         ...session,
         resumeCursor: shutdownSnapshotCursor,
@@ -1842,11 +1846,7 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-adapter-rejected-resume");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.stopRuntimeSession!({ threadId });
       const outcome = yield* provider.startSessionWithOutcome!(threadId, {
         provider: "codex",
@@ -2626,11 +2626,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-runtime-stop-replacement-fence");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.updateSession(threadId, (session) => ({
         ...session,
         status: "connecting",
@@ -2638,11 +2634,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }));
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       yield* provider.stopRuntimeSession!({ threadId });
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.updateSession(threadId, (session) => ({
         ...session,
         createdAt: observed.session!.createdAt,
@@ -2680,11 +2672,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-runtime-stop-updated-observation");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       routing.codex.updateSession(threadId, (session) => ({
         ...session,
@@ -2709,11 +2697,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       assert.isNull(observed.session);
       assert.isNull(observed.lifecycleGeneration);
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const before = Option.getOrThrow(yield* directory.getBinding(threadId));
       const stops = routing.codex.stopSession.mock.calls.length;
       const stopped = yield* Effect.result(
@@ -2735,11 +2719,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-runtime-stop-retained-unobserved");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.retainStopped(threadId);
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       assert.isNull(observed.session);
@@ -2760,11 +2740,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-reaper-pending-send");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const accepted = Deferred.makeUnsafe<void>();
       const release = Deferred.makeUnsafe<void>();
       const originalSend = routing.codex.sendTurn.getMockImplementation()!;
@@ -2774,9 +2750,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
           Effect.andThen(originalSend(input)),
         ),
       );
-      const sending = yield* provider
-        .sendTurn({ threadId, input: "continue the goal", attachments: [] })
-        .pipe(Effect.forkChild);
+      const sending = yield* sendTextTurn(provider, threadId, "continue the goal").pipe(
+        Effect.forkChild,
+      );
       yield* Deferred.await(accepted);
       const stops = routing.codex.stopSession.mock.calls.length;
       yield* provider.stopRuntimeSession!({ threadId, onlyIfIdleSince: new Date().toISOString() });
@@ -2794,11 +2770,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-stop-reaper-overlap");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const stopping = Deferred.makeUnsafe<void>();
       const release = Deferred.makeUnsafe<void>();
       const originalStop = routing.codex.stopSession.getMockImplementation()!;
@@ -2827,26 +2799,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-provider-handoff-reset");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.stopSession({ threadId });
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
 
       // Codex's native continuation is protected: a different provider cannot
       // silently take over a thread that still holds a Codex resume cursor.
       const refused = yield* Effect.exit(
-        provider.startSession(threadId, {
-          provider: "claudeAgent",
-          threadId,
-          runtimeMode: "full-access",
-        }),
+        startTestSession(provider, threadId, "claudeAgent", "full-access"),
       );
       assert.isTrue(Exit.isFailure(refused));
       assert.include(
@@ -2856,11 +2816,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       // A same-thread provider handoff requests the reset explicitly first.
       yield* provider.clearSessionResumeCursor!({ threadId });
-      const handedOff = yield* provider.startSession(threadId, {
-        provider: "claudeAgent",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const handedOff = yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       assert.equal(handedOff.provider, "claudeAgent");
       yield* provider.stopSession({ threadId });
     }),
@@ -2871,11 +2827,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-provider-rebind-abandon");
-      const codex = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const codex = yield* startTestSession(provider, threadId, "codex", "full-access");
       assert.ok(codex.resumeCursor);
       routing.claude.startSession.mockClear();
 
@@ -2985,11 +2937,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-runtime-cleanup-retry");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const bindingBefore = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const stopCallsBefore = routing.codex.stopSession.mock.calls.length;
       const originalStop = routing.codex.stopSession.getMockImplementation()!;
@@ -3264,11 +3212,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const sourceThreadId = asThreadId("thread-fork-through-turn-source");
       const targetThreadId = asThreadId("thread-fork-through-turn-target");
 
-      yield* provider.startSession(sourceThreadId, {
-        provider: "codex",
-        threadId: sourceThreadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, sourceThreadId, "codex", "full-access");
       const forkCallCount = routing.codex.forkThread.mock.calls.length;
 
       const result = yield* provider.forkThread!({
@@ -3291,12 +3235,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const sourceThreadId = asThreadId("thread-native-fork-source");
       const targetThreadId = asThreadId("thread-native-fork-target");
 
-      yield* provider.startSession(sourceThreadId, {
-        provider: "codex",
-        threadId: sourceThreadId,
-        cwd: "/tmp/native-fork-source",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(
+        provider,
+        sourceThreadId,
+        "codex",
+        "full-access",
+        "/tmp/native-fork-source",
+      );
       const forkCallCount = routing.codex.forkThread.mock.calls.length;
       const forkInput = {
         sourceThreadId,
@@ -3309,11 +3254,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* directory.remove(sourceThreadId);
       const second = yield* provider.forkThread!(forkInput);
       const startsBeforeRecovery = routing.codex.startSession.mock.calls.length;
-      yield* provider.sendTurn({
-        threadId: targetThreadId,
-        input: "continue the fork",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, targetThreadId, "continue the fork");
 
       assert.deepEqual(second, first);
       assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 1);
@@ -3341,11 +3282,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.strictEqual(yield* prewarm({ threadId }), false);
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const startsAfterLaunch = routing.codex.startSession.mock.calls.length;
       assert.strictEqual(yield* prewarm({ threadId }), false);
       assert.strictEqual(routing.codex.startSession.mock.calls.length, startsAfterLaunch);
@@ -3367,11 +3304,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-prewarm-disconnected");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* routing.codex.stopSession(threadId);
 
       const started = yield* Deferred.make<void>();
@@ -3462,11 +3395,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       // recover the session with the same approval set and folder grant it
       // was spawned with.
       yield* routing.codex.stopSession(threadId);
-      yield* provider.sendTurn({
-        threadId,
-        input: "keep going",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, threadId, "keep going");
 
       const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
       assert.strictEqual(recoveredStart?.threadId, threadId);
@@ -3809,12 +3738,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-explicit-stop-inactive");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       routing.codex.stopSession.mockClear();
       routing.codex.hasSession.mockReturnValueOnce(Effect.succeed(false));
 
@@ -4062,12 +3986,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             const suffix = terminalCase.event.type;
             const threadId = asThreadId(`thread-retired-binding-${suffix}`);
             yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
-            yield* provider.startSession(threadId, {
-              provider: "codex",
-              threadId,
-              cwd: "/tmp/project",
-              runtimeMode: "full-access",
-            });
+            yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
             const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
             assert.ok(binding);
             const retiredGeneration = `retired-runtime-${suffix}`;
@@ -4156,12 +4075,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-terminal-no-active-turn");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         assert.equal(typeof binding?.lifecycleGeneration, "string");
         assert.equal(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId, null);
@@ -4232,12 +4146,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-terminal-matching-turn");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
@@ -4287,12 +4196,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-item-closure");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const activeTurnId = String(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId);
@@ -4344,12 +4248,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-subagent-child");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
@@ -4420,12 +4319,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-interaction-resolution");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
@@ -4559,12 +4453,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-binding-routing");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         // Rotate the runtime generation (as a stop does), keep a live adapter
         // session around (the zombie), and rewind the persisted binding to the
         // old generation — a turn send must not fast-path into that session,
@@ -4649,14 +4538,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         10,
         "same-provider start",
       );
-      const crossProviderFiber = yield* provider
-        .startSession(threadId, {
-          provider: "claudeAgent",
-          threadId,
-          cwd: "/tmp/provider-starts",
-          runtimeMode: "full-access",
-        })
-        .pipe(Effect.result, Effect.forkChild);
+      const crossProviderFiber = yield* startTestSession(
+        provider,
+        threadId,
+        "claudeAgent",
+        "full-access",
+        "/tmp/provider-starts",
+      ).pipe(Effect.result, Effect.forkChild);
       yield* sleep(25);
       assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
 
@@ -4686,23 +4574,25 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-failed-provider-replacement");
-      const initial = yield* provider.startSession(threadId, {
-        provider: "codex",
+      const initial = yield* startTestSession(
+        provider,
         threadId,
-        cwd: "/tmp/failed-provider-replacement",
-        runtimeMode: "full-access",
-      });
+        "codex",
+        "full-access",
+        "/tmp/failed-provider-replacement",
+      );
       const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const codexStartCount = routing.codex.startSession.mock.calls.length;
       const claudeStartCount = routing.claude.startSession.mock.calls.length;
 
       const replacement = yield* Effect.result(
-        provider.startSession(threadId, {
-          provider: "claudeAgent",
+        startTestSession(
+          provider,
           threadId,
-          cwd: "/tmp/failed-provider-replacement",
-          runtimeMode: "full-access",
-        }),
+          "claudeAgent",
+          "full-access",
+          "/tmp/failed-provider-replacement",
+        ),
       );
       assert.equal(replacement._tag, "Failure");
 
@@ -4732,12 +4622,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-recovery-start-race");
-      const initial = yield* provider.startSession(threadId, {
-        provider: "codex",
+      const initial = yield* startTestSession(
+        provider,
         threadId,
-        cwd: "/tmp/recovery-start-race",
-        runtimeMode: "full-access",
-      });
+        "codex",
+        "full-access",
+        "/tmp/recovery-start-race",
+      );
       assert.equal(typeof provider.stopRuntimeSession, "function");
       if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
       yield* provider.stopRuntimeSession({ threadId });
@@ -4754,23 +4645,22 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const codexStartCount = routing.codex.startSession.mock.calls.length;
       const claudeStartCount = routing.claude.startSession.mock.calls.length;
 
-      const recoveryFiber = yield* provider
-        .sendTurn({ threadId, input: "recover", attachments: [] })
-        .pipe(Effect.forkChild);
+      const recoveryFiber = yield* sendTextTurn(provider, threadId, "recover").pipe(
+        Effect.forkChild,
+      );
       yield* waitUntil(
         () => routing.codex.startSession.mock.calls.length > codexStartCount,
         500,
         10,
         "provider recovery start",
       );
-      const competingStartFiber = yield* provider
-        .startSession(threadId, {
-          provider: "claudeAgent",
-          threadId,
-          cwd: "/tmp/recovery-start-race",
-          runtimeMode: "full-access",
-        })
-        .pipe(Effect.result, Effect.forkChild);
+      const competingStartFiber = yield* startTestSession(
+        provider,
+        threadId,
+        "claudeAgent",
+        "full-access",
+        "/tmp/recovery-start-race",
+      ).pipe(Effect.result, Effect.forkChild);
       yield* sleep(25);
       assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
 
@@ -4805,12 +4695,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-claude-interaction-generation");
 
-      yield* provider.startSession(threadId, {
-        provider: "claudeAgent",
+      yield* startTestSession(
+        provider,
         threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "approval-required",
-      });
+        "claudeAgent",
+        "approval-required",
+        "/tmp/project",
+      );
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const lifecycleGeneration = binding?.lifecycleGeneration;
       assert.equal(typeof lifecycleGeneration, "string");
@@ -4884,12 +4775,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       routing.codex.respondToRequest.mockClear();
       routing.codex.respondToUserInput.mockClear();
 
-      const session = yield* provider.startSession(asThreadId("thread-1"), {
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-1"),
+        "codex",
+        "full-access",
+        "/tmp/project",
+      );
       assert.equal(session.provider, "codex");
       const binding = Option.getOrUndefined(yield* directory.getBinding(session.threadId));
       const lifecycleGeneration = binding?.lifecycleGeneration;
@@ -4929,11 +4821,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ],
       ]);
 
-      yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, session.threadId, "hello");
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
 
       yield* provider.interruptTurn({ threadId: session.threadId });
@@ -4950,11 +4838,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
 
       const startsBeforeRecovery = routing.codex.startSession.mock.calls.length;
-      yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "continue after interrupt",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, session.threadId, "continue after interrupt");
       assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeRecovery + 1);
       const resumedInput = routing.codex.startSession.mock.calls.at(-1)?.[0];
       assert.deepEqual(resumedInput?.resumeCursor, session.resumeCursor);
@@ -4972,11 +4856,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* provider.stopSession({ threadId: session.threadId });
       const sendAfterStop = yield* Effect.result(
-        provider.sendTurn({
-          threadId: session.threadId,
-          input: "after-stop",
-          attachments: [],
-        }),
+        sendTextTurn(provider, session.threadId, "after-stop"),
       );
       assertFailure(
         sendAfterStop,
@@ -5103,11 +4983,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const provider = yield* ProviderService;
         const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId(`thread-conditional-interrupt-current-${target}`);
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
         const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
         routing.codex.updateSession(threadId, (session) => ({
@@ -5148,11 +5024,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       Effect.gen(function* () {
         const provider = yield* ProviderService;
         const threadId = asThreadId(`thread-stop-receipt-no-binding-${operation}`);
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
         yield* provider.stopSession({ threadId });
         const calls = routing.codex.stopSession.mock.calls.length;
@@ -5182,11 +5054,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-stop-receipt-binding-refresh");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       const read = directory.getBinding;
@@ -5232,11 +5100,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           const repository = yield* ProviderSessionRuntimeRepository;
           const threadId = asThreadId(`thread-stop-receipt-failure-${failurePhase}`);
           let controlRequestId = `event:stop-receipt-${failurePhase}`;
-          yield* provider.startSession(threadId, {
-            provider: "codex",
-            threadId,
-            runtimeMode: "full-access",
-          });
+          yield* startTestSession(provider, threadId, "codex", "full-access");
           yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
           yield* directory.upsert({
             threadId,
@@ -5362,11 +5226,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const provider = yield* ProviderService;
         const repository = yield* ProviderSessionRuntimeRepository;
         const threadId = asThreadId("thread-stop-first-retirement-write");
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
         const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
         const stops = routing.codex.stopSession.mock.calls.length;
@@ -5416,11 +5276,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const repository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-stop-receipt-same-epoch");
       const controlRequestId = "event:stop-receipt-original-turn";
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       const interrupts = routing.codex.interruptTurn.mock.calls.length;
@@ -5482,11 +5338,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-stop-receipt-child-target");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.sendTurn({ threadId, input: "parent A", attachments: [] });
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       const request = {
@@ -5610,11 +5462,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-running-without-bound-turn");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.updateSession(threadId, (session) => ({ ...session, status: "running" }));
       yield* directory.upsert({
         threadId,
@@ -5653,11 +5501,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           const provider = yield* ProviderService;
           const directory = yield* ProviderSessionDirectory;
           const threadId = asThreadId(`thread-conditional-lock-contention-${target}`);
-          yield* provider.startSession(threadId, {
-            provider: "codex",
-            threadId,
-            runtimeMode: "full-access",
-          });
+          yield* startTestSession(provider, threadId, "codex", "full-access");
           yield* provider.sendTurn({ threadId, input: "hold turn", attachments: [] });
           const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
           const before = Option.getOrThrow(yield* directory.getBinding(threadId));
@@ -5737,12 +5581,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-exact-interrupt");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
       routing.codex.interruptTurn.mockClear();
 
@@ -5762,12 +5601,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-child-interrupt-credential-rotation");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const startsBeforeRotation = routing.codex.startSession.mock.calls.length;
       const stopsBeforeRotation = routing.codex.stopSession.mock.calls.length;
@@ -5836,12 +5670,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         );
         const renewalsBefore = routing.codex.renewAgentGatewayCredential.mock.calls.length;
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const lifecycleGeneration = initialBinding?.lifecycleGeneration;
         assert.equal(typeof lifecycleGeneration, "string");
@@ -5899,9 +5728,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const startsBeforeB = routing.codex.startSession.mock.calls.length;
         const stopsBeforeB = routing.codex.stopSession.mock.calls.length;
         const sendsBeforeB = routing.codex.sendTurn.mock.calls.length;
-        const turnB = yield* provider
-          .sendTurn({ threadId, input: "turn B", attachments: [] })
-          .pipe(Effect.forkChild);
+        const turnB = yield* sendTextTurn(provider, threadId, "turn B").pipe(Effect.forkChild);
         yield* sleep(25);
         assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
         assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
@@ -5945,12 +5772,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           Effect.succeed(reuse),
         );
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* routing.codex.waitForRuntimeSubscribers();
 
         // The terminal event carrying AGENT_GATEWAY_TURN_AUTHORITY_RETIRED was
@@ -5998,12 +5820,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-proactive-terminal-gateway-rotation");
         const turnA = asTurnId(`turn-${threadId}`);
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const lifecycleGeneration = initialBinding?.lifecycleGeneration;
         assert.equal(typeof lifecycleGeneration, "string");
@@ -6087,12 +5904,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           ),
         );
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          cwd: "/tmp/project",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
         yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         assert.isDefined(binding?.lifecycleGeneration);
@@ -6115,9 +5927,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           })
           .pipe(Effect.forkChild);
         yield* Effect.yieldNow;
-        const nextTurn = yield* provider
-          .sendTurn({ threadId, input: "turn B", attachments: [] })
-          .pipe(Effect.forkChild);
+        const nextTurn = yield* sendTextTurn(provider, threadId, "turn B").pipe(Effect.forkChild);
         yield* sleep(10);
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB);
 
@@ -6144,12 +5954,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ),
       );
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const firstStop = yield* Effect.exit(
         provider.interruptTurn({
@@ -6202,20 +6007,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ),
       );
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const sendCallsBeforeB = routing.codex.sendTurn.mock.calls.length;
 
       const interrupted = yield* provider.interruptTurn({ threadId }).pipe(Effect.forkChild);
       yield* Deferred.await(stopStarted);
-      const nextTurn = yield* provider
-        .sendTurn({ threadId, input: "turn B", attachments: [] })
-        .pipe(Effect.forkChild);
+      const nextTurn = yield* sendTextTurn(provider, threadId, "turn B").pipe(Effect.forkChild);
       yield* Effect.yieldNow;
       assert.equal(routing.codex.sendTurn.mock.calls.length, sendCallsBeforeB);
 
@@ -6283,12 +6081,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ),
       );
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       const sendsBeforeRecovery = routing.codex.sendTurn.mock.calls.length;
 
@@ -6319,12 +6112,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ),
       );
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
       assert.equal(Exit.isFailure(yield* Effect.exit(provider.interruptTurn({ threadId }))), true);
 
@@ -6351,12 +6139,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       // An explicit session replacement is the recovery authority after a
       // failed teardown and clears the fail-closed fence.
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
       yield* provider.stopSession({ threadId });
     }),
   );
@@ -6392,11 +6175,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       routing.codex.sendTurn.mockClear();
-      const session = yield* provider.startSession(asThreadId("thread-send-mismatch"), {
-        provider: "codex",
-        threadId: asThreadId("thread-send-mismatch"),
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-send-mismatch"),
+        "codex",
+        "full-access",
+      );
 
       const result = yield* Effect.result(
         provider.sendTurn({
@@ -6540,11 +6324,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const bindingBeforeTurn = yield* directory.getBinding(threadId);
       assert.equal(Option.isNone(bindingBeforeTurn), true);
 
-      yield* provider.sendTurn({
-        threadId,
-        input: "hello from work account",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, threadId, "hello from work account");
 
       const bindingAfterTurn = yield* directory.getBinding(threadId);
       assert.equal(Option.isSome(bindingAfterTurn), true);
@@ -6597,11 +6377,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       routing.codex.startSession.mockClear();
       routing.codex.sendTurn.mockClear();
 
-      yield* provider.sendTurn({
-        threadId,
-        input: "continue on the work account",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, threadId, "continue on the work account");
 
       assert.equal(routing.codex.stopSession.mock.calls.length, 1);
       assert.equal(routing.codex.startSession.mock.calls.length, 1);
@@ -6986,13 +6762,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        const first = yield* provider
-          .sendTurn({ threadId, input: "first", attachments: [] })
-          .pipe(Effect.exit, Effect.forkChild);
+        const first = yield* sendTextTurn(provider, threadId, "first").pipe(
+          Effect.exit,
+          Effect.forkChild,
+        );
         yield* Deferred.await(staleStarted);
-        const second = yield* provider
-          .sendTurn({ threadId, input: "second", attachments: [] })
-          .pipe(Effect.exit, Effect.forkChild);
+        const second = yield* sendTextTurn(provider, threadId, "second").pipe(
+          Effect.exit,
+          Effect.forkChild,
+        );
         assert.equal(devin.sendTurn.mock.calls.length, 0);
         yield* Deferred.succeed(releaseStale, undefined);
         assert.equal(Exit.isFailure(yield* Fiber.join(first)), true);
@@ -7035,11 +6813,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       routing.claude.startSession.mockClear();
       routing.claude.sendTurn.mockClear();
 
-      yield* provider.sendTurn({
-        threadId: initial.threadId,
-        input: "resume with claude",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, initial.threadId, "resume with claude");
 
       assert.equal(routing.claude.startSession.mock.calls.length, 1);
       const resumedStartInput = routing.claude.startSession.mock.calls[0]?.[0];
@@ -7074,11 +6848,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("lost-question-runtime");
-      yield* provider.startSession(threadId, {
-        provider: "claudeAgent",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
       yield* routing.claude.stopAll();
       const starts = routing.claude.startSession.mock.calls.length;
@@ -7112,16 +6882,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstThreadId = asThreadId("thread-list-cleared-1");
       const secondThreadId = asThreadId("thread-list-cleared-2");
 
-      yield* provider.startSession(firstThreadId, {
-        provider: "codex",
-        threadId: firstThreadId,
-        runtimeMode: "full-access",
-      });
-      yield* provider.startSession(secondThreadId, {
-        provider: "codex",
-        threadId: secondThreadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, firstThreadId, "codex", "full-access");
+      yield* startTestSession(provider, secondThreadId, "codex", "full-access");
 
       yield* routing.codex.stopAll();
       yield* routing.claude.stopAll();
@@ -7137,16 +6899,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-runtime-status-transitions");
 
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
-      yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
+      yield* sendTextTurn(provider, session.threadId, "hello");
 
       const runningRuntime = yield* runtimeRepository.getByThreadId({
         threadId: session.threadId,
@@ -7180,11 +6934,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-runtime-complete"), {
-        provider: "codex",
-        threadId: asThreadId("thread-runtime-complete"),
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-runtime-complete"),
+        "codex",
+        "full-access",
+      );
       const turn = yield* provider.sendTurn({
         threadId: session.threadId,
         input: "hello",
@@ -7194,7 +6949,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           model: "gpt-5-codex",
         },
       });
-      yield* sleep(50);
+      yield* routing.codex.waitForRuntimeSubscribers();
 
       routing.codex.emit({
         type: "turn.completed",
@@ -7205,7 +6960,17 @@ routing.layer("ProviderServiceLive routing", (it) => {
         turnId: turn.turnId,
         payload: { state: "completed" },
       });
-      yield* sleep(50);
+      yield* waitUntilEffect(() =>
+        runtimeRepository
+          .getByThreadId({ threadId: session.threadId })
+          .pipe(
+            Effect.map(
+              (runtime) =>
+                asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                  .lastRuntimeEvent === "turn.completed",
+            ),
+          ),
+      );
 
       const runtime = yield* runtimeRepository.getByThreadId({
         threadId: session.threadId,
@@ -7255,11 +7020,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       let olderDispatchStarted = false;
       let releaseOlderDispatch: ((result: ProviderTurnStartResult) => void) | undefined;
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.sendTurn
         .mockImplementationOnce(() =>
           Effect.promise(
@@ -7342,11 +7103,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       let releaseOlder: ((result: ProviderTurnStartResult) => void) | undefined;
       let failNewer: (() => void) | undefined;
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.sendTurn
         .mockImplementationOnce(() =>
           Effect.promise(
@@ -7374,9 +7131,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         })
         .pipe(Effect.forkChild);
       yield* waitUntil(() => releaseOlder !== undefined, 500, 20, "older dispatch start");
-      const newerFiber = yield* provider
-        .sendTurn({ threadId, input: "newer", attachments: [] })
-        .pipe(Effect.forkChild);
+      const newerFiber = yield* sendTextTurn(provider, threadId, "newer").pipe(Effect.forkChild);
       yield* waitUntil(() => failNewer !== undefined, 500, 20, "newer dispatch start");
 
       releaseOlder?.({ threadId, turnId: olderTurnId, resumeCursor: olderCursor });
@@ -7412,11 +7167,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         detail: "injected started-turn persistence failure",
       });
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.sendTurn
         .mockImplementationOnce((input) =>
           Effect.succeed({ threadId: input.threadId, turnId: failedTurnId }),
@@ -7461,11 +7212,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("thread-subagent-scoped-events");
       const turnId = asTurnId("turn-parent-live");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.sendTurn.mockImplementationOnce((input) =>
         Effect.succeed({ threadId: input.threadId, turnId }),
       );
@@ -7520,11 +7267,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         model: "gpt-5.4",
       };
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       routing.codex.steerTurn.mockImplementationOnce((input) =>
         Effect.succeed({ threadId: input.threadId, turnId, resumeCursor }),
       );
@@ -7628,11 +7371,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-runtime-resume-refresh"), {
-        provider: "claudeAgent",
-        threadId: asThreadId("thread-runtime-resume-refresh"),
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-runtime-resume-refresh"),
+        "claudeAgent",
+        "full-access",
+      );
       const updatedResumeCursor = {
         threadId: session.threadId,
         resume: "550e8400-e29b-41d4-a716-446655440000",
@@ -7675,16 +7419,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-task-resume-refresh"), {
-        provider: "claudeAgent",
-        threadId: asThreadId("thread-task-resume-refresh"),
-        runtimeMode: "full-access",
-      });
-      const turn = yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "continue the work",
-        attachments: [],
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-task-resume-refresh"),
+        "claudeAgent",
+        "full-access",
+      );
+      const turn = yield* sendTextTurn(provider, session.threadId, "continue the work");
       const updatedResumeCursor = {
         threadId: session.threadId,
         resume: "550e8400-e29b-41d4-a716-446655440000",
@@ -7746,16 +7487,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-runtime-error"), {
-        provider: "codex",
-        threadId: asThreadId("thread-runtime-error"),
-        runtimeMode: "full-access",
-      });
-      const turn = yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-runtime-error"),
+        "codex",
+        "full-access",
+      );
+      const turn = yield* sendTextTurn(provider, session.threadId, "hello");
 
       routing.codex.emit({
         type: "runtime.error",
@@ -7795,11 +7533,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-runtime-state-error"), {
-        provider: "codex",
-        threadId: asThreadId("thread-runtime-state-error"),
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-runtime-state-error"),
+        "codex",
+        "full-access",
+      );
 
       routing.codex.emit({
         type: "thread.state.changed",
@@ -7835,16 +7574,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-runtime-compact-boundary"), {
-        provider: "codex",
-        threadId: asThreadId("thread-runtime-compact-boundary"),
-        runtimeMode: "full-access",
-      });
-      const turn = yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-runtime-compact-boundary"),
+        "codex",
+        "full-access",
+      );
+      const turn = yield* sendTextTurn(provider, session.threadId, "hello");
 
       routing.codex.emit({
         type: "thread.state.changed",
@@ -7891,12 +7627,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        return yield* provider.startSession(asThreadId("thread-claude-start"), {
-          provider: "claudeAgent",
-          threadId: asThreadId("thread-claude-start"),
-          cwd: "/tmp/project-claude-start",
-          runtimeMode: "full-access",
-        });
+        return yield* startTestSession(
+          provider,
+          asThreadId("thread-claude-start"),
+          "claudeAgent",
+          "full-access",
+          "/tmp/project-claude-start",
+        );
       }).pipe(Effect.provide(firstProviderLayer));
 
       yield* Effect.gen(function* () {
@@ -7913,12 +7650,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        yield* provider.startSession(initial.threadId, {
-          provider: "claudeAgent",
-          threadId: initial.threadId,
-          cwd: "/tmp/project-claude-start",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(
+          provider,
+          initial.threadId,
+          "claudeAgent",
+          "full-access",
+          "/tmp/project-claude-start",
+        );
       }).pipe(Effect.provide(secondProviderLayer));
 
       assert.equal(secondClaude.startSession.mock.calls.length, 1);
@@ -7984,12 +7722,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        yield* provider.startSession(initial.threadId, {
-          provider: "codex",
-          threadId: initial.threadId,
-          cwd: "/tmp/project-clear-resume",
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(
+          provider,
+          initial.threadId,
+          "codex",
+          "full-access",
+          "/tmp/project-clear-resume",
+        );
       }).pipe(Effect.provide(secondProviderLayer));
 
       assert.equal(secondCodex.startSession.mock.calls.length, 1);
@@ -8129,11 +7868,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* serverSettings.updateSettings(settingsForKey("credential-v2"));
       const result = yield* Effect.result(
-        provider.sendTurn({
-          threadId,
-          input: "do not recover with changed credentials",
-          attachments: [],
-        }),
+        sendTextTurn(provider, threadId, "do not recover with changed credentials"),
       );
 
       assert.equal(result._tag, "Failure");
@@ -8289,11 +8024,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        yield* provider.sendTurn({
-          threadId: initial.threadId,
-          input: "continue after account fields cleared",
-          attachments: [],
-        });
+        yield* sendTextTurn(provider, initial.threadId, "continue after account fields cleared");
       }).pipe(Effect.provide(secondProviderLayer));
 
       assert.equal(secondCodex.startSession.mock.calls.length, 1);
@@ -8332,11 +8063,7 @@ rotationRetry.layer("ProviderServiceLive credential rotation event durability", 
       const settlementEventId = asEventId(ROTATION_RETRY_FAILURE_EVENT_ID);
       rotationRetryPersistAttempts.clear();
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const lifecycleGeneration = binding?.lifecycleGeneration;
       assert.equal(typeof lifecycleGeneration, "string");
@@ -8408,9 +8135,7 @@ rotationRetry.layer("ProviderServiceLive credential rotation event durability", 
 
       const startsBeforeB = rotationRetry.codex.startSession.mock.calls.length;
       const stopsBeforeB = rotationRetry.codex.stopSession.mock.calls.length;
-      const turnB = yield* provider
-        .sendTurn({ threadId, input: "turn B", attachments: [] })
-        .pipe(Effect.forkChild);
+      const turnB = yield* sendTextTurn(provider, threadId, "turn B").pipe(Effect.forkChild);
       rotationRetry.codex.emit({
         type: "task.updated",
         eventId: settlementEventId,
@@ -8477,12 +8202,13 @@ restartRollbackRouting.layer("ProviderServiceLive restart-based rollback", (it) 
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-droid-restart-rollback");
-      const session = yield* provider.startSession(threadId, {
-        provider: "droid",
+      const session = yield* startTestSession(
+        provider,
         threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+        "droid",
+        "full-access",
+        "/tmp/project",
+      );
 
       yield* provider.rollbackConversation({ threadId, numTurns: 1 });
 
@@ -8507,11 +8233,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         const provider = yield* ProviderService;
         const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId("thread-reaper-late-terminal-retirement");
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         yield* idleCleanup.codex.waitForRuntimeSubscribers();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -8587,11 +8309,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-reaper-live-cursor-after-event");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       const earlierCursor = { resume: "earlier-event-cursor" };
       const latestCursor = { resume: "newer-live-cursor" };
@@ -8648,11 +8366,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-reaper-rejected-idle-timer");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       const cutoff = new Date(Date.now() - 60_000).toISOString();
       idleCleanup.codex.emit({
@@ -8713,11 +8427,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           ),
         ),
       );
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -8779,11 +8489,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           }),
         ),
       );
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -8811,11 +8517,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const olderTurnId = asTurnId("turn-idle-stale-older");
       const newerTurnId = asTurnId("turn-idle-stale-newer");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.sendTurn
         .mockImplementationOnce((input) =>
           Effect.succeed({ threadId: input.threadId, turnId: olderTurnId }),
@@ -8886,11 +8588,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const firstTurnId = asTurnId("turn-ambiguous-first");
       const secondTurnId = asTurnId("turn-ambiguous-second");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.sendTurn
         .mockImplementationOnce((input) =>
           Effect.succeed({ threadId: input.threadId, turnId: firstTurnId }),
@@ -8928,11 +8626,12 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         const provider = yield* ProviderService;
         const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-        const session = yield* provider.startSession(asThreadId("thread-idle-persisted-cursor"), {
-          provider: "codex",
-          threadId: asThreadId("thread-idle-persisted-cursor"),
-          runtimeMode: "full-access",
-        });
+        const session = yield* startTestSession(
+          provider,
+          asThreadId("thread-idle-persisted-cursor"),
+          "codex",
+          "full-access",
+        );
 
         const persistedBefore = yield* runtimeRepository.getByThreadId({
           threadId: session.threadId,
@@ -8981,11 +8680,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-idle-new-turn");
 
       idleCleanup.codex.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -8999,30 +8694,21 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
       );
 
-      yield* provider.sendTurn({
-        threadId: session.threadId,
-        input: "new turn before idle stop",
-        attachments: [],
-      });
+      yield* sendTextTurn(provider, session.threadId, "new turn before idle stop");
       yield* sleep(150);
 
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
@@ -9036,11 +8722,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-idle-runtime-turn-start");
 
       idleCleanup.codex.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9054,20 +8736,15 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
@@ -9094,11 +8771,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-idle-background-task");
 
       idleCleanup.claude.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "claudeAgent",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       yield* idleCleanup.claude.waitForRuntimeSubscribers();
       idleCleanup.claude.emit({
         type: "task.started",
@@ -9147,11 +8820,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-idle-superseded-generation");
 
       idleCleanup.codex.stopSession.mockClear();
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.equal(typeof binding?.lifecycleGeneration, "string");
       const lifecycleGeneration = String(binding?.lifecycleGeneration);
@@ -9250,11 +8919,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-clear-resume-live-task");
 
       idleCleanup.claude.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "claudeAgent",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       yield* idleCleanup.claude.waitForRuntimeSubscribers();
       idleCleanup.claude.emit({
         type: "task.started",
@@ -9304,11 +8969,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const firstTurnId = asTurnId("turn-conflicting-start-first");
       const secondTurnId = asTurnId("turn-conflicting-start-second");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.started",
@@ -9403,33 +9064,26 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
       );
       yield* waitUntil(() => listSessionsStarted, 500, 20, "idle listSessions start");
 
-      const sendTurnFiber = yield* provider
-        .sendTurn({
-          threadId,
-          input: "new turn after idle timeout fired",
-          attachments: [],
-        })
-        .pipe(Effect.forkChild);
+      const sendTurnFiber = yield* sendTextTurn(
+        provider,
+        threadId,
+        "new turn after idle timeout fired",
+      ).pipe(Effect.forkChild);
 
       const release = releaseListSessions;
       requireReleaseListSessions(release)([staleReadySession]);
@@ -9466,11 +9120,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const threadId = asThreadId("thread-idle-interrupted-dispatch");
 
       idleCleanup.codex.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9484,20 +9134,15 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
@@ -9505,11 +9150,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       idleCleanup.codex.sendTurn.mockImplementationOnce(() => Effect.interrupt);
       yield* Effect.exit(
-        provider.sendTurn({
-          threadId: session.threadId,
-          input: "new turn interrupted before runtime events",
-          attachments: [],
-        }),
+        sendTextTurn(provider, session.threadId, "new turn interrupted before runtime events"),
       );
 
       yield* waitUntil(
@@ -9528,11 +9169,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-rollback-success");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9546,20 +9183,15 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
@@ -9581,146 +9213,80 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
-  it.effect("waits for fired idle cleanup before removing an explicit stop binding", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
-      const threadId = asThreadId("thread-idle-stop-remove-race");
-      let listSessionsStarted = false;
-      let releaseListSessions: ReleaseListSessions | undefined;
+  it.effect.each(["stopSession", "stopRuntimeSession"] as const)(
+    "waits for fired idle cleanup before %s",
+    (stop) =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+        const threadId = asThreadId(`thread-idle-stop-race-${stop}`);
+        let listSessionsStarted = false;
+        let releaseListSessions: ReleaseListSessions | undefined;
 
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const { resumeCursor: _omittedResumeCursor, ...staleReadySession } = session;
-      idleCleanup.codex.listSessions
-        .mockImplementationOnce(() => Effect.succeed([session]))
-        .mockImplementationOnce(() =>
-          Effect.promise(
-            () =>
-              new Promise<ReadonlyArray<ProviderSession>>((resolve) => {
-                listSessionsStarted = true;
-                releaseListSessions = resolve;
+        const session = yield* startTestSession(provider, threadId, "codex", "full-access");
+        const staleReadySession = withoutResumeCursor(session);
+        idleCleanup.codex.stopSession.mockClear();
+        idleCleanup.codex.listSessions
+          .mockImplementationOnce(() => Effect.succeed([session]))
+          .mockImplementationOnce(() =>
+            Effect.promise(
+              () =>
+                new Promise<ReadonlyArray<ProviderSession>>((resolve) => {
+                  listSessionsStarted = true;
+                  releaseListSessions = resolve;
+                }),
+            ),
+          );
+
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`runtime-idle-before-${stop}`),
+          provider: "codex",
+          createdAt: "2026-02-27T00:04:00.000Z",
+          threadId,
+          payload: { state: "completed" },
+        });
+        yield* waitUntilEffect(
+          () =>
+            runtimeRepository.getByThreadId({ threadId }).pipe(
+              Effect.map((runtime) => {
+                if (Option.isNone(runtime)) {
+                  return false;
+                }
+                const payload = runtime.value.runtimePayload;
+                return (
+                  payload !== null &&
+                  typeof payload === "object" &&
+                  !Array.isArray(payload) &&
+                  (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
+                );
               }),
-          ),
+            ),
+          500,
+          20,
+          "runtime completion persistence",
         );
+        yield* waitUntil(() => listSessionsStarted, 500, 20, "idle listSessions start");
 
-      yield* idleCleanup.codex.waitForRuntimeSubscribers();
-      idleCleanup.codex.emit({
-        type: "turn.completed",
-        eventId: asEventId("runtime-idle-before-explicit-stop"),
-        provider: "codex",
-        createdAt: "2026-02-27T00:04:00.000Z",
-        threadId,
-        payload: { state: "completed" },
-      });
-      yield* waitUntilEffect(
-        () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
-        500,
-        20,
-        "runtime completion persistence",
-      );
-      yield* waitUntil(() => listSessionsStarted, 500, 20, "idle listSessions start");
+        const stopFiber = yield* (
+          stop === "stopSession"
+            ? provider.stopSession({ threadId })
+            : provider.stopRuntimeSession!({ threadId })
+        ).pipe(Effect.forkChild);
+        requireReleaseListSessions(releaseListSessions)([staleReadySession]);
+        yield* Fiber.join(stopFiber);
 
-      const stopFiber = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
-      const release = releaseListSessions;
-      requireReleaseListSessions(release)([staleReadySession]);
-      yield* Fiber.join(stopFiber);
-
-      const binding = yield* directory.getBinding(threadId);
-      assert.equal(Option.isNone(binding), true);
-    }),
-  );
-
-  it.effect("waits for fired idle cleanup before explicit runtime stop", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
-      const threadId = asThreadId("thread-idle-runtime-stop-race");
-      let listSessionsStarted = false;
-      let releaseListSessions: ReleaseListSessions | undefined;
-
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const { resumeCursor: _omittedResumeCursor, ...staleReadySession } = session;
-      idleCleanup.codex.stopSession.mockClear();
-      idleCleanup.codex.listSessions
-        .mockImplementationOnce(() => Effect.succeed([session]))
-        .mockImplementationOnce(() =>
-          Effect.promise(
-            () =>
-              new Promise<ReadonlyArray<ProviderSession>>((resolve) => {
-                listSessionsStarted = true;
-                releaseListSessions = resolve;
-              }),
-          ),
-        );
-
-      yield* idleCleanup.codex.waitForRuntimeSubscribers();
-      idleCleanup.codex.emit({
-        type: "turn.completed",
-        eventId: asEventId("runtime-idle-before-runtime-stop"),
-        provider: "codex",
-        createdAt: "2026-02-27T00:04:00.000Z",
-        threadId,
-        payload: { state: "completed" },
-      });
-      yield* waitUntilEffect(
-        () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
-        500,
-        20,
-        "runtime completion persistence",
-      );
-      yield* waitUntil(() => listSessionsStarted, 500, 20, "idle listSessions start");
-
-      assert.equal(typeof provider.stopRuntimeSession, "function");
-      if (!provider.stopRuntimeSession) {
-        assert.fail("stopRuntimeSession unavailable");
-      }
-      const stopFiber = yield* provider.stopRuntimeSession({ threadId }).pipe(Effect.forkChild);
-      const release = releaseListSessions;
-      requireReleaseListSessions(release)([staleReadySession]);
-      yield* Fiber.join(stopFiber);
-
-      // The explicit stop also crosses the idempotent cleanup barrier after
-      // the idle stop settles, even though the session is no longer routable.
-      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 2);
-      assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
-    }),
+        if (stop === "stopSession") {
+          assert.isTrue(Option.isNone(yield* directory.getBinding(threadId)));
+        } else {
+          // The explicit stop also crosses the idempotent cleanup barrier after
+          // the idle stop settles, even though the session is no longer routable.
+          assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 2);
+          assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
+        }
+      }),
   );
 
   it.effect("reschedules idle cleanup after successful compact work", () =>
@@ -9729,11 +9295,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-compact-success");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9747,20 +9309,15 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
@@ -9793,11 +9350,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-idle-closed-state");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.stopSession.mockClear();
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9824,11 +9377,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-idle-compact-running");
 
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.stopSession.mockClear();
       idleCleanup.codex.updateSession(threadId, (existing) => ({
         ...existing,
@@ -9866,11 +9415,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       });
 
       idleCleanup.codex.stopSession.mockClear();
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
       idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
@@ -9884,20 +9429,15 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntilEffect(
         () =>
-          runtimeRepository.getByThreadId({ threadId }).pipe(
-            Effect.map((runtime) => {
-              if (Option.isNone(runtime)) {
-                return false;
-              }
-              const payload = runtime.value.runtimePayload;
-              return (
-                payload !== null &&
-                typeof payload === "object" &&
-                !Array.isArray(payload) &&
-                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
-              );
-            }),
-          ),
+          runtimeRepository
+            .getByThreadId({ threadId })
+            .pipe(
+              Effect.map(
+                (runtime) =>
+                  asRuntimePayloadRecord(Option.getOrUndefined(runtime)?.runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
         500,
         20,
         "runtime completion persistence",
@@ -9905,11 +9445,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       idleCleanup.codex.sendTurn.mockImplementationOnce(() => Effect.fail(dispatchFailure));
       const failedTurn = yield* Effect.result(
-        provider.sendTurn({
-          threadId: session.threadId,
-          input: "new turn that fails before runtime events",
-          attachments: [],
-        }),
+        sendTextTurn(provider, session.threadId, "new turn that fails before runtime events"),
       );
       assertFailure(failedTurn, dispatchFailure);
 
@@ -9930,11 +9466,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-ordered-subscriber-delivery");
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
 
       const receivedByHealthy: string[] = [];
       const expectedEventIds = new Set<string>(["evt-ordered-1", "evt-ordered-2", "evt-ordered-3"]);
@@ -10003,11 +9535,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-ready");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* provider.sendTurn({ threadId, input: "hello" });
       yield* sleep(50);
 
@@ -10043,11 +9571,7 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-persisted-fanout");
-      const session = yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(provider, threadId, "codex", "full-access");
       assert.notEqual(provider.streamPersistedEvents, undefined);
 
       const canonicalEvents = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
@@ -10112,11 +9636,7 @@ batchFanout.layer("ProviderServiceLive durable text batches", (it) => {
       Effect.gen(function* () {
         const provider = yield* ProviderService;
         const threadId = asThreadId("thread-batch-fanout");
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         const release = yield* Deferred.make<void>();
         batchFanoutRelease = Deferred.await(release);
         batchFanoutEvents.length = 0;
@@ -10202,11 +9722,7 @@ for (const stop of ["interrupt", "session", "dispose"] as const) {
           const provider = yield* ProviderService;
           const directory = yield* ProviderSessionDirectory;
           const threadId = asThreadId(`thread-batch-${stop}`);
-          yield* provider.startSession(threadId, {
-            provider: "codex",
-            threadId,
-            runtimeMode: "full-access",
-          });
+          yield* startTestSession(provider, threadId, "codex", "full-access");
           const sent = yield* provider.sendTurn({ threadId, input: "brief" });
           yield* stopBatch.codex.waitForRuntimeSubscribers();
           const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
@@ -10258,11 +9774,7 @@ stopRetry.layer("ProviderServiceLive urgent Stop with text persistence retry", (
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-stop-text-retry");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const sent = yield* provider.sendTurn({ threadId, input: "brief" });
       yield* stopRetry.codex.waitForRuntimeSubscribers();
       const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
@@ -10325,11 +9837,7 @@ for (const stopKind of ["stopSession", "stopRuntimeSession"] as const) {
             const provider = yield* ProviderService;
             const directory = yield* ProviderSessionDirectory;
             const threadId = asThreadId(`thread-durable-${stopKind}-${stopFails}`);
-            yield* provider.startSession(threadId, {
-              provider: "codex",
-              threadId,
-              runtimeMode: "full-access",
-            });
+            yield* startTestSession(provider, threadId, "codex", "full-access");
             const sent = yield* provider.sendTurn({ threadId, input: "brief" });
             yield* batchStop.codex.waitForRuntimeSubscribers();
             const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
@@ -10423,11 +9931,7 @@ originalIdFanout.layer("ProviderServiceLive original delta identities", (it) => 
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-original-ids");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* originalIdFanout.codex.waitForRuntimeSubscribers();
       originalIdEvents.length = 0;
       const first: ProviderRuntimeEvent = {
@@ -10692,12 +10196,7 @@ validation.layer("ProviderServiceLive validation", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-task-control-unsupported");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access", "/tmp/project");
 
       const cases = [
         {
@@ -10742,12 +10241,13 @@ validation.layer("ProviderServiceLive validation", (it) => {
         }),
       );
 
-      const session = yield* provider.startSession(asThreadId("thread-missing"), {
-        provider: "codex",
-        threadId: asThreadId("thread-missing"),
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startTestSession(
+        provider,
+        asThreadId("thread-missing"),
+        "codex",
+        "full-access",
+        "/tmp/project",
+      );
 
       assert.equal(session.threadId, asThreadId("thread-missing"));
 
@@ -10787,11 +10287,7 @@ disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const failure = yield* Effect.result(
-        provider.startSession(asThreadId("thread-disabled-provider"), {
-          provider: "codex",
-          threadId: asThreadId("thread-disabled-provider"),
-          runtimeMode: "full-access",
-        }),
+        startTestSession(provider, asThreadId("thread-disabled-provider"), "codex", "full-access"),
       );
 
       assert.equal(failure._tag, "Failure");
@@ -10847,11 +10343,7 @@ providerDisabledAfterInitialCheck.layer("ProviderServiceLive enablement race", (
       const threadId = asThreadId("thread-disabled-during-start");
 
       const failure = yield* Effect.result(
-        provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        }),
+        startTestSession(provider, threadId, "codex", "full-access"),
       );
 
       assert.equal(failure._tag, "Failure");
@@ -10901,11 +10393,7 @@ it.effect.each(["matching exit", "missing parent exit"] as const)(
         const directory = yield* Effect.service(ProviderSessionDirectory).pipe(
           Effect.provide(services),
         );
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "codex", "full-access");
         const sent = yield* provider.sendTurn({ threadId, input: "continue the work" });
         // The native provider has already finished and reports ready, but
         // the blocked journal still makes its projection look active.
@@ -11030,11 +10518,7 @@ it.effect("ProviderServiceLive starts adapter teardown when a queued session ref
     const threadId = asThreadId("thread-stopall-refresh-failure");
     const teardownStarted = yield* Deferred.make<void>();
 
-    yield* provider.startSession(threadId, {
-      provider: "codex",
-      threadId,
-      runtimeMode: "full-access",
-    });
+    yield* startTestSession(provider, threadId, "codex", "full-access");
 
     const listSessions = shutdown.codex.listSessions.getMockImplementation();
     assert.ok(listSessions);
@@ -11063,11 +10547,7 @@ it.effect("ProviderServiceLive backpressures slow subscribers and completes fano
       const services = yield* Layer.buildWithScope(boundedFanout.rawLayer, scope);
       const provider = yield* Effect.service(ProviderService).pipe(Effect.provide(services));
       const threadId = asThreadId("thread-bounded-fanout");
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       yield* boundedFanout.codex.waitForRuntimeSubscribers();
 
       const slowConsumerStarted = yield* Deferred.make<void>();
@@ -11218,11 +10698,7 @@ targetedChildStop.layer("targeted child transport ownership", (it) => {
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("targeted-stop-preserves-runtime");
       Object.assign(targetedChildStop.codex.adapter, { stopTask: () => Effect.void });
-      yield* provider.startSession(threadId, {
-        threadId,
-        provider: "codex",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "codex", "full-access");
       const before = Option.getOrThrow(yield* directory.getBinding(threadId));
       yield* provider.stopTask({ threadId, taskId: "child" });
       const after = Option.getOrThrow(yield* directory.getBinding(threadId));
@@ -11276,12 +10752,13 @@ stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-opencode-stopped-retained");
 
-      const initial = yield* provider.startSession(threadId, {
-        provider: "opencode",
+      const initial = yield* startTestSession(
+        provider,
         threadId,
-        cwd: "/tmp/opencode-stopped-retained",
-        runtimeMode: "full-access",
-      });
+        "opencode",
+        "full-access",
+        "/tmp/opencode-stopped-retained",
+      );
       stoppedOpenCodeRouting.openCode.retainStopped(threadId);
       stoppedOpenCodeRouting.openCode.startSession.mockClear();
       stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
@@ -11336,11 +10813,7 @@ stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (
         const provider = yield* ProviderService;
         const threadId = asThreadId("thread-opencode-stopped-control-plane");
 
-        yield* provider.startSession(threadId, {
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startTestSession(provider, threadId, "opencode", "full-access");
         stoppedOpenCodeRouting.openCode.retainStopped(threadId);
 
         const interruptResult = yield* Effect.result(provider.interruptTurn({ threadId }));
@@ -11426,11 +10899,7 @@ claudeIdleStopFence.layer("ProviderServiceLive conditional Claude idle Stop fenc
       const releaseRetirement = yield* Deferred.make<void>();
       const sendAttempted = yield* Deferred.make<void>();
       const claude = claudeIdleStopFence.claude;
-      yield* provider.startSession(threadId, {
-        threadId,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       const before = Option.getOrThrow(yield* directory.getBinding(threadId));
       assert.equal(observed.session?.status, "ready");
@@ -11545,11 +11014,7 @@ claudeIdleStopFence.layer("ProviderServiceLive conditional Claude idle Stop fenc
       const dispatchEntered = yield* Deferred.make<void>();
       const releaseDispatch = yield* Deferred.make<void>();
       const claude = claudeIdleStopFence.claude;
-      yield* provider.startSession(threadId, {
-        threadId,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startTestSession(provider, threadId, "claudeAgent", "full-access");
       const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
       const send = claude.sendTurn.getMockImplementation()!;
       claude.sendTurn.mockImplementationOnce((input) =>
@@ -11559,9 +11024,7 @@ claudeIdleStopFence.layer("ProviderServiceLive conditional Claude idle Stop fenc
         ),
       );
       yield* Effect.gen(function* () {
-        const sending = yield* provider
-          .sendTurn({ threadId, input: "turn B", attachments: [] })
-          .pipe(Effect.forkChild);
+        const sending = yield* sendTextTurn(provider, threadId, "turn B").pipe(Effect.forkChild);
         yield* Deferred.await(dispatchEntered);
         const before = Option.getOrThrow(yield* directory.getBinding(threadId));
         const current = yield* provider.getRuntimeSessionStopTarget!({ threadId });

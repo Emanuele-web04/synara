@@ -1974,143 +1974,48 @@ it.effect("rebuilds a deleted hot cursor and advances a stalled projector on boo
   ),
 );
 
-it.effect("replays a backlog larger than one commit batch without losing rows or cursors", () =>
-  Effect.gen(function* () {
-    // Bootstrap replay commits in batches (BOOTSTRAP_REPLAY_BATCH_SIZE = 500)
-    // to amortize fsync. A backlog spanning multiple batches, with the final
-    // batch partially filled, must still converge: every event applied, the
-    // cursor at the journal head, and — because rows and cursor share each
-    // batch transaction — never a committed cursor ahead of committed rows.
-    const { dbPath } = yield* ServerConfig;
-    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
-    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
-      Layer.provideMerge(OrchestrationEventStoreLive),
-      Layer.provideMerge(persistenceLayer),
-    );
-    const projectId = ProjectId.makeUnsafe("project-batched-replay");
-    const threadId = ThreadId.makeUnsafe("thread-batched-replay");
-    const createdAt = "2026-08-12T08:00:00.000Z";
-    const messageCount = 1_200;
+it.effect(
+  "replays multiple file-backed batches without losing messages or crossing the captured fence",
+  () =>
+    Effect.gen(function* () {
+      const { dbPath } = yield* ServerConfig;
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const eventStoreLayer = OrchestrationEventStoreLive.pipe(
+        Layer.provideMerge(persistenceLayer),
+      );
+      const projectId = ProjectId.makeUnsafe("project-bootstrap-paged");
+      const threadId = ThreadId.makeUnsafe("thread-bootstrap-paged");
+      const occurredAt = "2026-07-14T01:00:00.000Z";
+      // 2,501 total events, so the 500-row replay transactions have a partial tail.
+      const messageCount = 2_499;
 
-    yield* Effect.gen(function* () {
-      const eventStore = yield* OrchestrationEventStore;
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* eventStore.append({
-        type: "project.created",
-        ...envelope("evt-batched-replay-project", "cmd-batched-replay-project"),
-        ...projectCreated(
-          projectId,
-          "Batched replay project",
-          "/tmp/project-batched-replay",
-          createdAt,
-        ),
-      });
-      yield* eventStore.append({
-        type: "thread.created",
-        ...envelope("evt-batched-replay-thread", "cmd-batched-replay-thread"),
-        ...threadCreated(
-          threadId,
-          projectId,
-          "Batched replay thread",
-          { provider: "claudeAgent", model: "claude-sonnet-4-5-20250929" },
-          createdAt,
-        ),
-      });
-      for (let index = 0; index < messageCount; index += 1) {
+      yield* Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
         yield* eventStore.append({
-          type: "thread.message-sent",
-          ...envelope(`evt-batched-replay-message-${index}`, `cmd-batched-replay-message-${index}`),
-          aggregateKind: "thread",
-          aggregateId: threadId,
-          occurredAt: createdAt,
-          payload: messagePayload(
-            threadId,
-            MessageId.makeUnsafe(`message-batched-replay-${index}`),
-            "user",
-            `message ${index}`,
-            createdAt,
+          type: "project.created",
+          ...envelope("evt-bootstrap-paged-created", "cmd-bootstrap-paged-created"),
+          ...projectCreated(
+            projectId,
+            "Replay project",
+            "/tmp/project-bootstrap-paged",
+            occurredAt,
           ),
         });
-      }
-      // No cursors, no rows: the entire backlog replays through bootstrap.
-      yield* sql`DELETE FROM projection_state`;
-      yield* sql`DELETE FROM projection_thread_messages`;
-    }).pipe(Effect.provide(projectionLayer));
-
-    const { stateRows, projectedCount, highWater } = yield* Effect.gen(function* () {
-      const projectionPipeline = yield* OrchestrationProjectionPipeline;
-      const eventStore = yield* OrchestrationEventStore;
-      const sql = yield* SqlClient.SqlClient;
-      yield* projectionPipeline.bootstrap;
-      const stateRows = yield* sql<{
-        readonly projector: string;
-        readonly lastAppliedSequence: number;
-      }>`
-        SELECT projector, last_applied_sequence AS "lastAppliedSequence"
-        FROM projection_state
-      `;
-      const [countRow] = yield* sql<{ readonly projectedCount: number }>`
-        SELECT COUNT(*) AS "projectedCount" FROM projection_thread_messages
-      `;
-      const highWater = yield* eventStore.getHighWaterSequence();
-      return {
-        stateRows,
-        projectedCount: countRow?.projectedCount ?? 0,
-        highWater,
-      };
-    }).pipe(Effect.provide(projectionLayer));
-
-    assert.equal(projectedCount, messageCount);
-    const cursorByProjector = new Map(
-      stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
-    );
-    assert.equal(cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.threadMessages), highWater);
-    assert.equal(cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.hot), highWater);
-  }).pipe(
-    Effect.provide(
-      Layer.provideMerge(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "synara-projection-pipeline-batched-replay-",
-        }),
-        NodeServices.layer,
-      ),
-    ),
-  ),
-);
-
-it.effect("drains 2,501 file-backed events to a captured high-water fence", () =>
-  Effect.gen(function* () {
-    const { dbPath } = yield* ServerConfig;
-    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
-    const eventStoreLayer = OrchestrationEventStoreLive.pipe(Layer.provideMerge(persistenceLayer));
-    const projectId = ProjectId.makeUnsafe("project-bootstrap-paged");
-    const occurredAt = "2026-07-14T01:00:00.000Z";
-
-    yield* Effect.gen(function* () {
-      const eventStore = yield* OrchestrationEventStore;
-      const sql = yield* SqlClient.SqlClient;
-      yield* eventStore.append({
-        type: "project.created",
-        eventId: EventId.makeUnsafe("evt-bootstrap-paged-created"),
-        aggregateKind: "project",
-        aggregateId: projectId,
-        occurredAt,
-        commandId: CommandId.makeUnsafe("cmd-bootstrap-paged-created"),
-        causationEventId: null,
-        correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-paged-created"),
-        metadata: {},
-        payload: {
-          projectId,
-          title: "Project 0",
-          workspaceRoot: "/tmp/project-bootstrap-paged",
-          defaultModelSelection: null,
-          scripts: [],
-          createdAt: occurredAt,
-          updatedAt: occurredAt,
-        },
-      });
-      yield* sql`
+        yield* eventStore.append({
+          type: "thread.created",
+          ...envelope("evt-bootstrap-paged-thread", "cmd-bootstrap-paged-thread"),
+          ...threadCreated(
+            threadId,
+            projectId,
+            "Replay thread",
+            { provider: "claudeAgent", model: "claude-sonnet-4-5-20250929" },
+            occurredAt,
+          ),
+        });
+        // Bulk seed only the backlog. Bootstrap still reads, decodes, and applies
+        // every event through the real event store and projection transactions.
+        yield* sql`
         WITH RECURSIVE digits(n) AS (
           SELECT 0
           UNION ALL
@@ -2136,103 +2041,119 @@ it.effect("drains 2,501 file-backed events to a captured high-water fence", () =
         )
         SELECT
           'evt-bootstrap-paged-' || n,
-          'project',
-          ${projectId},
+          'thread',
+          ${threadId},
           n,
-          'project.meta-updated',
+          'thread.message-sent',
           ${occurredAt},
           'cmd-bootstrap-paged-' || n,
           NULL,
           'cmd-bootstrap-paged-' || n,
           'user',
           json_object(
-            'projectId', ${projectId},
-            'title', 'Project ' || n,
+            'threadId', ${threadId},
+            'messageId', 'message-bootstrap-paged-' || n,
+            'role', 'user',
+            'text', 'message ' || n,
+            'turnId', NULL,
+            'streaming', json('false'),
+            'createdAt', ${occurredAt},
             'updatedAt', ${occurredAt}
           ),
           '{}'
         FROM numbered
+        WHERE n <= ${messageCount}
+        ORDER BY n
       `;
-    }).pipe(Effect.provide(eventStoreLayer));
+      }).pipe(Effect.provide(eventStoreLayer));
 
-    let appendedAfterFence = false;
-    const appendAfterFenceLayer = Layer.effect(
-      OrchestrationEventStore,
-      Effect.gen(function* () {
-        const eventStore = yield* OrchestrationEventStore;
-        return {
-          ...eventStore,
-          readFromSequence(sequenceExclusive, limit, throughSequenceInclusive, filter) {
-            return Stream.unwrap(
-              Effect.gen(function* () {
-                if (!appendedAfterFence) {
-                  appendedAfterFence = true;
-                  yield* eventStore.append({
-                    type: "project.meta-updated",
-                    eventId: EventId.makeUnsafe("evt-bootstrap-paged-after-fence"),
-                    aggregateKind: "project",
-                    aggregateId: projectId,
-                    occurredAt,
-                    commandId: CommandId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
-                    causationEventId: null,
-                    correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
-                    metadata: {},
-                    payload: {
-                      projectId,
-                      title: "Project after fence",
-                      updatedAt: occurredAt,
-                    },
-                  });
-                }
-                return eventStore.readFromSequence(
-                  sequenceExclusive,
-                  limit,
-                  throughSequenceInclusive,
-                  filter,
-                );
-              }),
-            );
-          },
-        } satisfies OrchestrationEventStoreShape;
-      }),
-    ).pipe(Layer.provide(OrchestrationEventStoreLive));
-    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
-      Layer.provideMerge(appendAfterFenceLayer),
-      Layer.provideMerge(persistenceLayer),
-    );
+      let appendedAfterFence = false;
+      const appendAfterFenceLayer = Layer.effect(
+        OrchestrationEventStore,
+        Effect.gen(function* () {
+          const eventStore = yield* OrchestrationEventStore;
+          return {
+            ...eventStore,
+            readFromSequence(sequenceExclusive, limit, throughSequenceInclusive, filter) {
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  if (!appendedAfterFence) {
+                    appendedAfterFence = true;
+                    yield* eventStore.append({
+                      type: "project.meta-updated",
+                      eventId: EventId.makeUnsafe("evt-bootstrap-paged-after-fence"),
+                      aggregateKind: "project",
+                      aggregateId: projectId,
+                      occurredAt,
+                      commandId: CommandId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
+                      causationEventId: null,
+                      correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
+                      metadata: {},
+                      payload: {
+                        projectId,
+                        title: "Project after fence",
+                        updatedAt: occurredAt,
+                      },
+                    });
+                  }
+                  return eventStore.readFromSequence(
+                    sequenceExclusive,
+                    limit,
+                    throughSequenceInclusive,
+                    filter,
+                  );
+                }),
+              );
+            },
+          } satisfies OrchestrationEventStoreShape;
+        }),
+      ).pipe(Layer.provide(OrchestrationEventStoreLive));
+      const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
+        Layer.provideMerge(appendAfterFenceLayer),
+        Layer.provideMerge(persistenceLayer),
+      );
 
-    const result = yield* Effect.gen(function* () {
-      const projectionPipeline = yield* OrchestrationProjectionPipeline;
-      const sql = yield* SqlClient.SqlClient;
-      yield* projectionPipeline.bootstrap;
-      const projects = yield* sql<{ readonly title: string }>`
+      const result = yield* Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        yield* projectionPipeline.bootstrap;
+        const projects = yield* sql<{ readonly title: string }>`
         SELECT title FROM projection_projects WHERE project_id = ${projectId}
       `;
-      const cursors = yield* sql<{ readonly lastAppliedSequence: number }>`
+        const cursors = yield* sql<{ readonly lastAppliedSequence: number }>`
         SELECT last_applied_sequence AS "lastAppliedSequence" FROM projection_state
       `;
-      const eventCount = yield* sql<{ readonly count: number }>`
+        const eventCount = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_events
       `;
-      return { projects, cursors, eventCount: eventCount[0]?.count ?? 0 };
-    }).pipe(Effect.provide(projectionLayer));
+        const messages = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ${threadId}
+      `;
+        return {
+          projects,
+          cursors,
+          eventCount: eventCount[0]?.count ?? 0,
+          messageCount: messages[0]?.count ?? 0,
+        };
+      }).pipe(Effect.provide(projectionLayer));
 
-    assert.deepEqual(result.projects, [{ title: "Project 2500" }]);
-    assert.equal(result.eventCount, 2_502);
-    assert.equal(result.cursors.length, Object.keys(ORCHESTRATION_PROJECTOR_NAMES).length);
-    for (const cursor of result.cursors) {
-      assert.equal(cursor.lastAppliedSequence, 2_501);
-    }
-  }).pipe(
-    Effect.provide(
-      Layer.provideMerge(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "synara-projection-pipeline-paged-",
-        }),
-        NodeServices.layer,
+      assert.deepEqual(result.projects, [{ title: "Replay project" }]);
+      assert.equal(result.messageCount, messageCount);
+      assert.equal(result.eventCount, messageCount + 3);
+      assert.equal(result.cursors.length, Object.keys(ORCHESTRATION_PROJECTOR_NAMES).length);
+      for (const cursor of result.cursors) {
+        assert.equal(cursor.lastAppliedSequence, messageCount + 2);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "synara-projection-pipeline-paged-",
+          }),
+          NodeServices.layer,
+        ),
       ),
     ),
-  ),
 );
 
 it.layer(

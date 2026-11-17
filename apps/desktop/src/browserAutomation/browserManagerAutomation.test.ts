@@ -84,6 +84,16 @@ class FakeWebContents extends EventEmitter {
   getZoomFactor = () => 1;
 }
 
+function createNativeView(webContents: FakeWebContents) {
+  return {
+    webContents,
+    setBounds: vi.fn(),
+    setVisible: vi.fn(),
+    setBorderRadius: vi.fn(),
+    setBackgroundColor: vi.fn(),
+  };
+}
+
 describe("DesktopBrowserManager tab switching", () => {
   // Unused queued views would otherwise leak into the next describe's tests.
   afterEach(() => webContentsViewConstructor.mockReset());
@@ -97,13 +107,7 @@ describe("DesktopBrowserManager tab switching", () => {
         return Promise.resolve();
       }),
     });
-    const view = {
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const view = createNativeView(contents);
     return { contents, view };
   }
 
@@ -289,13 +293,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
     (initialDark) => {
       const contents = new FakeWebContents(301);
-      const view = {
-        webContents: contents,
-        setBounds: vi.fn(),
-        setVisible: vi.fn(),
-        setBorderRadius: vi.fn(),
-        setBackgroundColor: vi.fn(),
-      };
+      const view = createNativeView(contents);
       webContentsViewConstructor.mockReturnValueOnce(view);
       const theme = nativeTheme as unknown as EventEmitter & { shouldUseDarkColors: boolean };
       theme.shouldUseDarkColors = initialDark;
@@ -353,13 +351,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       };
       const capturePage = vi.fn(async () => image);
       Object.assign(contents, { capturePage });
-      const view = {
-        webContents: contents,
-        setBounds: vi.fn(),
-        setVisible: vi.fn(),
-        setBorderRadius: vi.fn(),
-        setBackgroundColor: vi.fn(),
-      };
+      const view = createNativeView(contents);
       webContentsViewConstructor.mockReturnValueOnce(view);
       const manager = new DesktopBrowserManager();
       const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
@@ -415,13 +407,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     };
     const capturePage = vi.fn(async () => image);
     Object.assign(contents, { capturePage });
-    const view = {
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const view = createNativeView(contents);
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
@@ -456,13 +442,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("does not suspend a native page behind a long-lived menu, but still suspends after panel hide", async () => {
     vi.useFakeTimers();
     const contents = new FakeWebContents(101);
-    const view = {
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const view = createNativeView(contents);
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
@@ -510,13 +490,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const child = new FakeWebContents(202);
     const grandchild = new FakeWebContents(203);
     for (const webContents of [source, child, ...(nested ? [grandchild] : [])]) {
-      webContentsViewConstructor.mockReturnValueOnce({
-        webContents,
-        setBounds: vi.fn(),
-        setVisible: vi.fn(),
-        setBorderRadius: vi.fn(),
-        setBackgroundColor: vi.fn(),
-      });
+      webContentsViewConstructor.mockReturnValueOnce(createNativeView(webContents));
     }
     const manager = new DesktopBrowserManager();
     manager.setWindow({
@@ -573,13 +547,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       // A popup opened after genuine human input must not inherit a spent
       // automation epoch either.
       if (!nested) {
-        webContentsViewConstructor.mockReturnValueOnce({
-          webContents: grandchild,
-          setBounds: vi.fn(),
-          setVisible: vi.fn(),
-          setBorderRadius: vi.fn(),
-          setBackgroundColor: vi.fn(),
-        });
+        webContentsViewConstructor.mockReturnValueOnce(createNativeView(grandchild));
         openPopup(child, grandchild);
         const manualChildDownload = { preventDefault: vi.fn() };
         willDownloadListener.current!(manualChildDownload, {}, grandchild);
@@ -598,16 +566,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     contents.loadURL = vi.fn(async (url?: string) => {
       popupUrl = url ?? "";
     });
-    const view = (webContents: FakeWebContents) => ({
-      webContents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    });
     webContentsViewConstructor
-      .mockReturnValueOnce(view(source))
-      .mockReturnValueOnce(view(contents));
+      .mockReturnValueOnce(createNativeView(source))
+      .mockReturnValueOnce(createNativeView(contents));
     const manager = new DesktopBrowserManager();
     manager.setWindow({
       isDestroyed: () => false,
@@ -643,13 +604,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("allows an owner import while the selected native tab is covered, without revealing or claiming it", async () => {
     const contents = new FakeWebContents(99);
-    const view = {
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const view = createNativeView(contents);
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     manager.setWindow({
@@ -678,13 +633,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   });
   it("keeps a manually opened native page alive across expanded and floating presentations", async () => {
     const contents = new FakeWebContents(100);
-    webContentsViewConstructor.mockReturnValueOnce({
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    });
+    webContentsViewConstructor.mockReturnValueOnce(createNativeView(contents));
     const manager = new DesktopBrowserManager();
     manager.setWindow({
       isDestroyed: () => false,
@@ -726,13 +675,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     Object.assign(contents, {
       capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("page") })),
     });
-    const view = {
-      webContents: contents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const view = createNativeView(contents);
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     manager.setWindow({
@@ -764,13 +707,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {
     const nativeWebContents = new FakeWebContents(101);
-    const nativeView = {
-      webContents: nativeWebContents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const nativeView = createNativeView(nativeWebContents);
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const nativeManager = new DesktopBrowserManager();
@@ -842,13 +779,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       });
       const manager = new DesktopBrowserManager();
       if (surface === "native") {
-        webContentsViewConstructor.mockReturnValueOnce({
-          webContents: contents,
-          setBounds: vi.fn(),
-          setVisible: vi.fn(),
-          setBorderRadius: vi.fn(),
-          setBackgroundColor: vi.fn(),
-        });
+        webContentsViewConstructor.mockReturnValueOnce(createNativeView(contents));
         manager.setWindow({
           isDestroyed: () => false,
           contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
@@ -886,13 +817,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("demotes a native runtime to renderer when the floating surface claims the tab", () => {
     const nativeWebContents = new FakeWebContents(201);
-    const nativeView = {
-      webContents: nativeWebContents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const nativeView = createNativeView(nativeWebContents);
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const manager = new DesktopBrowserManager();
@@ -940,13 +865,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("adopts a renderer guest even when attach races ahead of bounds promotion", () => {
     const nativeWebContents = new FakeWebContents(211);
-    const nativeView = {
-      webContents: nativeWebContents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    };
+    const nativeView = createNativeView(nativeWebContents);
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const manager = new DesktopBrowserManager();
@@ -988,13 +907,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     "keeps an agent's native page when a stale guest attaches (bounds first: %s)",
     async (boundsFirst) => {
       const nativeWebContents = new FakeWebContents(213);
-      const nativeView = {
-        webContents: nativeWebContents,
-        setBounds: vi.fn(),
-        setVisible: vi.fn(),
-        setBorderRadius: vi.fn(),
-        setBackgroundColor: vi.fn(),
-      };
+      const nativeView = createNativeView(nativeWebContents);
       webContentsViewConstructor.mockReturnValueOnce(nativeView);
       const manager = new DesktopBrowserManager();
       const hostWindow = {
@@ -1976,13 +1889,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(sourceTabId);
 
       const child = new FakeWebContents(120);
-      const view = {
-        webContents: child,
-        setBounds: vi.fn(),
-        setVisible: vi.fn(),
-        setBorderRadius: vi.fn(),
-        setBackgroundColor: vi.fn(),
-      };
+      const view = createNativeView(child);
       webContentsViewConstructor.mockReturnValueOnce(view);
       const preferences = { contextIsolation: true, sandbox: true, nodeIntegration: false };
       const popupOptions = {
@@ -2169,13 +2076,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("does not race host navigation when the owning panel reveals first", async () => {
     const nativeWebContents = Object.assign(new FakeWebContents(), { getURL: () => "" });
-    webContentsViewConstructor.mockReturnValueOnce({
-      webContents: nativeWebContents,
-      setBounds: vi.fn(),
-      setVisible: vi.fn(),
-      setBorderRadius: vi.fn(),
-      setBackgroundColor: vi.fn(),
-    });
+    webContentsViewConstructor.mockReturnValueOnce(createNativeView(nativeWebContents));
     const manager = new DesktopBrowserManager();
     manager.setWindow({
       isDestroyed: () => false,
@@ -2243,13 +2144,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         (_, index) => new FakeWebContents(100 + index),
       );
       for (const webContents of nativeWebContents) {
-        webContentsViewConstructor.mockReturnValueOnce({
-          webContents,
-          setBounds: vi.fn(),
-          setVisible: vi.fn(),
-          setBorderRadius: vi.fn(),
-          setBackgroundColor: vi.fn(),
-        });
+        webContentsViewConstructor.mockReturnValueOnce(createNativeView(webContents));
       }
 
       const manager = new DesktopBrowserManager();

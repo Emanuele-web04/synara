@@ -219,31 +219,20 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("hides fast mode controls for non-Opus models", async () => {
+  it("shows Sonnet effort options without fast mode controls", async () => {
     await using _ = await mountClaudePicker({ model: "claude-sonnet-4-6" });
 
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("Effort");
-      expect(document.body.querySelector('[aria-label="Fast mode"]')).toBeNull();
-    });
-  });
-
-  it("shows only the provided effort options", async () => {
-    await using _ = await mountClaudePicker({
-      model: "claude-sonnet-4-6",
-    });
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
+      expect(text).toContain("Effort");
       expect(text).toContain("Low");
       expect(text).toContain("Medium");
       expect(text).toContain("High");
       expect(text).toContain("Max");
       expect(text).toContain("Ultrathink");
+      expect(document.body.querySelector('[aria-label="Fast mode"]')).toBeNull();
     });
   });
 
@@ -523,24 +512,15 @@ describe("TraitsPicker (Cursor)", () => {
     supportsFastMode: true,
   };
 
-  it("shows Default instead of an empty trigger for fast-only models", async () => {
+  it("labels the fast-only trigger Default and offers only speed options", async () => {
     await using _ = await mountCursorPicker({
       runtimeModel: fastOnlyComposerRuntimeModel,
       options: { fastMode: false },
     });
 
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("Default");
-    });
-  });
-
-  it("shows only fast mode labels for fast-only models", async () => {
-    await using _ = await mountCursorPicker({
-      runtimeModel: fastOnlyComposerRuntimeModel,
-      options: { fastMode: false },
-    });
-
-    await page.getByRole("button").click();
+    const trigger = page.getByRole("button");
+    await expect.element(trigger).toHaveTextContent("Default");
+    await trigger.click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";

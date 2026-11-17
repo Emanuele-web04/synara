@@ -6,6 +6,7 @@ import { render } from "vitest-browser-react";
 import type { ChatMessage } from "../../types";
 import { deriveTimelineEntries } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 
 const now = "2026-09-12T12:00:00.000Z";
 const text = "知道。\n\n- 前端 Web 项目：`/project/web`\n- `erp-code` 通常指 C# ERP 项目。";
@@ -31,24 +32,9 @@ it("renders a reopened tokenized CJK reply as one intact Markdown list", async (
   const result = await render(
     <div style={{ height: 600 }}>
       <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        {...makeTimelineBaseProps()}
         timelineEntries={deriveTimelineEntries([incoming], [], [])}
-        turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso={now}
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
       />
     </div>,
   );

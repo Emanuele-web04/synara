@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
 
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import type { TimelineEntry } from "../../session-logic";
 
 const MESSAGE_ID = MessageId.makeUnsafe("assistant-find");
@@ -56,26 +57,11 @@ function FindTimelineHarness({ onNavigate = () => {} }: { onNavigate?: () => voi
       </button>
       <div style={{ height: 420 }}>
         <MessagesTimeline
-          hasMessages
-          isWorking={false}
-          activeTurnInProgress={false}
-          activeTurnStartedAt={null}
+          {...makeTimelineBaseProps()}
           controllerRef={controllerRef}
           onNavigate={onNavigate}
           timelineEntries={TIMELINE_ENTRIES}
-          turnDiffSummaryByAssistantMessageId={new Map()}
           nowIso="2026-01-01T00:00:01.000Z"
-          expandedWorkGroups={{}}
-          onToggleWorkGroup={() => {}}
-          onOpenTurnDiff={() => {}}
-          revertTurnCountByUserMessageId={new Map()}
-          onRevertUserMessage={() => {}}
-          isRevertingCheckpoint={false}
-          onImageExpand={() => {}}
-          markdownCwd={undefined}
-          resolvedTheme="dark"
-          timestampFormat="locale"
-          workspaceRoot={undefined}
           findHighlight={{
             query: "error",
             activeMatch: { messageId: MESSAGE_ID, startOffset: 0, endOffset: 5 },

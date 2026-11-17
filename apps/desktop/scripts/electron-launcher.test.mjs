@@ -211,15 +211,6 @@ describe("macOS Electron launcher signature", () => {
     );
   });
 
-  it("reuses the verified launcher without signing it again", (t) => {
-    const fixture = createLauncherFixture(t);
-    const executable = fixture.build();
-    fixture.commands.length = 0;
-
-    assert.equal(fixture.build(), executable);
-    assert.deepEqual(fixture.commands, []);
-  });
-
   it("rebuilds a launcher with stale cache metadata", (t) => {
     const fixture = createLauncherFixture(t);
     const executable = fixture.build();

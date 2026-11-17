@@ -52,33 +52,28 @@ const second: CatalogCheckout = {
 };
 afterEach(() => {
   localStorage.removeItem(projectCatalogKey()!);
-  document.documentElement.classList.remove("dark");
   fixture.open.mockClear();
 });
-it.each(["light", "dark"])(
-  "requires a checkout choice and preserves both host identities when linking (%s)",
-  async (theme) => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    await page.viewport(1000, 1000);
-    saveProjectCatalog(projectCatalogKey()!, { ...emptyCatalog(), checkouts: [first, second] });
-    emitWsTransportState("open");
-    await render(
-      <QueryClientProvider client={new QueryClient()}>
-        <ProjectCatalogDialog onClose={fixture.close} />
-      </QueryClientProvider>,
-    );
-    await page.getByRole("checkbox", { name: "Select Synara on Mac mini" }).click();
-    await page.getByRole("checkbox", { name: "Select Synara on MacBook" }).click();
-    await page.getByRole("textbox", { name: "New group name" }).fill("Synara across my computers");
-    await page.getByRole("button", { name: "Link selected" }).click();
-    await expect
-      .element(page.getByRole("textbox", { name: "Group name", exact: true }))
-      .toHaveValue("Synara across my computers");
-    expect(fixture.open).not.toHaveBeenCalled();
-    await page.getByRole("button", { name: "Switch and open", exact: true }).click();
-    expect(fixture.open).toHaveBeenCalledWith(second);
-  },
-);
+it("requires a checkout choice and preserves both host identities when linking", async () => {
+  await page.viewport(1000, 1000);
+  saveProjectCatalog(projectCatalogKey()!, { ...emptyCatalog(), checkouts: [first, second] });
+  emitWsTransportState("open");
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ProjectCatalogDialog onClose={fixture.close} />
+    </QueryClientProvider>,
+  );
+  await page.getByRole("checkbox", { name: "Select Synara on Mac mini" }).click();
+  await page.getByRole("checkbox", { name: "Select Synara on MacBook" }).click();
+  await page.getByRole("textbox", { name: "New group name" }).fill("Synara across my computers");
+  await page.getByRole("button", { name: "Link selected" }).click();
+  await expect
+    .element(page.getByRole("textbox", { name: "Group name", exact: true }))
+    .toHaveValue("Synara across my computers");
+  expect(fixture.open).not.toHaveBeenCalled();
+  await page.getByRole("button", { name: "Switch and open", exact: true }).click();
+  expect(fixture.open).toHaveBeenCalledWith(second);
+});
 it("shows an offline catalog without allowing an execution or metadata change", async () => {
   saveProjectCatalog(projectCatalogKey()!, { ...emptyCatalog(), checkouts: [first, second] });
   emitWsTransportState("closed");

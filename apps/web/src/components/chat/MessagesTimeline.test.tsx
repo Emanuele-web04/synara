@@ -5,6 +5,7 @@
 
 import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
+import { makeTimelineBaseProps } from "./MessagesTimeline.test-support";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
@@ -74,30 +75,6 @@ vi.mock("@legendapp/list/react", async () => {
 
   return { LegendList };
 });
-
-// Baseline MessagesTimeline props shared across render tests; spread the
-// result and override individual props (or pass them as JSX after the spread).
-function makeTimelineBaseProps(nowIso: string | null = "2026-03-17T19:12:30.000Z") {
-  return {
-    hasMessages: true,
-    isWorking: false,
-    activeTurnInProgress: false,
-    activeTurnStartedAt: null,
-    turnDiffSummaryByAssistantMessageId: new Map(),
-    ...(nowIso === null ? {} : { nowIso }),
-    expandedWorkGroups: {},
-    onToggleWorkGroup: () => {},
-    onOpenTurnDiff: () => {},
-    revertTurnCountByUserMessageId: new Map(),
-    onRevertUserMessage: () => {},
-    isRevertingCheckpoint: false,
-    onImageExpand: () => {},
-    markdownCwd: undefined,
-    resolvedTheme: "dark" as const,
-    timestampFormat: "locale" as const,
-    workspaceRoot: undefined,
-  };
-}
 
 function matchMedia() {
   return {

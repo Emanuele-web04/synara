@@ -11,33 +11,23 @@ const FREEZE_MOTION = `
   }
 `;
 
-export async function preparePage(page: Page, theme: "light" | "dark") {
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.evaluate((selectedTheme) => {
-    document.documentElement.classList.toggle("dark", selectedTheme === "dark");
-    localStorage.setItem("synara-theme", selectedTheme);
-  }, theme);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.addStyleTag({ content: FREEZE_MOTION });
-  await waitForImages(page);
-  await page.evaluate(() => document.fonts.ready);
-}
-
 export async function prepareRoute(page: Page, pathname: string, theme: "light" | "dark") {
-  await page.goto(pathname, { waitUntil: "domcontentloaded" });
-  await page.evaluate((selectedTheme) => {
-    document.documentElement.classList.toggle("dark", selectedTheme === "dark");
-    localStorage.setItem("synara-theme", selectedTheme);
+  await page.addInitScript((selectedTheme) => {
+    if (window.top === window) localStorage.setItem("synara-theme", selectedTheme);
   }, theme);
-  await page.reload({ waitUntil: "domcontentloaded" });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(pathname, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    (selectedTheme) =>
+      document.documentElement.classList.contains("dark") === (selectedTheme === "dark"),
+    theme,
+  );
   await page.addStyleTag({ content: FREEZE_MOTION });
   await waitForImages(page);
   await page.evaluate(() => document.fonts.ready);
 }
 
-export async function waitForImages(page: Page) {
+async function waitForImages(page: Page) {
   await page.evaluate(async () => {
     const renderedImages = [...document.images].filter(
       (image) => image.getClientRects().length > 0,

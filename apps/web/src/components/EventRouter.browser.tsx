@@ -484,7 +484,7 @@ async function mountApp(options?: {
   initialPath?: string;
   waitForThreadId?: ThreadId | null;
   requireSyncedThread?: boolean;
-}): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
+}) {
   const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
@@ -526,15 +526,13 @@ async function mountApp(options?: {
   }
   let cleanedUp = false;
 
-  return {
-    router,
-    cleanup: async () => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      await screen.unmount();
-      if (host.isConnected) host.remove();
-    },
+  const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    await screen.unmount();
+    if (host.isConnected) host.remove();
   };
+  return { router, cleanup, [Symbol.asyncDispose]: cleanup };
 }
 
 function sendThreadEventPush(event: OrchestrationEvent) {
@@ -710,102 +708,86 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   it("surfaces exhausted shell overflow and retries only the shell subscription", async () => {
-    const mounted = await mountApp();
-    try {
-      const previousShell = subscribeShellRequestCount;
-      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
-      for (let attempt = 0; attempt < 2; attempt++) {
-        for (const listener of shellStreamFailureListeners)
-          listener({
-            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
-            error: new Error("Stream overflow retry budget exhausted"),
-          });
-      }
-      await vi.waitFor(() =>
-        expect(
-          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
-            (element) => element.textContent === "Workspace updates paused",
-          ),
-        ).toHaveLength(1),
-      );
-      await expect
-        .element(page.getByText("Workspace updates paused", { exact: true }))
-        .toBeVisible();
-      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
-      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
-      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
-      await expect
-        .element(page.getByText("Workspace updates paused", { exact: true }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("dismisses workspace overflow after a reconnected shell snapshot", async () => {
-    const mounted = await mountApp();
-    try {
-      const previousShell = subscribeShellRequestCount;
+    await using mounted = await mountApp();
+    const previousShell = subscribeShellRequestCount;
+    const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+    for (let attempt = 0; attempt < 2; attempt++) {
       for (const listener of shellStreamFailureListeners)
         listener({
           code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
           error: new Error("Stream overflow retry budget exhausted"),
         });
-      await expect
-        .element(page.getByText("Workspace updates paused", { exact: true }))
-        .toBeVisible();
-      sendServerWelcomePush();
-      await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
-      await expect
-        .element(page.getByText("Workspace updates paused", { exact: true }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
     }
+    await vi.waitFor(() =>
+      expect(
+        [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+          (element) => element.textContent === "Workspace updates paused",
+        ),
+      ).toHaveLength(1),
+    );
+    await expect.element(page.getByText("Workspace updates paused", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+    await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+    expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+    await expect
+      .element(page.getByText("Workspace updates paused", { exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  it("dismisses workspace overflow after a reconnected shell snapshot", async () => {
+    await using mounted = await mountApp();
+    const previousShell = subscribeShellRequestCount;
+    for (const listener of shellStreamFailureListeners)
+      listener({
+        code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+        error: new Error("Stream overflow retry budget exhausted"),
+      });
+    await expect.element(page.getByText("Workspace updates paused", { exact: true })).toBeVisible();
+    sendServerWelcomePush();
+    await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(previousShell + 1));
+    await expect
+      .element(page.getByText("Workspace updates paused", { exact: true }))
+      .not.toBeInTheDocument();
   });
 
   it("resumes exhausted thread overflow without a detail snapshot", async () => {
-    const mounted = await mountApp();
-    try {
-      const previousSnapshots = getThreadDetailSnapshotRequestCount;
-      const previousShell = subscribeShellRequestCount;
-      const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
-      for (const listener of threadSnapshotFailureListeners)
-        listener({
-          threadId: THREAD_ID,
-          code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
-          error: new Error("Stream overflow retry budget exhausted"),
-        });
-      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
-      expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
+    await using mounted = await mountApp();
+    const previousSnapshots = getThreadDetailSnapshotRequestCount;
+    const previousShell = subscribeShellRequestCount;
+    const previousThread = subscribeThreadRequestCountById.get(THREAD_ID);
+    for (const listener of threadSnapshotFailureListeners)
+      listener({
         threadId: THREAD_ID,
-        afterSequence: 1,
-        batchReplay: true,
+        code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+        error: new Error("Stream overflow retry budget exhausted"),
       });
-      expect(subscribeShellRequestCount).toBe(previousShell);
-      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
-      await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
-      delayNextThreadSnapshot = true; // A cursor resume delivers only subsequent events.
-      await page.getByRole("button", { name: "Retry updates", exact: true }).click();
-      await vi.waitFor(() =>
-        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
-      );
-      expect(subscribeShellRequestCount).toBe(previousShell);
-      sendThreadEventPush(resumedThreadEvent());
-      await vi.waitFor(() =>
-        expect(
-          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
-            (message) => message.text === "Resumed from the applied cursor",
-          ),
-        ).toBe(true),
-      );
-      expect(getThreadDetailSnapshotRequestCount).toBe(previousSnapshots);
-      await expect
-        .element(page.getByText("Thread updates paused", { exact: true }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
-    }
+    expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+    expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
+      threadId: THREAD_ID,
+      afterSequence: 1,
+      batchReplay: true,
+    });
+    expect(subscribeShellRequestCount).toBe(previousShell);
+    expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
+    await expect.element(page.getByText("Thread updates paused", { exact: true })).toBeVisible();
+    delayNextThreadSnapshot = true; // A cursor resume delivers only subsequent events.
+    await page.getByRole("button", { name: "Retry updates", exact: true }).click();
+    await vi.waitFor(() =>
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe((previousThread ?? 0) + 1),
+    );
+    expect(subscribeShellRequestCount).toBe(previousShell);
+    sendThreadEventPush(resumedThreadEvent());
+    await vi.waitFor(() =>
+      expect(
+        getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+          (message) => message.text === "Resumed from the applied cursor",
+        ),
+      ).toBe(true),
+    );
+    expect(getThreadDetailSnapshotRequestCount).toBe(previousSnapshots);
+    await expect
+      .element(page.getByText("Thread updates paused", { exact: true }))
+      .not.toBeInTheDocument();
   });
 
   it("deduplicates overflow notices and scopes them to their thread", async () => {
@@ -816,67 +798,57 @@ describe("EventRouter scoped orchestration sync", () => {
         { ...fixture.snapshot.threads[0]!, id: OTHER_THREAD_ID, title: "Other thread" },
       ],
     };
-    const mounted = await mountApp();
-    try {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        for (const listener of threadSnapshotFailureListeners)
-          listener({
-            threadId: THREAD_ID,
-            code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
-            error: new Error("overflow exhausted"),
-          });
-      }
-      await vi.waitFor(() =>
-        expect(
-          [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
-            (element) => element.textContent === "Thread updates paused",
-          ),
-        ).toHaveLength(1),
-      );
-      await expect.element(page.getByText(/The update stream for.*Root test thread/)).toBeVisible();
-      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
-      await vi.waitFor(() =>
-        expect(threadStreamRequestIdByThreadId.has(OTHER_THREAD_ID)).toBe(true),
-      );
-      await expect
-        .element(page.getByText("Thread updates paused", { exact: true }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("clears an exhausted failure when a reconnected cursor stream applies an event", async () => {
-    const mounted = await mountApp();
-    try {
+    await using mounted = await mountApp();
+    for (let attempt = 0; attempt < 2; attempt++) {
       for (const listener of threadSnapshotFailureListeners)
         listener({
           threadId: THREAD_ID,
           code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
           error: new Error("overflow exhausted"),
         });
-      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
-      const previous = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
-      delayNextThreadSnapshot = true;
-      sendServerWelcomePush();
-      await vi.waitFor(() =>
-        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previous + 1),
-      );
-      sendThreadEventPush(resumedThreadEvent());
-      await vi.waitFor(() =>
-        expect(
-          getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
-            (message) => message.text === "Resumed from the applied cursor",
-          ),
-        ).toBe(true),
-      );
-      expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).not.toBe("failed");
-      await expect
-        .element(page.getByText("Thread updates paused", { exact: true }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
     }
+    await vi.waitFor(() =>
+      expect(
+        [...document.querySelectorAll('[data-slot="toast-title"]')].filter(
+          (element) => element.textContent === "Thread updates paused",
+        ),
+      ).toHaveLength(1),
+    );
+    await expect.element(page.getByText(/The update stream for.*Root test thread/)).toBeVisible();
+    await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+    await vi.waitFor(() => expect(threadStreamRequestIdByThreadId.has(OTHER_THREAD_ID)).toBe(true));
+    await expect
+      .element(page.getByText("Thread updates paused", { exact: true }))
+      .not.toBeInTheDocument();
+  });
+
+  it("clears an exhausted failure when a reconnected cursor stream applies an event", async () => {
+    await using mounted = await mountApp();
+    for (const listener of threadSnapshotFailureListeners)
+      listener({
+        threadId: THREAD_ID,
+        code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+        error: new Error("overflow exhausted"),
+      });
+    expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("failed");
+    const previous = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+    delayNextThreadSnapshot = true;
+    sendServerWelcomePush();
+    await vi.waitFor(() =>
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previous + 1),
+    );
+    sendThreadEventPush(resumedThreadEvent());
+    await vi.waitFor(() =>
+      expect(
+        getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+          (message) => message.text === "Resumed from the applied cursor",
+        ),
+      ).toBe(true),
+    );
+    expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).not.toBe("failed");
+    await expect
+      .element(page.getByText("Thread updates paused", { exact: true }))
+      .not.toBeInTheDocument();
   });
 
   it.each(["thread", "shell"])(
@@ -1056,17 +1028,13 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   it("coalesces the replayed welcome with the initial subscription bootstrap", async () => {
-    const mounted = await mountApp();
+    await using mounted = await mountApp();
 
-    try {
-      expect(subscribeShellRequestCount).toBe(1);
-      // The first welcome must not restart the open chat's stream: that would
-      // interrupt its snapshot and load the whole transcript a second time.
-      await new Promise((resolve) => window.setTimeout(resolve, 200));
-      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
-    } finally {
-      await mounted.cleanup();
-    }
+    expect(subscribeShellRequestCount).toBe(1);
+    // The first welcome must not restart the open chat's stream: that would
+    // interrupt its snapshot and load the whole transcript a second time.
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+    expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
   });
 
   it("accepts a current empty-shell proof without overwriting hydrated collections", async () => {
@@ -1103,22 +1071,46 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  it("does not query a fallback after a streamed shell snapshot with no spaces", async () => {
-    const mounted = await mountApp();
+  it("skips the shell fallback after an empty-Spaces snapshot and uses it for a missed reconnect snapshot", async () => {
+    const browserWindow: Window = window;
+    const setTimeout = browserWindow.setTimeout.bind(browserWindow);
+    const clearTimeout = browserWindow.clearTimeout.bind(browserWindow);
+    const pendingFallbacks = new Map<number, () => void>();
+    // Drive the 1.5 s shell fallback without advancing MSW or transport timers.
+    const schedule = vi
+      .spyOn(browserWindow, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay !== 1_500 || typeof callback !== "function") {
+          return setTimeout(callback, delay, ...args);
+        }
+        const timer = setTimeout(() => undefined, 60_000);
+        pendingFallbacks.set(timer, () => callback(...args));
+        return timer;
+      });
+    const cancel = vi.spyOn(browserWindow, "clearTimeout").mockImplementation((timer) => {
+      if (timer !== undefined) pendingFallbacks.delete(timer);
+      clearTimeout(timer);
+    });
+    const fireFallbacks = () => {
+      const timers = Array.from(pendingFallbacks);
+      expect(timers.length).toBeGreaterThan(0);
+      for (const [timer, callback] of timers) {
+        browserWindow.clearTimeout(timer);
+        callback();
+      }
+    };
+    let mounted: Awaited<ReturnType<typeof mountApp>> | undefined;
+    let query: { mockRestore(): void } | undefined;
 
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      mounted = await mountApp();
+      const fallbackQuery = vi.spyOn(createWsNativeApi().orchestration, "getShellSnapshot");
+      query = fallbackQuery;
       expect(useStore.getState().spaces).toEqual([]);
+      fireFallbacks();
+      expect(fallbackQuery).not.toHaveBeenCalled();
       expect(getShellSnapshotRequestCount).toBe(0);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
 
-  it("applies the shell fallback when a reconnect snapshot does not arrive", async () => {
-    const mounted = await mountApp();
-
-    try {
       fixture.snapshot = {
         ...fixture.snapshot,
         snapshotSequence: 2,
@@ -1131,6 +1123,8 @@ describe("EventRouter scoped orchestration sync", () => {
       sendServerWelcomePush();
 
       await vi.waitFor(() => expect(subscribeShellRequestCount).toBe(2));
+      fireFallbacks();
+      expect(fallbackQuery).toHaveBeenCalledOnce();
       await vi.waitFor(() => expect(getShellSnapshotRequestCount).toBe(1), {
         timeout: 3_000,
       });
@@ -1140,217 +1134,216 @@ describe("EventRouter scoped orchestration sync", () => {
         ),
       );
     } finally {
-      await mounted.cleanup();
+      try {
+        await mounted?.cleanup();
+      } finally {
+        query?.mockRestore();
+        for (const timer of pendingFallbacks.keys()) clearTimeout(timer);
+        cancel.mockRestore();
+        schedule.mockRestore();
+      }
     }
   });
 
   it("drops duplicate thread events after the thread snapshot sequence advances", async () => {
-    const mounted = await mountApp();
+    await using mounted = await mountApp();
 
-    try {
-      const firstAssistantChunk = {
-        sequence: 2,
-        eventId: EventId.makeUnsafe("event-message-2"),
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:05.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
-          threadId: THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-assistant-1"),
-          role: "assistant",
-          text: "hello",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          source: "native",
-          streaming: true,
-          createdAt: "2026-03-04T12:00:05.000Z",
-          updatedAt: "2026-03-04T12:00:05.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const firstAssistantChunk = {
+      sequence: 2,
+      eventId: EventId.makeUnsafe("event-message-2"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:05.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: THREAD_ID,
+        messageId: MessageId.makeUnsafe("msg-assistant-1"),
+        role: "assistant",
+        text: "hello",
+        turnId: TurnId.makeUnsafe("turn-1"),
+        source: "native",
+        streaming: true,
+        createdAt: "2026-03-04T12:00:05.000Z",
+        updatedAt: "2026-03-04T12:00:05.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
-      sendThreadEventPush(firstAssistantChunk);
+    sendThreadEventPush(firstAssistantChunk);
 
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          const message = thread?.messages.find(
-            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
-          );
-          expect(message?.text).toBe("hello");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      sendThreadEventPush(firstAssistantChunk);
-
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-
-      const threadAfterDuplicate = useStore.getState();
-      expect(
-        getThreadFromState(threadAfterDuplicate, THREAD_ID)?.messages.filter(
+    await vi.waitFor(
+      () => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        const message = thread?.messages.find(
           (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
-        ),
-      ).toHaveLength(1);
+        );
+        expect(message?.text).toBe("hello");
+      },
+      { timeout: 8_000, interval: 16 },
+    );
 
-      const secondAssistantChunk = {
-        ...firstAssistantChunk,
-        sequence: 3,
-        eventId: EventId.makeUnsafe("event-message-3"),
-        occurredAt: "2026-03-04T12:00:06.000Z",
-        payload: {
-          ...firstAssistantChunk.payload,
-          text: "hello world",
-          streaming: false,
-          updatedAt: "2026-03-04T12:00:06.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    sendThreadEventPush(firstAssistantChunk);
 
-      sendThreadEventPush(secondAssistantChunk);
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
 
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          const message = thread?.messages.find(
-            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
-          );
-          expect(message?.text).toBe("hello world");
-          expect(message?.streaming).toBe(false);
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
+    const threadAfterDuplicate = useStore.getState();
+    expect(
+      getThreadFromState(threadAfterDuplicate, THREAD_ID)?.messages.filter(
+        (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
+      ),
+    ).toHaveLength(1);
+
+    const secondAssistantChunk = {
+      ...firstAssistantChunk,
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-message-3"),
+      occurredAt: "2026-03-04T12:00:06.000Z",
+      payload: {
+        ...firstAssistantChunk.payload,
+        text: "hello world",
+        streaming: false,
+        updatedAt: "2026-03-04T12:00:06.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+    sendThreadEventPush(secondAssistantChunk);
+
+    await vi.waitFor(
+      () => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        const message = thread?.messages.find(
+          (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
+        );
+        expect(message?.text).toBe("hello world");
+        expect(message?.streaming).toBe(false);
+      },
+      { timeout: 8_000, interval: 16 },
+    );
   });
 
   it("replays missed thread detail events when a subscribed shell row advances", async () => {
-    const mounted = await mountApp();
+    await using mounted = await mountApp();
 
-    try {
-      const assistantMessage = {
-        sequence: 2,
-        eventId: EventId.makeUnsafe("event-replay-assistant"),
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:05.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
+    const assistantMessage = {
+      sequence: 2,
+      eventId: EventId.makeUnsafe("event-replay-assistant"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:05.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: THREAD_ID,
+        messageId: MessageId.makeUnsafe("msg-replayed-assistant"),
+        role: "assistant",
+        text: "Recovered from replay",
+        turnId: TurnId.makeUnsafe("turn-replayed"),
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:05.000Z",
+        updatedAt: "2026-03-04T12:00:05.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const sessionReady = {
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-replay-session-ready"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:06.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.session-set",
+      payload: {
+        threadId: THREAD_ID,
+        session: {
           threadId: THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-replayed-assistant"),
-          role: "assistant",
-          text: "Recovered from replay",
-          turnId: TurnId.makeUnsafe("turn-replayed"),
-          source: "native",
-          streaming: false,
-          createdAt: "2026-03-04T12:00:05.000Z",
-          updatedAt: "2026-03-04T12:00:05.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-      const sessionReady = {
-        sequence: 3,
-        eventId: EventId.makeUnsafe("event-replay-session-ready"),
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:06.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.session-set",
-        payload: {
-          threadId: THREAD_ID,
-          session: {
-            threadId: THREAD_ID,
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: "2026-03-04T12:00:06.000Z",
-          },
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-      const otherThreadMessage = {
-        sequence: 4,
-        eventId: EventId.makeUnsafe("event-replay-other-thread"),
-        aggregateKind: "thread",
-        aggregateId: OTHER_THREAD_ID,
-        occurredAt: "2026-03-04T12:00:07.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
-          threadId: OTHER_THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-replayed-other-thread"),
-          role: "assistant",
-          text: "Wrong thread",
-          turnId: TurnId.makeUnsafe("turn-replayed-other-thread"),
-          source: "native",
-          streaming: false,
-          createdAt: "2026-03-04T12:00:07.000Z",
-          updatedAt: "2026-03-04T12:00:07.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-      const futureSameThreadMessage = {
-        ...assistantMessage,
-        sequence: 5,
-        eventId: EventId.makeUnsafe("event-replay-future-assistant"),
-        occurredAt: "2026-03-04T12:00:08.000Z",
-        payload: {
-          ...assistantMessage.payload,
-          messageId: MessageId.makeUnsafe("msg-replayed-future-assistant"),
-          text: "Future event",
-          createdAt: "2026-03-04T12:00:08.000Z",
-          updatedAt: "2026-03-04T12:00:08.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-      replayEvents = [assistantMessage, sessionReady, otherThreadMessage, futureSameThreadMessage];
-
-      sendShellEventPush({
-        kind: "thread-upserted",
-        sequence: 3,
-        thread: {
-          ...createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
           updatedAt: "2026-03-04T12:00:06.000Z",
-          session: sessionReady.payload.session,
         },
-      });
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+    const otherThreadMessage = {
+      sequence: 4,
+      eventId: EventId.makeUnsafe("event-replay-other-thread"),
+      aggregateKind: "thread",
+      aggregateId: OTHER_THREAD_ID,
+      occurredAt: "2026-03-04T12:00:07.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: OTHER_THREAD_ID,
+        messageId: MessageId.makeUnsafe("msg-replayed-other-thread"),
+        role: "assistant",
+        text: "Wrong thread",
+        turnId: TurnId.makeUnsafe("turn-replayed-other-thread"),
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:07.000Z",
+        updatedAt: "2026-03-04T12:00:07.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const futureSameThreadMessage = {
+      ...assistantMessage,
+      sequence: 5,
+      eventId: EventId.makeUnsafe("event-replay-future-assistant"),
+      occurredAt: "2026-03-04T12:00:08.000Z",
+      payload: {
+        ...assistantMessage.payload,
+        messageId: MessageId.makeUnsafe("msg-replayed-future-assistant"),
+        text: "Future event",
+        createdAt: "2026-03-04T12:00:08.000Z",
+        updatedAt: "2026-03-04T12:00:08.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    replayEvents = [assistantMessage, sessionReady, otherThreadMessage, futureSameThreadMessage];
 
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          expect(
-            thread?.messages.some(
-              (message) =>
-                message.id === MessageId.makeUnsafe("msg-replayed-assistant") &&
-                message.text === "Recovered from replay" &&
-                message.streaming === false,
-            ),
-          ).toBe(true);
-          expect(thread?.session?.orchestrationStatus).toBe("ready");
-          expect(
-            thread?.messages.some(
-              (message) => message.id === MessageId.makeUnsafe("msg-replayed-future-assistant"),
-            ),
-          ).toBe(false);
-          expect(thread?.messages.some((message) => message.text === "Wrong thread")).toBe(false);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      expect(replayRequestCursors).toContain(1);
-    } finally {
-      await mounted.cleanup();
-    }
+    sendShellEventPush({
+      kind: "thread-upserted",
+      sequence: 3,
+      thread: {
+        ...createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+        updatedAt: "2026-03-04T12:00:06.000Z",
+        session: sessionReady.payload.session,
+      },
+    });
+
+    await vi.waitFor(
+      () => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(
+          thread?.messages.some(
+            (message) =>
+              message.id === MessageId.makeUnsafe("msg-replayed-assistant") &&
+              message.text === "Recovered from replay" &&
+              message.streaming === false,
+          ),
+        ).toBe(true);
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(
+          thread?.messages.some(
+            (message) => message.id === MessageId.makeUnsafe("msg-replayed-future-assistant"),
+          ),
+        ).toBe(false);
+        expect(thread?.messages.some((message) => message.text === "Wrong thread")).toBe(false);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+    expect(replayRequestCursors).toContain(1);
   });
 
   it("hydrates a pending approval for an orchestrator thread with no session detail", async () => {
@@ -1800,15 +1793,11 @@ describe("EventRouter scoped orchestration sync", () => {
   it("does not poll a converged terminal thread projection", async () => {
     // Advance the polling clock while browser rendering and transport timers stay real.
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-    const mounted = await mountApp();
+    await using mounted = await mountApp();
 
-    try {
-      // Cover the reconciliation deadline plus the polling interval's phase.
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(getThreadDetailSnapshotRequestCount).toBe(0);
-    } finally {
-      await mounted.cleanup();
-    }
+    // Cover the reconciliation deadline plus the polling interval's phase.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getThreadDetailSnapshotRequestCount).toBe(0);
   }, 60_000);
 
   it("runs one terminal reconciliation when the final assistant event is absent", async () => {
@@ -2364,82 +2353,78 @@ describe("EventRouter scoped orchestration sync", () => {
   }, 60_000);
 
   it("flushes only the first assistant chunk immediately for a message", async () => {
-    const mounted = await mountApp();
+    await using mounted = await mountApp();
 
-    try {
-      const firstAssistantChunk = {
-        sequence: 2,
-        eventId: EventId.makeUnsafe("event-message-immediate-1"),
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:05.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
-          threadId: THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-assistant-immediate"),
-          role: "assistant",
-          text: "I’ll start",
-          turnId: TurnId.makeUnsafe("turn-immediate"),
-          source: "native",
-          streaming: true,
-          createdAt: "2026-03-04T12:00:05.000Z",
-          updatedAt: "2026-03-04T12:00:05.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const firstAssistantChunk = {
+      sequence: 2,
+      eventId: EventId.makeUnsafe("event-message-immediate-1"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:05.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: THREAD_ID,
+        messageId: MessageId.makeUnsafe("msg-assistant-immediate"),
+        role: "assistant",
+        text: "I’ll start",
+        turnId: TurnId.makeUnsafe("turn-immediate"),
+        source: "native",
+        streaming: true,
+        createdAt: "2026-03-04T12:00:05.000Z",
+        updatedAt: "2026-03-04T12:00:05.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
-      sendThreadEventPush(firstAssistantChunk);
+    sendThreadEventPush(firstAssistantChunk);
 
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          const message = thread?.messages.find(
-            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
-          );
-          expect(message?.text).toBe("I’ll start");
-          expect(message?.streaming).toBe(true);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
+    await vi.waitFor(
+      () => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        const message = thread?.messages.find(
+          (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+        );
+        expect(message?.text).toBe("I’ll start");
+        expect(message?.streaming).toBe(true);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
 
-      const secondAssistantChunk = {
-        ...firstAssistantChunk,
-        sequence: 3,
-        eventId: EventId.makeUnsafe("event-message-immediate-2"),
-        occurredAt: "2026-03-04T12:00:05.050Z",
-        payload: {
-          ...firstAssistantChunk.payload,
-          text: " by scanning the repository.",
-          updatedAt: "2026-03-04T12:00:05.050Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const secondAssistantChunk = {
+      ...firstAssistantChunk,
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-message-immediate-2"),
+      occurredAt: "2026-03-04T12:00:05.050Z",
+      payload: {
+        ...firstAssistantChunk.payload,
+        text: " by scanning the repository.",
+        updatedAt: "2026-03-04T12:00:05.050Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
-      sendThreadEventPush(secondAssistantChunk);
+    sendThreadEventPush(secondAssistantChunk);
 
-      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
 
-      const threadBeforeThrottleFlush = getThreadFromState(useStore.getState(), THREAD_ID);
-      const messageBeforeThrottleFlush = threadBeforeThrottleFlush?.messages.find(
-        (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
-      );
-      expect(messageBeforeThrottleFlush?.text).toBe("I’ll start");
+    const threadBeforeThrottleFlush = getThreadFromState(useStore.getState(), THREAD_ID);
+    const messageBeforeThrottleFlush = threadBeforeThrottleFlush?.messages.find(
+      (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+    );
+    expect(messageBeforeThrottleFlush?.text).toBe("I’ll start");
 
-      await vi.waitFor(
-        () => {
-          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
-          const message = thread?.messages.find(
-            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
-          );
-          expect(message?.text).toBe("I’ll start by scanning the repository.");
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
+    await vi.waitFor(
+      () => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        const message = thread?.messages.find(
+          (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+        );
+        expect(message?.text).toBe("I’ll start by scanning the repository.");
+      },
+      { timeout: 4_000, interval: 16 },
+    );
   });
 
   it("applies a batched cursor-resume replay in a single store update", async () => {
@@ -2557,78 +2542,77 @@ describe("EventRouter scoped orchestration sync", () => {
         [PROJECT_ID]: recoveryThreadId,
       },
     });
-    const mounted = await mountApp({ routeThreadId: recoveryThreadId, waitForThreadId: null });
+    await using mounted = await mountApp({
+      routeThreadId: recoveryThreadId,
+      waitForThreadId: null,
+    });
 
-    try {
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      sendThreadEventPush(bufferedEvent);
-      const subscribeCountBeforeMaterialization =
-        subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
-      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+    await vi.waitFor(
+      () => {
+        expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+    sendThreadEventPush(bufferedEvent);
+    const subscribeCountBeforeMaterialization =
+      subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
+    const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
 
-      const baseThread = fixture.snapshot.threads[0]!;
-      fixture.snapshot = {
-        ...fixture.snapshot,
-        snapshotSequence: 2,
-        threads: [
-          ...fixture.snapshot.threads,
-          {
-            ...baseThread,
-            id: recoveryThreadId,
-            title: "Buffered recovery thread",
-            messages: [],
-            activities: [],
-            proposedPlans: [],
-            checkpoints: [],
-            latestTurn: null,
-            updatedAt: "2026-03-04T12:00:08.000Z",
-          } satisfies OrchestrationReadModel["threads"][number],
-        ],
-      };
-      sendShellEventPush({
-        kind: "thread-upserted",
-        sequence: 2,
-        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
-          (thread) => thread.id === recoveryThreadId,
-        )!,
-      });
+    const baseThread = fixture.snapshot.threads[0]!;
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      snapshotSequence: 2,
+      threads: [
+        ...fixture.snapshot.threads,
+        {
+          ...baseThread,
+          id: recoveryThreadId,
+          title: "Buffered recovery thread",
+          messages: [],
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          latestTurn: null,
+          updatedAt: "2026-03-04T12:00:08.000Z",
+        } satisfies OrchestrationReadModel["threads"][number],
+      ],
+    };
+    sendShellEventPush({
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
+        (thread) => thread.id === recoveryThreadId,
+      )!,
+    });
 
-      let thread;
-      await vi.waitFor(
-        () => {
-          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-            detailSnapshotReadsBeforeMaterialization,
-          );
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
-            subscribeCountBeforeMaterialization,
-          );
-          thread = getThreadFromState(useStore.getState(), recoveryThreadId);
-          const message = thread?.messages.find(
-            (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
-          );
-          expect(message?.text).toBe("buffered reply");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      sendThreadEventPush(bufferedEvent);
-
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-
-      thread = getThreadFromState(useStore.getState(), recoveryThreadId);
-      expect(
-        thread?.messages.filter(
+    let thread;
+    await vi.waitFor(
+      () => {
+        expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+          detailSnapshotReadsBeforeMaterialization,
+        );
+        expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+          subscribeCountBeforeMaterialization,
+        );
+        thread = getThreadFromState(useStore.getState(), recoveryThreadId);
+        const message = thread?.messages.find(
           (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
-        ),
-      ).toHaveLength(1);
-    } finally {
-      await mounted.cleanup();
-    }
+        );
+        expect(message?.text).toBe("buffered reply");
+      },
+      { timeout: 8_000, interval: 16 },
+    );
+
+    sendThreadEventPush(bufferedEvent);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    thread = getThreadFromState(useStore.getState(), recoveryThreadId);
+    expect(
+      thread?.messages.filter(
+        (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("recovers a promoted draft when both live promotion paths are missed", async () => {
@@ -2653,75 +2637,69 @@ describe("EventRouter scoped orchestration sync", () => {
       },
     });
     useFakePollingClock();
-    const mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
+    await using mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
 
-    try {
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      const subscribeCountBeforeMaterialization =
-        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
-      const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
-      const baseThread = fixture.snapshot.threads[0]!;
-      fixture.snapshot = {
-        ...fixture.snapshot,
-        snapshotSequence: 2,
-        threads: [
-          ...fixture.snapshot.threads,
-          {
-            ...baseThread,
-            id: draftThreadId,
-            title: "Recovered missed promotion",
-            messages: [
-              {
-                id: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
-                role: "assistant",
-                text: "recovered without a reload",
-                turnId: TurnId.makeUnsafe("turn-draft-missed-live-promotion"),
-                streaming: false,
-                source: "native",
-                createdAt: "2026-03-04T12:00:09.000Z",
-                updatedAt: "2026-03-04T12:00:09.000Z",
-              },
-            ],
-            activities: [],
-            proposedPlans: [],
-            checkpoints: [],
-            latestTurn: {
+    await vi.waitFor(
+      () => {
+        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+    const subscribeCountBeforeMaterialization =
+      subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+    const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+    const baseThread = fixture.snapshot.threads[0]!;
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      snapshotSequence: 2,
+      threads: [
+        ...fixture.snapshot.threads,
+        {
+          ...baseThread,
+          id: draftThreadId,
+          title: "Recovered missed promotion",
+          messages: [
+            {
+              id: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
+              role: "assistant",
+              text: "recovered without a reload",
               turnId: TurnId.makeUnsafe("turn-draft-missed-live-promotion"),
-              state: "completed",
-              requestedAt: "2026-03-04T12:00:08.000Z",
-              startedAt: "2026-03-04T12:00:08.100Z",
-              completedAt: "2026-03-04T12:00:09.000Z",
-              assistantMessageId: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
+              streaming: false,
+              source: "native",
+              createdAt: "2026-03-04T12:00:09.000Z",
+              updatedAt: "2026-03-04T12:00:09.000Z",
             },
-            updatedAt: "2026-03-04T12:00:09.000Z",
-          } satisfies OrchestrationReadModel["threads"][number],
-        ],
-      };
+          ],
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-draft-missed-live-promotion"),
+            state: "completed",
+            requestedAt: "2026-03-04T12:00:08.000Z",
+            startedAt: "2026-03-04T12:00:08.100Z",
+            completedAt: "2026-03-04T12:00:09.000Z",
+            assistantMessageId: MessageId.makeUnsafe("msg-draft-missed-live-promotion"),
+          },
+          updatedAt: "2026-03-04T12:00:09.000Z",
+        } satisfies OrchestrationReadModel["threads"][number],
+      ],
+    };
 
-      // Deliberately do not push either a shell upsert or a thread stream item.
-      // The periodic direct projection read must promote the visible draft.
-      await waitForPolling(() => {
-        expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-          detailReadsBeforeMaterialization,
-        );
-        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
-          subscribeCountBeforeMaterialization,
-        );
-        expect(getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text).toBe(
-          "recovered without a reload",
-        );
-        expect(
-          useComposerDraftStore.getState().draftThreadsByThreadId[draftThreadId],
-        ).toBeUndefined();
-      });
-    } finally {
-      await mounted.cleanup();
-    }
+    // Deliberately do not push either a shell upsert or a thread stream item.
+    // The periodic direct projection read must promote the visible draft.
+    await waitForPolling(() => {
+      expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(detailReadsBeforeMaterialization);
+      expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+        subscribeCountBeforeMaterialization,
+      );
+      expect(getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text).toBe(
+        "recovered without a reload",
+      );
+      expect(
+        useComposerDraftStore.getState().draftThreadsByThreadId[draftThreadId],
+      ).toBeUndefined();
+    });
   });
 
   it("requests a thread snapshot again when a subscribed draft thread becomes real", async () => {
@@ -2747,112 +2725,108 @@ describe("EventRouter scoped orchestration sync", () => {
       },
     });
 
-    const mounted = await mountApp({
+    await using mounted = await mountApp({
       routeThreadId: draftThreadId,
       waitForThreadId: null,
     });
 
-    try {
-      await vi.waitFor(
-        () => {
-          expect(
-            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(1);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      const subscribeCountBeforeMaterialization =
-        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
-      const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+    await vi.waitFor(
+      () => {
+        expect(
+          subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
+        ).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+    const subscribeCountBeforeMaterialization =
+      subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+    const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
 
-      const baseThread = fixture.snapshot.threads[0]!;
-      fixture.snapshot = {
-        ...fixture.snapshot,
-        snapshotSequence: 2,
-        threads: [
-          ...fixture.snapshot.threads,
-          {
-            ...baseThread,
-            id: draftThreadId,
-            title: "Promoted thread",
-            messages: [],
-            activities: [],
-            proposedPlans: [],
-            checkpoints: [],
-            latestTurn: null,
-            updatedAt: "2026-03-04T12:00:08.000Z",
-          } satisfies OrchestrationReadModel["threads"][number],
-        ],
-      };
+    const baseThread = fixture.snapshot.threads[0]!;
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      snapshotSequence: 2,
+      threads: [
+        ...fixture.snapshot.threads,
+        {
+          ...baseThread,
+          id: draftThreadId,
+          title: "Promoted thread",
+          messages: [],
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          latestTurn: null,
+          updatedAt: "2026-03-04T12:00:08.000Z",
+        } satisfies OrchestrationReadModel["threads"][number],
+      ],
+    };
 
-      sendThreadEventPush({
-        sequence: 3,
-        eventId: EventId.makeUnsafe("event-draft-promoted-assistant"),
-        aggregateKind: "thread",
-        aggregateId: draftThreadId,
-        occurredAt: "2026-03-04T12:00:09.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
-          threadId: draftThreadId,
-          messageId: MessageId.makeUnsafe("msg-draft-promoted-assistant"),
-          role: "assistant",
-          text: "draft promotion rendered",
-          turnId: TurnId.makeUnsafe("turn-draft-promoted"),
-          source: "native",
-          streaming: false,
-          createdAt: "2026-03-04T12:00:09.000Z",
-          updatedAt: "2026-03-04T12:00:09.000Z",
-        },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>);
+    sendThreadEventPush({
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-draft-promoted-assistant"),
+      aggregateKind: "thread",
+      aggregateId: draftThreadId,
+      occurredAt: "2026-03-04T12:00:09.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: draftThreadId,
+        messageId: MessageId.makeUnsafe("msg-draft-promoted-assistant"),
+        role: "assistant",
+        text: "draft promotion rendered",
+        turnId: TurnId.makeUnsafe("turn-draft-promoted"),
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:09.000Z",
+        updatedAt: "2026-03-04T12:00:09.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>);
 
-      sendShellEventPush({
-        kind: "thread-upserted",
-        sequence: 2,
-        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
-          (thread) => thread.id === draftThreadId,
-        )!,
+    sendShellEventPush({
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
+        (thread) => thread.id === draftThreadId,
+      )!,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
+        expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+          detailSnapshotReadsBeforeMaterialization,
+        );
+        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+          subscribeCountBeforeMaterialization,
+        );
+        const thread = getThreadFromState(useStore.getState(), draftThreadId);
+        expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+
+    const subscribeCountAfterMaterialization =
+      subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+    for (const listener of threadSnapshotFailureListeners) {
+      listener({
+        threadId: draftThreadId,
+        code: "THREAD_SNAPSHOT_NOT_FOUND",
+        error: new Error("The original draft stream exhausted after materialization"),
       });
-
-      await vi.waitFor(
-        () => {
-          expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
-          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-            detailSnapshotReadsBeforeMaterialization,
-          );
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
-            subscribeCountBeforeMaterialization,
-          );
-          const thread = getThreadFromState(useStore.getState(), draftThreadId);
-          expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-
-      const subscribeCountAfterMaterialization =
-        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
-      for (const listener of threadSnapshotFailureListeners) {
-        listener({
-          threadId: draftThreadId,
-          code: "THREAD_SNAPSHOT_NOT_FOUND",
-          error: new Error("The original draft stream exhausted after materialization"),
-        });
-      }
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
-            subscribeCountAfterMaterialization + 1,
-          );
-          expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
     }
+    await vi.waitFor(
+      () => {
+        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+          subscribeCountAfterMaterialization + 1,
+        );
+        expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
+      },
+      { timeout: 4_000, interval: 16 },
+    );
   });
 
   it("hydrates a promoted draft when it first appears in a shell snapshot", async () => {
@@ -2877,71 +2851,67 @@ describe("EventRouter scoped orchestration sync", () => {
         [PROJECT_ID]: draftThreadId,
       },
     });
-    const mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
+    await using mounted = await mountApp({ routeThreadId: draftThreadId, waitForThreadId: null });
 
-    try {
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      const subscribeCountBeforeMaterialization =
-        subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
-      const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
-      const baseThread = fixture.snapshot.threads[0]!;
-      fixture.snapshot = {
-        ...fixture.snapshot,
-        snapshotSequence: 2,
-        threads: [
-          ...fixture.snapshot.threads,
-          {
-            ...baseThread,
-            id: draftThreadId,
-            title: "Snapshot-promoted thread",
-            messages: [
-              {
-                id: MessageId.makeUnsafe("msg-snapshot-promoted"),
-                role: "assistant",
-                text: "hydrated from promoted snapshot",
-                turnId: TurnId.makeUnsafe("turn-snapshot-promoted"),
-                streaming: true,
-                source: "native",
-                createdAt: "2026-03-04T12:00:09.000Z",
-                updatedAt: "2026-03-04T12:00:09.000Z",
-              },
-            ],
-            activities: [],
-            proposedPlans: [],
-            checkpoints: [],
-            updatedAt: "2026-03-04T12:00:09.000Z",
-          } satisfies OrchestrationReadModel["threads"][number],
-        ],
-      };
+    await vi.waitFor(
+      () => {
+        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 4_000, interval: 16 },
+    );
+    const subscribeCountBeforeMaterialization =
+      subscribeThreadRequestCountById.get(draftThreadId) ?? 0;
+    const detailReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
+    const baseThread = fixture.snapshot.threads[0]!;
+    fixture.snapshot = {
+      ...fixture.snapshot,
+      snapshotSequence: 2,
+      threads: [
+        ...fixture.snapshot.threads,
+        {
+          ...baseThread,
+          id: draftThreadId,
+          title: "Snapshot-promoted thread",
+          messages: [
+            {
+              id: MessageId.makeUnsafe("msg-snapshot-promoted"),
+              role: "assistant",
+              text: "hydrated from promoted snapshot",
+              turnId: TurnId.makeUnsafe("turn-snapshot-promoted"),
+              streaming: true,
+              source: "native",
+              createdAt: "2026-03-04T12:00:09.000Z",
+              updatedAt: "2026-03-04T12:00:09.000Z",
+            },
+          ],
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          updatedAt: "2026-03-04T12:00:09.000Z",
+        } satisfies OrchestrationReadModel["threads"][number],
+      ],
+    };
 
-      sendShellEventPush({
-        kind: "snapshot",
-        snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
-      });
+    sendShellEventPush({
+      kind: "snapshot",
+      snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
+    });
 
-      await vi.waitFor(
-        () => {
-          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-            detailReadsBeforeMaterialization,
-          );
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
-            subscribeCountBeforeMaterialization,
-          );
-          expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
-          expect(
-            getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text,
-          ).toBe("hydrated from promoted snapshot");
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
+    await vi.waitFor(
+      () => {
+        expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
+          detailReadsBeforeMaterialization,
+        );
+        expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+          subscribeCountBeforeMaterialization,
+        );
+        expect(useStore.getState().threadDetailSyncById?.[draftThreadId]).toBe("synced");
+        expect(getThreadFromState(useStore.getState(), draftThreadId)?.messages.at(-1)?.text).toBe(
+          "hydrated from promoted snapshot",
+        );
+      },
+      { timeout: 4_000, interval: 16 },
+    );
   });
 
   it("keeps a live assistant intro when a lagging thread snapshot arrives right after it", async () => {
@@ -3250,26 +3220,22 @@ describe("EventRouter scoped orchestration sync", () => {
     }, 60_000);
 
     it("ignores a thread-stream snapshot older than the applied cursor", async () => {
-      const mounted = await mountApp();
-      try {
-        sendThreadEventPush(orderingDelta(2, "Hello"));
-        await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
-          timeout: 4_000,
-          interval: 16,
-        });
+      await using mounted = await mountApp();
+      sendThreadEventPush(orderingDelta(2, "Hello"));
+      await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
+        timeout: 4_000,
+        interval: 16,
+      });
 
-        // A slower snapshot taken before event 2 must not move the cursor back,
-        // or a catch-up replay from it re-applies the already-consumed delta.
-        sendThreadSnapshotPush(THREAD_ID, 1);
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
-        expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: 2 });
+      // A slower snapshot taken before event 2 must not move the cursor back,
+      // or a catch-up replay from it re-applies the already-consumed delta.
+      sendThreadSnapshotPush(THREAD_ID, 1);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: 2 });
 
-        sendThreadEventPush(orderingDelta(2, "Hello"));
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-        expect(orderingMessageText()).toBe("Hello");
-      } finally {
-        await mounted.cleanup();
-      }
+      sendThreadEventPush(orderingDelta(2, "Hello"));
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      expect(orderingMessageText()).toBe("Hello");
     }, 60_000);
 
     it.each([1, 40])(
@@ -3280,18 +3246,14 @@ describe("EventRouter scoped orchestration sync", () => {
           .getState()
           .syncServerReadModel({ ...fixture.snapshot, snapshotSequence: cachedSequence });
         setThreadDetailResumeCursor(THREAD_ID, cachedSequence);
-        const mounted = await mountApp();
-        try {
-          // The subscription's first snapshot confirms sequence 1. A later older snapshot
-          // is now a race, not the initial snapshot of a reset server journal.
-          sendThreadSnapshotPush(THREAD_ID, fixture.snapshot.snapshotSequence - 1);
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
-          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({
-            afterSequence: fixture.snapshot.snapshotSequence,
-          });
-        } finally {
-          await mounted.cleanup();
-        }
+        await using mounted = await mountApp();
+        // The subscription's first snapshot confirms sequence 1. A later older snapshot
+        // is now a race, not the initial snapshot of a reset server journal.
+        sendThreadSnapshotPush(THREAD_ID, fixture.snapshot.snapshotSequence - 1);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+        expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({
+          afterSequence: fixture.snapshot.snapshotSequence,
+        });
       },
       60_000,
     );

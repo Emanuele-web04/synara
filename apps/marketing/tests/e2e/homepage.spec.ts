@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { preparePage } from "../test-helpers";
+import { prepareRoute } from "../test-helpers";
 import releaseDownloads from "../../src/data/latest-release-downloads.json" with { type: "json" };
 
 test.describe("homepage functional flow", () => {
   test("hero links to install and GitHub", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1100 });
-    await preparePage(page, "light");
+    await prepareRoute(page, "/", "light");
 
     await expect(page.locator("h1")).toHaveText("Run every coding agent in one workspace");
 
@@ -21,7 +21,7 @@ test.describe("homepage functional flow", () => {
 
   test("supports mobile navigation, FAQ disclosure and theme toggle", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await preparePage(page, "light");
+    await prepareRoute(page, "/", "light");
     await page.getByRole("button", { name: "Open navigation" }).click();
     await expect(page.getByRole("button", { name: "Close navigation" })).toHaveAttribute(
       "aria-expanded",

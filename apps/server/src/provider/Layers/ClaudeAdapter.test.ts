@@ -592,6 +592,18 @@ function makeDeterministicRandomService(seed = 0x1234_5678): {
   };
 }
 
+function startFullAccessSession(adapter: ClaudeAdapterShape) {
+  return adapter.startSession({
+    threadId: THREAD_ID,
+    provider: "claudeAgent",
+    runtimeMode: "full-access",
+  });
+}
+
+function sendTextTurn(adapter: ClaudeAdapterShape, threadId: ThreadId, input: string) {
+  return adapter.sendTurn({ threadId, input, attachments: [] });
+}
+
 function emitAssistantUsage(
   query: FakeClaudeQuery,
   sessionId: string,
@@ -1641,30 +1653,18 @@ describe("ClaudeAdapterLive", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       // First full-access turn: desired mode equals the spawn mode, so the
       // redundant control request is skipped (provable first-turn state).
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "First turn",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "First turn");
       assert.deepEqual(harness.query.setPermissionModeCalls, []);
 
       // Second turn wants the SAME desired mode, but the CLI's mode is no longer
       // provable once a prompt has run, so the request is sent unconditionally
       // (the pre-optimization behavior, with no equality skip against a tracked
       // mode).
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "Second turn",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "Second turn");
       assert.deepEqual(harness.query.setPermissionModeCalls, ["bypassPermissions"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1683,17 +1683,9 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "Start the work",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "Start the work");
 
       const steered = yield* adapter.steerTurn({
         threadId: session.threadId,
@@ -1908,11 +1900,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       const steered = yield* adapter.steerTurn({
         threadId: session.threadId,
@@ -1936,11 +1924,7 @@ describe("ClaudeAdapterLive", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       // Plan differs from the spawn mode (bypassPermissions) -> request is sent
       // even though this is the first turn.
@@ -2033,11 +2017,7 @@ describe("ClaudeAdapterLive", () => {
       mkdirSync(path.dirname(attachmentPath), { recursive: true });
       writeFileSync(attachmentPath, bytes);
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input,
@@ -2068,16 +2048,8 @@ describe("ClaudeAdapterLive", () => {
           Stream.runCollect,
           Effect.forkChild,
         );
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "Inspect the screenshot",
-          attachments: [],
-        });
+        const session = yield* startFullAccessSession(adapter);
+        yield* sendTextTurn(adapter, session.threadId, "Inspect the screenshot");
         const data = Buffer.alloc(512 * 1024, 123).toString("base64");
         const image = { type: "image", source: { type: "base64", media_type: "image/png", data } };
         const assistant = {
@@ -2107,27 +2079,14 @@ describe("ClaudeAdapterLive", () => {
             content: [{ type: "tool_result", tool_use_id: "tool-images", content: [image] }],
           },
         };
-        harness.query.emit({
-          type: "stream_event",
-          session_id: "sdk-session-images",
-          uuid: "stream-images",
-          parent_tool_use_id: null,
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: assistant.message.content[0],
-          },
-        } as unknown as SDKMessage);
+        emitStreamEvent(harness.query, "sdk-session-images", "stream-images", {
+          type: "content_block_start",
+          index: 0,
+          content_block: assistant.message.content[0],
+        });
         harness.query.emit(assistant as unknown as SDKMessage);
         harness.query.emit(user as unknown as SDKMessage);
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-images",
-          uuid: "result-images",
-        } as unknown as SDKMessage);
+        emitSuccessResult(harness.query, "sdk-session-images", "result-images");
         const events = Array.from(yield* Fiber.join(eventsFiber));
         const snapshot = yield* adapter.readThread(session.threadId);
         assert.lengthOf(snapshot.turns, 1);
@@ -2155,16 +2114,8 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "Exercise image tool classification",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, session.threadId, "Exercise image tool classification");
       const cases = [
         ["generate_image", "image_generation"],
         ["image_gen", "image_generation"],
@@ -2181,17 +2132,11 @@ describe("ClaudeAdapterLive", () => {
       ] as const;
       const input = { prompt: "Generate an image", path: "/tmp/example.png" };
       for (const [index, [name]] of cases.entries()) {
-        harness.query.emit({
-          type: "stream_event",
-          session_id: "sdk-session-image-kinds",
-          uuid: `stream-image-kind-${index}`,
-          parent_tool_use_id: null,
-          event: {
-            type: "content_block_start",
-            index,
-            content_block: { type: "tool_use", id: `image-kind-${index}`, name, input },
-          },
-        } as unknown as SDKMessage);
+        emitStreamEvent(harness.query, "sdk-session-image-kinds", `stream-image-kind-${index}`, {
+          type: "content_block_start",
+          index,
+          content_block: { type: "tool_use", id: `image-kind-${index}`, name, input },
+        });
       }
       harness.query.emit({
         type: "assistant",
@@ -2223,14 +2168,7 @@ describe("ClaudeAdapterLive", () => {
           })),
         },
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-image-kinds",
-        uuid: "result-image-kinds",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-image-kinds", "result-image-kinds");
       const events = Array.from(yield* Fiber.join(eventsFiber));
       for (const [index, [name, itemType]] of cases.entries()) {
         const toolEvents = events.filter(
@@ -2280,83 +2218,49 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
       const commandWhoseTruncationEndsInWhitespace = `${"x".repeat(399)} \nignored`;
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-1",
-        uuid: "stream-0",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "text",
-            text: "",
+      emitStreamEvent(harness.query, "sdk-session-1", "stream-0", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "text",
+          text: "",
+        },
+      });
+
+      emitStreamEvent(harness.query, "sdk-session-1", "stream-1", {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "text_delta",
+          text: "Hi",
+        },
+      });
+
+      emitStreamEvent(harness.query, "sdk-session-1", "stream-2", {
+        type: "content_block_stop",
+        index: 0,
+      });
+
+      emitStreamEvent(harness.query, "sdk-session-1", "stream-3", {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "tool-1",
+          name: "Bash",
+          input: {
+            command: commandWhoseTruncationEndsInWhitespace,
           },
         },
-      } as unknown as SDKMessage);
+      });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-1",
-        uuid: "stream-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 0,
-          delta: {
-            type: "text_delta",
-            text: "Hi",
-          },
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-1",
-        uuid: "stream-2",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_stop",
-          index: 0,
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-1",
-        uuid: "stream-3",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 1,
-          content_block: {
-            type: "tool_use",
-            id: "tool-1",
-            name: "Bash",
-            input: {
-              command: commandWhoseTruncationEndsInWhitespace,
-            },
-          },
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-1",
-        uuid: "stream-4",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_stop",
-          index: 1,
-        },
-      } as unknown as SDKMessage);
+      emitStreamEvent(harness.query, "sdk-session-1", "stream-4", {
+        type: "content_block_stop",
+        index: 1,
+      });
 
       harness.query.emit({
         type: "assistant",
@@ -2369,14 +2273,7 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-1",
-        uuid: "result-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-1", "result-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       assert.deepEqual(
@@ -2451,52 +2348,29 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
+      const session = yield* startFullAccessSession(adapter);
+
+      const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
+
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "thinking-message-start", {
+        type: "message_start",
+        message: { id: "thinking-message" },
       });
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "thinking-block-start", {
+        type: "content_block_start",
+        index: 2,
+        content_block: { type: "thinking", thinking: "First ", signature: "never-display" },
       });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "thinking-message-start",
-        parent_tool_use_id: null,
-        event: { type: "message_start", message: { id: "thinking-message" } },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "thinking-block-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 2,
-          content_block: { type: "thinking", thinking: "First ", signature: "never-display" },
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "stream-thinking", {
+        type: "content_block_delta",
+        index: 2,
+        delta: {
+          type: "thinking_delta",
+          thinking: "Let",
         },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "stream-thinking",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 2,
-          delta: {
-            type: "thinking_delta",
-            thinking: "Let",
-          },
-        },
-      } as unknown as SDKMessage);
+      });
 
       for (let snapshot = 0; snapshot < 2; snapshot += 1) {
         harness.query.emit({
@@ -2513,39 +2387,24 @@ describe("ClaudeAdapterLive", () => {
           },
         } as unknown as SDKMessage);
       }
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "thinking-stop",
-        parent_tool_use_id: null,
-        event: { type: "content_block_stop", index: 2 },
-      } as unknown as SDKMessage);
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "thinking-stop", {
+        type: "content_block_stop",
+        index: 2,
+      });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "second-message-start",
-        parent_tool_use_id: null,
-        event: { type: "message_start", message: { id: "second-message" } },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "second-thinking",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 2,
-          delta: { type: "thinking_delta", thinking: "Next" },
-        },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "second-thinking-stop",
-        parent_tool_use_id: null,
-        event: { type: "content_block_stop", index: 2 },
-      } as unknown as SDKMessage);
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "second-message-start", {
+        type: "message_start",
+        message: { id: "second-message" },
+      });
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "second-thinking", {
+        type: "content_block_delta",
+        index: 2,
+        delta: { type: "thinking_delta", thinking: "Next" },
+      });
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "second-thinking-stop", {
+        type: "content_block_stop",
+        index: 2,
+      });
       harness.query.emit({
         type: "assistant",
         session_id: "sdk-session-tool-streams",
@@ -2574,48 +2433,30 @@ describe("ClaudeAdapterLive", () => {
         } as unknown as SDKMessage);
       }
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "stream-tool-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 1,
-          content_block: {
-            type: "tool_use",
-            id: "tool-grep-1",
-            name: "Grep",
-            input: {},
-          },
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "stream-tool-start", {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "tool-grep-1",
+          name: "Grep",
+          input: {},
         },
-      } as unknown as SDKMessage);
+      });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "stream-tool-input-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 1,
-          delta: {
-            type: "input_json_delta",
-            partial_json: '{"pattern":"foo","path":"src"}',
-          },
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "stream-tool-input-1", {
+        type: "content_block_delta",
+        index: 1,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"pattern":"foo","path":"src"}',
         },
-      } as unknown as SDKMessage);
+      });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-tool-streams",
-        uuid: "stream-tool-stop",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_stop",
-          index: 1,
-        },
-      } as unknown as SDKMessage);
+      emitStreamEvent(harness.query, "sdk-session-tool-streams", "stream-tool-stop", {
+        type: "content_block_stop",
+        index: 1,
+      });
 
       harness.query.emit({
         type: "user",
@@ -2634,14 +2475,7 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-tool-streams",
-        uuid: "result-tool-streams",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-tool-streams", "result-tool-streams");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       assert.deepEqual(
@@ -2762,90 +2596,52 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
+      const session = yield* startFullAccessSession(adapter);
+
+      const turn = yield* sendTextTurn(adapter, session.threadId, "edit the file");
+
+      emitStreamEvent(harness.query, "sdk-session-file-edit", "stream-text-start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "text",
+          text: "",
+        },
       });
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "edit the file",
-        attachments: [],
+      emitStreamEvent(harness.query, "sdk-session-file-edit", "stream-text-delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "text_delta",
+          text: "Updated it.",
+        },
       });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-file-edit",
-        uuid: "stream-text-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "text",
-            text: "",
+      emitStreamEvent(harness.query, "sdk-session-file-edit", "stream-text-stop", {
+        type: "content_block_stop",
+        index: 0,
+      });
+
+      emitStreamEvent(harness.query, "sdk-session-file-edit", "stream-edit-start", {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "tool-edit-1",
+          name: "Edit",
+          input: {
+            file_path: "src/example.ts",
+            old_string: "before",
+            new_string: "after",
           },
         },
-      } as unknown as SDKMessage);
+      });
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-file-edit",
-        uuid: "stream-text-delta",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 0,
-          delta: {
-            type: "text_delta",
-            text: "Updated it.",
-          },
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-file-edit",
-        uuid: "stream-text-stop",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_stop",
-          index: 0,
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-file-edit",
-        uuid: "stream-edit-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 1,
-          content_block: {
-            type: "tool_use",
-            id: "tool-edit-1",
-            name: "Edit",
-            input: {
-              file_path: "src/example.ts",
-              old_string: "before",
-              new_string: "after",
-            },
-          },
-        },
-      } as unknown as SDKMessage);
-
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-file-edit",
-        uuid: "stream-edit-stop",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_stop",
-          index: 1,
-        },
-      } as unknown as SDKMessage);
+      emitStreamEvent(harness.query, "sdk-session-file-edit", "stream-edit-stop", {
+        type: "content_block_stop",
+        index: 1,
+      });
 
       harness.query.emit({
         type: "user",
@@ -2864,14 +2660,7 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-file-edit",
-        uuid: "result-file-edit",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-file-edit", "result-file-edit");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const diffUpdatedIndex = runtimeEvents.findIndex(
@@ -2917,17 +2706,13 @@ describe("ClaudeAdapterLive", () => {
         }),
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      const firstTurn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "Run sleep 60 in the background",
-        attachments: [],
-      });
+      const firstTurn = yield* sendTextTurn(
+        adapter,
+        session.threadId,
+        "Run sleep 60 in the background",
+      );
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -2937,21 +2722,10 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-late-task",
         uuid: "late-task-started",
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-late-task",
-        uuid: "late-task-first-result",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-late-task", "late-task-first-result");
       yield* Deferred.await(firstTurnCompleted);
 
-      const secondTurn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "Something else",
-        attachments: [],
-      });
+      const secondTurn = yield* sendTextTurn(adapter, session.threadId, "Something else");
       assert.notEqual(String(secondTurn.turnId), String(firstTurn.turnId));
       harness.query.emit({
         type: "system",
@@ -3000,38 +2774,24 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "delegate this",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "delegate this");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-subagent-model",
-        uuid: "stream-subagent-model-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-task-model",
-            name: "Task",
-            input: {
-              description: "Review the database layer",
-              prompt: "Audit the SQL changes",
-              subagent_type: "code-reviewer",
-            },
+      emitStreamEvent(harness.query, "sdk-session-subagent-model", "stream-subagent-model-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-task-model",
+          name: "Task",
+          input: {
+            description: "Review the database layer",
+            prompt: "Audit the SQL changes",
+            subagent_type: "code-reviewer",
           },
         },
-      } as unknown as SDKMessage);
+      });
 
       const emitSubagentAssistant = (uuid: string, model: string) =>
         harness.query.emit({
@@ -3053,14 +2813,7 @@ describe("ClaudeAdapterLive", () => {
       emitSubagentAssistant("assistant-subagent-model-5", "<synthetic>");
       emitSubagentAssistant("assistant-subagent-model-6", "");
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-subagent-model",
-        uuid: "result-subagent-model-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-subagent-model", "result-subagent-model-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const modelEvents = runtimeEvents.filter((event) => event.type === "thread.metadata.updated");
@@ -3095,38 +2848,24 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "delegate this",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "delegate this");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-subagent",
-        uuid: "stream-subagent-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-task-1",
-            name: "Task",
-            input: {
-              description: "Review the database layer",
-              prompt: "Audit the SQL changes",
-              subagent_type: "code-reviewer",
-            },
+      emitStreamEvent(harness.query, "sdk-session-subagent", "stream-subagent-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-task-1",
+          name: "Task",
+          input: {
+            description: "Review the database layer",
+            prompt: "Audit the SQL changes",
+            subagent_type: "code-reviewer",
           },
         },
-      } as unknown as SDKMessage);
+      });
 
       harness.query.emit({
         type: "system",
@@ -3198,14 +2937,7 @@ describe("ClaudeAdapterLive", () => {
         uuid: "task-notification-1",
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-subagent",
-        uuid: "result-subagent-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-subagent", "result-subagent-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const childEvents = runtimeEvents.filter(
@@ -3305,34 +3037,20 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "run the browser tests",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "run the browser tests");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-async-bash",
-        uuid: "stream-async-bash-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-bash-1",
-            name: "Bash",
-            input: { command: "bun run test:browser" },
-          },
+      emitStreamEvent(harness.query, "sdk-session-async-bash", "stream-async-bash-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-bash-1",
+          name: "Bash",
+          input: { command: "bun run test:browser" },
         },
-      } as unknown as SDKMessage);
+      });
 
       harness.query.emit({
         type: "system",
@@ -3385,14 +3103,7 @@ describe("ClaudeAdapterLive", () => {
         uuid: "tool-progress-async-bash-2",
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-async-bash",
-        uuid: "result-async-bash-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-async-bash", "result-async-bash-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       assert.equal(
@@ -3429,38 +3140,24 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "delegate this",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "delegate this");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-subagent",
-        uuid: "stream-subagent-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-task-1",
-            name: "Task",
-            input: {
-              description: "Explore the codebase",
-              prompt: "Find the relevant modules",
-              subagent_type: "explore",
-            },
+      emitStreamEvent(harness.query, "sdk-session-subagent", "stream-subagent-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-task-1",
+          name: "Task",
+          input: {
+            description: "Explore the codebase",
+            prompt: "Find the relevant modules",
+            subagent_type: "explore",
           },
         },
-      } as unknown as SDKMessage);
+      });
 
       harness.query.emit({
         type: "assistant",
@@ -3521,14 +3218,7 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-subagent",
-        uuid: "result-subagent-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-subagent", "result-subagent-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const childEvents = runtimeEvents.filter(
@@ -3598,11 +3288,7 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       harness.query.emit({
         type: "system",
@@ -3718,11 +3404,7 @@ describe("ClaudeAdapterLive", () => {
           Stream.runCollect,
           Effect.forkChild,
         );
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccessSession(adapter);
 
         harness.query.emit({
           type: "system",
@@ -3769,11 +3451,7 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       // The SDK can patch the individual task before the aggregate snapshot
       // lands. The patch must not pre-seed the announce diff, or the snapshot
@@ -3825,11 +3503,7 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const backgroundSnapshot = (uuid: string, description: string) =>
         harness.query.emit({
@@ -3935,37 +3609,23 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "delegate this",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, session.threadId, "delegate this");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-zombie",
-        uuid: "stream-zombie-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-task-zombie",
-            name: "Task",
-            input: {
-              description: "Sleep repeatedly",
-              prompt: "Sleep in a loop",
-              subagent_type: "worker-low",
-            },
+      emitStreamEvent(harness.query, "sdk-session-zombie", "stream-zombie-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-task-zombie",
+          name: "Task",
+          input: {
+            description: "Sleep repeatedly",
+            prompt: "Sleep in a loop",
+            subagent_type: "worker-low",
           },
         },
-      } as unknown as SDKMessage);
+      });
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -4088,14 +3748,7 @@ describe("ClaudeAdapterLive", () => {
           usage: { input_tokens: 3, output_tokens: 2 },
         },
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-zombie",
-        uuid: "result-zombie-1",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-zombie", "result-zombie-1");
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       for (const toolUseId of ["tool-task-zombie", "tool-task-zombie2"]) {
@@ -4147,11 +3800,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       assert.equal(harness.getLastCreateQueryInput()?.options.forwardSubagentText, true);
 
       harness.query.emit({
@@ -4214,16 +3863,8 @@ describe("ClaudeAdapterLive", () => {
 
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
-        const turn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "wait in the visible browser",
-          attachments: [],
-        });
+        const session = yield* startFullAccessSession(adapter);
+        const turn = yield* sendTextTurn(adapter, session.threadId, "wait in the visible browser");
         const query = harness.queries[0]!;
 
         // The child shares the parent's MCP transport. Stop only the child
@@ -4278,16 +3919,8 @@ describe("ClaudeAdapterLive", () => {
         Stream.runDrain,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "answer at length",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      const turn = yield* sendTextTurn(adapter, session.threadId, "answer at length");
       const query = harness.queries[0]!;
       // The result clears the adapter turn before ProviderService persists the
       // terminal event, so a Stop in that window still names the turn.
@@ -4315,16 +3948,12 @@ describe("ClaudeAdapterLive", () => {
         Stream.runDrain,
         Effect.forkChild,
       );
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "leave the child running in the background",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      const turn = yield* sendTextTurn(
+        adapter,
+        session.threadId,
+        "leave the child running in the background",
+      );
       const query = harness.queries[0]!;
       query.emit({
         type: "system",
@@ -4336,14 +3965,11 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-background-after-parent",
         uuid: "task-started-background-after-parent",
       } as unknown as SDKMessage);
-      query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-background-after-parent",
-        uuid: "result-background-after-parent",
-      } as unknown as SDKMessage);
+      emitSuccessResult(
+        query,
+        "sdk-session-background-after-parent",
+        "result-background-after-parent",
+      );
       yield* Fiber.join(completed);
 
       assert.deepEqual(gateway.cancelledTurns, [{ token: "gateway-token-1", turnId: turn.turnId }]);
@@ -4368,11 +3994,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       const hook = harness.getLastCreateQueryInput()?.options.hooks?.PreToolUse?.[0]?.hooks[0];
       assert.isDefined(hook);
@@ -4478,11 +4100,7 @@ describe("ClaudeAdapterLive", () => {
       mkdirSync(path.dirname(attachmentPath), { recursive: true });
       writeFileSync(attachmentPath, Uint8Array.from([1, 2, 3, 4]));
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       const nextCallsBeforeTaskStart = harness.query.iteratorNextCalls;
       harness.query.emit({
@@ -4554,11 +4172,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       yield* adapter.backgroundTask(session.threadId, "tool-task-bg-1");
       assert.deepEqual(harness.query.backgroundTasksCalls, ["tool-task-bg-1"]);
@@ -4581,11 +4195,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       harness.query.emit({
         type: "system",
@@ -4635,40 +4245,26 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "delegate this",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "delegate this");
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-effort",
-        uuid: "stream-effort-1",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-task-effort-1",
-            name: "Agent",
-            input: {
-              description: "Deep audit",
-              prompt: "Audit the changes",
-              subagent_type: "worker-high",
-              model: "sonnet",
-              run_in_background: true,
-            },
+      emitStreamEvent(harness.query, "sdk-session-effort", "stream-effort-1", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-task-effort-1",
+          name: "Agent",
+          input: {
+            description: "Deep audit",
+            prompt: "Audit the changes",
+            subagent_type: "worker-high",
+            model: "sonnet",
+            run_in_background: true,
           },
         },
-      } as unknown as SDKMessage);
+      });
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const collabStarted = runtimeEvents.find(
@@ -4703,11 +4299,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       // Workflow run itself: no tool_use_id, identified by task_type/workflow_name.
       harness.query.emit({
@@ -4909,11 +4501,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -4984,11 +4572,7 @@ describe("ClaudeAdapterLive", () => {
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -5084,28 +4668,18 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-workflow-meta",
-        uuid: "stream-workflow-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-workflow-1",
-            name: "Workflow",
-            input: { script: workflowScript },
-          },
+      emitStreamEvent(harness.query, "sdk-session-workflow-meta", "stream-workflow-start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-workflow-1",
+          name: "Workflow",
+          input: { script: workflowScript },
         },
-      } as unknown as SDKMessage);
+      });
 
       // task_started carries the full script text as `prompt`.
       harness.query.emit({
@@ -5291,28 +4865,18 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-workflow-poll",
-        uuid: "stream-workflow-poll-start",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool-workflow-poll",
-            name: "Workflow",
-            input: { script: "export const meta = { name: 'spec' };" },
-          },
+      emitStreamEvent(harness.query, "sdk-session-workflow-poll", "stream-workflow-poll-start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-workflow-poll",
+          name: "Workflow",
+          input: { script: "export const meta = { name: 'spec' };" },
         },
-      } as unknown as SDKMessage);
+      });
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -5457,18 +5021,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-workflow-effort",
-        uuid: "stream-workflow-effort-start",
-        parent_tool_use_id: null,
-        event: {
+      emitStreamEvent(
+        harness.query,
+        "sdk-session-workflow-effort",
+        "stream-workflow-effort-start",
+        {
           type: "content_block_start",
           index: 0,
           content_block: {
@@ -5478,7 +5037,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             input: { script: "export const meta = { name: 'spec' };" },
           },
         },
-      } as unknown as SDKMessage);
+      );
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -5587,11 +5146,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       harness.query.emit({
         type: "system",
@@ -5635,11 +5190,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -5708,16 +5259,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           Stream.runCollect,
           Effect.forkChild,
         );
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
-        const turn = yield* adapter.sendTurn({
-          threadId: THREAD_ID,
-          input: "Synthetic boundary fixture",
-          attachments: [],
-        });
+        yield* startFullAccessSession(adapter);
+        const turn = yield* sendTextTurn(adapter, THREAD_ID, "Synthetic boundary fixture");
         harness.query.emit({
           type: "assistant",
           session_id: "vendor-error-flag-session",
@@ -5775,18 +5318,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           Effect.forkChild,
         );
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        const session = yield* startFullAccessSession(adapter);
         const resumeCursor = session.resumeCursor;
 
-        const turn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "hello",
-          attachments: [],
-        });
+        const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
         const firstQuery = harness.queries[0];
         assert.ok(firstQuery);
 
@@ -5804,14 +5339,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
         // Claude Agent SDK currently follows the structured assistant error with a
         // nominal success result. The structured error must remain authoritative.
-        firstQuery.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-auth-failure",
-          uuid: "result-auth-failure",
-        } as unknown as SDKMessage);
+        emitSuccessResult(firstQuery, "sdk-session-auth-failure", "result-auth-failure");
 
         const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
         const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
@@ -5856,11 +5384,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           adapter.streamEvents,
           (event) => event.type === "turn.completed",
         ).pipe(Stream.runHead, Effect.forkChild);
-        const retry = yield* adapter.sendTurn({
-          threadId: resumedSession.threadId,
-          input: "retry after login",
-          attachments: [],
-        });
+        const retry = yield* sendTextTurn(adapter, resumedSession.threadId, "retry after login");
         assert.notEqual(String(retry.turnId), String(turn.turnId));
 
         secondQuery.emit({
@@ -5873,14 +5397,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             content: [{ type: "text", text: "Authenticated and ready." }],
           },
         } as unknown as SDKMessage);
-        secondQuery.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-auth-retry",
-          uuid: "result-auth-retry",
-        } as unknown as SDKMessage);
+        emitSuccessResult(secondQuery, "sdk-session-auth-retry", "result-auth-retry");
 
         const retryCompleted = yield* Fiber.join(retryCompletedFiber);
         assert.equal(retryCompleted._tag, "Some");
@@ -5922,16 +5439,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const observed = yield* observeRuntimeEvents(adapter);
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      yield* startFullAccessSession(adapter);
+      const turn = yield* sendTextTurn(adapter, THREAD_ID, "hello");
       const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
       yield* Effect.promise(() => prompts.next());
       const nextPrompt = Effect.promise(() => prompts.next()).pipe(
@@ -6091,7 +5600,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       }
 
       // The cancelled retry never re-prompts; the next prompt is the user's.
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1_500)));
+      yield* TestClock.adjust("1500 millis");
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "next", attachments: [] });
       assert.equal(promptText(yield* nextPrompt), "next");
       harness.query.emit({
@@ -6125,17 +5634,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           Effect.forkChild,
         );
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        const session = yield* startFullAccessSession(adapter);
 
-        const turn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "hello",
-          attachments: [],
-        });
+        const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
 
         harness.query.emit({
           type: "assistant",
@@ -6212,11 +5713,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
       });
 
-      const turn = yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
       harness.query.fail(new Error("All fibers interrupted without error"));
 
@@ -6275,17 +5772,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         ),
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
-      const turn = yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
       // The Claude SDK surfaces an external SIGTERM as this error string.
       harness.query.fail(new Error("Claude Code process exited with code 143"));
@@ -6345,11 +5834,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
         runtimeMode: "full-access",
       });
-      const turn = yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "continue",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, THREAD_ID, "continue");
 
       harness.query.fail(
         new Error("No conversation found with session ID: 44c0b890-8775-4f30-b47f-0709d29cc9e1"),
@@ -6430,11 +5915,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       query.emit({
         type: "system",
@@ -6479,11 +5960,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       for (let i = 0; i < 10_000 && harness.query.iteratorNextCalls === 0; i += 1) {
         yield* Effect.yieldNow;
       }
@@ -6534,11 +6011,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const failedStop = yield* Effect.exit(adapter.stopSession(THREAD_ID));
       assert.isTrue(Exit.isFailure(failedStop));
@@ -7186,11 +6659,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Stream.runForEach(adapter.streamEvents, () => Effect.void),
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       yield* adapter.stopSession(THREAD_ID);
 
@@ -7226,11 +6695,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccessSession(adapter);
 
         // High-frequency reasoning telemetry — must never reach the timeline.
         for (let i = 0; i < 3; i += 1) {
@@ -7406,17 +6871,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "build the feature",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "build the feature");
 
       emitStreamEvent(harness.query, "sdk-session-todo-start", "stream-todo-start", {
         type: "content_block_start",
@@ -7471,17 +6928,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "ship the patch",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "ship the patch");
 
       emitStreamEvent(harness.query, "sdk-session-todo-delta", "stream-todo-delta-start", {
         type: "content_block_start",
@@ -7529,17 +6978,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "build the feature",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "build the feature");
 
       emitStreamEvent(harness.query, "sdk-session-task-create", "stream-task-create", {
         type: "content_block_start",
@@ -7683,16 +7124,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "fix the bug",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, session.threadId, "fix the bug");
 
       emitPlanCall(
         "tool-plan-1",
@@ -7759,17 +7192,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue the work",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "continue the work");
 
       emitStreamEvent(harness.query, "sdk-session-task-list", "stream-task-list", {
         type: "content_block_start",
@@ -7931,11 +7356,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
       ]);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "continue");
 
       const taskEvents = Array.from(yield* Fiber.join(taskEventFiber));
       assert.deepEqual(taskEvents[0]?.payload.tasks, [
@@ -7976,11 +7397,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
       });
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "start unrelated work",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "start unrelated work");
       assert.equal("trackedTasks" in (turn.resumeCursor as Record<string, unknown>), false);
 
       emitStreamEvent(harness.query, "sdk-session-new-task-group", "stream-new-task-create", {
@@ -8035,11 +7452,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       harness.query.emit({
         type: "system",
@@ -8097,17 +7510,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
       harness.query.emit({
         type: "result",
@@ -8173,11 +7578,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
       });
 
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
       harness.query.emit({
         type: "result",
@@ -8240,11 +7641,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         });
 
-        yield* adapter.sendTurn({
-          threadId: THREAD_ID,
-          input: "hello",
-          attachments: [],
-        });
+        yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
         harness.query.emit({
           type: "system",
@@ -8316,17 +7713,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           Effect.forkChild,
         );
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        const session = yield* startFullAccessSession(adapter);
 
-        const turn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "hello",
-          attachments: [],
-        });
+        const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
 
         harness.query.emit({
           type: "assistant",
@@ -8394,17 +7783,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "hello");
 
       emitStreamEvent(harness.query, "sdk-session-reused-text-index", "stream-reused-start-1", {
         type: "content_block_start",
@@ -8517,17 +7898,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
 
       harness.query.emit({
         type: "assistant",
@@ -8579,18 +7952,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       assert.equal(session.threadId, THREAD_ID);
 
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
       assert.equal(turn.threadId, THREAD_ID);
 
       emitStreamEvent(harness.query, "sdk-thread-real", "stream-thread-real", {
@@ -8647,11 +8012,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "approve this",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "approve this");
       yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
       emitStreamEvent(harness.query, "sdk-session-approval-1", "stream-approval-thread", {
@@ -8946,11 +8307,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const createInput = harness.getLastCreateQueryInput();
       assert.isDefined(createInput?.options.agents);
@@ -8994,18 +8351,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccessSession(adapter);
 
-        yield* adapter.sendTurn({
-          threadId: THREAD_ID,
-          input:
-            "Compare the migration and @review(check regressions) then @explore(find related files)",
-          attachments: [],
-        });
+        yield* sendTextTurn(
+          adapter,
+          THREAD_ID,
+          "Compare the migration and @review(check regressions) then @explore(find related files)",
+        );
 
         const createInput = harness.getLastCreateQueryInput();
         const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
@@ -9087,11 +8439,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           enableComputerControl: true,
         });
 
-        yield* adapter.sendTurn({
-          threadId: THREAD_ID,
-          input: "Click the target",
-          attachments: [],
-        });
+        yield* sendTextTurn(adapter, THREAD_ID, "Click the target");
 
         const canUseTool = harness.createInputs[0]?.options.canUseTool;
         assert.equal(typeof canUseTool, "function");
@@ -9262,11 +8610,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
         runtimeMode: "full-access",
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "continue");
 
       harness.query.emit({
         type: "system",
@@ -9390,17 +8734,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
-      const firstTurn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "first",
-        attachments: [],
-      });
+      const firstTurn = yield* sendTextTurn(adapter, session.threadId, "first");
 
       const firstCompletedFiber = yield* Stream.filter(
         adapter.streamEvents,
@@ -9415,11 +8751,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         assert.equal(String(firstCompleted.value.turnId), String(firstTurn.turnId));
       }
 
-      const secondTurn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "second",
-        attachments: [],
-      });
+      const secondTurn = yield* sendTextTurn(adapter, session.threadId, "second");
 
       const secondCompletedFiber = yield* Stream.filter(
         adapter.streamEvents,
@@ -9454,19 +8786,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       const runTurn = (input: string, suffix: string) =>
         Effect.gen(function* () {
-          const turn = yield* adapter.sendTurn({
-            threadId: session.threadId,
-            input,
-            attachments: [],
-          });
+          const turn = yield* sendTextTurn(adapter, session.threadId, input);
           const completedFiber = yield* Stream.filter(
             adapter.streamEvents,
             (event) => event.type === "turn.completed",
@@ -10115,11 +9439,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         (event) => event.type === "session.configured",
       ).pipe(Stream.runHead, Effect.forkChild);
 
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const settings = harness.getLastCreateQueryInput()?.options.settings;
       assert.ok(settings && typeof settings === "object");
@@ -10342,11 +9662,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const replacement = yield* Effect.exit(
         adapter.startSession({
@@ -10375,16 +9691,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "hello",
-        attachments: [],
-      });
+      yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, THREAD_ID, "hello");
 
       harness.queries[0]?.fail(new Error("All fibers interrupted without error"));
       yield* Effect.yieldNow;
@@ -10411,13 +9719,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const result = yield* Effect.exit(
-        adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        }),
-      );
+      const result = yield* Effect.exit(startFullAccessSession(adapter));
 
       assert.ok(Exit.isFailure(result));
       assert.equal(query.closeCalls, 1);
@@ -10512,11 +9814,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       const collectTurn = () =>
         adapter.streamEvents.pipe(
           Stream.takeUntil((event) => event.type === "turn.completed"),
@@ -10573,11 +9871,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         [82_026, 82_020],
       );
       const zero = yield* collectTurn();
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "zero-usage command",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, THREAD_ID, "zero-usage command");
       emitBlock("synthetic-output", 0, "request-4");
       emitSuccessResult(harness.query, "sdk-block-accounting", "result-zero", {
         input_tokens: 0,
@@ -10724,11 +10018,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         }),
         Effect.forkChild,
       );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "first", attachments: [] });
       emitAssistantUsage(
@@ -10976,11 +10266,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         resumeCursor: { resume: nativeSessionId },
       });
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "/compact",
-        attachments: [],
-      });
+      const turn = yield* sendTextTurn(adapter, session.threadId, "/compact");
       harness.query.emit({
         type: "system",
         subtype: "status",
@@ -11033,11 +10319,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           tokenAccountingVersion: 1,
         },
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "/compact",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "/compact");
 
       emitAssistantUsage(
         harness.query,
@@ -11075,11 +10357,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       yield* Deferred.await(observation.turnCompleted);
 
-      const nextTurn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue",
-        attachments: [],
-      });
+      const nextTurn = yield* sendTextTurn(adapter, session.threadId, "continue");
       emitAssistantUsage(
         harness.query,
         nativeSessionId,
@@ -11148,11 +10426,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           tokenAccountingVersion: 1,
         },
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "continue");
       emitAssistantUsage(
         harness.query,
         "sdk-session-resumed-accounting",
@@ -11208,11 +10482,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           processedTokenTotal: 999_999,
         },
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "/compact",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "/compact");
       emitCompactionBoundary(harness.query, nativeSessionId, "legacy-compact-boundary");
       emitAssistantUsage(harness.query, nativeSessionId, "legacy-compaction-call", "Compacted", {
         total_tokens: 190_000,
@@ -11223,11 +10493,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Deferred.await(observation.turnCompleted);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "continue");
       emitAssistantUsage(
         harness.query,
         nativeSessionId,
@@ -11276,11 +10542,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           options: { autoCompactWindow: "200k" },
         },
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "hello");
 
       const bigUsageAssistant = (uuid: string) =>
         ({
@@ -11523,16 +10785,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         (event) => event.type === "turn.completed",
       ).pipe(Stream.runHead, Effect.forkChild);
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, session.threadId, "hello");
       emitSuccessResult(harness.query, "sdk-session-context-timeout", "result-context-timeout");
 
       const completed = yield* Fiber.join(completedFiber);
@@ -11550,11 +10804,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "plan this for me",
@@ -11585,11 +10835,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         provider: "claudeAgent",
         runtimeMode: "approval-required",
       });
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "hello");
 
       assert.deepEqual(harness.query.setPermissionModeCalls, []);
     }).pipe(
@@ -11628,11 +10874,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Fiber.join(turnCompletedFiber);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "now build it",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "now build it");
 
       assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "default"]);
     }).pipe(
@@ -11651,11 +10893,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        const session = yield* startFullAccessSession(adapter);
         yield* adapter.sendTurn({
           threadId: session.threadId,
           input: "plan this",
@@ -11696,11 +10934,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
@@ -11763,11 +10997,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
@@ -11834,11 +11064,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
@@ -11908,25 +11134,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       // Drain the session startup events (started, configured, state.changed).
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "question turn",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "question turn");
       yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-user-input-1",
-        uuid: "stream-user-input-thread",
-        parent_tool_use_id: null,
-        event: {
-          type: "message_start",
-          message: {
-            id: "msg-user-input-thread",
-          },
+      emitStreamEvent(harness.query, "sdk-session-user-input-1", "stream-user-input-thread", {
+        type: "message_start",
+        message: {
+          id: "msg-user-input-thread",
         },
-      } as unknown as SDKMessage);
+      });
 
       const threadStarted = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(threadStarted._tag, "Some");
@@ -12031,25 +11247,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "multi-select turn",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "multi-select turn");
       yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-user-input-multi",
-        uuid: "stream-user-input-multi",
-        parent_tool_use_id: null,
-        event: {
-          type: "message_start",
-          message: {
-            id: "msg-user-input-multi",
-          },
+      emitStreamEvent(harness.query, "sdk-session-user-input-multi", "stream-user-input-multi", {
+        type: "message_start",
+        message: {
+          id: "msg-user-input-multi",
         },
-      } as unknown as SDKMessage);
+      });
 
       const threadStarted = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(threadStarted._tag, "Some");
@@ -12120,11 +11326,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       // In full-access mode, regular tools are auto-approved.
       // AskUserQuestion should still go through the user-input flow.
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
 
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
@@ -12188,11 +11390,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
       const canUseTool = harness.getLastCreateQueryInput()!.options.canUseTool!;
       const questions = [
@@ -12312,18 +11510,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "ask a question",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, session.threadId, "ask a question");
       yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
       const createInput = harness.getLastCreateQueryInput();
@@ -12378,14 +11568,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         session_id: "sdk-session-user-input-terminal",
         uuid: "task-updated-user-input-terminal",
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-user-input-terminal",
-        uuid: "result-user-input-terminal",
-      } as unknown as SDKMessage);
+      emitSuccessResult(
+        harness.query,
+        "sdk-session-user-input-terminal",
+        "result-user-input-terminal",
+      );
 
       const terminalLifecycle = Array.from(yield* Fiber.join(terminalLifecycleFiber));
       assert.deepEqual(
@@ -12426,18 +11613,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+        const session = yield* startFullAccessSession(adapter);
         yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-        yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "start a background task",
-          attachments: [],
-        });
+        yield* sendTextTurn(adapter, session.threadId, "start a background task");
         yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
         const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
@@ -12479,14 +11658,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           adapter.streamEvents,
           (event) => event.type === "turn.completed",
         ).pipe(Stream.runHead, Effect.forkChild);
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-background-question",
-          uuid: "result-background-question",
-        } as unknown as SDKMessage);
+        emitSuccessResult(
+          harness.query,
+          "sdk-session-background-question",
+          "result-background-question",
+        );
 
         const completedEvent = yield* Fiber.join(completedEventFiber);
         assert.equal(completedEvent._tag, "Some");
@@ -12532,11 +11708,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
       const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
@@ -12678,45 +11850,24 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "hello",
-        attachments: [],
-      });
+      const session = yield* startFullAccessSession(adapter);
+      const turn = yield* sendTextTurn(adapter, session.threadId, "hello");
 
       const turnCompletedFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "turn.completed",
       ).pipe(Stream.runHead, Effect.forkChild);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-native-log",
-        uuid: "stream-native-log",
-        parent_tool_use_id: null,
-        event: {
-          type: "content_block_delta",
-          index: 0,
-          delta: {
-            type: "text_delta",
-            text: "hi",
-          },
+      emitStreamEvent(harness.query, "sdk-session-native-log", "stream-native-log", {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "text_delta",
+          text: "hi",
         },
-      } as unknown as SDKMessage);
+      });
 
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-native-log",
-        uuid: "result-native-log",
-      } as unknown as SDKMessage);
+      emitSuccessResult(harness.query, "sdk-session-native-log", "result-native-log");
 
       const turnCompleted = yield* Fiber.join(turnCompletedFiber);
       assert.equal(turnCompleted._tag, "Some");
@@ -12956,16 +12107,8 @@ describe("ClaudeAdapterLive forkThread", () => {
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "Long-running work",
-        attachments: [],
-      });
+      yield* startFullAccessSession(adapter);
+      yield* sendTextTurn(adapter, THREAD_ID, "Long-running work");
 
       const result = yield* adapter.forkThread!({
         sourceThreadId: THREAD_ID,
@@ -13087,11 +12230,7 @@ describe("ClaudeAdapterLive forkThread", () => {
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
       const runTurn = (input: string, assistantUuid: string) =>
         Effect.gen(function* () {
           const completed = yield* adapter.streamEvents.pipe(
@@ -13115,11 +12254,7 @@ describe("ClaudeAdapterLive forkThread", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "Command with no assistant message",
-        attachments: [],
-      });
+      yield* sendTextTurn(adapter, THREAD_ID, "Command with no assistant message");
       emitSuccessResult(query, SOURCE_SESSION_ID, "no-assistant-result", { input_tokens: 0 });
       yield* Fiber.join(thirdCompleted);
 
@@ -13161,11 +12296,7 @@ describe("ClaudeAdapterLive forkThread", () => {
       const adapter = yield* ClaudeAdapter;
       // A live context restarts its turn log at [] on resume; the persisted
       // cumulative count must win.
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      yield* startFullAccessSession(adapter);
 
       const result = yield* adapter.forkThread!({
         sourceThreadId: THREAD_ID,
@@ -13375,11 +12506,7 @@ describe("Claude explicit native compaction", () => {
               assert.equal(session?.status, "ready");
               assert.isUndefined(session?.activeTurnId);
               assert.equal((session?.resumeCursor as { turnCount?: number })?.turnCount, 1);
-              return yield* adapter.sendTurn({
-                threadId: THREAD_ID,
-                input: "Continue after the completed turn",
-                attachments: [],
-              });
+              return yield* sendTextTurn(adapter, THREAD_ID, "Continue after the completed turn");
             }),
           ),
           Effect.ensuring(Deferred.succeed(nextTurnStarted, undefined)),
@@ -14871,11 +13998,7 @@ function taskIdOf(event: ProviderRuntimeEvent): string {
 
 function startTrackingSession(adapter: ClaudeAdapterShape) {
   return Effect.gen(function* () {
-    const session = yield* adapter.startSession({
-      threadId: THREAD_ID,
-      provider: "claudeAgent",
-      runtimeMode: "full-access",
-    });
+    const session = yield* startFullAccessSession(adapter);
     yield* adapter.sendTurn({ threadId: session.threadId, input: "delegate", attachments: [] });
     return session;
   });
@@ -16498,11 +15621,7 @@ it.effect("keeps steer admission and turn ownership atomic across cooperative yi
         const outcome = yield* Effect.gen(function* () {
           const adapter = yield* ClaudeAdapter;
           yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
-          const first = yield* adapter.sendTurn({
-            threadId: THREAD_ID,
-            input: "original",
-            attachments: [],
-          });
+          const first = yield* sendTextTurn(adapter, THREAD_ID, "original");
           const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
           yield* Effect.promise(() => prompts.next());
           const scheduled: Array<() => void> = [];
@@ -16544,11 +15663,7 @@ it.effect("keeps steer admission and turn ownership atomic across cooperative yi
           );
           emitSuccessResult(harness.query, "scheduler-synthetic", "terminal", {});
           yield* Fiber.join(terminal);
-          const next = yield* adapter.sendTurn({
-            threadId: THREAD_ID,
-            input: "replacement",
-            attachments: [],
-          });
+          const next = yield* sendTextTurn(adapter, THREAD_ID, "replacement");
           let idleTicks = 0;
           while (steering.pollUnsafe() === undefined && slices < 256 && idleTicks < 32) {
             const before = slices;
@@ -16624,11 +15739,7 @@ it.effect(
     const harness = makeHarness({ cwd: os.tmpdir(), baseDir: os.tmpdir() });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
+      const session = yield* startFullAccessSession(adapter);
       const reset = Math.floor(Date.now() / 1_000) + 3_600;
       for (const round of [0, 1, 2]) {
         const eventsFiber = yield* adapter.streamEvents.pipe(

@@ -1270,6 +1270,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      dispatch: (command: OrchestrationCommand) => Effect.runPromise(engine.dispatch(command)),
       runtime,
       realProviderService: await runtime.runPromise(Effect.service(ProviderService)),
       providerRuntimeRepository: Option.getOrUndefined(
@@ -1494,16 +1495,14 @@ describe("ProviderCommandReactor", () => {
       commandId: string,
       scope: { readonly turnId?: TurnId; readonly usageLimitRecoveryId?: string } = {},
     ) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe(commandId),
-          threadId,
-          ...scope,
-          requestedBy: "user",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe(commandId),
+        threadId,
+        ...scope,
+        requestedBy: "user",
+        createdAt: new Date().toISOString(),
+      });
 
     // Holds the next provider send until the returned release resolves it with its accepted turn.
     const gateNextSend = (harness: Awaited<ReturnType<typeof createHarness>>) => {
@@ -1566,24 +1565,15 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "approval-required",
         activeTurnId: limitedTurnId,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("usage-limit-running-source"),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: selection.provider,
-            providerInstanceId: selection.instanceId ?? selection.provider,
-            runtimeMode: "approval-required",
-            activeTurnId: limitedTurnId,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "usage-limit-running-source",
+        threadId,
+        status: "running",
+        providerName: selection.provider,
+        providerInstanceId: selection.instanceId ?? selection.provider,
+        activeTurnId: limitedTurnId,
+        at: createdAt,
+      });
       if (queuedText) {
         await dispatchHarnessUserTurn(harness, {
           messageId: "usage-limit-accepted-queue",
@@ -1592,15 +1582,13 @@ describe("ProviderCommandReactor", () => {
         });
         await harness.drain();
       }
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.usage-limit.source",
-          commandId: CommandId.makeUnsafe("usage-limit-freeze-source"),
-          threadId,
-          source: { turnId: limitedTurnId, bindingKey, policyEpoch: 0 },
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.usage-limit.source",
+        commandId: CommandId.makeUnsafe("usage-limit-freeze-source"),
+        threadId,
+        source: { turnId: limitedTurnId, bindingKey, policyEpoch: 0 },
+        createdAt,
+      });
       expect((await readHarnessThread(harness))?.usageLimitRecoverySource).toMatchObject({
         turnId: limitedTurnId,
         bindingKey,
@@ -1616,24 +1604,15 @@ describe("ProviderCommandReactor", () => {
       const createdAt = await seedLimitSource(harness, queuedText);
       const selection = (await readHarnessThread(harness))!.modelSelection;
       harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("usage-limit-failed-source"),
-          threadId,
-          session: {
-            threadId,
-            status: "error",
-            providerName: selection.provider,
-            providerInstanceId: selection.instanceId ?? selection.provider,
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: "Usage limit reached",
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "usage-limit-failed-source",
+        threadId,
+        status: "error",
+        providerName: selection.provider,
+        providerInstanceId: selection.instanceId ?? selection.provider,
+        lastError: "Usage limit reached",
+        at: createdAt,
+      });
       const sourceBeforeSchedule = await readHarnessThread(harness);
       expect(sourceBeforeSchedule?.latestTurn).toMatchObject({
         turnId: limitedTurnId,
@@ -1651,15 +1630,13 @@ describe("ProviderCommandReactor", () => {
         bindingKey,
         policyEpoch: 0,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.usage-limit.schedule",
-          commandId: CommandId.makeUnsafe("usage-limit-arm"),
-          threadId,
-          recovery: wait,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.usage-limit.schedule",
+        commandId: CommandId.makeUnsafe("usage-limit-arm"),
+        threadId,
+        recovery: wait,
+        createdAt,
+      });
       await waitFor(
         async () => (await readHarnessThread(harness))?.usageLimitRecovery?.id === wait.id,
       );
@@ -1670,39 +1647,27 @@ describe("ProviderCommandReactor", () => {
       harness: Awaited<ReturnType<typeof createHarness>>,
       recoveryId: string,
     ) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.usage-limit.resume",
-          commandId: CommandId.makeUnsafe(`usage-limit-resume-${crypto.randomUUID()}`),
-          threadId,
-          recoveryId,
-          policyEpoch: 0,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      harness.dispatch({
+        type: "thread.usage-limit.resume",
+        commandId: CommandId.makeUnsafe(`usage-limit-resume-${crypto.randomUUID()}`),
+        threadId,
+        recoveryId,
+        policyEpoch: 0,
+        createdAt: new Date().toISOString(),
+      });
 
     async function seedCompletedHumanTurn(harness: Awaited<ReturnType<typeof createHarness>>) {
       const previousTurnId = asTurnId("human-previous-completed-turn");
       const createdAt = new Date(Date.now() - 2_000).toISOString();
       for (const status of ["running", "ready"] as const) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`human-previous-${status}`),
-            threadId,
-            session: {
-              threadId,
-              status,
-              providerName: "codex",
-              providerInstanceId: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: status === "running" ? previousTurnId : null,
-              lastError: null,
-              updatedAt: createdAt,
-            },
-            createdAt,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: `human-previous-${status}`,
+          threadId,
+          status,
+          providerInstanceId: "codex",
+          activeTurnId: status === "running" ? previousTurnId : null,
+          at: createdAt,
+        });
       }
       harness.setRuntimeSessionTurnState({
         threadId,
@@ -1939,25 +1904,21 @@ describe("ProviderCommandReactor", () => {
         ingestRuntimeEvents: true,
         serverSettings: { autoResumeAfterUsageLimits: true },
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("quota-goal-deferred"),
-          threadId,
-          goal: "Finish the complete requested objective",
-          goalStartBehavior: "defer",
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("quota-goal-deferred"),
+        threadId,
+        goal: "Finish the complete requested objective",
+        goalStartBehavior: "defer",
+      });
       await seedLimitWait(harness);
       expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("quota-goal-manual-resume"),
-          threadId,
-          goalPaused: false,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("quota-goal-manual-resume"),
+        threadId,
+        goalPaused: false,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
       expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
@@ -2129,7 +2090,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: new Date().toISOString(),
         } satisfies OrchestrationCommand;
         if (cancelAt === "before native start") {
-          await Effect.runPromise(harness.engine.dispatch(stop));
+          await harness.dispatch(stop);
         } else {
           const dispatch = harness.engine.dispatch;
           let cancelled = false;
@@ -2449,7 +2410,7 @@ describe("ProviderCommandReactor", () => {
         now: new Date(Date.now() + 1_000).toISOString(),
       });
       expect(commands.some((command) => command.type === "thread.session.set")).toBe(true);
-      for (const command of commands) await Effect.runPromise(harness.engine.dispatch(command));
+      for (const command of commands) await harness.dispatch(command);
       expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
       expect((await readHarnessThread(harness))?.session?.status).toBe("interrupted");
       const fresh = await harness.restartReactor();
@@ -2490,20 +2451,18 @@ describe("ProviderCommandReactor", () => {
       if (!accepted?.session || !resumedTurnId)
         throw new Error("Expected accepted recovery ownership");
       const now = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("usage-limit-native-start-before-crash"),
-          threadId,
-          session: {
-            ...accepted.session,
-            status: "running",
-            activeTurnId: resumedTurnId,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("usage-limit-native-start-before-crash"),
+        threadId,
+        session: {
+          ...accepted.session,
+          status: "running",
+          activeTurnId: resumedTurnId,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
       const persisted = await readHarnessThread(harness);
       if (!persisted) throw new Error("Missing persisted recovery");
       expect(persisted.usageLimitRecovery).toMatchObject({ state: "resuming", resumedTurnId });
@@ -2511,7 +2470,7 @@ describe("ProviderCommandReactor", () => {
         threads: [persisted],
         now: new Date(Date.now() + 1_000).toISOString(),
       });
-      for (const command of cleanup) await Effect.runPromise(harness.engine.dispatch(command));
+      for (const command of cleanup) await harness.dispatch(command);
       const reconciled = await readHarnessThread(harness);
       expect(reconciled?.session?.status).toBe("interrupted");
       expect(reconciled?.usageLimitRecovery).toBeNull();
@@ -2612,17 +2571,15 @@ describe("ProviderCommandReactor", () => {
         });
         await seedLimitSource(harness, "Do not send before reset");
         if (pendingIdentity) {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.usage-limit.admit",
-              commandId: CommandId.makeUnsafe("raw-limit-pending-admission"),
-              threadId,
-              admissionSequence: (await Effect.runPromise(harness.engine.getReadModel()))
-                .snapshotSequence,
-              policyEpoch: 0,
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.usage-limit.admit",
+            commandId: CommandId.makeUnsafe("raw-limit-pending-admission"),
+            threadId,
+            admissionSequence: (await Effect.runPromise(harness.engine.getReadModel()))
+              .snapshotSequence,
+            policyEpoch: 0,
+            createdAt: new Date().toISOString(),
+          });
         }
         let releaseSchedule!: () => void;
         let scheduleEntered = false;
@@ -2711,24 +2668,22 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     await harness.seedCompletion();
     const beforeCompletion = await readHarnessThread(harness);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("passive-result"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requireUnarchived: true,
-        activity: {
-          id: EventId.makeUnsafe("passive-result"),
-          kind: "synara.task.completed",
-          tone: "info",
-          summary: "Delegated task completed",
-          payload: { detail: "delegated result" },
-          turnId: null,
-          createdAt: new Date().toISOString(),
-        },
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("passive-result"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requireUnarchived: true,
+      activity: {
+        id: EventId.makeUnsafe("passive-result"),
+        kind: "synara.task.completed",
+        tone: "info",
+        summary: "Delegated task completed",
+        payload: { detail: "delegated result" },
+        turnId: null,
         createdAt: new Date().toISOString(),
-      }),
-    );
+      },
+      createdAt: new Date().toISOString(),
+    });
     await harness.drain();
     const afterCompletion = await readHarnessThread(harness);
     expect(afterCompletion?.latestHumanMessageAt).toBe(beforeCompletion?.latestHumanMessageAt);
@@ -2837,16 +2792,14 @@ describe("ProviderCommandReactor", () => {
 
     it("runs a worktree chat in its worktree and keeps the extra folders live", async () => {
       const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("multi-folder-worktree-mode"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          envMode: "worktree",
-          branch: "synara/multi-folder",
-          worktreePath: "/tmp/provider-worktrees/multi-folder",
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("multi-folder-worktree-mode"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/multi-folder",
+        worktreePath: "/tmp/provider-worktrees/multi-folder",
+      });
       await dispatchTurn(harness, "worktree");
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
@@ -2870,14 +2823,12 @@ describe("ProviderCommandReactor", () => {
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       harness.startSession.mockClear();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "project.meta.update",
-          commandId: CommandId.makeUnsafe("multi-folder-edit-folders"),
-          projectId: asProjectId("project-1"),
-          additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
-        }),
-      );
+      await harness.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.makeUnsafe("multi-folder-edit-folders"),
+        projectId: asProjectId("project-1"),
+        additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+      });
       await harness.drain();
       // Editing the folders never restarts an idle session on its own.
       expect(harness.startSession).not.toHaveBeenCalled();
@@ -2928,31 +2879,19 @@ describe("ProviderCommandReactor", () => {
           }),
         );
         harness.getSessionAdditionalDirectories.mockImplementation(() => Effect.succeed(persisted));
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("seed-recovered-session"),
-            threadId,
-            createdAt: now,
-            session: {
-              threadId,
-              status: "ready",
-              providerName: "claudeAgent",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: now,
-            },
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "project.meta.update",
-            commandId: CommandId.makeUnsafe("multi-folder-edit-recovered"),
-            projectId: asProjectId("project-1"),
-            additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "seed-recovered-session",
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          at: now,
+        });
+        await harness.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("multi-folder-edit-recovered"),
+          projectId: asProjectId("project-1"),
+          additionalFolders: ["/tmp/provider-api", "/tmp/provider-docs"],
+        });
         await dispatchTurn(harness, "recovered");
         await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
@@ -3041,33 +2980,29 @@ describe("ProviderCommandReactor", () => {
       readonly createdAt: string;
     },
   ) {
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe(`cmd-import-${input.messageId}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: input.messageId,
-            role: "user",
-            text: "rollback target",
-            createdAt: input.createdAt,
-            updatedAt: input.createdAt,
-          },
-        ],
-        createdAt: input.createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.makeUnsafe(`cmd-assistant-complete-${input.messageId}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe(`assistant-${input.messageId}`),
-        turnId: input.turnId,
-        createdAt: input.createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe(`cmd-import-${input.messageId}`),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: input.messageId,
+          role: "user",
+          text: "rollback target",
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        },
+      ],
+      createdAt: input.createdAt,
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe(`cmd-assistant-complete-${input.messageId}`),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: MessageId.makeUnsafe(`assistant-${input.messageId}`),
+      turnId: input.turnId,
+      createdAt: input.createdAt,
+    });
   }
 
   async function readHarnessThread(
@@ -3117,30 +3052,28 @@ describe("ProviderCommandReactor", () => {
     userText = "Fix the backend authentication callback race",
   ) {
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe(`cmd-rename-context-${crypto.randomUUID()}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: asMessageId(`rename-user-${crypto.randomUUID()}`),
-            role: "user",
-            text: userText,
-            createdAt,
-            updatedAt: createdAt,
-          },
-          {
-            messageId: asMessageId(`rename-assistant-${crypto.randomUUID()}`),
-            role: "assistant",
-            text: "I found the race in the callback state transition.",
-            createdAt,
-            updatedAt: createdAt,
-          },
-        ],
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe(`cmd-rename-context-${crypto.randomUUID()}`),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: asMessageId(`rename-user-${crypto.randomUUID()}`),
+          role: "user",
+          text: userText,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        {
+          messageId: asMessageId(`rename-assistant-${crypto.randomUUID()}`),
+          role: "assistant",
+          text: "I found the race in the callback state transition.",
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ],
+      createdAt,
+    });
   }
 
   function emitStartedBootTurn(
@@ -3283,34 +3216,22 @@ describe("ProviderCommandReactor", () => {
           completedAt: createdAt,
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("old-running-session-with-stop"),
-          threadId,
-          session: {
-            threadId,
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            status: "running",
-            activeTurnId: turnId,
-            updatedAt: createdAt,
-            lastError: null,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "old-running-session-with-stop",
+        threadId,
+        status: "running",
+        activeTurnId: turnId,
+        at: createdAt,
+      });
       const control = {
         commandId: CommandId.makeUnsafe("pending-durable-stop"),
         threadId,
         createdAt,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch(
-          type === "thread.turn.interrupt"
-            ? { ...control, type, turnId, requestedBy: "user" }
-            : { ...control, type },
-        ),
+      await harness.dispatch(
+        type === "thread.turn.interrupt"
+          ? { ...control, type, turnId, requestedBy: "user" }
+          : { ...control, type },
       );
       expect((await readHarnessThread(harness))?.session?.activeTurnId).toBe(turnId);
       const capture = () => harness.runtime.runPromise(captureCrashResumeRecord);
@@ -3325,6 +3246,32 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  function createHarnessThread(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly commandId: string;
+      readonly threadId: ThreadId;
+      readonly parentThreadId?: ThreadId;
+      readonly title: string;
+      readonly modelSelection: ModelSelection;
+      readonly createdAt: string;
+    },
+  ) {
+    const { commandId, ...thread } = input;
+    return harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe(commandId),
+      projectId: asProjectId("project-1"),
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      ...thread,
+    });
+  }
+
+  type StartTurnCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
+
   async function dispatchHarnessUserTurn(
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
@@ -3334,26 +3281,30 @@ describe("ProviderCommandReactor", () => {
       readonly commandId?: string;
       readonly threadId?: ThreadId;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
+      readonly modelSelection?: StartTurnCommand["modelSelection"];
+      readonly dispatchMode?: StartTurnCommand["dispatchMode"];
+      readonly interactionMode?: StartTurnCommand["interactionMode"];
+      readonly runtimeMode?: StartTurnCommand["runtimeMode"];
       readonly dispatchOrigin?: "user" | "automation" | "agent";
     },
   ) {
-    return Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe(input.commandId ?? `cmd-${input.messageId}`),
-        threadId: input.threadId ?? ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId(input.messageId),
-          role: "user",
-          text: input.text,
-          attachments: input.attachments ?? [],
-        },
-        ...(input.dispatchOrigin !== undefined ? { dispatchOrigin: input.dispatchOrigin } : {}),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: input.createdAt,
-      }),
-    );
+    return harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe(input.commandId ?? `cmd-${input.messageId}`),
+      threadId: input.threadId ?? ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId(input.messageId),
+        role: "user",
+        text: input.text,
+        attachments: input.attachments ?? [],
+      },
+      ...(input.dispatchOrigin !== undefined ? { dispatchOrigin: input.dispatchOrigin } : {}),
+      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+      ...(input.dispatchMode !== undefined ? { dispatchMode: input.dispatchMode } : {}),
+      interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: input.runtimeMode ?? "approval-required",
+      createdAt: input.createdAt,
+    });
   }
 
   async function setHarnessSession(
@@ -3371,28 +3322,31 @@ describe("ProviderCommandReactor", () => {
       readonly at: string;
       readonly threadId?: ThreadId;
       readonly providerName?: string | null;
+      readonly providerInstanceId?: OrchestrationSession["providerInstanceId"];
+      readonly runtimeMode?: OrchestrationSession["runtimeMode"];
       readonly activeTurnId?: TurnId | null;
       readonly lastError?: string | null;
     },
   ) {
     const threadId = input.threadId ?? ThreadId.makeUnsafe("thread-1");
-    return Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe(input.commandId),
+    return harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe(input.commandId),
+      threadId,
+      session: {
         threadId,
-        session: {
-          threadId,
-          status: input.status,
-          providerName: input.providerName === undefined ? "codex" : input.providerName,
-          runtimeMode: "approval-required",
-          activeTurnId: input.activeTurnId ?? null,
-          lastError: input.lastError ?? null,
-          updatedAt: input.at,
-        },
-        createdAt: input.at,
-      }),
-    );
+        status: input.status,
+        providerName: input.providerName === undefined ? "codex" : input.providerName,
+        ...(input.providerInstanceId !== undefined
+          ? { providerInstanceId: input.providerInstanceId }
+          : {}),
+        runtimeMode: input.runtimeMode ?? "approval-required",
+        activeTurnId: input.activeTurnId ?? null,
+        lastError: input.lastError ?? null,
+        updatedAt: input.at,
+      },
+      createdAt: input.at,
+    });
   }
 
   async function emitHarnessTurnTerminal(
@@ -3572,7 +3526,7 @@ describe("ProviderCommandReactor", () => {
         decision,
         createdAt: new Date().toISOString(),
       };
-      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.dispatch(command);
       await harness.drain();
       return command;
     }
@@ -3668,16 +3622,14 @@ describe("ProviderCommandReactor", () => {
         status: "pending" as const,
         createdAt: now,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe(input.setCommandId),
-          threadId,
-          review,
-          expectedReviewId: null,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe(input.setCommandId),
+        threadId,
+        review,
+        expectedReviewId: null,
+        createdAt: now,
+      });
       const key = {
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: source.sequence,
@@ -3716,17 +3668,15 @@ describe("ProviderCommandReactor", () => {
         text: "Continue this recovered held message",
         setCommandId: "cmd-cache-retry-ahead-review",
       });
-      const response = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.respond",
-          commandId: CommandId.makeUnsafe("cmd-cache-retry-ahead-continue"),
-          threadId,
-          reviewId: review.reviewId,
-          messageId: review.messageId,
-          decision: "continue",
-          createdAt: now,
-        }),
-      );
+      const response = await harness.dispatch({
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe("cmd-cache-retry-ahead-continue"),
+        threadId,
+        reviewId: review.reviewId,
+        messageId: review.messageId,
+        decision: "continue",
+        createdAt: now,
+      });
       const responseKey = { ...sourceKey, eventSequence: response.sequence };
       await Effect.runPromise(
         harness.deliveryRepository.claim({
@@ -3792,38 +3742,19 @@ describe("ProviderCommandReactor", () => {
           },
         );
         const peer = ThreadId.makeUnsafe(`cache-fenced-${state}-peer`);
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-create`),
-            threadId: peer,
-            projectId: asProjectId("project-1"),
-            title: "Pinned peer",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-session`),
-            threadId: peer,
-            session: {
-              threadId: peer,
-              status: "ready",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              updatedAt: now,
-              lastError: null,
-            },
-            createdAt: now,
-          }),
-        );
+        await createHarnessThread(harness, {
+          commandId: `cache-fenced-${state}-peer-create`,
+          threadId: peer,
+          title: "Pinned peer",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt: now,
+        });
+        await setHarnessSession(harness, {
+          commandId: `cache-fenced-${state}-peer-session`,
+          threadId: peer,
+          status: "ready",
+          at: now,
+        });
         const prefix = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
         for (const event of prefix)
           await Effect.runPromise(
@@ -3833,26 +3764,22 @@ describe("ProviderCommandReactor", () => {
               updatedAt: now,
             }),
           );
-        const pinned = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.task.stop",
-            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-pin`),
-            threadId: peer,
-            taskId: "pinned-peer-task",
-            createdAt: now,
-          }),
-        );
-        const response = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.respond",
-            commandId: CommandId.makeUnsafe(`cache-fenced-${state}-continue`),
-            threadId,
-            reviewId: review.reviewId,
-            messageId: review.messageId,
-            decision: "continue",
-            createdAt: now,
-          }),
-        );
+        const pinned = await harness.dispatch({
+          type: "thread.task.stop",
+          commandId: CommandId.makeUnsafe(`cache-fenced-${state}-peer-pin`),
+          threadId: peer,
+          taskId: "pinned-peer-task",
+          createdAt: now,
+        });
+        const response = await harness.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe(`cache-fenced-${state}-continue`),
+          threadId,
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "continue",
+          createdAt: now,
+        });
         const responseKey = { ...key, eventSequence: response.sequence };
         await Effect.runPromise(
           harness.deliveryRepository.claim({
@@ -3925,15 +3852,13 @@ describe("ProviderCommandReactor", () => {
             ),
           );
           const callsBefore = harness.stopTask.mock.calls.length;
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.task.stop",
-              commandId: CommandId.makeUnsafe("cache-fenced-normal-after-recovery"),
-              threadId,
-              taskId: "normal-task",
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.task.stop",
+            commandId: CommandId.makeUnsafe("cache-fenced-normal-after-recovery"),
+            threadId,
+            taskId: "normal-task",
+            createdAt: now,
+          });
           await waitFor(() => harness.stopTask.mock.calls.length > callsBefore);
           await Effect.runPromise(fresh.reactor.drain);
           expect(
@@ -4026,17 +3951,15 @@ describe("ProviderCommandReactor", () => {
             createdAt: new Date().toISOString(),
           });
         } else {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-queued-stop-compact"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review!.reviewId,
-              messageId: review!.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-queued-stop-compact"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review!.reviewId,
+            messageId: review!.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
         }
         await waitFor(() => preparation.mock.calls.length === 1);
         if (editsNativeCommand) {
@@ -4062,14 +3985,12 @@ describe("ProviderCommandReactor", () => {
         }
         // Fill the ordered source's bounded handoff with unrelated events.
         for (const index of [1, 2, 3]) {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.meta.update",
-              commandId: CommandId.makeUnsafe(`cmd-discovery-title-${index}`),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              title: `Title ${index}`,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`cmd-discovery-title-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            title: `Title ${index}`,
+          });
         }
         const cancellationCommand: OrchestrationCommand =
           commandType === "thread.conversation.rollback"
@@ -4098,7 +4019,7 @@ describe("ProviderCommandReactor", () => {
                   threadId: ThreadId.makeUnsafe("thread-1"),
                   createdAt: new Date().toISOString(),
                 };
-        await Effect.runPromise(harness.engine.dispatch(cancellationCommand));
+        await harness.dispatch(cancellationCommand);
         await expect.poll(() => cancelDiscovery.mock.calls.length).toBe(1);
         await harness.drain();
         if (commandType === "thread.turn.interrupt") {
@@ -4275,23 +4196,13 @@ describe("ProviderCommandReactor", () => {
         }
         if (phase === "queued-stop" || phase === "queued-rollback") {
           const createdAt = new Date().toISOString();
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.session.set",
-              commandId: CommandId.makeUnsafe("cmd-compact-preparing-session"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              session: {
-                threadId: ThreadId.makeUnsafe("thread-1"),
-                providerName: "claudeAgent",
-                runtimeMode: "approval-required",
-                status: "running",
-                activeTurnId: asTurnId("preparing-native-compact"),
-                lastError: null,
-                updatedAt: createdAt,
-              },
-              createdAt,
-            }),
-          );
+          await setHarnessSession(harness, {
+            commandId: "cmd-compact-preparing-session",
+            status: "running",
+            providerName: "claudeAgent",
+            activeTurnId: asTurnId("preparing-native-compact"),
+            at: createdAt,
+          });
           await dispatchHarnessUserTurn(harness, {
             messageId: "queued-behind-cancelled-compact",
             text: "This queued message must stay cancelled",
@@ -4306,31 +4217,29 @@ describe("ProviderCommandReactor", () => {
           expect(queuedEvent).toBeDefined();
           queuedSequence = queuedEvent!.sequence;
         }
-        await Effect.runPromise(
-          harness.engine.dispatch(
-            phase === "queued-rollback"
-              ? {
-                  type: "thread.conversation.rollback",
-                  commandId: CommandId.makeUnsafe("cmd-cancel-compact-rollback"),
-                  threadId: ThreadId.makeUnsafe("thread-1"),
-                  messageId: asMessageId("prior-rollback-history"),
-                  numTurns: 1,
-                  createdAt: new Date().toISOString(),
-                }
-              : {
-                  type:
-                    phase === "preflight" ||
-                    phase === "baseline" ||
-                    phase === "subscriber-lag" ||
-                    phase === "idle-interrupt" ||
-                    phase === "service-cancel"
-                      ? "thread.turn.interrupt"
-                      : "thread.session.stop",
-                  commandId: CommandId.makeUnsafe(`cmd-direct-compact-cancel-${phase}`),
-                  threadId: ThreadId.makeUnsafe("thread-1"),
-                  createdAt: new Date().toISOString(),
-                },
-          ),
+        await harness.dispatch(
+          phase === "queued-rollback"
+            ? {
+                type: "thread.conversation.rollback",
+                commandId: CommandId.makeUnsafe("cmd-cancel-compact-rollback"),
+                threadId: ThreadId.makeUnsafe("thread-1"),
+                messageId: asMessageId("prior-rollback-history"),
+                numTurns: 1,
+                createdAt: new Date().toISOString(),
+              }
+            : {
+                type:
+                  phase === "preflight" ||
+                  phase === "baseline" ||
+                  phase === "subscriber-lag" ||
+                  phase === "idle-interrupt" ||
+                  phase === "service-cancel"
+                    ? "thread.turn.interrupt"
+                    : "thread.session.stop",
+                commandId: CommandId.makeUnsafe(`cmd-direct-compact-cancel-${phase}`),
+                threadId: ThreadId.makeUnsafe("thread-1"),
+                createdAt: new Date().toISOString(),
+              },
         );
         if (phase === "replay") await harness.startReactor();
         else if (phase === "subscriber-lag") await waitFor(() => subscriberEntered);
@@ -4426,25 +4335,23 @@ describe("ProviderCommandReactor", () => {
         });
         try {
           const send = (id: string, text: string, modelSelection?: ModelSelection) =>
-            Effect.runPromise(
-              harness.engine.dispatch({
-                type: "thread.turn.start",
-                commandId: CommandId.makeUnsafe(id),
-                threadId: ThreadId.makeUnsafe("thread-1"),
-                message: { messageId: asMessageId(id), role: "user", text, attachments: [] },
-                interactionMode: "default",
-                runtimeMode:
-                  changedSetting === "runtime" && modelSelection
-                    ? "full-access"
-                    : "approval-required",
-                dispatchMode,
-                ...(modelSelection ? { modelSelection } : {}),
-                ...(changedSetting === "computer" && modelSelection
-                  ? { enableComputerControl: true, computerControlGeneration: 0 }
-                  : {}),
-                createdAt: new Date().toISOString(),
-              }),
-            );
+            harness.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.makeUnsafe(id),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              message: { messageId: asMessageId(id), role: "user", text, attachments: [] },
+              interactionMode: "default",
+              runtimeMode:
+                changedSetting === "runtime" && modelSelection
+                  ? "full-access"
+                  : "approval-required",
+              dispatchMode,
+              ...(modelSelection ? { modelSelection } : {}),
+              ...(changedSetting === "computer" && modelSelection
+                ? { enableComputerControl: true, computerControlGeneration: 0 }
+                : {}),
+              createdAt: new Date().toISOString(),
+            });
           await send("before-compact-settings", "Initial task");
           await harness.drain();
           const selection: ModelSelection = {
@@ -4502,23 +4409,14 @@ describe("ProviderCommandReactor", () => {
         getPersistedSessionProfile,
         getClaudeCacheObservation: () => Effect.succeed(undefined),
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-cold-native-compact"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          message: {
-            messageId: asMessageId("cold-native-compact"),
-            role: "user",
-            text: "/compact Keep the established context",
-            attachments: [],
-          },
-          interactionMode: "default",
-          modelSelection: pendingSelection,
-          runtimeMode: "full-access",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-cold-native-compact",
+        messageId: "cold-native-compact",
+        text: "/compact Keep the established context",
+        runtimeMode: "full-access",
+        modelSelection: pendingSelection,
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       expect(getPersistedSessionProfile).toHaveBeenCalledWith(ThreadId.makeUnsafe("thread-1"));
       expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -4578,23 +4476,14 @@ describe("ProviderCommandReactor", () => {
       );
       await Effect.runPromise(Deferred.await(leaseAcquired));
       try {
-        const response = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("cmd-native-steer-compact"),
-            threadId,
-            message: {
-              messageId: asMessageId("native-steer-compact"),
-              role: "user",
-              text: "/compact Preserve project decisions",
-              attachments: [],
-            },
-            dispatchMode: "steer",
-            interactionMode: "default",
-            runtimeMode: "approval-required",
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        const response = await dispatchHarnessUserTurn(harness, {
+          commandId: "cmd-native-steer-compact",
+          threadId,
+          messageId: "native-steer-compact",
+          text: "/compact Preserve project decisions",
+          dispatchMode: "steer",
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(async () => {
           const delivery = await Effect.runPromise(
             harness.deliveryRepository.getDelivery({
@@ -4615,14 +4504,12 @@ describe("ProviderCommandReactor", () => {
           payload: { state: "completed" },
           providerRefs: {},
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("cmd-native-steer-cancel"),
-            threadId,
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-native-steer-cancel"),
+          threadId,
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(() => cancelDiscovery.mock.calls.length === 1);
         await Effect.runPromise(Deferred.succeed(releaseLease, undefined));
         await harness.drain();
@@ -4661,30 +4548,26 @@ describe("ProviderCommandReactor", () => {
           );
         }
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-compact-before-handoff"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-compact-before-handoff"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() =>
             phase === "startup"
               ? harness.startSession.mock.calls.length === 2
               : getClaudeCacheObservation.mock.calls.length === 2,
           );
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.turn.interrupt",
-              commandId: CommandId.makeUnsafe("cmd-interrupt-before-handoff"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("cmd-interrupt-before-handoff"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() => cancelDiscovery.mock.calls.length === 1);
           await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout(Duration.seconds(1))));
           releaseObservation();
@@ -4715,17 +4598,15 @@ describe("ProviderCommandReactor", () => {
       );
       await Effect.runPromise(Deferred.await(leaseAcquired));
       try {
-        const response = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.respond",
-            commandId: CommandId.makeUnsafe("cmd-compact-behind-checkpoint-lease"),
-            threadId,
-            reviewId: review.reviewId,
-            messageId: review.messageId,
-            decision: "compact",
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        const response = await harness.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-compact-behind-checkpoint-lease"),
+          threadId,
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "compact",
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(async () => {
           const delivery = await Effect.runPromise(
             harness.deliveryRepository.getDelivery({
@@ -4735,14 +4616,12 @@ describe("ProviderCommandReactor", () => {
           );
           return Option.getOrUndefined(delivery)?.state === "inflight";
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("cmd-cancel-behind-checkpoint-lease"),
-            threadId,
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-cancel-behind-checkpoint-lease"),
+          threadId,
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(() => cancelDiscovery.mock.calls.length === 1);
         await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout(Duration.seconds(1))));
         expect(startClaudeCompaction).not.toHaveBeenCalled();
@@ -4811,14 +4690,12 @@ describe("ProviderCommandReactor", () => {
         const uncertain = (await readHarnessThread(harness))?.claudeCacheReview;
         expect(uncertain?.status).toBe("uncertain");
         const turnId = uncertain!.compactionTurnId!;
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: cancellation === "stop" ? "thread.session.stop" : "thread.archive",
-            commandId: CommandId.makeUnsafe("review-stop"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: cancellation === "stop" ? "thread.session.stop" : "thread.archive",
+          commandId: CommandId.makeUnsafe("review-stop"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt: new Date().toISOString(),
+        });
         await harness.drain();
         if (cancellation === "stop") {
           setObservation({
@@ -4970,17 +4847,15 @@ describe("ProviderCommandReactor", () => {
           text: "Do not send after recovery cancellation",
           setCommandId: "cmd-recovery-review",
         });
-        const response = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.respond",
-            commandId: CommandId.makeUnsafe("cmd-recovery-continue"),
-            threadId,
-            reviewId: review.reviewId,
-            messageId: review.messageId,
-            decision: "continue",
-            createdAt: now,
-          }),
-        );
+        const response = await harness.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-recovery-continue"),
+          threadId,
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "continue",
+          createdAt: now,
+        });
         await Effect.runPromise(
           harness.deliveryRepository.claim({
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -4992,14 +4867,12 @@ describe("ProviderCommandReactor", () => {
               settlement === "expired" ? now : new Date(Date.now() + 1_000).toISOString(),
           }),
         );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("cmd-recovery-interrupt"),
-            threadId,
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-recovery-interrupt"),
+          threadId,
+          createdAt: now,
+        });
         const getDelivery = harness.deliveryRepository.getDelivery;
         let reads = 0;
         Object.assign(harness.deliveryRepository, {
@@ -5057,26 +4930,22 @@ describe("ProviderCommandReactor", () => {
         },
       });
       try {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.respond",
-            commandId: CommandId.makeUnsafe("cmd-gap-continue"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            reviewId: review.reviewId,
-            messageId: review.messageId,
-            decision: "continue",
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-gap-continue"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "continue",
+          createdAt: new Date().toISOString(),
+        });
         await Effect.runPromise(Deferred.await(entered));
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("cmd-gap-interrupt"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-gap-interrupt"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(() => cancelDiscovery.mock.calls.length === 1);
       } finally {
         await Effect.runPromise(Deferred.succeed(release, undefined));
@@ -5096,36 +4965,32 @@ describe("ProviderCommandReactor", () => {
           Deferred.await(releaseObservation).pipe(Effect.as(review.assessment)),
         );
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-reconfigure-compact"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-reconfigure-compact"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() => getClaudeCacheObservation.mock.calls.length === 2);
-          const update = await Effect.runPromise(
-            harness.engine.dispatch(
-              change !== "runtime"
-                ? {
-                    type: "thread.meta.update",
-                    commandId: CommandId.makeUnsafe("cmd-change-provider-during-compaction"),
-                    threadId: ThreadId.makeUnsafe("thread-1"),
-                    modelSelection: { provider: "codex", model: "gpt-5-codex" },
-                    ...(change === "handoff" ? { providerHandoff: true } : {}),
-                  }
-                : {
-                    type: "thread.runtime-mode.set",
-                    commandId: CommandId.makeUnsafe("cmd-change-runtime-during-compaction"),
-                    threadId: ThreadId.makeUnsafe("thread-1"),
-                    runtimeMode: "full-access",
-                    createdAt: new Date().toISOString(),
-                  },
-            ),
+          const update = await harness.dispatch(
+            change !== "runtime"
+              ? {
+                  type: "thread.meta.update",
+                  commandId: CommandId.makeUnsafe("cmd-change-provider-during-compaction"),
+                  threadId: ThreadId.makeUnsafe("thread-1"),
+                  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+                  ...(change === "handoff" ? { providerHandoff: true } : {}),
+                }
+              : {
+                  type: "thread.runtime-mode.set",
+                  commandId: CommandId.makeUnsafe("cmd-change-runtime-during-compaction"),
+                  threadId: ThreadId.makeUnsafe("thread-1"),
+                  runtimeMode: "full-access",
+                  createdAt: new Date().toISOString(),
+                },
           );
           await waitFor(async () => {
             const state = await Effect.runPromise(
@@ -5171,21 +5036,18 @@ describe("ProviderCommandReactor", () => {
         cacheResponseTimeout: Duration.millis(100),
       });
       const review = await sendHeldMessage(harness);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.respond",
-          commandId: CommandId.makeUnsafe("cmd-cache-response-deadline"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          reviewId: review.reviewId,
-          messageId: review.messageId,
-          decision: "compact",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe("cmd-cache-response-deadline"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        reviewId: review.reviewId,
+        messageId: review.messageId,
+        decision: "compact",
+        createdAt: new Date().toISOString(),
+      });
       try {
         await waitFor(() => startClaudeCompaction.mock.calls.length === 1, 500);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        expect(cleanedUp).toBe(true);
+        await waitFor(() => cleanedUp);
         await waitFor(async () =>
           (
             await Effect.runPromise(
@@ -5204,6 +5066,10 @@ describe("ProviderCommandReactor", () => {
         );
         expect(blockers).toContainEqual(expect.objectContaining({ state: "uncertain" }));
         expect(harness.sendTurn).not.toHaveBeenCalled();
+        // The durable blocker is written before the thread review is projected.
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.claudeCacheReview?.status === "uncertain",
+        );
         const settledReview = (await readHarnessThread(harness))?.claudeCacheReview;
         expect(settledReview?.status).toBe("uncertain");
         expect(settledReview?.error).toContain("did not respond within 100ms");
@@ -5251,21 +5117,13 @@ describe("ProviderCommandReactor", () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
         const threadId = ThreadId.makeUnsafe("thread-during-retried-compaction");
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("cmd-create-during-retried-compaction"),
-            threadId,
-            projectId: asProjectId("project-1"),
-            title: "Independent chat",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            branch: null,
-            worktreePath: null,
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await createHarnessThread(harness, {
+          commandId: "cmd-create-during-retried-compaction",
+          threadId,
+          title: "Independent chat",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt: new Date().toISOString(),
+        });
         await dispatchHarnessUserTurn(harness, {
           threadId,
           messageId: "during-retried-compaction",
@@ -5305,17 +5163,15 @@ describe("ProviderCommandReactor", () => {
         }
         let terminal: Promise<void> | undefined;
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-slow-compact"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-slow-compact"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() => startClaudeCompaction.mock.calls.length === 1);
           if (phase !== "compaction") {
             await harness.drain();
@@ -5336,21 +5192,13 @@ describe("ProviderCommandReactor", () => {
             expectedStatus,
           );
           const threadId = ThreadId.makeUnsafe("thread-during-compaction");
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.create",
-              commandId: CommandId.makeUnsafe("cmd-create-during-compaction"),
-              threadId,
-              projectId: asProjectId("project-1"),
-              title: "Independent chat",
-              modelSelection: { provider: "codex", model: "gpt-5-codex" },
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              runtimeMode: "approval-required",
-              branch: null,
-              worktreePath: null,
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await createHarnessThread(harness, {
+            commandId: "cmd-create-during-compaction",
+            threadId,
+            title: "Independent chat",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            createdAt: new Date().toISOString(),
+          });
           await dispatchHarnessUserTurn(harness, {
             threadId,
             messageId: "during-compaction",
@@ -5364,14 +5212,12 @@ describe("ProviderCommandReactor", () => {
             expectedStatus,
           );
           if (phase === "cancel-follow-up") {
-            await Effect.runPromise(
-              harness.engine.dispatch({
-                type: "thread.session.stop",
-                commandId: CommandId.makeUnsafe("cmd-stop-pending-cache-send"),
-                threadId: ThreadId.makeUnsafe("thread-1"),
-                createdAt: new Date().toISOString(),
-              }),
-            );
+            await harness.dispatch({
+              type: "thread.session.stop",
+              commandId: CommandId.makeUnsafe("cmd-stop-pending-cache-send"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              createdAt: new Date().toISOString(),
+            });
             await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
             await Effect.runPromise(
               harness.reactor.drain.pipe(Effect.timeout(Duration.seconds(1))),
@@ -5608,17 +5454,15 @@ describe("ProviderCommandReactor", () => {
           }),
         );
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-early-terminal-compact"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-early-terminal-compact"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() => terminalPublished);
           // Give the independent runtime-event consumer a turn while the
           // source delivery is deliberately still awaiting provider acceptance.
@@ -5769,23 +5613,21 @@ describe("ProviderCommandReactor", () => {
         text: "/compact Preserve the pending task",
         createdAt: now,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe("cmd-cache-original-compact-review"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          review: {
-            reviewId: "cache-original-compact-review",
-            messageId: asMessageId("cache-original-compact"),
-            sourceEventSequence: source.sequence,
-            assessment: observation,
-            status: "pending",
-            createdAt: now,
-          },
-          expectedReviewId: null,
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe("cmd-cache-original-compact-review"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        review: {
+          reviewId: "cache-original-compact-review",
+          messageId: asMessageId("cache-original-compact"),
+          sourceEventSequence: source.sequence,
+          assessment: observation,
+          status: "pending",
           createdAt: now,
-        }),
-      );
+        },
+        expectedReviewId: null,
+        createdAt: now,
+      });
       await harness.startReactor();
       await harness.drain();
       const review = (await readHarnessThread(harness))?.claudeCacheReview;
@@ -5851,20 +5693,18 @@ describe("ProviderCommandReactor", () => {
           });
         }
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-compact-authorization-respond"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "compact",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-compact-authorization-respond"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "compact",
+            createdAt: new Date().toISOString(),
+          });
           if (stage === "cache-revalidation") {
             await waitFor(() => getterCalls === 2);
-            await Effect.runPromise(harness.engine.dispatch(rollback));
+            await harness.dispatch(rollback);
           }
         } finally {
           releaseObservation(observation);
@@ -5899,42 +5739,38 @@ describe("ProviderCommandReactor", () => {
         });
         const review = await sendHeldMessage(harness);
         try {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-cache-continue-during-revalidation"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "continue",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-cache-continue-during-revalidation"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "continue",
+            createdAt: new Date().toISOString(),
+          });
           await waitFor(() => getterCalls === 2);
-          await Effect.runPromise(
-            harness.engine.dispatch(
-              action === "archive"
+          await harness.dispatch(
+            action === "archive"
+              ? {
+                  type: "thread.archive",
+                  commandId: CommandId.makeUnsafe("cmd-cache-archive-during-revalidation"),
+                  threadId: ThreadId.makeUnsafe("thread-1"),
+                }
+              : action === "stop"
                 ? {
-                    type: "thread.archive",
-                    commandId: CommandId.makeUnsafe("cmd-cache-archive-during-revalidation"),
+                    type: "thread.session.stop",
+                    commandId: CommandId.makeUnsafe("cmd-cache-stop-during-revalidation"),
                     threadId: ThreadId.makeUnsafe("thread-1"),
+                    createdAt: new Date().toISOString(),
                   }
-                : action === "stop"
-                  ? {
-                      type: "thread.session.stop",
-                      commandId: CommandId.makeUnsafe("cmd-cache-stop-during-revalidation"),
-                      threadId: ThreadId.makeUnsafe("thread-1"),
-                      createdAt: new Date().toISOString(),
-                    }
-                  : {
-                      type: "thread.conversation.rollback.complete",
-                      commandId: CommandId.makeUnsafe("cmd-cache-rollback-during-revalidation"),
-                      threadId: ThreadId.makeUnsafe("thread-1"),
-                      messageId: review.messageId,
-                      numTurns: 1,
-                      createdAt: new Date().toISOString(),
-                    },
-            ),
+                : {
+                    type: "thread.conversation.rollback.complete",
+                    commandId: CommandId.makeUnsafe("cmd-cache-rollback-during-revalidation"),
+                    threadId: ThreadId.makeUnsafe("thread-1"),
+                    messageId: review.messageId,
+                    numTurns: 1,
+                    createdAt: new Date().toISOString(),
+                  },
           );
         } finally {
           releaseObservation(observation);
@@ -6003,16 +5839,14 @@ describe("ProviderCommandReactor", () => {
         status: "pending" as const,
         createdAt: now,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe("cmd-startup-replay-review"),
-          threadId,
-          review,
-          expectedReviewId: null,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe("cmd-startup-replay-review"),
+        threadId,
+        review,
+        expectedReviewId: null,
+        createdAt: now,
+      });
       await Effect.runPromise(
         harness.deliveryRepository.claim({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -6031,30 +5865,26 @@ describe("ProviderCommandReactor", () => {
           completedAt: now,
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.respond",
-          commandId: CommandId.makeUnsafe("cmd-startup-replay-compact"),
-          threadId,
-          reviewId: review.reviewId,
-          messageId: review.messageId,
-          decision: "compact",
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe("cmd-startup-replay-compact"),
+        threadId,
+        reviewId: review.reviewId,
+        messageId: review.messageId,
+        decision: "compact",
+        createdAt: now,
+      });
 
       if (settlement.startsWith("cancelled-")) {
         if (settlement === "cancelled-rollback") {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.conversation.rollback",
-              commandId: CommandId.makeUnsafe("cmd-cancel-before-replay"),
-              threadId,
-              messageId: asMessageId("before-replay-history"),
-              numTurns: 1,
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.conversation.rollback",
+            commandId: CommandId.makeUnsafe("cmd-cancel-before-replay"),
+            threadId,
+            messageId: asMessageId("before-replay-history"),
+            numTurns: 1,
+            createdAt: now,
+          });
         } else {
           const commandType =
             settlement === "cancelled-stop"
@@ -6064,14 +5894,12 @@ describe("ProviderCommandReactor", () => {
                 : settlement === "cancelled-archive"
                   ? "thread.archive"
                   : "thread.delete";
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: commandType,
-              commandId: CommandId.makeUnsafe("cmd-cancel-before-replay"),
-              threadId,
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: commandType,
+            commandId: CommandId.makeUnsafe("cmd-cancel-before-replay"),
+            threadId,
+            createdAt: now,
+          });
         }
       }
 
@@ -6173,49 +6001,43 @@ describe("ProviderCommandReactor", () => {
           status: "pending" as const,
           createdAt: now,
         };
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.set",
-            commandId: CommandId.makeUnsafe("cmd-seed-compaction-review"),
-            threadId,
-            review,
-            expectedReviewId: null,
-            createdAt: now,
-          }),
-        );
-        const compactResponse = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.respond",
-            commandId: CommandId.makeUnsafe("cmd-seed-compact-response"),
-            threadId,
-            reviewId: review.reviewId,
-            messageId: review.messageId,
-            decision: "compact",
-            createdAt: now,
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.set",
-            commandId: CommandId.makeUnsafe("cmd-seed-compacting"),
-            threadId,
-            review: {
-              ...review,
-              status:
-                evidence === "failed-recovery-interrupted"
-                  ? "failed"
-                  : evidence === "confirmed-after-reconciliation" ||
-                      evidence === "uncertain-missing" ||
-                      evidence.startsWith("cancelled-")
-                    ? "uncertain"
-                    : "compacting",
-              compactionTurnId: turnId,
-              compactionResponseEventSequence: compactResponse.sequence,
-            },
-            expectedReviewId: review.reviewId,
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.claude-cache.set",
+          commandId: CommandId.makeUnsafe("cmd-seed-compaction-review"),
+          threadId,
+          review,
+          expectedReviewId: null,
+          createdAt: now,
+        });
+        const compactResponse = await harness.dispatch({
+          type: "thread.claude-cache.respond",
+          commandId: CommandId.makeUnsafe("cmd-seed-compact-response"),
+          threadId,
+          reviewId: review.reviewId,
+          messageId: review.messageId,
+          decision: "compact",
+          createdAt: now,
+        });
+        await harness.dispatch({
+          type: "thread.claude-cache.set",
+          commandId: CommandId.makeUnsafe("cmd-seed-compacting"),
+          threadId,
+          review: {
+            ...review,
+            status:
+              evidence === "failed-recovery-interrupted"
+                ? "failed"
+                : evidence === "confirmed-after-reconciliation" ||
+                    evidence === "uncertain-missing" ||
+                    evidence.startsWith("cancelled-")
+                  ? "uncertain"
+                  : "compacting",
+            compactionTurnId: turnId,
+            compactionResponseEventSequence: compactResponse.sequence,
+          },
+          expectedReviewId: review.reviewId,
+          createdAt: now,
+        });
         for (const eventSequence of [source.sequence, compactResponse.sequence]) {
           await Effect.runPromise(
             harness.deliveryRepository.claim({
@@ -6270,16 +6092,14 @@ describe("ProviderCommandReactor", () => {
         if (evidence === "uncertain-user-delivery" || evidence === "inflight-user-delivery") {
           // A confirmed compaction may have released the user's message before
           // its acknowledgement was lost and the old terminal was pruned.
-          const continued = await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.compacted",
-              commandId: CommandId.makeUnsafe("cmd-previous-compact-release"),
-              threadId,
-              reviewId: review.reviewId,
-              turnId,
-              createdAt: now,
-            }),
-          );
+          const continued = await harness.dispatch({
+            type: "thread.claude-cache.compacted",
+            commandId: CommandId.makeUnsafe("cmd-previous-compact-release"),
+            threadId,
+            reviewId: review.reviewId,
+            turnId,
+            createdAt: now,
+          });
           uncertainUserDeliverySequence = continued.sequence;
           await Effect.runPromise(
             harness.deliveryRepository.claim({
@@ -6316,21 +6136,19 @@ describe("ProviderCommandReactor", () => {
               );
             }
           }
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.set",
-              commandId: CommandId.makeUnsafe("cmd-uncertain-user-delivery"),
-              threadId,
-              review: {
-                ...review,
-                status: "uncertain",
-                compactionTurnId: turnId,
-                compactionResponseEventSequence: compactResponse.sequence,
-              },
-              expectedReviewId: review.reviewId,
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.set",
+            commandId: CommandId.makeUnsafe("cmd-uncertain-user-delivery"),
+            threadId,
+            review: {
+              ...review,
+              status: "uncertain",
+              compactionTurnId: turnId,
+              compactionResponseEventSequence: compactResponse.sequence,
+            },
+            expectedReviewId: review.reviewId,
+            createdAt: now,
+          });
         }
         let terminalSequence: number | undefined;
         if (
@@ -6372,54 +6190,35 @@ describe("ProviderCommandReactor", () => {
         if (evidence === "confirmed-invariant-failure") {
           const nextThreadId = ThreadId.makeUnsafe("thread-2");
           const nextTurnId = asTurnId("next-native-compaction-turn");
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.create",
-              commandId: CommandId.makeUnsafe("cmd-next-cache-thread"),
-              threadId: nextThreadId,
-              projectId: asProjectId("project-1"),
-              title: "Next recovered task",
-              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              runtimeMode: "approval-required",
-              branch: null,
-              worktreePath: null,
-              createdAt: now,
-            }),
-          );
-          const nextSource = await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.turn.start",
-              commandId: CommandId.makeUnsafe("cmd-next-cache-message"),
-              threadId: nextThreadId,
-              message: {
-                messageId: asMessageId("next-cache-message"),
-                role: "user",
-                text: "Continue the unaffected task",
-                attachments: [],
-              },
-              runtimeMode: "approval-required",
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              createdAt: now,
-            }),
-          );
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.set",
-              commandId: CommandId.makeUnsafe("cmd-next-cache-review"),
-              threadId: nextThreadId,
-              review: {
-                ...review,
-                reviewId: "next-cache-review",
-                messageId: asMessageId("next-cache-message"),
-                sourceEventSequence: nextSource.sequence,
-                status: "compacting",
-                compactionTurnId: nextTurnId,
-              },
-              expectedReviewId: null,
-              createdAt: now,
-            }),
-          );
+          await createHarnessThread(harness, {
+            commandId: "cmd-next-cache-thread",
+            threadId: nextThreadId,
+            title: "Next recovered task",
+            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+            createdAt: now,
+          });
+          const nextSource = await dispatchHarnessUserTurn(harness, {
+            commandId: "cmd-next-cache-message",
+            threadId: nextThreadId,
+            messageId: "next-cache-message",
+            text: "Continue the unaffected task",
+            createdAt: now,
+          });
+          await harness.dispatch({
+            type: "thread.claude-cache.set",
+            commandId: CommandId.makeUnsafe("cmd-next-cache-review"),
+            threadId: nextThreadId,
+            review: {
+              ...review,
+              reviewId: "next-cache-review",
+              messageId: asMessageId("next-cache-message"),
+              sourceEventSequence: nextSource.sequence,
+              status: "compacting",
+              compactionTurnId: nextTurnId,
+            },
+            expectedReviewId: null,
+            createdAt: now,
+          });
           const nextTerminal = await Effect.runPromise(
             harness.runtimeEventRepository.append({
               eventId: asEventId("next-cache-terminal"),
@@ -6471,14 +6270,12 @@ describe("ProviderCommandReactor", () => {
           return;
         }
         if (evidence.startsWith("cancelled-")) {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.session.stop",
-              commandId: CommandId.makeUnsafe("cancel-before-recovery"),
-              threadId,
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.session.stop",
+            commandId: CommandId.makeUnsafe("cancel-before-recovery"),
+            threadId,
+            createdAt: now,
+          });
           await dispatchHarnessUserTurn(harness, {
             messageId: "blocked-before-startup-recovery",
             text: "Do not replay this blocked send at startup",
@@ -6593,41 +6390,20 @@ describe("ProviderCommandReactor", () => {
         });
         await harness.drain();
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("cmd-cache-model-session-ready"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            session: {
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              providerName: "claudeAgent",
-              status: "ready",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: createdAt,
-            },
-            createdAt,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "cmd-cache-model-session-ready",
+          status: "ready",
+          providerName: "claudeAgent",
+          at: createdAt,
+        });
         harness.sendTurn.mockClear();
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("cmd-cache-warm-model-send"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            message: {
-              messageId: asMessageId("warm-model-message"),
-              role: "user",
-              text: "Continue using this model",
-              attachments: [],
-            },
-            modelSelection: { provider: "claudeAgent", model },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "cmd-cache-warm-model-send",
+          messageId: "warm-model-message",
+          text: "Continue using this model",
+          modelSelection: { provider: "claudeAgent", model },
+          createdAt,
+        });
         await harness.drain();
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
         expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
@@ -6678,58 +6454,50 @@ describe("ProviderCommandReactor", () => {
           text: "Hold this message across recovery",
           createdAt: now,
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.claude-cache.set",
-            commandId: CommandId.makeUnsafe("cmd-cache-review-before-recovery"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            review: {
-              reviewId: "durable-review-before-recovery",
-              messageId: asMessageId("cache-recovery-message"),
-              sourceEventSequence: receipt.sequence,
-              assessment: observation,
-              status: "pending",
-              createdAt: now,
-            },
-            expectedReviewId: null,
+        await harness.dispatch({
+          type: "thread.claude-cache.set",
+          commandId: CommandId.makeUnsafe("cmd-cache-review-before-recovery"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          review: {
+            reviewId: "durable-review-before-recovery",
+            messageId: asMessageId("cache-recovery-message"),
+            sourceEventSequence: receipt.sequence,
+            assessment: observation,
+            status: "pending",
             createdAt: now,
-          }),
-        );
+          },
+          expectedReviewId: null,
+          createdAt: now,
+        });
 
         if (interveningAction !== "none") {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-cache-continue-before-archive"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: "durable-review-before-recovery",
-              messageId: asMessageId("cache-recovery-message"),
-              decision: "continue",
-              createdAt: now,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-cache-continue-before-archive"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: "durable-review-before-recovery",
+            messageId: asMessageId("cache-recovery-message"),
+            decision: "continue",
+            createdAt: now,
+          });
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("responding");
           const commandId = CommandId.makeUnsafe(`cmd-cache-${interveningAction}-before-dispatch`);
           const threadId = ThreadId.makeUnsafe("thread-1");
-          await Effect.runPromise(
-            harness.engine.dispatch(
-              interveningAction === "stop"
-                ? { type: "thread.session.stop", commandId, threadId, createdAt: now }
-                : {
-                    type: interveningAction === "archive" ? "thread.archive" : "thread.delete",
-                    commandId,
-                    threadId,
-                  },
-            ),
+          await harness.dispatch(
+            interveningAction === "stop"
+              ? { type: "thread.session.stop", commandId, threadId, createdAt: now }
+              : {
+                  type: interveningAction === "archive" ? "thread.archive" : "thread.delete",
+                  commandId,
+                  threadId,
+                },
           );
           if (interveningAction === "archive") {
-            await Effect.runPromise(
-              harness.engine.dispatch({
-                type: "thread.unarchive",
-                commandId: CommandId.makeUnsafe("cmd-cache-unarchive-before-dispatch"),
-                threadId,
-              }),
-            );
+            await harness.dispatch({
+              type: "thread.unarchive",
+              commandId: CommandId.makeUnsafe("cmd-cache-unarchive-before-dispatch"),
+              threadId,
+            });
           }
         }
 
@@ -6764,7 +6532,7 @@ describe("ProviderCommandReactor", () => {
         input: "Continue with this exact message",
       });
 
-      await Effect.runPromise(harness.engine.dispatch(continueCommand));
+      await harness.dispatch(continueCommand);
       await harness.drain();
       await expect(respondToReview(harness, review, "continue", "duplicate")).rejects.toThrow(
         "Command produced no events.",
@@ -6863,13 +6631,11 @@ describe("ProviderCommandReactor", () => {
       `),
       ).toHaveLength(1);
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.delete",
-          commandId: CommandId.makeUnsafe("cmd-delete-cache-hold"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-delete-cache-hold"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+      });
       await harness.drain();
 
       expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -6885,16 +6651,14 @@ describe("ProviderCommandReactor", () => {
       const observation = expiredCacheObservation();
       const harness = await createCacheHarness(() => observation);
       const review = await sendHeldMessage(harness);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.conversation.rollback.complete",
-          commandId: CommandId.makeUnsafe("cmd-remove-held-message"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          messageId: review.messageId,
-          numTurns: 1,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.conversation.rollback.complete",
+        commandId: CommandId.makeUnsafe("cmd-remove-held-message"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: review.messageId,
+        numTurns: 1,
+        createdAt: new Date().toISOString(),
+      });
       expect((await readHarnessThread(harness))?.messages).toEqual([]);
 
       await respondToReview(harness, review, "continue");
@@ -6912,40 +6676,23 @@ describe("ProviderCommandReactor", () => {
       const review = await sendHeldMessage(harness);
       const threadId = ThreadId.makeUnsafe("thread-cache-independent");
       const now = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("cmd-cache-independent-create"),
-          threadId,
-          projectId: asProjectId("project-1"),
-          title: "Independent thread",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: "cmd-cache-independent-create",
+        threadId,
+        title: "Independent thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt: now,
+      });
       harness.sendTurn.mockImplementationOnce(() =>
         Effect.succeed({ threadId, turnId: asTurnId("turn-cache-independent") }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-cache-independent-send"),
-          threadId,
-          message: {
-            messageId: asMessageId("cache-independent-message"),
-            role: "user",
-            text: "Run independently of the pending review",
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-cache-independent-send",
+        threadId,
+        messageId: "cache-independent-message",
+        text: "Run independently of the pending review",
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
 
@@ -6989,17 +6736,15 @@ describe("ProviderCommandReactor", () => {
         });
         if (mode === "renewed") {
           const review = await sendHeldMessage(harness);
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.claude-cache.respond",
-              commandId: CommandId.makeUnsafe("cmd-cache-renew-during-observation"),
-              threadId: ThreadId.makeUnsafe("thread-1"),
-              reviewId: review.reviewId,
-              messageId: review.messageId,
-              decision: "continue",
-              createdAt: new Date().toISOString(),
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.claude-cache.respond",
+            commandId: CommandId.makeUnsafe("cmd-cache-renew-during-observation"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            reviewId: review.reviewId,
+            messageId: review.messageId,
+            decision: "continue",
+            createdAt: new Date().toISOString(),
+          });
         } else {
           await dispatchHarnessUserTurn(harness, {
             messageId: "cache-held-message",
@@ -7013,21 +6758,19 @@ describe("ProviderCommandReactor", () => {
           const commandId = CommandId.makeUnsafe("cmd-cache-cancel-observation");
           const threadId = ThreadId.makeUnsafe("thread-1");
           cancellationSequence = (
-            await Effect.runPromise(
-              harness.engine.dispatch(
-                action === "stop"
-                  ? {
-                      type: "thread.session.stop",
-                      commandId,
-                      threadId,
-                      createdAt: new Date().toISOString(),
-                    }
-                  : {
-                      type: action === "archive" ? "thread.archive" : "thread.delete",
-                      commandId,
-                      threadId,
-                    },
-              ),
+            await harness.dispatch(
+              action === "stop"
+                ? {
+                    type: "thread.session.stop",
+                    commandId,
+                    threadId,
+                    createdAt: new Date().toISOString(),
+                  }
+                : {
+                    type: action === "archive" ? "thread.archive" : "thread.delete",
+                    commandId,
+                    threadId,
+                  },
             )
           ).sequence;
         } finally {
@@ -7124,14 +6867,12 @@ describe("ProviderCommandReactor", () => {
 
     it("allows a new message to create a hold after an earlier stop", async () => {
       const harness = await createCacheHarness();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.makeUnsafe("cmd-cache-earlier-stop"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-cache-earlier-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
 
       const review = await sendHeldMessage(harness);
@@ -7202,28 +6943,24 @@ describe("ProviderCommandReactor", () => {
 
     it("continues an active goal without asking when the Claude context is cold", async () => {
       const harness = await createCacheHarness();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-cold-goal"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          goal: "Complete the remaining work",
-          goalStartBehavior: "defer",
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-cold-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Complete the remaining work",
+        goalStartBehavior: "defer",
+      });
       const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
       expect(goalStartedAt).toBeTruthy();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.goal.continue",
-          commandId: CommandId.makeUnsafe("cmd-cold-goal-continue"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          goalStartedAt: goalStartedAt!,
-          trigger: "turn-completed",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-cold-goal-continue"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goalStartedAt: goalStartedAt!,
+        trigger: "turn-completed",
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
 
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
@@ -7476,34 +7213,21 @@ describe("ProviderCommandReactor", () => {
 
     // A missing turn.started can leave a placeholder with a runtime that has
     // not accepted a turn; any non-running runtime resolves to no live turn.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-stuck-starting-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "starting",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-stuck-starting-session",
+      threadId,
+      status: "starting",
+      at: now,
+    });
     await harness.drain();
     harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-stop-stuck-starting"),
-        threadId,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-stop-stuck-starting"),
+      threadId,
+      createdAt: now,
+    });
     await harness.drain();
 
     expect((await readHarnessThread(harness))?.session).toMatchObject({
@@ -7525,50 +7249,29 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const parent = ThreadId.makeUnsafe("thread-1");
     const child = ThreadId.makeUnsafe("subagent:thread-1:connecting-child");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("create-connecting-child"),
-        threadId: child,
-        parentThreadId: parent,
-        projectId: asProjectId("project-1"),
-        title: "Starting child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "create-connecting-child",
+      threadId: child,
+      title: "Starting child",
+      parentThreadId: parent,
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
     for (const threadId of [parent, child]) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`session-${threadId}`),
-          threadId,
-          session: {
-            threadId,
-            status: "starting",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: `session-${threadId}`,
+        threadId,
+        status: "starting",
+        at: now,
+      });
     }
     harness.setRuntimeSessionTurnState({ threadId: parent, status: "connecting" });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("stop-connecting-child"),
-        threadId: child,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("stop-connecting-child"),
+      threadId: child,
+      createdAt: now,
+    });
     await harness.drain();
     const state = await Effect.runPromise(harness.engine.getReadModel());
     expect(state.threads.find((entry) => entry.id === child)?.session).toMatchObject({
@@ -7588,37 +7291,24 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-starting-before-runtime-event"),
-        threadId,
-        session: {
-          threadId,
-          status: "starting",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-starting-before-runtime-event",
+      threadId,
+      status: "starting",
+      at: now,
+    });
     harness.setRuntimeSessionTurnState({
       threadId,
       status: "running",
       activeTurnId: asTurnId("turn-not-yet-projected"),
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-stop-before-runtime-event"),
-        threadId,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-stop-before-runtime-event"),
+      threadId,
+      createdAt: now,
+    });
     await harness.drain();
 
     expect(harness.interruptTurn).toHaveBeenCalledWith({
@@ -7747,33 +7437,21 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("retry-terminal-rolled-back"),
         createdAt: now,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("seed-terminal-retry-session"),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("retry-terminal-turn"),
-            updatedAt: now,
-            lastError: null,
-          },
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.conversation.rollback",
-          commandId: CommandId.makeUnsafe("terminal-retry-request"),
-          threadId,
-          messageId: asMessageId("retry-terminal-source"),
-          numTurns: 1,
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "seed-terminal-retry-session",
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("retry-terminal-turn"),
+        at: now,
+      });
+      await harness.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("terminal-retry-request"),
+        threadId,
+        messageId: asMessageId("retry-terminal-source"),
+        numTurns: 1,
+        createdAt: now,
+      });
       const events = Array.from(
         await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
       );
@@ -7866,22 +7544,14 @@ describe("ProviderCommandReactor", () => {
       const now = new Date().toISOString();
       const childId = ThreadId.makeUnsafe("subagent:missing-parent:compacting");
       const messageId = asMessageId("orphan-held-message");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("orphan-compaction-create"),
-          threadId: childId,
-          parentThreadId: ThreadId.makeUnsafe("missing-parent"),
-          projectId: asProjectId("project-1"),
-          title: "Orphan compaction",
-          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: "orphan-compaction-create",
+        threadId: childId,
+        title: "Orphan compaction",
+        parentThreadId: ThreadId.makeUnsafe("missing-parent"),
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        createdAt: now,
+      });
       // The child was started by its provider before the parent owner vanished.
       await harness.emitRuntimeEvent({
         type: "turn.started",
@@ -7896,17 +7566,15 @@ describe("ProviderCommandReactor", () => {
         const child = await readHarnessThread(harness, childId);
         return child?.latestTurn?.state === "running" && child.session?.status === "running";
       });
-      const source = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("orphan-compaction-source"),
-          threadId: childId,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          message: { messageId, role: "user", text: "Held prompt", attachments: [] },
-          createdAt: now,
-        }),
-      );
+      const source = await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("orphan-compaction-source"),
+        threadId: childId,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        message: { messageId, role: "user", text: "Held prompt", attachments: [] },
+        createdAt: now,
+      });
       const review = {
         reviewId: "orphan-compaction-review",
         messageId,
@@ -7919,45 +7587,39 @@ describe("ProviderCommandReactor", () => {
         status: "pending" as const,
         createdAt: now,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe("orphan-compaction-review-set"),
-          threadId: childId,
-          review,
-          createdAt: now,
-        }),
-      );
-      const response = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.respond",
-          commandId: CommandId.makeUnsafe("orphan-compaction-review-respond"),
-          threadId: childId,
-          reviewId: review.reviewId,
-          messageId,
-          decision: "compact",
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe("orphan-compaction-compacting"),
-          threadId: childId,
-          review: {
-            ...review,
-            status: reviewStatus,
-            ...(reviewStatus !== "pending"
-              ? {
-                  compactionTurnId: asTurnId("orphan-compaction"),
-                  compactionResponseEventSequence: response.sequence,
-                }
-              : {}),
-          },
-          expectedReviewId: review.reviewId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe("orphan-compaction-review-set"),
+        threadId: childId,
+        review,
+        createdAt: now,
+      });
+      const response = await harness.dispatch({
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe("orphan-compaction-review-respond"),
+        threadId: childId,
+        reviewId: review.reviewId,
+        messageId,
+        decision: "compact",
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe("orphan-compaction-compacting"),
+        threadId: childId,
+        review: {
+          ...review,
+          status: reviewStatus,
+          ...(reviewStatus !== "pending"
+            ? {
+                compactionTurnId: asTurnId("orphan-compaction"),
+                compactionResponseEventSequence: response.sequence,
+              }
+            : {}),
+        },
+        expectedReviewId: review.reviewId,
+        createdAt: now,
+      });
       await expect(harness.startReactor()).resolves.toBeUndefined();
       await harness.drain();
       const readChild = async () =>
@@ -7978,22 +7640,12 @@ describe("ProviderCommandReactor", () => {
       await Effect.runPromise(fresh.reactor.drain);
       expect(await Effect.runPromise(harness.engine.getEventHighWaterSequence)).toBe(beforeRestart);
       expect((await readChild()).claudeCacheReview).toEqual(child.claudeCacheReview);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("healthy-after-orphan-compaction"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          message: {
-            messageId: asMessageId("healthy-compaction-message"),
-            role: "user",
-            text: "Continue",
-            attachments: [],
-          },
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "healthy-after-orphan-compaction",
+        messageId: "healthy-compaction-message",
+        text: "Continue",
+        createdAt: now,
+      });
       await Effect.runPromise(fresh.reactor.drain);
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       expect(harness.sendTurn.mock.calls[0]?.[0].threadId).toBe("thread-1");
@@ -8023,42 +7675,31 @@ describe("ProviderCommandReactor", () => {
         mode === "deleted-parent" || mode === "deleted-thread" ? "thread-1" : "missing-parent",
       );
       const childId = ThreadId.makeUnsafe(`subagent:${parentId}:orphan`);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("create-orphan"),
-          threadId: childId,
-          projectId: asProjectId("project-1"),
-          title: "Persisted child",
-          modelSelection:
-            priorState === "queued"
-              ? { provider: "claudeAgent", model: "claude-sonnet-4-5" }
-              : { provider: "codex", model: "gpt-5-codex" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          ...(mode === "legacy-synthetic" ? {} : { parentThreadId: parentId }),
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("orphan-session"),
-          threadId: childId,
-          session: {
-            threadId: childId,
-            status: "running",
-            providerName: priorState === "queued" ? "claudeAgent" : "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("orphan-turn"),
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("create-orphan"),
+        threadId: childId,
+        projectId: asProjectId("project-1"),
+        title: "Persisted child",
+        modelSelection:
+          priorState === "queued"
+            ? { provider: "claudeAgent", model: "claude-sonnet-4-5" }
+            : { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        ...(mode === "legacy-synthetic" ? {} : { parentThreadId: parentId }),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      });
+      await setHarnessSession(harness, {
+        commandId: "orphan-session",
+        threadId: childId,
+        status: "running",
+        providerName: priorState === "queued" ? "claudeAgent" : "codex",
+        activeTurnId: asTurnId("orphan-turn"),
+        at: now,
+      });
       if (priorState === "queued") {
         // Restore a provider-owned child turn before persisting the historical
         // queued message; direct input to a Codex native child is unavailable.
@@ -8076,41 +7717,28 @@ describe("ProviderCommandReactor", () => {
           return child?.latestTurn?.state === "running" && child.session?.status === "running";
         });
       }
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("interrupt-orphan"),
-          threadId: childId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("interrupt-orphan"),
+        threadId: childId,
+        createdAt: now,
+      });
       if (mode === "deleted-parent" || mode === "deleted-thread") {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.delete",
-            commandId: CommandId.makeUnsafe("delete-before-recovery"),
-            threadId: mode === "deleted-parent" ? parentId : childId,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.makeUnsafe("delete-before-recovery"),
+          threadId: mode === "deleted-parent" ? parentId : childId,
+        });
       }
       if (priorState === "queued") {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("queue-orphan"),
-            threadId: childId,
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            dispatchMode: "queue",
-            message: {
-              messageId: asMessageId("queued-orphan-message"),
-              role: "user",
-              text: "Queued work",
-              attachments: [],
-            },
-            createdAt: now,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "queue-orphan",
+          threadId: childId,
+          messageId: "queued-orphan-message",
+          text: "Queued work",
+          dispatchMode: "queue",
+          createdAt: now,
+        });
       }
       const events = Array.from(
         await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
@@ -8282,22 +7910,12 @@ describe("ProviderCommandReactor", () => {
       ).toMatchObject(expectedDelivery);
       // Healthy independent work must remain usable after recovery.
       if (mode !== "deleted-parent") {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("healthy-after-recovery"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            message: {
-              messageId: asMessageId("healthy-message"),
-              role: "user",
-              text: "Continue",
-              attachments: [],
-            },
-            createdAt: now,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "healthy-after-recovery",
+          messageId: "healthy-message",
+          text: "Continue",
+          createdAt: now,
+        });
         await Effect.runPromise(fresh.reactor.drain);
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
         expect(harness.sendTurn.mock.calls[0]?.[0].threadId).toBe("thread-1");
@@ -8313,23 +7931,21 @@ describe("ProviderCommandReactor", () => {
       let unreadable = 0;
       // Put the unreadable row beyond the first admission page, between valid work.
       for (let index = 0; index < 70; index++) {
-        const result = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: CommandId.makeUnsafe(`validation-${index}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
+        const result = await harness.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`validation-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt,
+          activity: {
+            id: asEventId(`validation-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Progress",
+            payload: {},
+            turnId: null,
             createdAt,
-            activity: {
-              id: asEventId(`validation-${index}`),
-              kind: "tool.progress",
-              tone: "info",
-              summary: "Progress",
-              payload: {},
-              turnId: null,
-              createdAt,
-            },
-          }),
-        );
+          },
+        });
         unreadable = result.sequence;
       }
       await dispatchHarnessUserTurn(harness, {
@@ -8380,23 +7996,21 @@ describe("ProviderCommandReactor", () => {
       createdAt,
     });
     for (let index = 0; index < 70; index++)
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.makeUnsafe(`page-${index}`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
+      await harness.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`page-${index}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt,
+        activity: {
+          id: asEventId(`page-${index}`),
+          kind: "tool.progress",
+          tone: "info",
+          summary: "Progress",
+          payload: { detail: "x".repeat(8_000) },
+          turnId: null,
           createdAt,
-          activity: {
-            id: asEventId(`page-${index}`),
-            kind: "tool.progress",
-            tone: "info",
-            summary: "Progress",
-            payload: { detail: "x".repeat(8_000) },
-            turnId: null,
-            createdAt,
-          },
-        }),
-      );
+        },
+      });
     const through = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
     const read = harness.engine.readEventsThrough;
     const reads = vi
@@ -8485,23 +8099,21 @@ describe("ProviderCommandReactor", () => {
       ),
     );
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("ack-shutdown-progress"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("ack-shutdown-progress"),
-          kind: "tool.progress",
-          tone: "info",
-          summary: "Tool is running",
-          payload: {},
-          turnId: null,
-          createdAt: now,
-        },
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("ack-shutdown-progress"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("ack-shutdown-progress"),
+        kind: "tool.progress",
+        tone: "info",
+        summary: "Tool is running",
+        payload: {},
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
     const activeScope = scope!;
     try {
       await Effect.runPromise(Deferred.await(ackStarted).pipe(Effect.timeout("1 second")));
@@ -8517,38 +8129,21 @@ describe("ProviderCommandReactor", () => {
   it("recovers an unfinished earlier lane without replaying another lane's succeeded provider turn", async () => {
     const harness = await createHarness({ startReactor: false });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-recovery-independent-create"),
-        threadId: ThreadId.makeUnsafe("thread-recovery-independent"),
-        projectId: asProjectId("project-1"),
-        title: "Recovered independent thread",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-recovery-independent-create",
+      threadId: ThreadId.makeUnsafe("thread-recovery-independent"),
+      title: "Recovered independent thread",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
     for (const threadId of ["thread-1", "thread-recovery-independent"]) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-recovery-${threadId}`),
-          threadId: ThreadId.makeUnsafe(threadId),
-          message: {
-            messageId: asMessageId(`message-recovery-${threadId}`),
-            role: "user",
-            text: "Preserve provider ownership",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-recovery-${threadId}`,
+        threadId: ThreadId.makeUnsafe(threadId),
+        messageId: `message-recovery-${threadId}`,
+        text: "Preserve provider ownership",
+        createdAt: now,
+      });
     }
     const events = Array.from(
       await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
@@ -8933,13 +8528,11 @@ describe("ProviderCommandReactor", () => {
       attemptCount: 3,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.delete",
-        commandId: CommandId.makeUnsafe("cmd-delete-before-queued-reconcile"),
-        threadId,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.makeUnsafe("cmd-delete-before-queued-reconcile"),
+      threadId,
+    });
     await harness.drain();
     expect((await readHarnessThread(harness, threadId))?.deletedAt).not.toBeNull();
 
@@ -8976,32 +8569,19 @@ describe("ProviderCommandReactor", () => {
     harness: Awaited<ReturnType<typeof createHarness>>,
     now: string,
   ) {
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-durable-expired-session"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-durable-expired"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-durable-expired-interrupt"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-durable-expired"),
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-durable-expired-session",
+      status: "running",
+      activeTurnId: asTurnId("turn-durable-expired"),
+      at: now,
+    });
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-durable-expired-interrupt"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-durable-expired"),
+      createdAt: now,
+    });
     const events = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
@@ -9275,41 +8855,22 @@ describe("ProviderCommandReactor", () => {
       createdAt: now,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-durable-unrelated-thread"),
-        threadId: ThreadId.makeUnsafe("thread-2"),
-        projectId: asProjectId("project-1"),
-        title: "Unrelated thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-durable-uncertain-session"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-durable-uncertain"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-durable-unrelated-thread",
+      threadId: ThreadId.makeUnsafe("thread-2"),
+      title: "Unrelated thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
+    await setHarnessSession(harness, {
+      commandId: "cmd-durable-uncertain-session",
+      status: "running",
+      activeTurnId: asTurnId("turn-durable-uncertain"),
+      at: now,
+    });
     // The provider turn stays live until the authorized retry: an accepted
     // Stop alone does not settle a turn the runtime still runs.
     harness.setRuntimeSessionTurnState({
@@ -9317,34 +8878,22 @@ describe("ProviderCommandReactor", () => {
       status: "running",
       activeTurnId: asTurnId("turn-durable-uncertain"),
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-durable-unrelated-session"),
-        threadId: ThreadId.makeUnsafe("thread-2"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-2"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-durable-unrelated"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-durable-unrelated-session",
+      threadId: ThreadId.makeUnsafe("thread-2"),
+      status: "running",
+      activeTurnId: asTurnId("turn-durable-unrelated"),
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.conversation.rollback",
-        commandId: CommandId.makeUnsafe("cmd-durable-uncertain-rollback"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-durable-uncertain"),
-        numTurns: 1,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.conversation.rollback",
+      commandId: CommandId.makeUnsafe("cmd-durable-uncertain-rollback"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-durable-uncertain"),
+      numTurns: 1,
+      createdAt: now,
+    });
 
     await waitFor(async () =>
       Effect.runPromise(
@@ -9365,24 +8914,20 @@ describe("ProviderCommandReactor", () => {
     // Interrupts are the escape hatch out of a quarantined thread, so the
     // blocked thread still runs its own interrupt; the unrelated thread is
     // untouched by another thread's quarantine.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-durable-blocked-continuation"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-durable-uncertain"),
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-durable-unrelated-continuation"),
-        threadId: ThreadId.makeUnsafe("thread-2"),
-        turnId: asTurnId("turn-durable-unrelated"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-durable-blocked-continuation"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-durable-uncertain"),
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-durable-unrelated-continuation"),
+      threadId: ThreadId.makeUnsafe("thread-2"),
+      turnId: asTurnId("turn-durable-unrelated"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 3);
     expect(harness.interruptTurn.mock.calls.map(([request]) => request.threadId)).toEqual([
@@ -9402,15 +8947,13 @@ describe("ProviderCommandReactor", () => {
 
     // A non-exempt side effect on the blocked thread is skipped while the
     // quarantine holds, and must be replayed once the thread resumes.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("cmd-durable-blocked-task-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        taskId: "task-durable-blocked",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("cmd-durable-blocked-task-stop"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      taskId: "task-durable-blocked",
+      createdAt: now,
+    });
     const highWater = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
     await waitFor(async () => {
       const state = await Effect.runPromise(
@@ -9486,35 +9029,23 @@ describe("ProviderCommandReactor", () => {
       createdAt: now,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-abandon-session-running"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-abandon-session-running",
+      threadId,
+      status: "running",
+      activeTurnId: turnId,
+      at: now,
+    });
     // A rollback whose provider interrupt cannot prove it landed is ambiguous,
     // so it quarantines the thread instead of retrying itself.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.conversation.rollback",
-        commandId: CommandId.makeUnsafe("cmd-abandon-rollback"),
-        threadId,
-        messageId: asMessageId("user-message-abandon-source"),
-        numTurns: 1,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.conversation.rollback",
+      commandId: CommandId.makeUnsafe("cmd-abandon-rollback"),
+      threadId,
+      messageId: asMessageId("user-message-abandon-source"),
+      numTurns: 1,
+      createdAt: now,
+    });
     await waitFor(async () =>
       Effect.runPromise(
         harness.deliveryRepository
@@ -9527,39 +9058,19 @@ describe("ProviderCommandReactor", () => {
     );
 
     // Settle the session so the follow-up message starts a turn instead of queueing.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-abandon-session-ready"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    const skippedTurn = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-abandon-skipped-turn"),
-        threadId,
-        message: {
-          messageId: asMessageId("abandon-skipped-user"),
-          role: "user",
-          text: "Message sent while the thread was blocked",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-abandon-session-ready",
+      threadId,
+      status: "ready",
+      at: now,
+    });
+    const skippedTurn = await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-abandon-skipped-turn",
+      threadId,
+      messageId: "abandon-skipped-user",
+      text: "Message sent while the thread was blocked",
+      createdAt: now,
+    });
     await waitFor(async () => {
       const state = await Effect.runPromise(
         harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
@@ -9643,35 +9154,23 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         });
 
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("cmd-abandon-session-running"),
-            threadId,
-            session: {
-              threadId,
-              status: "running",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: turnId,
-              lastError: null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "cmd-abandon-session-running",
+          threadId,
+          status: "running",
+          activeTurnId: turnId,
+          at: now,
+        });
         // A rollback whose provider interrupt cannot prove it landed is ambiguous,
         // so it quarantines the thread instead of retrying itself.
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.conversation.rollback",
-            commandId: CommandId.makeUnsafe("cmd-abandon-rollback"),
-            threadId,
-            messageId: asMessageId("user-message-abandon-source"),
-            numTurns: 1,
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.conversation.rollback",
+          commandId: CommandId.makeUnsafe("cmd-abandon-rollback"),
+          threadId,
+          messageId: asMessageId("user-message-abandon-source"),
+          numTurns: 1,
+          createdAt: now,
+        });
         await waitFor(async () =>
           Effect.runPromise(
             harness.deliveryRepository
@@ -9684,56 +9183,26 @@ describe("ProviderCommandReactor", () => {
         );
 
         // Settle the session so the follow-up message starts a turn instead of queueing.
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("cmd-abandon-session-ready"),
-            threadId,
-            session: {
-              threadId,
-              status: "ready",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "cmd-abandon-session-ready",
+          threadId,
+          status: "ready",
+          at: now,
+        });
         const unrelatedId = ThreadId.makeUnsafe("unrelated-pinned-thread");
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("create-unrelated-pinned"),
-            threadId: unrelatedId,
-            projectId: asProjectId("project-1"),
-            title: "Unrelated",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("session-unrelated-pinned"),
-            threadId: unrelatedId,
-            session: {
-              threadId: unrelatedId,
-              status: "ready",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              updatedAt: now,
-              lastError: null,
-            },
-            createdAt: now,
-          }),
-        );
+        await createHarnessThread(harness, {
+          commandId: "create-unrelated-pinned",
+          threadId: unrelatedId,
+          title: "Unrelated",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt: now,
+        });
+        await setHarnessSession(harness, {
+          commandId: "session-unrelated-pinned",
+          threadId: unrelatedId,
+          status: "ready",
+          at: now,
+        });
         const pinned = await dispatchHarnessUserTurn(harness, {
           messageId: "unrelated-pinned-user",
           text: "Held before provider acceptance",
@@ -9741,22 +9210,13 @@ describe("ProviderCommandReactor", () => {
           threadId: unrelatedId,
         });
         await Effect.runPromise(Deferred.await(unrelatedEntered));
-        const skippedTurn = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("cmd-abandon-skipped-turn"),
-            threadId,
-            message: {
-              messageId: asMessageId("abandon-skipped-user"),
-              role: "user",
-              text: "Message sent while the thread was blocked",
-              attachments: [],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: now,
-          }),
-        );
+        const skippedTurn = await dispatchHarnessUserTurn(harness, {
+          commandId: "cmd-abandon-skipped-turn",
+          threadId,
+          messageId: "abandon-skipped-user",
+          text: "Message sent while the thread was blocked",
+          createdAt: now,
+        });
         await waitFor(async () =>
           (await readHarnessThread(harness))!.activities.some(
             (activity) =>
@@ -9891,15 +9351,13 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ startReactor: false });
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const blocked = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("startup-count-old-blocker"),
-        threadId,
-        taskId: "old-task",
-        createdAt: now,
-      }),
-    );
+    const blocked = await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("startup-count-old-blocker"),
+      threadId,
+      taskId: "old-task",
+      createdAt: now,
+    });
     const key = {
       consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
       eventSequence: blocked.sequence,
@@ -9923,38 +9381,19 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const other = ThreadId.makeUnsafe("startup-count-pinned");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("startup-count-other-create"),
-        threadId: other,
-        projectId: asProjectId("project-1"),
-        title: "Other",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("startup-count-other-session"),
-        threadId: other,
-        session: {
-          threadId: other,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          updatedAt: now,
-          lastError: null,
-        },
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "startup-count-other-create",
+      threadId: other,
+      title: "Other",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
+    await setHarnessSession(harness, {
+      commandId: "startup-count-other-session",
+      threadId: other,
+      status: "ready",
+      at: now,
+    });
     const prefix = Array.from(
       await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
     );
@@ -9966,34 +9405,23 @@ describe("ProviderCommandReactor", () => {
           updatedAt: now,
         }),
       );
-    const pinned = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("startup-count-other-pin"),
-        threadId: other,
-        taskId: "pinned-task",
-        createdAt: now,
-      }),
-    );
+    const pinned = await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("startup-count-other-pin"),
+      threadId: other,
+      taskId: "pinned-task",
+      createdAt: now,
+    });
     let last = 0;
     for (let index = 0; index < 3; index++) {
       last = (
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`startup-count-skipped-${index}`),
-            threadId,
-            message: {
-              messageId: asMessageId(`startup-count-message-${index}`),
-              role: "user",
-              text: `Previously skipped ${index}`,
-              attachments: [],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: now,
-          }),
-        )
+        await dispatchHarnessUserTurn(harness, {
+          commandId: `startup-count-skipped-${index}`,
+          threadId,
+          messageId: `startup-count-message-${index}`,
+          text: `Previously skipped ${index}`,
+          createdAt: now,
+        })
       ).sequence;
     }
     // Durable state from the stopped prior reactor: all these logical FIFO rows were skipped.
@@ -10070,15 +9498,13 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ startReactor: false });
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const blocked = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("startup-count-old-blocker"),
-        threadId,
-        taskId: "old-task",
-        createdAt: now,
-      }),
-    );
+    const blocked = await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("startup-count-old-blocker"),
+      threadId,
+      taskId: "old-task",
+      createdAt: now,
+    });
     const key = {
       consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
       eventSequence: blocked.sequence,
@@ -10102,38 +9528,19 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const other = ThreadId.makeUnsafe("startup-count-pinned");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("startup-count-other-create"),
-        threadId: other,
-        projectId: asProjectId("project-1"),
-        title: "Other",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("startup-count-other-session"),
-        threadId: other,
-        session: {
-          threadId: other,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          updatedAt: now,
-          lastError: null,
-        },
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "startup-count-other-create",
+      threadId: other,
+      title: "Other",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
+    await setHarnessSession(harness, {
+      commandId: "startup-count-other-session",
+      threadId: other,
+      status: "ready",
+      at: now,
+    });
     const prefix = Array.from(
       await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
     );
@@ -10145,34 +9552,23 @@ describe("ProviderCommandReactor", () => {
           updatedAt: now,
         }),
       );
-    const pinned = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("startup-count-other-pin"),
-        threadId: other,
-        taskId: "pinned-task",
-        createdAt: now,
-      }),
-    );
+    const pinned = await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("startup-count-other-pin"),
+      threadId: other,
+      taskId: "pinned-task",
+      createdAt: now,
+    });
     let last = 0;
     for (let index = 0; index < 37; index++) {
       last = (
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`startup-count-skipped-${index}`),
-            threadId,
-            message: {
-              messageId: asMessageId(`startup-count-message-${index}`),
-              role: "user",
-              text: `Previously skipped ${index}`,
-              attachments: [],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: now,
-          }),
-        )
+        await dispatchHarnessUserTurn(harness, {
+          commandId: `startup-count-skipped-${index}`,
+          threadId,
+          messageId: `startup-count-message-${index}`,
+          text: `Previously skipped ${index}`,
+          createdAt: now,
+        })
       ).sequence;
     }
     // Durable state from the stopped prior reactor: all these logical FIFO rows were skipped.
@@ -10245,42 +9641,36 @@ describe("ProviderCommandReactor", () => {
       lastError: null,
       updatedAt: createdAt,
     };
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("quit-race-session"),
-        threadId,
-        session: scenario.initiallyStopped
-          ? { ...session, status: "stopped", activeTurnId: null }
-          : session,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe("quit-race-session"),
+      threadId,
+      session: scenario.initiallyStopped
+        ? { ...session, status: "stopped", activeTurnId: null }
+        : session,
+      createdAt,
+    });
     if (scenario.initiallyStopped) await Effect.runPromise(harness.engine.quiesce);
-    const requested = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe(
-          scenario.intentionalQuit ? "quit-resume-interrupt:race:thread-1" : "manual-interrupt",
-        ),
-        threadId,
-        turnId,
-        createdAt,
-      }),
-    );
+    const requested = await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe(
+        scenario.intentionalQuit ? "quit-resume-interrupt:race:thread-1" : "manual-interrupt",
+      ),
+      threadId,
+      turnId,
+      createdAt,
+    });
     if (!scenario.initiallyStopped)
       await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
     await Effect.runPromise(harness.engine.quiesce);
     if (scenario.stopped) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("quit-race-stopped"),
-          threadId,
-          session: { ...session, status: "stopped", activeTurnId: null },
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("quit-race-stopped"),
+        threadId,
+        session: { ...session, status: "stopped", activeTurnId: null },
+        createdAt,
+      });
     }
     await Effect.runPromise(Deferred.succeed(release, undefined));
     await harness.drain();
@@ -10323,31 +9713,29 @@ describe("ProviderCommandReactor", () => {
     const commandId = CommandId.makeUnsafe(
       scenario === "manual interrupt" ? "user-interrupt" : "quit-resume-interrupt:fixture:thread-1",
     );
-    const requested = await Effect.runPromise(
-      harness.engine.dispatch(
-        scenario === "turn start"
-          ? {
-              type: "thread.turn.start",
-              commandId,
-              threadId,
-              message: {
-                messageId: asMessageId("quit-start"),
-                role: "user",
-                text: "Do not replay",
-                attachments: [],
-              },
-              runtimeMode: "approval-required",
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              createdAt,
-            }
-          : {
-              type: "thread.turn.interrupt",
-              commandId,
-              threadId,
-              turnId: asTurnId("old-turn"),
-              createdAt,
+    const requested = await harness.dispatch(
+      scenario === "turn start"
+        ? {
+            type: "thread.turn.start",
+            commandId,
+            threadId,
+            message: {
+              messageId: asMessageId("quit-start"),
+              role: "user",
+              text: "Do not replay",
+              attachments: [],
             },
-      ),
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }
+        : {
+            type: "thread.turn.interrupt",
+            commandId,
+            threadId,
+            turnId: asTurnId("old-turn"),
+            createdAt,
+          },
     );
     const session = {
       threadId,
@@ -10360,30 +9748,26 @@ describe("ProviderCommandReactor", () => {
     };
     if (scenario !== "missing stop") {
       const stoppedAt = scenario === "late stop" ? "2026-09-07T14:00:02.000Z" : createdAt;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("recorded-provider-stop"),
-          threadId,
-          session: {
-            ...session,
-            updatedAt: stoppedAt,
-            lastError: scenario === "failed stop" ? "Exit unproven" : null,
-          },
-          createdAt: stoppedAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("recorded-provider-stop"),
+        threadId,
+        session: {
+          ...session,
+          updatedAt: stoppedAt,
+          lastError: scenario === "failed stop" ? "Exit unproven" : null,
+        },
+        createdAt: stoppedAt,
+      });
     }
     if (scenario === "newer running session") {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("new-provider-session"),
-          threadId,
-          session: { ...session, status: "running", activeTurnId: asTurnId("new-turn") },
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("new-provider-session"),
+        threadId,
+        session: { ...session, status: "running", activeTurnId: asTurnId("new-turn") },
+        createdAt,
+      });
     }
     await Effect.runPromise(
       harness.deliveryRepository.claim({
@@ -10406,15 +9790,13 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     if (scenario === "another blocker") {
-      const another = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.task.stop",
-          commandId: CommandId.makeUnsafe("other-stop"),
-          threadId,
-          taskId: "other-task",
-          createdAt,
-        }),
-      );
+      const another = await harness.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("other-stop"),
+        threadId,
+        taskId: "other-task",
+        createdAt,
+      });
       await Effect.runPromise(
         harness.deliveryRepository.claim({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -10437,35 +9819,24 @@ describe("ProviderCommandReactor", () => {
       );
     }
     const skippedAt = "2026-09-07T14:00:03.000Z";
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("quit-resume:skipped"),
-        threadId,
-        message: {
-          messageId: asMessageId("skipped"),
-          role: "user",
-          text: "Never replay this signup",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: skippedAt,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "quit-resume:skipped",
+      threadId,
+      messageId: "skipped",
+      text: "Never replay this signup",
+      createdAt: skippedAt,
+    });
     const sessionError =
       scenario === "unrelated session error"
         ? "An unrelated failure"
         : formatProviderDeliveryBlockDetail(lastError);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("visible-delivery-error"),
-        threadId,
-        session: { ...session, status: "error", lastError: sessionError, updatedAt: skippedAt },
-        createdAt: skippedAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe("visible-delivery-error"),
+      threadId,
+      session: { ...session, status: "error", lastError: sessionError, updatedAt: skippedAt },
+      createdAt: skippedAt,
+    });
     for (const event of await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)))) {
       await Effect.runPromise(
         harness.deliveryRepository.advanceCursor({
@@ -10529,31 +9900,29 @@ describe("ProviderCommandReactor", () => {
         scenario === "interrupt with another error"
           ? "Provider process tree did not prove exit."
           : PROVIDER_COMMAND_CLAIM_EXPIRED_DETAIL;
-      const requested = await Effect.runPromise(
-        harness.engine.dispatch(
-          scenario === "expired turn start"
-            ? {
-                type: "thread.turn.start",
-                commandId: CommandId.makeUnsafe("expired-start"),
-                threadId,
-                message: {
-                  messageId: asMessageId("expired-start"),
-                  role: "user",
-                  text: "Do not replay",
-                  attachments: [],
-                },
-                runtimeMode: "approval-required",
-                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-                createdAt,
-              }
-            : {
-                type: "thread.turn.interrupt",
-                commandId: CommandId.makeUnsafe("user-interrupt"),
-                threadId,
-                turnId: asTurnId("old-turn"),
-                createdAt,
+      const requested = await harness.dispatch(
+        scenario === "expired turn start"
+          ? {
+              type: "thread.turn.start",
+              commandId: CommandId.makeUnsafe("expired-start"),
+              threadId,
+              message: {
+                messageId: asMessageId("expired-start"),
+                role: "user",
+                text: "Do not replay",
+                attachments: [],
               },
-        ),
+              runtimeMode: "approval-required",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              createdAt,
+            }
+          : {
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("user-interrupt"),
+              threadId,
+              turnId: asTurnId("old-turn"),
+              createdAt,
+            },
       );
       await Effect.runPromise(
         harness.deliveryRepository.claim({
@@ -10577,40 +9946,21 @@ describe("ProviderCommandReactor", () => {
       );
       // A message the quarantine skipped, and the block banner it left.
       const skippedAt = "2026-11-10T08:01:00.000Z";
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("skipped-start"),
-          threadId,
-          message: {
-            messageId: asMessageId("skipped"),
-            role: "user",
-            text: "Skipped while blocked",
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: skippedAt,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "skipped-start",
+        threadId,
+        messageId: "skipped",
+        text: "Skipped while blocked",
+        createdAt: skippedAt,
+      });
       const sessionError = formatProviderDeliveryBlockDetail(lastError);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("visible-delivery-error"),
-          threadId,
-          session: {
-            threadId,
-            status: sessionStatus,
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: sessionError,
-            updatedAt: skippedAt,
-          },
-          createdAt: skippedAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "visible-delivery-error",
+        threadId,
+        status: sessionStatus,
+        lastError: sessionError,
+        at: skippedAt,
+      });
       for (const event of await Effect.runPromise(
         Stream.runCollect(harness.engine.readEvents(0)),
       )) {
@@ -10704,33 +10054,22 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId(`turn-settle-${terminalState}`),
         createdAt: now,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-session`),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId(`turn-settle-${terminalState}`),
-            lastError: formatProviderDeliveryBlockDetail("previously reconciled failure"),
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.conversation.rollback",
-          commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-rollback`),
-          threadId,
-          messageId: asMessageId(`user-message-settle-${terminalState}`),
-          numTurns: 1,
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: `cmd-settle-${terminalState}-session`,
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId(`turn-settle-${terminalState}`),
+        lastError: formatProviderDeliveryBlockDetail("previously reconciled failure"),
+        at: now,
+      });
+      await harness.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe(`cmd-settle-${terminalState}-rollback`),
+        threadId,
+        messageId: asMessageId(`user-message-settle-${terminalState}`),
+        numTurns: 1,
+        createdAt: now,
+      });
 
       await waitFor(async () =>
         Effect.runPromise(
@@ -10780,15 +10119,13 @@ describe("ProviderCommandReactor", () => {
       const failedAt = "2026-10-04T10:00:01.000Z";
 
       const seedSurvivingBlocker = async (commandId: string, lastError: string) => {
-        const requested = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.task.stop",
-            commandId: CommandId.makeUnsafe(commandId),
-            threadId,
-            taskId: `task-${commandId}`,
-            createdAt,
-          }),
-        );
+        const requested = await harness.dispatch({
+          type: "thread.task.stop",
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId,
+          taskId: `task-${commandId}`,
+          createdAt,
+        });
         await Effect.runPromise(
           harness.deliveryRepository.claim({
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -10890,15 +10227,13 @@ describe("ProviderCommandReactor", () => {
         ...(scenario === "unrelated error" ? { lastError: "Unrelated session failure" } : {}),
         updatedAt,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("session-before-reconcile"),
-          threadId,
-          session: beforeReconcile,
-          createdAt: updatedAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("session-before-reconcile"),
+        threadId,
+        session: beforeReconcile,
+        createdAt: updatedAt,
+      });
       let concurrentSession: OrchestrationSession | undefined;
       if (scenario === "concurrent update") {
         const dispatch = harness.engine.dispatch;
@@ -10977,33 +10312,21 @@ describe("ProviderCommandReactor", () => {
       turnId: asTurnId("turn-skip-block"),
       createdAt: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-skip-block-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-skip-block"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.conversation.rollback",
-        commandId: CommandId.makeUnsafe("cmd-skip-block-rollback"),
-        threadId,
-        messageId: asMessageId("user-message-skip-block"),
-        numTurns: 1,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-skip-block-session",
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-skip-block"),
+      at: now,
+    });
+    await harness.dispatch({
+      type: "thread.conversation.rollback",
+      commandId: CommandId.makeUnsafe("cmd-skip-block-rollback"),
+      threadId,
+      messageId: asMessageId("user-message-skip-block"),
+      numTurns: 1,
+      createdAt: now,
+    });
     await waitFor(async () =>
       Effect.runPromise(
         harness.deliveryRepository
@@ -11016,39 +10339,19 @@ describe("ProviderCommandReactor", () => {
     );
 
     // Settle the session so the follow-up message starts a turn instead of queueing.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-skip-block-session-ready"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    const skippedTurn = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-skip-block-turn"),
-        threadId,
-        message: {
-          messageId: asMessageId("skip-block-user"),
-          role: "user",
-          text: "Message sent while the thread was blocked",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-skip-block-session-ready",
+      threadId,
+      status: "ready",
+      at: now,
+    });
+    const skippedTurn = await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-skip-block-turn",
+      threadId,
+      messageId: "skip-block-user",
+      text: "Message sent while the thread was blocked",
+      createdAt: now,
+    });
     await waitFor(async () => {
       const state = await Effect.runPromise(
         harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
@@ -11074,32 +10377,20 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("turn-operator-retry-restart");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-operator-retry-restart-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    const requested = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-operator-retry-restart-interrupt"),
-        threadId,
-        turnId,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-operator-retry-restart-session",
+      threadId,
+      status: "running",
+      activeTurnId: turnId,
+      at: now,
+    });
+    const requested = await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-operator-retry-restart-interrupt"),
+      threadId,
+      turnId,
+      createdAt: now,
+    });
     await Effect.runPromise(
       harness.deliveryRepository.claim({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -11231,13 +10522,11 @@ describe("ProviderCommandReactor", () => {
 
     // Deleting the thread must cancel its pending promotion so a stray drain can
     // never dispatch a turn for a thread that no longer exists.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.delete",
-        commandId: CommandId.makeUnsafe("cmd-delete-thread-queued"),
-        threadId,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.makeUnsafe("cmd-delete-thread-queued"),
+      threadId,
+    });
 
     await waitFor(async () => {
       const promotion = await Effect.runPromise(
@@ -11266,13 +10555,11 @@ describe("ProviderCommandReactor", () => {
 
     // Soft-delete the thread while the reactor is down (this projects deleted_at
     // on the thread row so it resolves to undefined).
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.delete",
-        commandId: CommandId.makeUnsafe("cmd-recovery-delete-thread"),
-        threadId,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.makeUnsafe("cmd-recovery-delete-thread"),
+      threadId,
+    });
 
     // Advance the delivery cursor past every event so live replay drains nothing
     // on start: only startup recovery acts on the leftover promotion.
@@ -11317,41 +10604,30 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe(fork ? "audit-fork" : "thread-1");
     const now = new Date().toISOString();
     if (fork)
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.fork.create",
-          commandId: CommandId.makeUnsafe("audit-create"),
-          threadId,
-          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-          projectId: asProjectId("project-1"),
-          title: "Audit",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          importedMessages: [],
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("audit-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Audit",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt: now,
+      });
     const send = async (n: number) => {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`audit-command-${n}`),
-          threadId,
-          message: {
-            messageId: asMessageId(`audit-message-${n}`),
-            role: "user",
-            text: `audit prompt ${n}`,
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: `audit-command-${n}`,
+        threadId,
+        messageId: `audit-message-${n}`,
+        text: `audit prompt ${n}`,
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === n);
     };
     await send(1);
@@ -11371,16 +10647,14 @@ describe("ProviderCommandReactor", () => {
     async function seedSourceTurns(harness: Awaited<ReturnType<typeof createHarness>>) {
       const now = new Date().toISOString();
       for (const word of ["apple", "banana"]) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.message.assistant.complete",
-            commandId: CommandId.makeUnsafe(`cmd-source-${word}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            messageId: MessageId.makeUnsafe(`assistant:${word}`),
-            turnId: asTurnId(`turn-${word}`),
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.makeUnsafe(`cmd-source-${word}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: MessageId.makeUnsafe(`assistant:${word}`),
+          turnId: asTurnId(`turn-${word}`),
+          createdAt: now,
+        });
       }
     }
 
@@ -11390,56 +10664,45 @@ describe("ProviderCommandReactor", () => {
     ) {
       const now = new Date().toISOString();
       const threadId = ThreadId.makeUnsafe("thread-fork-from-turn");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.fork.create",
-          commandId: CommandId.makeUnsafe("cmd-fork-from-turn"),
-          threadId,
-          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-          projectId: asProjectId("project-1"),
-          title: "Words",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          throughMessageId: MessageId.makeUnsafe(throughMessageId),
-          importedMessages: [
-            {
-              messageId: asMessageId("fork-imported-user"),
-              role: "user",
-              text: "Remember the word APPLE.",
-              createdAt: now,
-              updatedAt: now,
-            },
-            {
-              messageId: asMessageId("fork-imported-assistant"),
-              role: "assistant",
-              text: "ok",
-              createdAt: now,
-              updatedAt: now,
-            },
-          ],
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-fork-from-turn-start"),
-          threadId,
-          message: {
-            messageId: asMessageId("fork-from-turn-user"),
+      await harness.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-fork-from-turn"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Words",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        throughMessageId: MessageId.makeUnsafe(throughMessageId),
+        importedMessages: [
+          {
+            messageId: asMessageId("fork-imported-user"),
             role: "user",
-            text: "Which words do I want you to remember?",
-            attachments: [],
+            text: "Remember the word APPLE.",
+            createdAt: now,
+            updatedAt: now,
           },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+          {
+            messageId: asMessageId("fork-imported-assistant"),
+            role: "assistant",
+            text: "ok",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      });
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-fork-from-turn-start",
+        threadId,
+        messageId: "fork-from-turn-user",
+        text: "Which words do I want you to remember?",
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       return threadId;
     }
@@ -11482,43 +10745,41 @@ describe("ProviderCommandReactor", () => {
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-sidechat-fork-create"),
-        threadId: ThreadId.makeUnsafe("thread-sidechat"),
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Sidechat: Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-sidechat-fork-create"),
+      threadId: ThreadId.makeUnsafe("thread-sidechat"),
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Sidechat: Thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [
+        {
+          messageId: asMessageId("sidechat-imported-user"),
+          role: "user",
+          text: "Earlier question",
+          createdAt: now,
+          updatedAt: now,
         },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [
-          {
-            messageId: asMessageId("sidechat-imported-user"),
-            role: "user",
-            text: "Earlier question",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("sidechat-imported-assistant"),
-            role: "assistant",
-            text: "Earlier answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
+        {
+          messageId: asMessageId("sidechat-imported-assistant"),
+          role: "assistant",
+          text: "Earlier answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
 
     await dispatchHarnessUserTurn(harness, {
       messageId: "sidechat-native-user",
@@ -11556,45 +10817,34 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-standalone-sidechat");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-standalone-sidechat-create"),
-        threadId,
-        projectId: asProjectId("project-1"),
-        title: "Sidechat: Crash on launch",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        sidechatContext: {
-          kind: "github-item",
-          itemKind: "issue",
-          repository: "octo/repo",
-          number: 42,
-          url: "https://github.com/octo/repo/issues/42",
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-standalone-sidechat-turn"),
-        threadId,
-        message: {
-          messageId: asMessageId("standalone-sidechat-user"),
-          role: "user",
-          text: "What is the impact of this issue?",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe("cmd-standalone-sidechat-create"),
+      threadId,
+      projectId: asProjectId("project-1"),
+      title: "Sidechat: Crash on launch",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      sidechatContext: {
+        kind: "github-item",
+        itemKind: "issue",
+        repository: "octo/repo",
+        number: 42,
+        url: "https://github.com/octo/repo/issues/42",
+      },
+      createdAt: now,
+    });
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-standalone-sidechat-turn",
+      threadId,
+      messageId: "standalone-sidechat-user",
+      text: "What is the impact of this issue?",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     const input = (harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined)?.input;
@@ -11616,60 +10866,49 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-fork-create"),
-        threadId,
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Native Droid sidechat",
-        modelSelection: {
-          provider: "droid",
-          model: "claude-sonnet-4-6",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [
-          {
-            messageId: asMessageId("native-droid-sidechat-imported-user"),
-            role: "user",
-            text: "Imported Droid sidechat question",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("native-droid-sidechat-imported-assistant"),
-            role: "assistant",
-            text: "Imported Droid sidechat answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-overlong-turn-start"),
-        threadId,
-        message: {
-          messageId: asMessageId("native-droid-sidechat-overlong-user"),
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-fork-create"),
+      threadId,
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Native Droid sidechat",
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [
+        {
+          messageId: asMessageId("native-droid-sidechat-imported-user"),
           role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
-          attachments: [],
+          text: "Imported Droid sidechat question",
+          createdAt: now,
+          updatedAt: now,
         },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+        {
+          messageId: asMessageId("native-droid-sidechat-imported-assistant"),
+          role: "assistant",
+          text: "Imported Droid sidechat answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-native-droid-sidechat-overlong-turn-start",
+      threadId,
+      messageId: "native-droid-sidechat-overlong-user",
+      text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
+      createdAt: now,
+    });
 
     await waitFor(
       async () => (await readHarnessThread(harness, threadId))?.session?.status === "error",
@@ -11680,22 +10919,13 @@ describe("ProviderCommandReactor", () => {
       "too long to include the sidechat context",
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-turn-start"),
-        threadId,
-        message: {
-          messageId: asMessageId("native-droid-sidechat-user"),
-          role: "user",
-          text: "Continue the native Droid sidechat",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-native-droid-sidechat-turn-start",
+      threadId,
+      messageId: "native-droid-sidechat-user",
+      text: "Continue the native Droid sidechat",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.forkThread).toHaveBeenCalledTimes(1);
@@ -11714,23 +10944,21 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const messageText = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-max-input-with-thread-mention"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("max-input-with-thread-mention"),
-          role: "user",
-          text: messageText,
-          attachments: [],
-          mentions: [{ name: "Current thread", path: "thread://thread-1" }],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-max-input-with-thread-mention"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("max-input-with-thread-mention"),
+        role: "user",
+        text: messageText,
+        attachments: [],
+        mentions: [{ name: "Current thread", path: "thread://thread-1" }],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     const input = harness.sendTurn.mock.calls[0]?.[0] as
@@ -11745,31 +10973,19 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-max-input-goal-set"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Preserve the full objective",
-        goalStartBehavior: "defer",
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-max-input-with-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("max-input-with-goal"),
-          role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-max-input-goal-set"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Preserve the full objective",
+      goalStartBehavior: "defer",
+    });
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-max-input-with-goal",
+      messageId: "max-input-with-goal",
+      text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -11797,11 +11013,11 @@ describe("ProviderCommandReactor", () => {
         goal: objective,
         ...(startBehavior ? { goalStartBehavior: startBehavior } : {}),
       } as const;
-      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.dispatch(command);
 
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
-      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.dispatch(command);
       await harness.drain();
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       const providerInput = harness.sendTurn.mock.calls[0]?.[0].input;
@@ -11828,37 +11044,33 @@ describe("ProviderCommandReactor", () => {
       readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: string };
     },
   ) =>
-    Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        commandId: CommandId.makeUnsafe(`cmd-send-${id}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: { messageId: MessageId.makeUnsafe(id), role: "user", text, attachments: [] },
-        enableComputerControl: false,
-        computerControlGeneration: 0,
-        ...(options?.sourceProposedPlan ? { sourceProposedPlan: options.sourceProposedPlan } : {}),
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    harness.dispatch({
+      type: "thread.turn.start",
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      commandId: CommandId.makeUnsafe(`cmd-send-${id}`),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: { messageId: MessageId.makeUnsafe(id), role: "user", text, attachments: [] },
+      enableComputerControl: false,
+      computerControlGeneration: 0,
+      ...(options?.sourceProposedPlan ? { sourceProposedPlan: options.sourceProposedPlan } : {}),
+      createdAt: new Date().toISOString(),
+    });
   const resumeThread = (
     harness: Awaited<ReturnType<typeof createHarness>>,
     id: string,
     options?: { readonly continuationPrompt?: string; readonly computerControlGeneration?: number },
   ) =>
-    Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.resume",
-        commandId: CommandId.makeUnsafe(id),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        ...(options?.continuationPrompt ? { continuationPrompt: options.continuationPrompt } : {}),
-        ...(options?.computerControlGeneration !== undefined
-          ? { computerControlGeneration: options.computerControlGeneration }
-          : {}),
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    harness.dispatch({
+      type: "thread.turn.resume",
+      commandId: CommandId.makeUnsafe(id),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      ...(options?.continuationPrompt ? { continuationPrompt: options.continuationPrompt } : {}),
+      ...(options?.computerControlGeneration !== undefined
+        ? { computerControlGeneration: options.computerControlGeneration }
+        : {}),
+      createdAt: new Date().toISOString(),
+    });
   // A refused send quarantines the thread; Unblock abandons that delivery and
   // never retries it, which leaves exactly the message Resume should resend.
   const failThenUnblockSend = async (
@@ -11928,23 +11140,21 @@ describe("ProviderCommandReactor", () => {
       ["running", asTurnId("turn-1")],
       [settled, null],
     ] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`${id}-${status}`),
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(`${id}-${status}`),
+        threadId,
+        session: {
           threadId,
-          session: {
-            threadId,
-            status,
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId,
-            lastError: null,
-            updatedAt: new Date().toISOString(),
-          },
-          createdAt: new Date().toISOString(),
-        }),
-      );
+          status,
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId,
+          lastError: null,
+          updatedAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      });
     }
     harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
     await waitFor(
@@ -11986,23 +11196,21 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.proposed-plan.upsert",
-        commandId: CommandId.makeUnsafe("cmd-resume-plan"),
-        threadId,
-        proposedPlan: {
-          id: "plan-resume",
-          turnId: null,
-          planMarkdown: "1. Refactor the settings page",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: now,
-          updatedAt: now,
-        },
+    await harness.dispatch({
+      type: "thread.proposed-plan.upsert",
+      commandId: CommandId.makeUnsafe("cmd-resume-plan"),
+      threadId,
+      proposedPlan: {
+        id: "plan-resume",
+        turnId: null,
+        planMarkdown: "1. Refactor the settings page",
+        implementedAt: null,
+        implementationThreadId: null,
         createdAt: now,
-      }),
-    );
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
     const sourceProposedPlan = { threadId, planId: "plan-resume" };
     await failThenUnblockSend(harness, () =>
       sendUserTurn(harness, "resume-plan-message", "Implement the plan", { sourceProposedPlan }),
@@ -12151,40 +11359,34 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-visible-goal-failure"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Finish the complete implementation",
-        goalStartBehavior: "start-with-message",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-visible-goal-failure"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Finish the complete implementation",
+      goalStartBehavior: "start-with-message",
+    });
     await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
     await harness.drain();
     const failedThread = (await readHarnessThread(harness))!;
     expect(failedThread.messages).toHaveLength(1);
     expect(failedThread.session?.status).toBe("error");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-visible-goal-startup-recovery"),
-        threadId: failedThread.id,
-        goalStartedAt: failedThread.goalStartedAt!,
-        trigger: "startup-recovery",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.goal.continue",
+      commandId: CommandId.makeUnsafe("cmd-visible-goal-startup-recovery"),
+      threadId: failedThread.id,
+      goalStartedAt: failedThread.goalStartedAt!,
+      trigger: "startup-recovery",
+      createdAt: new Date().toISOString(),
+    });
     await harness.drain();
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-visible-goal-resume"),
-        threadId: failedThread.id,
-        goalPaused: false,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-visible-goal-resume"),
+      threadId: failedThread.id,
+      goalPaused: false,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     await harness.drain();
     expect((await readHarnessThread(harness))?.messages).toHaveLength(1);
@@ -12193,15 +11395,13 @@ describe("ProviderCommandReactor", () => {
   it("recovers an active idle goal when the reactor restarts", async () => {
     const harness = await createHarness({ startReactor: false });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-reactor-restart"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Resume after Synara restarts",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-before-reactor-restart"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Resume after Synara restarts",
+      goalStartBehavior: "defer",
+    });
     await harness.startReactor();
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -12215,60 +11415,52 @@ describe("ProviderCommandReactor", () => {
     const sidechatId = ThreadId.makeUnsafe("thread-expired-goal-sidechat");
     const createdAt = new Date(Date.now() - SIDECHAT_INACTIVITY_EXPIRY_MS - 1_000).toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-create-expired-goal-sidechat"),
-        threadId: sidechatId,
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Expired goal sidechat",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [],
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-sidechat-expiry"),
-        threadId: sidechatId,
-        goal: "This goal must not resume",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-create-expired-goal-sidechat"),
+      threadId: sidechatId,
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Expired goal sidechat",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [],
+      createdAt,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-before-sidechat-expiry"),
+      threadId: sidechatId,
+      goal: "This goal must not resume",
+      goalStartBehavior: "defer",
+    });
     const sidechatBeforeExpiry = (
       await Effect.runPromise(harness.engine.getReadModel())
     ).threads.find((thread) => thread.id === sidechatId);
     expect(sidechatBeforeExpiry?.goalStartedAt).toBeTruthy();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-persist-goal-before-sidechat-expiry"),
-        threadId: sidechatId,
-        goalStartedAt: sidechatBeforeExpiry?.goalStartedAt ?? null,
-        trigger: "turn-completed",
+    await harness.dispatch({
+      type: "thread.goal.continue",
+      commandId: CommandId.makeUnsafe("cmd-persist-goal-before-sidechat-expiry"),
+      threadId: sidechatId,
+      goalStartedAt: sidechatBeforeExpiry?.goalStartedAt ?? null,
+      trigger: "turn-completed",
+      createdAt,
+    });
+    await harness.dispatch({
+      type: "thread.sidechat.expire",
+      commandId: CommandId.makeUnsafe("cmd-expire-goal-sidechat"),
+      threadId: sidechatId,
+      expectedLastActivityAt:
+        sidechatBeforeExpiry?.sidechatLastActivityAt ??
+        sidechatBeforeExpiry?.createdAt ??
         createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.sidechat.expire",
-        commandId: CommandId.makeUnsafe("cmd-expire-goal-sidechat"),
-        threadId: sidechatId,
-        expectedLastActivityAt:
-          sidechatBeforeExpiry?.sidechatLastActivityAt ??
-          sidechatBeforeExpiry?.createdAt ??
-          createdAt,
-        expiredAt: new Date().toISOString(),
-      }),
-    );
+      expiredAt: new Date().toISOString(),
+    });
 
     await harness.startReactor();
     await harness.drain();
@@ -12285,25 +11477,23 @@ describe("ProviderCommandReactor", () => {
     const messageEventId = asEventId("evt-message-expired-turn-start-sidechat");
     const createdAt = new Date(Date.now() - SIDECHAT_INACTIVITY_EXPIRY_MS - 1_000).toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-create-expired-turn-start-sidechat"),
-        threadId: sidechatId,
-        sourceThreadId,
-        sidechatSourceThreadId: sourceThreadId,
-        projectId: asProjectId("project-1"),
-        title: "Expired turn start sidechat",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [],
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-create-expired-turn-start-sidechat"),
+      threadId: sidechatId,
+      sourceThreadId,
+      sidechatSourceThreadId: sourceThreadId,
+      projectId: asProjectId("project-1"),
+      title: "Expired turn start sidechat",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [],
+      createdAt,
+    });
     const sidechatBeforeExpiry = (
       await Effect.runPromise(harness.engine.getReadModel())
     ).threads.find((thread) => thread.id === sidechatId);
@@ -12351,18 +11541,16 @@ describe("ProviderCommandReactor", () => {
         },
       },
     ]);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.sidechat.expire",
-        commandId: CommandId.makeUnsafe("cmd-expire-turn-start-sidechat"),
-        threadId: sidechatId,
-        expectedLastActivityAt:
-          sidechatBeforeExpiry?.sidechatLastActivityAt ??
-          sidechatBeforeExpiry?.createdAt ??
-          createdAt,
-        expiredAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.sidechat.expire",
+      commandId: CommandId.makeUnsafe("cmd-expire-turn-start-sidechat"),
+      threadId: sidechatId,
+      expectedLastActivityAt:
+        sidechatBeforeExpiry?.sidechatLastActivityAt ??
+        sidechatBeforeExpiry?.createdAt ??
+        createdAt,
+      expiredAt: new Date().toISOString(),
+    });
 
     await harness.startReactor();
     await harness.drain();
@@ -12373,16 +11561,14 @@ describe("ProviderCommandReactor", () => {
   it("ignores a stale continuation request after the goal is cleared", async () => {
     const harness = await createHarness();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalStartedAt: null,
-        trigger: "turn-completed",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.goal.continue",
+      commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goalStartedAt: null,
+      trigger: "turn-completed",
+      createdAt: new Date().toISOString(),
+    });
 
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -12392,36 +11578,30 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.interaction-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-plan-before-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        interactionMode: "plan",
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-in-plan-mode"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Implement the approved plan",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-plan-before-goal"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      interactionMode: "plan",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-in-plan-mode"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Implement the approved plan",
+    });
 
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.interaction-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-default-after-plan-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        interactionMode: "default",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-default-after-plan-goal"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      interactionMode: "default",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
@@ -12433,33 +11613,27 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-debug-toggle"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Keep this goal idle",
-        goalStartBehavior: "defer",
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.interaction-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-debug-with-active-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        interactionMode: "debug",
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.interaction-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-default-after-debug-with-active-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-before-debug-toggle"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Keep this goal idle",
+      goalStartBehavior: "defer",
+    });
+    await harness.dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-debug-with-active-goal"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      interactionMode: "debug",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-default-after-debug-with-active-goal"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -12468,23 +11642,19 @@ describe("ProviderCommandReactor", () => {
   it("does not continue an active goal for a wording-only edit", async () => {
     const harness = await createHarness();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-wording-edit"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Finish the implementation",
-        goalStartBehavior: "defer",
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-wording-edit"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Finish the implementation and tests",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-before-wording-edit"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Finish the implementation",
+      goalStartBehavior: "defer",
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-wording-edit"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Finish the implementation and tests",
+    });
 
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -12493,45 +11663,37 @@ describe("ProviderCommandReactor", () => {
   it("resumes a paused idle goal immediately", async () => {
     const harness = await createHarness();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-paused-seed"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Resume the full objective",
-        goalStartBehavior: "defer",
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-paused"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalPaused: true,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-paused-seed"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Resume the full objective",
+      goalStartBehavior: "defer",
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-paused"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goalPaused: true,
+    });
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-edited-while-paused"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Resume the edited objective",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-edited-while-paused"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Resume the edited objective",
+    });
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-resumed"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalPaused: false,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-resumed"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goalPaused: false,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
@@ -12543,15 +11705,13 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-queue-priority"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Finish after handling user input",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-queue-priority"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Finish after handling user input",
+      goalStartBehavior: "defer",
+    });
     await seedQueuedTurnBehindLiveTurn(harness, {
       liveTurnId: asTurnId("turn-before-goal-continuation"),
       messageId: asMessageId("msg-user-before-goal-continuation"),
@@ -12561,17 +11721,15 @@ describe("ProviderCommandReactor", () => {
     const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
     expect(goalStartedAt).toBeTruthy();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-goal-continue-after-user-queue"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalStartedAt: goalStartedAt!,
-        trigger: "turn-completed",
-        sourceTurnId: asTurnId("turn-before-goal-continuation"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.goal.continue",
+      commandId: CommandId.makeUnsafe("cmd-goal-continue-after-user-queue"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goalStartedAt: goalStartedAt!,
+      trigger: "turn-completed",
+      sourceTurnId: asTurnId("turn-before-goal-continuation"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
@@ -12589,70 +11747,53 @@ describe("ProviderCommandReactor", () => {
       const now = new Date().toISOString();
       const requestId = asApprovalRequestId("approval-before-goal-continuation");
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-goal-before-pending-approval"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          goal: "Continue after the approval settles",
-          goalStartBehavior: visible ? "start-with-message" : "defer",
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.makeUnsafe("cmd-pending-approval-before-goal"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          activity: {
-            id: EventId.makeUnsafe("activity-pending-approval-before-goal"),
-            tone: "approval",
-            kind: "approval.requested",
-            summary: "Command approval requested",
-            payload: {
-              requestId,
-              requestKind: "command",
-            },
-            turnId: null,
-            createdAt: now,
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-pending-approval"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Continue after the approval settles",
+        goalStartBehavior: visible ? "start-with-message" : "defer",
+      });
+      await harness.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-pending-approval-before-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-pending-approval-before-goal"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          payload: {
+            requestId,
+            requestKind: "command",
           },
+          turnId: null,
           createdAt: now,
-        }),
-      );
+        },
+        createdAt: now,
+      });
       const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
       expect(goalStartedAt).toBeTruthy();
       if (!visible)
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.goal.continue",
-            commandId: CommandId.makeUnsafe("cmd-goal-blocked-by-approval"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            goalStartedAt: goalStartedAt!,
-            trigger: "startup-recovery",
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.goal.continue",
+          commandId: CommandId.makeUnsafe("cmd-goal-blocked-by-approval"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          goalStartedAt: goalStartedAt!,
+          trigger: "startup-recovery",
+          createdAt: now,
+        });
       await harness.startReactor();
 
       await harness.drain();
       expect(harness.sendTurn).not.toHaveBeenCalled();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-interrupted-session-before-goal-retry"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            status: "interrupted",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-interrupted-session-before-goal-retry",
+        status: "interrupted",
+        runtimeMode: "full-access",
+        at: now,
+      });
 
       await Effect.runPromise(
         harness.pendingInteractionRepository.deleteByIdentity({
@@ -12688,39 +11829,33 @@ describe("ProviderCommandReactor", () => {
       );
       harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-goal-before-stop-race"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          goal: "Stop this continuation",
-          goalStartBehavior: visible ? "start-with-message" : "defer",
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-before-stop-race"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Stop this continuation",
+        goalStartBehavior: visible ? "start-with-message" : "defer",
+      });
       const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
       expect(goalStartedAt).toBeTruthy();
       if (!visible)
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.goal.continue",
-            commandId: CommandId.makeUnsafe("cmd-goal-continuation-before-stop"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            goalStartedAt: goalStartedAt!,
-            trigger: "turn-completed",
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.goal.continue",
+          commandId: CommandId.makeUnsafe("cmd-goal-continuation-before-stop"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          goalStartedAt: goalStartedAt!,
+          trigger: "turn-completed",
+          createdAt: now,
+        });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("cmd-stop-racing-goal-continuation"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId("turn-before-goal-continuation"),
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-stop-racing-goal-continuation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-before-goal-continuation"),
+        createdAt: now,
+      });
       releaseSend({
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: asTurnId("turn-goal-continuation-after-stop"),
@@ -12738,61 +11873,57 @@ describe("ProviderCommandReactor", () => {
   it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-review-sidechat-fork-create"),
-        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Review sidechat",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [
-          {
-            messageId: asMessageId("review-sidechat-imported-user"),
-            role: "user",
-            text: "Context that must survive the review",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("review-sidechat-imported-assistant"),
-            role: "assistant",
-            text: "Prior sidechat answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-review-sidechat-review-start"),
-        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
-        message: {
-          messageId: asMessageId("review-sidechat-review-user"),
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-review-sidechat-fork-create"),
+      threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Review sidechat",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [
+        {
+          messageId: asMessageId("review-sidechat-imported-user"),
           role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
-          attachments: [],
+          text: "Context that must survive the review",
+          createdAt: now,
+          updatedAt: now,
         },
-        reviewTarget: { type: "uncommittedChanges" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+        {
+          messageId: asMessageId("review-sidechat-imported-assistant"),
+          role: "assistant",
+          text: "Prior sidechat answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-review-sidechat-review-start"),
+      threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+      message: {
+        messageId: asMessageId("review-sidechat-review-user"),
+        role: "user",
+        text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+        attachments: [],
+      },
+      reviewTarget: { type: "uncommittedChanges" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startReview.mock.calls.length === 1);
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -12828,37 +11959,33 @@ describe("ProviderCommandReactor", () => {
       mimeType: "image/png",
       sizeBytes: 4,
     };
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("legacy-review-worktree"),
-        threadId,
-        title: "New thread",
-        envMode: "worktree",
-        branch: "synara/deadbeef",
-        worktreePath: "/tmp/provider-project/.worktrees/deadbeef",
-        associatedWorktreePath: "/tmp/provider-project/.worktrees/deadbeef",
-        associatedWorktreeBranch: "synara/deadbeef",
-        associatedWorktreeRef: "synara/deadbeef",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("legacy-review-worktree"),
+      threadId,
+      title: "New thread",
+      envMode: "worktree",
+      branch: "synara/deadbeef",
+      worktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+      associatedWorktreeBranch: "synara/deadbeef",
+      associatedWorktreeRef: "synara/deadbeef",
+    });
     const attachmentPath = await harness.stageAttachment(image);
-    const accepted = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId,
-        threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: "Review using this screenshot",
-          attachments: [image],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    const accepted = await harness.dispatch({
+      type: "thread.turn.start",
+      commandId,
+      threadId,
+      message: {
+        messageId,
+        role: "user",
+        text: "Review using this screenshot",
+        attachments: [image],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: new Date().toISOString(),
+    });
     // Represent a durable review accepted by an older host, before the new admission guard.
     await Effect.runPromise(harness.sql`UPDATE orchestration_events
       SET payload_json = json_set(payload_json, '$.reviewTarget', json('{"type":"uncommittedChanges"}'))
@@ -12921,84 +12048,78 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-create"),
-        threadId,
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Restarted Droid sidechat",
-        modelSelection: {
-          provider: "droid",
-          model: "claude-sonnet-4-6",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [
-          {
-            messageId: asMessageId("restarted-droid-sidechat-imported-user"),
-            role: "user",
-            text: "Retained sidechat question",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("restarted-droid-sidechat-imported-assistant"),
-            role: "assistant",
-            text: "Retained sidechat answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-review"),
-        threadId,
-        message: {
-          messageId: asMessageId("restarted-droid-sidechat-review-user"),
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-create"),
+      threadId,
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Restarted Droid sidechat",
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [
+        {
+          messageId: asMessageId("restarted-droid-sidechat-imported-user"),
           role: "user",
-          text: "Review before restarting",
-          attachments: [],
+          text: "Retained sidechat question",
+          createdAt: now,
+          updatedAt: now,
         },
-        reviewTarget: { type: "uncommittedChanges" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+        {
+          messageId: asMessageId("restarted-droid-sidechat-imported-assistant"),
+          role: "assistant",
+          text: "Retained sidechat answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-review"),
+      threadId,
+      message: {
+        messageId: asMessageId("restarted-droid-sidechat-review-user"),
+        role: "user",
+        text: "Review before restarting",
+        attachments: [],
+      },
+      reviewTarget: { type: "uncommittedChanges" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await waitFor(() => harness.startReview.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-overlong-review"),
-        threadId,
-        message: {
-          messageId: asMessageId("restarted-droid-sidechat-overlong-review-user"),
-          role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
-          attachments: [],
-        },
-        reviewTarget: { type: "uncommittedChanges" },
-        modelSelection: {
-          provider: "droid",
-          model: "claude-opus-4-6",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-overlong-review"),
+      threadId,
+      message: {
+        messageId: asMessageId("restarted-droid-sidechat-overlong-review-user"),
+        role: "user",
+        text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+        attachments: [],
+      },
+      reviewTarget: { type: "uncommittedChanges" },
+      modelSelection: {
+        provider: "droid",
+        model: "claude-opus-4-6",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await waitFor(() => harness.startReview.mock.calls.length === 2);
 
     await dispatchHarnessUserTurn(harness, {
@@ -13025,30 +12146,28 @@ describe("ProviderCommandReactor", () => {
   ) => {
     const now = Date.now();
     const importedAt = new Date(now - 1_000).toISOString();
-    return Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe(`cmd-${threadId}-fork-create`),
-        threadId,
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Droid fork",
-        modelSelection: { provider: "droid", model: "claude-sonnet-4-6" },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: imported.map(([role, text], index) => ({
-          messageId: asMessageId(`${threadId}-imported-${index}`),
-          role,
-          text,
-          createdAt: importedAt,
-          updatedAt: importedAt,
-        })),
-        createdAt: new Date(now).toISOString(),
-      }),
-    );
+    return harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe(`cmd-${threadId}-fork-create`),
+      threadId,
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Droid fork",
+      modelSelection: { provider: "droid", model: "claude-sonnet-4-6" },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: imported.map(([role, text], index) => ({
+        messageId: asMessageId(`${threadId}-imported-${index}`),
+        role,
+        text,
+        createdAt: importedAt,
+        updatedAt: importedAt,
+      })),
+      createdAt: new Date(now).toISOString(),
+    });
   };
   const sendOnDroidFork = (
     harness: Awaited<ReturnType<typeof createHarness>>,
@@ -13251,15 +12370,13 @@ describe("ProviderCommandReactor", () => {
       activeTurnId: asTurnId("turn-interrupt-escalation"),
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation"),
-        threadId,
-        turnId: asTurnId("turn-interrupt-escalation"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-interrupt-escalation"),
+      threadId,
+      turnId: asTurnId("turn-interrupt-escalation"),
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
     expect(harness.interruptTurn).toHaveBeenCalledWith({
@@ -13326,15 +12443,13 @@ describe("ProviderCommandReactor", () => {
         status: "running",
         activeTurnId: asTurnId("turn-1"),
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("cmd-escalation-stop"),
-          threadId,
-          turnId: asTurnId("turn-1"),
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-escalation-stop"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
       return { harness, threadId };
@@ -13374,15 +12489,13 @@ describe("ProviderCommandReactor", () => {
         activeTurnId: asTurnId("turn-1"),
       });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-context-loss"),
-          threadId,
-          turnId: asTurnId("turn-1"),
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-context-loss"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      });
       await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
       expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
         threadId,
@@ -13614,14 +12727,12 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain(
         "Remember that the release train is amber.",
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.makeUnsafe("cmd-explicit-recovery-stop"),
-          threadId,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-explicit-recovery-stop"),
+        threadId,
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       await dispatchHarnessUserTurn(harness, {
         messageId: "after-explicit-recovery-stop",
@@ -13657,23 +12768,14 @@ describe("ProviderCommandReactor", () => {
         status: "running",
         activeTurnId: recoveryTurnId,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-recovery-steer"),
-          threadId,
-          message: {
-            messageId: asMessageId("recovery-steer"),
-            role: "user",
-            text: "Focus on the release train.",
-            attachments: [],
-          },
-          dispatchMode: "steer",
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-recovery-steer",
+        threadId,
+        messageId: "recovery-steer",
+        text: "Focus on the release train.",
+        dispatchMode: "steer",
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       expect(harness.steerTurn).toHaveBeenCalledTimes(1);
       const steerInput = harness.steerTurn.mock.calls[0]?.[0] as { readonly input?: string };
@@ -13867,16 +12969,14 @@ describe("ProviderCommandReactor", () => {
       activeTurnId: asTurnId("turn-active-edit"),
       at: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.conversation.rollback",
-        commandId: CommandId.makeUnsafe("cmd-conversation-rollback-active"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-active"),
-        numTurns: 1,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.conversation.rollback",
+      commandId: CommandId.makeUnsafe("cmd-conversation-rollback-active"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-active"),
+      numTurns: 1,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
@@ -14144,24 +13244,22 @@ describe("ProviderCommandReactor", () => {
 
     await harness.stageAttachment(imageAttachment);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-original-turn-start-for-edit"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-edit"),
-          role: "user",
-          text: "old prompt",
-          attachments: [imageAttachment],
-          skills: [skill],
-          mentions: [mention],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-original-turn-start-for-edit"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-edit"),
+        role: "user",
+        text: "old prompt",
+        attachments: [imageAttachment],
+        skills: [skill],
+        mentions: [mention],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     harness.sendTurn.mockClear();
     harness.startSession.mockClear();
@@ -14172,18 +13270,16 @@ describe("ProviderCommandReactor", () => {
       at: now,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-and-resend"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-edit"),
-        text: "edited prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-and-resend"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-edit"),
+      text: "edited prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -14286,21 +13382,13 @@ describe("ProviderCommandReactor", () => {
           const rpcPrincipal = attachmentPrincipalForSession(rpcLease!.sessionId);
           expect(attachmentPrincipalForSession(uploadLease!.sessionId)).toEqual(rpcPrincipal);
           if (rawThreadId !== "thread-1") {
-            await Effect.runPromise(
-              harness.engine.dispatch({
-                type: "thread.create",
-                commandId: CommandId.makeUnsafe(`cmd-photo-create-${host}`),
-                threadId,
-                projectId: asProjectId("project-1"),
-                title: "Phone photo fixture",
-                modelSelection: { provider: "codex", model: "gpt-5" },
-                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-                runtimeMode: "approval-required",
-                branch: null,
-                worktreePath: null,
-                createdAt: new Date().toISOString(),
-              }),
-            );
+            await createHarnessThread(harness, {
+              commandId: `cmd-photo-create-${host}`,
+              threadId,
+              title: "Phone photo fixture",
+              modelSelection: { provider: "codex", model: "gpt-5" },
+              createdAt: new Date().toISOString(),
+            });
           }
           const upload = async () => {
             const query = new URLSearchParams({
@@ -14426,31 +13514,20 @@ describe("ProviderCommandReactor", () => {
       sizeBytes: 4,
     };
     const storagePath = await harness.stageAttachment(imageAttachment);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-managed-object-path-generic-title"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-managed-object-path-generic-title"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "New thread",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-managed-object-path"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("message-managed-object-path"),
-          role: "user",
-          text: "Inspect this image",
-          attachments: [imageAttachment],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-managed-object-path",
+      messageId: "message-managed-object-path",
+      text: "Inspect this image",
+      attachments: [imageAttachment],
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     const sentAttachment = harness.sendTurn.mock.calls[0]?.[0].attachments?.[0];
@@ -14485,48 +13562,37 @@ describe("ProviderCommandReactor", () => {
     });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("cmd-import-droid-model-switch"),
-        threadId,
-        messages: [
-          {
-            messageId: asMessageId("droid-switch-earlier-user"),
-            role: "user",
-            text: "Earlier question",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("droid-switch-earlier-assistant"),
-            role: "assistant",
-            text: "Earlier answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-    for (const [index, model] of ["model-a", "model-b"].entries()) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-droid-model-switch-${index}`),
-          threadId,
-          message: {
-            messageId: asMessageId(`droid-model-switch-user-${index}`),
-            role: "user",
-            text: `turn on ${model}`,
-            attachments: [],
-          },
-          modelSelection: { provider: "droid", model },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("cmd-import-droid-model-switch"),
+      threadId,
+      messages: [
+        {
+          messageId: asMessageId("droid-switch-earlier-user"),
+          role: "user",
+          text: "Earlier question",
           createdAt: now,
-        }),
-      );
+          updatedAt: now,
+        },
+        {
+          messageId: asMessageId("droid-switch-earlier-assistant"),
+          role: "assistant",
+          text: "Earlier answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+    for (const [index, model] of ["model-a", "model-b"].entries()) {
+      await dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-droid-model-switch-${index}`,
+        threadId,
+        messageId: `droid-model-switch-user-${index}`,
+        text: `turn on ${model}`,
+        modelSelection: { provider: "droid", model },
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
     }
 
@@ -14545,30 +13611,28 @@ describe("ProviderCommandReactor", () => {
       conversationRollback: "restart-session",
     });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("cmd-import-droid-retained-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: asMessageId("droid-earlier-user"),
-            role: "user",
-            text: "Earlier question",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("droid-earlier-assistant"),
-            role: "assistant",
-            text: "Earlier answer",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("cmd-import-droid-retained-context"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: asMessageId("droid-earlier-user"),
+          role: "user",
+          text: "Earlier question",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          messageId: asMessageId("droid-earlier-assistant"),
+          role: "assistant",
+          text: "Earlier answer",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
     await dispatchHarnessUserTurn(harness, {
       messageId: "droid-edit-target",
       text: "old prompt",
@@ -14585,18 +13649,16 @@ describe("ProviderCommandReactor", () => {
       at: now,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-droid-edit-and-resend"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("droid-edit-target"),
-        text: "edited prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-droid-edit-and-resend"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("droid-edit-target"),
+      text: "edited prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -14624,30 +13686,28 @@ describe("ProviderCommandReactor", () => {
       const retryTurnId = asTurnId(`${provider}-edit-replay-retry`);
       const now = new Date().toISOString();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.messages.import",
-          commandId: CommandId.makeUnsafe(`cmd-import-${provider}-edit-context`),
-          threadId,
-          messages: [
-            {
-              messageId: asMessageId(`${provider}-edit-earlier-user`),
-              role: "user",
-              text: "Earlier question",
-              createdAt: now,
-              updatedAt: now,
-            },
-            {
-              messageId: asMessageId(`${provider}-edit-earlier-assistant`),
-              role: "assistant",
-              text: "Earlier answer",
-              createdAt: now,
-              updatedAt: now,
-            },
-          ],
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe(`cmd-import-${provider}-edit-context`),
+        threadId,
+        messages: [
+          {
+            messageId: asMessageId(`${provider}-edit-earlier-user`),
+            role: "user",
+            text: "Earlier question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId(`${provider}-edit-earlier-assistant`),
+            role: "assistant",
+            text: "Earlier answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      });
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-edit-target`,
         text: "old prompt",
@@ -14672,18 +13732,16 @@ describe("ProviderCommandReactor", () => {
         at: now,
       });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.message.edit-and-resend",
-          commandId: CommandId.makeUnsafe(`cmd-${provider}-edit-and-resend`),
-          threadId,
-          messageId: asMessageId(`${provider}-edit-target`),
-          text: "edited prompt",
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe(`cmd-${provider}-edit-and-resend`),
+        threadId,
+        messageId: asMessageId(`${provider}-edit-target`),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
       const rejectedInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
@@ -14774,18 +13832,16 @@ describe("ProviderCommandReactor", () => {
     harness.rollbackConversation.mockClear();
     harness.sendTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-queued-message"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("msg-queued-before-edit"),
-        text: "edited queued prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-queued-message"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("msg-queued-before-edit"),
+      text: "edited queued prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await harness.drain();
 
     expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
@@ -14832,47 +13888,34 @@ describe("ProviderCommandReactor", () => {
     fs.writeFileSync(attachmentPath, Buffer.from([1, 2, 3, 4]));
     await harness.stageAttachment(imageAttachment);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-original-image-edit"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-image-edit"),
-          role: "user",
-          text: "old image prompt",
-          attachments: [imageAttachment],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-original-image-edit",
+      messageId: "msg-image-edit",
+      text: "old image prompt",
+      attachments: [imageAttachment],
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     harness.sendTurn.mockClear();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.makeUnsafe("cmd-image-edit-assistant-complete"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("assistant-image-edit"),
-        turnId: asTurnId("turn-image-edit"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe("cmd-image-edit-assistant-complete"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("assistant-image-edit"),
+      turnId: asTurnId("turn-image-edit"),
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-image-resend"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("msg-image-edit"),
-        text: "edited image prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-image-resend"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("msg-image-edit"),
+      text: "edited image prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(fs.existsSync(attachmentPath)).toBe(true);
@@ -14931,34 +13974,30 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-checkpoint-edit"),
         createdAt: now,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe("cmd-checkpoint-edit-complete"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId("turn-checkpoint-edit"),
-          completedAt: now,
-          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
-          status: "ready",
-          files: [],
-          assistantMessageId: asMessageId("assistant-user-message-checkpoint-edit"),
-          checkpointTurnCount: 1,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-checkpoint-edit-complete"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-checkpoint-edit"),
+        completedAt: now,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        status: "ready",
+        files: [],
+        assistantMessageId: asMessageId("assistant-user-message-checkpoint-edit"),
+        checkpointTurnCount: 1,
+        createdAt: now,
+      });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.message.edit-and-resend",
-          commandId: CommandId.makeUnsafe("cmd-edit-checkpoint-resend"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          messageId: asMessageId("user-message-checkpoint-edit"),
-          text: "edited checkpoint prompt",
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-checkpoint-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-checkpoint-edit"),
+        text: "edited checkpoint prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      });
 
       if (mode === "success") {
         await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -15011,14 +14050,12 @@ describe("ProviderCommandReactor", () => {
     runtimes.add(firstRuntime);
     const store = await firstRuntime.runPromise(Effect.service(CheckpointStore));
     const harness = await createHarness({ checkpointStore: store });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "project.meta.update",
-        commandId: CommandId.makeUnsafe("edit-recovery-real-project"),
-        projectId: asProjectId("project-1"),
-        workspaceRoot: cwd,
-      }),
-    );
+    await harness.dispatch({
+      type: "project.meta.update",
+      commandId: CommandId.makeUnsafe("edit-recovery-real-project"),
+      projectId: asProjectId("project-1"),
+      workspaceRoot: cwd,
+    });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
     await seedRollbackTarget(harness, {
@@ -15026,21 +14063,19 @@ describe("ProviderCommandReactor", () => {
       turnId: asTurnId("turn-edit-recovery-real"),
       createdAt: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("edit-recovery-real-checkpoint"),
-        threadId,
-        turnId: asTurnId("turn-edit-recovery-real"),
-        completedAt: now,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-        status: "ready",
-        files: [],
-        assistantMessageId: asMessageId("assistant-user-edit-recovery-real"),
-        checkpointTurnCount: 1,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.diff.complete",
+      commandId: CommandId.makeUnsafe("edit-recovery-real-checkpoint"),
+      threadId,
+      turnId: asTurnId("turn-edit-recovery-real"),
+      completedAt: now,
+      checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+      status: "ready",
+      files: [],
+      assistantMessageId: asMessageId("assistant-user-edit-recovery-real"),
+      checkpointTurnCount: 1,
+      createdAt: now,
+    });
     fs.writeFileSync(path.join(cwd, "tracked.txt"), "user changed this after the turn\n");
     fs.writeFileSync(path.join(cwd, "untracked.txt"), "unsaved elsewhere\n");
     let refsBeforeRollback = "";
@@ -15053,18 +14088,16 @@ describe("ProviderCommandReactor", () => {
         ]);
       }),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("edit-recovery-real-resend"),
-        threadId,
-        messageId: asMessageId("user-edit-recovery-real"),
-        text: "edited checkpoint prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("edit-recovery-real-resend"),
+      threadId,
+      messageId: asMessageId("user-edit-recovery-real"),
+      text: "edited checkpoint prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     // Provider history can be trimmed only after durable file recovery exists.
     expect(refsBeforeRollback).toContain("/revert-rescue/");
@@ -15122,18 +14155,16 @@ describe("ProviderCommandReactor", () => {
       createdAt: now,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-and-resend-rollback-fails"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-edit-fails"),
-        text: "edited prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-and-resend-rollback-fails"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-edit-fails"),
+      text: "edited prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
     const thread = await readHarnessThread(harness);
@@ -15176,46 +14207,40 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("cmd-import-edit-start-failure"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: asMessageId("user-message-start-fails"),
-            role: "user",
-            text: "old prompt",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.makeUnsafe("cmd-assistant-edit-start-failure"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("assistant-edit-start-failure"),
-        turnId: asTurnId("turn-edit-start-failure"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("cmd-import-edit-start-failure"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: asMessageId("user-message-start-fails"),
+          role: "user",
+          text: "old prompt",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe("cmd-assistant-edit-start-failure"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("assistant-edit-start-failure"),
+      turnId: asTurnId("turn-edit-start-failure"),
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-and-resend-start-fails"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-start-fails"),
-        text: "edited prompt",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-and-resend-start-fails"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-start-fails"),
+      text: "edited prompt",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
     const thread = await readHarnessThread(harness);
@@ -15252,16 +14277,14 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.conversation.rollback",
-        commandId: CommandId.makeUnsafe("cmd-conversation-rollback-stale-resume"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-stale"),
-        numTurns: 1,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.conversation.rollback",
+      commandId: CommandId.makeUnsafe("cmd-conversation-rollback-stale-resume"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("user-message-stale"),
+      numTurns: 1,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
@@ -15290,25 +14313,23 @@ describe("ProviderCommandReactor", () => {
       const createdAt = new Date().toISOString();
       try {
         const sendUserTurn = async (index: number, switchOn?: boolean) => {
-          await Effect.runPromise(
-            harness.engine.dispatch({
-              type: "thread.turn.start",
-              commandId: CommandId.makeUnsafe(`computer-goal-user-${index}`),
-              threadId,
-              message: {
-                messageId: asMessageId(`computer-goal-message-${index}`),
-                role: "user",
-                text: "Continue",
-                attachments: [],
-              },
-              ...(switchOn !== undefined
-                ? { enableComputerControl: switchOn, computerControlGeneration: 0 }
-                : {}),
-              runtimeMode: "approval-required",
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              createdAt,
-            }),
-          );
+          await harness.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`computer-goal-user-${index}`),
+            threadId,
+            message: {
+              messageId: asMessageId(`computer-goal-message-${index}`),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            ...(switchOn !== undefined
+              ? { enableComputerControl: switchOn, computerControlGeneration: 0 }
+              : {}),
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          });
           await waitFor(() => harness.sendTurn.mock.calls.length === index);
           harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
           await setHarnessSession(harness, {
@@ -15324,27 +14345,23 @@ describe("ProviderCommandReactor", () => {
           await manager.setControlEnabled(threadId, false);
           await manager.setControlEnabled(threadId, true);
         }
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: CommandId.makeUnsafe("computer-goal-create"),
-            threadId,
-            goal: "Complete the desktop task",
-            goalStartBehavior: "defer",
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("computer-goal-create"),
+          threadId,
+          goal: "Complete the desktop task",
+          goalStartBehavior: "defer",
+        });
         const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt ?? null;
         const priorCalls = harness.sendTurn.mock.calls.length;
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.goal.continue",
-            commandId: CommandId.makeUnsafe("computer-goal-continue"),
-            threadId,
-            goalStartedAt,
-            trigger: "startup-recovery",
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.goal.continue",
+          commandId: CommandId.makeUnsafe("computer-goal-continue"),
+          threadId,
+          goalStartedAt,
+          trigger: "startup-recovery",
+          createdAt,
+        });
         await waitFor(() => harness.sendTurn.mock.calls.length > priorCalls);
         expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(expected);
         expect(manager.canContinueChatControl(threadId)).toBe(expected);
@@ -15364,22 +14381,13 @@ describe("ProviderCommandReactor", () => {
       sizeBytes: 42,
     };
     await harness.stageAttachment(attachment);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("appsnap-context-turn"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("appsnap-context-message"),
-          role: "user",
-          text: "Explain this image",
-          attachments: [attachment],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "appsnap-context-turn",
+      messageId: "appsnap-context-message",
+      text: "Explain this image",
+      attachments: [attachment],
+      createdAt: new Date().toISOString(),
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1].enableComputerControl).toBe(false);
     const sent = harness.sendTurn.mock.calls[0]?.[0];
@@ -15415,24 +14423,22 @@ describe("ProviderCommandReactor", () => {
             at: createdAt,
           });
         }
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`computer-invocation-${index}`),
-            threadId,
-            message: {
-              messageId: asMessageId(`computer-invocation-message-${index}`),
-              role: "user",
-              text,
-              attachments: [],
-            },
-            enableComputerControl: false,
-            computerControlGeneration: 0,
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`computer-invocation-${index}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`computer-invocation-message-${index}`),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          enableComputerControl: false,
+          computerControlGeneration: 0,
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        });
         await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
         expect(manager.canContinueChatControl(threadId)).toBe(false);
       }
@@ -15476,23 +14482,21 @@ describe("ProviderCommandReactor", () => {
             at: createdAt,
           });
         }
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`computer-request-${index}`),
-            threadId,
-            message: {
-              messageId: asMessageId(`computer-message-${index}`),
-              role: "user",
-              text: "Continue",
-              attachments: [],
-            },
-            ...activation,
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`computer-request-${index}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`computer-message-${index}`),
+            role: "user",
+            text: "Continue",
+            attachments: [],
+          },
+          ...activation,
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        });
         await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
       }
       expect(
@@ -15520,58 +14524,41 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const createdAt = new Date().toISOString();
     const markSessionReady = () =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(
-            `computer-stop-ready-${harness.sendTurn.mock.calls.length}`,
-          ),
-          threadId,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      setHarnessSession(harness, {
+        commandId: `computer-stop-ready-${harness.sendTurn.mock.calls.length}`,
+        threadId,
+        status: "ready",
+        at: createdAt,
+      });
     try {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("computer-stop-chat"),
-          threadId,
-          message: {
-            messageId: asMessageId("computer-stop-message-1"),
-            role: "user",
-            text: "Continue",
-            attachments: [],
-          },
-          enableComputerControl: true,
-          computerControlGeneration: 0,
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("computer-stop-chat"),
+        threadId,
+        message: {
+          messageId: asMessageId("computer-stop-message-1"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        enableComputerControl: true,
+        computerControlGeneration: 0,
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       expect(harness.startSession.mock.calls.at(-1)?.[1].enableComputerControl).toBe(true);
       expect(manager.canContinueChatControl(threadId)).toBe(true);
       await markSessionReady();
       // Stop is an explicit off: the durable intent is cleared even though no
       // turn carried a switch-off.
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("computer-stop"),
-          threadId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("computer-stop"),
+        threadId,
+        createdAt,
+      });
       await harness.drain();
       expect(harness.interruptTurn).not.toHaveBeenCalled();
       expect(manager.canContinueChatControl(threadId)).toBe(false);
@@ -15606,62 +14593,49 @@ describe("ProviderCommandReactor", () => {
     });
     const createdAt = new Date().toISOString();
     const startOrdinaryTurn = (id: ThreadId, tag: string) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`computer-fork-turn-${tag}`),
-          threadId: id,
-          message: {
-            messageId: asMessageId(`computer-fork-message-${tag}`),
-            role: "user",
-            text: "Continue",
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      dispatchHarnessUserTurn(harness, {
+        commandId: `computer-fork-turn-${tag}`,
+        threadId: id,
+        messageId: `computer-fork-message-${tag}`,
+        text: "Continue",
+        createdAt,
+      });
     try {
       // Parent with live switch intent: the fork inherits it at generation 0.
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("computer-fork-parent-chat"),
-          threadId: parentId,
-          message: {
-            messageId: asMessageId("computer-fork-parent-message"),
-            role: "user",
-            text: "Continue",
-            attachments: [],
-          },
-          enableComputerControl: true,
-          computerControlGeneration: 0,
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("computer-fork-parent-chat"),
+        threadId: parentId,
+        message: {
+          messageId: asMessageId("computer-fork-parent-message"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        enableComputerControl: true,
+        computerControlGeneration: 0,
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       expect(manager.canContinueChatControl(parentId)).toBe(true);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.fork.create",
-          commandId: CommandId.makeUnsafe("computer-fork-create"),
-          threadId: childId,
-          sourceThreadId: parentId,
-          projectId: asProjectId("project-1"),
-          title: "Fork child",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          importedMessages: [],
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("computer-fork-create"),
+        threadId: childId,
+        sourceThreadId: parentId,
+        projectId: asProjectId("project-1"),
+        title: "Fork child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      });
       await startOrdinaryTurn(childId, "child");
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
       expect(harness.forkThread).toHaveBeenCalledTimes(1);
@@ -15673,24 +14647,22 @@ describe("ProviderCommandReactor", () => {
       // Parent intent revoked: a later fork starts without computer control.
       await manager.setControlEnabled(parentId, false);
       await manager.setControlEnabled(parentId, true);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.fork.create",
-          commandId: CommandId.makeUnsafe("computer-fork-create-orphan"),
-          threadId: orphanId,
-          sourceThreadId: parentId,
-          projectId: asProjectId("project-1"),
-          title: "Fork orphan",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          importedMessages: [],
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("computer-fork-create-orphan"),
+        threadId: orphanId,
+        sourceThreadId: parentId,
+        projectId: asProjectId("project-1"),
+        title: "Fork orphan",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt,
+      });
       await startOrdinaryTurn(orphanId, "orphan");
       await waitFor(() => harness.sendTurn.mock.calls.length === 3);
       expect(harness.forkThread).toHaveBeenCalledTimes(2);
@@ -15738,25 +14710,23 @@ describe("ProviderCommandReactor", () => {
           activeTurnId: asTurnId("coding-live"),
           at: createdAt,
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("coding-steer-activation"),
-            threadId,
-            message: {
-              messageId: asMessageId("coding-steer-message"),
-              role: "user",
-              text: "Adjust the layout",
-              attachments: [],
-            },
-            enableComputerControl: true,
-            computerControlGeneration: 0,
-            dispatchMode: "steer",
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("coding-steer-activation"),
+          threadId,
+          message: {
+            messageId: asMessageId("coding-steer-message"),
+            role: "user",
+            text: "Adjust the layout",
+            attachments: [],
+          },
+          enableComputerControl: true,
+          computerControlGeneration: 0,
+          dispatchMode: "steer",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        });
         if (stale) {
           await waitFor(() => harness.steerTurn.mock.calls.length === 1);
           expect(harness.startSession).not.toHaveBeenCalled();
@@ -15804,24 +14774,22 @@ describe("ProviderCommandReactor", () => {
       activeTurnId: asTurnId("computer-live"),
       at: createdAt,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("computer-steer"),
-        threadId,
-        message: {
-          messageId: asMessageId("computer-steer-message"),
-          role: "user",
-          text: "Use the second window",
-          attachments: [],
-        },
-        enableComputerControl: false,
-        dispatchMode: "steer",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("computer-steer"),
+      threadId,
+      message: {
+        messageId: asMessageId("computer-steer-message"),
+        role: "user",
+        text: "Use the second window",
+        attachments: [],
+      },
+      enableComputerControl: false,
+      dispatchMode: "steer",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt,
+    });
     await waitFor(() => harness.steerTurn.mock.calls.length === 1);
     expect(harness.startSession).not.toHaveBeenCalled();
   });
@@ -15853,24 +14821,22 @@ describe("ProviderCommandReactor", () => {
         activeTurnId: asTurnId("computer-blocking"),
         at: createdAt,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("computer-queued-consent"),
-          threadId,
-          message: {
-            messageId: asMessageId("computer-queued-message"),
-            role: "user",
-            text: "Continue",
-            attachments: [],
-          },
-          enableComputerControl: true,
-          computerControlGeneration: 0,
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("computer-queued-consent"),
+        threadId,
+        message: {
+          messageId: asMessageId("computer-queued-message"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        enableComputerControl: true,
+        computerControlGeneration: 0,
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt,
+      });
       await harness.drain();
       expect(harness.sendTurn).not.toHaveBeenCalled();
       await manager.setControlEnabled(threadId, false);
@@ -15917,23 +14883,21 @@ describe("ProviderCommandReactor", () => {
       providerName: null,
       at: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-live-computer-provider"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-live-computer-provider"),
-          role: "user",
-          text: "Continue",
-          attachments: [],
-        },
-        enableComputerControl: true,
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-turn-live-computer-provider"),
+      threadId,
+      message: {
+        messageId: asMessageId("user-live-computer-provider"),
+        role: "user",
+        text: "Continue",
+        attachments: [],
+      },
+      enableComputerControl: true,
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(computerControlProvisioned).toHaveBeenCalledWith(threadId, "codex");
     expect(harness.startSession).not.toHaveBeenCalled();
@@ -15944,15 +14908,13 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     harness.listSessions.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-goal-before-turn"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Deliver <all> providers safely",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-goal-before-turn"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Deliver <all> providers safely",
+      goalStartBehavior: "defer",
+    });
 
     await dispatchHarnessUserTurn(harness, {
       messageId: "user-message-1",
@@ -16033,22 +14995,14 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-subagent-thread-create"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
-        projectId: asProjectId("project-1"),
-        title: "Subagent",
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-subagent-thread-create",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
+      title: "Subagent",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      createdAt: now,
+    });
 
     await startNativeChildTurn(harness, "tool-steer-1", "claudeAgent");
 
@@ -16079,30 +15033,20 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const subagentThreadId = ThreadId.makeUnsafe("subagent:thread-1:tool-goal-steer");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-subagent-goal-thread-create"),
-        threadId: subagentThreadId,
-        projectId: asProjectId("project-1"),
-        title: "Goal subagent",
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-subagent-goal-set"),
-        threadId: subagentThreadId,
-        goal: "Finish <all> tests",
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-subagent-goal-thread-create",
+      threadId: subagentThreadId,
+      title: "Goal subagent",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-subagent-goal-set"),
+      threadId: subagentThreadId,
+      goal: "Finish <all> tests",
+    });
     await startNativeChildTurn(harness, "tool-goal-steer", "claudeAgent");
     await dispatchHarnessUserTurn(harness, {
       messageId: "subagent-goal-steer-message",
@@ -16158,23 +15102,14 @@ describe("ProviderCommandReactor", () => {
         ),
       );
 
-      const requested = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-late-child-steer"),
-          threadId: childThreadId,
-          message: {
-            messageId: asMessageId("late-child-message"),
-            role: "user",
-            text: "Follow up before you finish",
-            attachments: [],
-          },
-          dispatchMode: "steer",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      const requested = await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-late-child-steer",
+        threadId: childThreadId,
+        messageId: "late-child-message",
+        text: "Follow up before you finish",
+        dispatchMode: "steer",
+        createdAt: now,
+      });
       await Effect.runPromise(Deferred.await(enteredSteer));
       await harness.emitRuntimeEvent({
         type: "turn.completed",
@@ -16255,15 +15190,13 @@ describe("ProviderCommandReactor", () => {
   it("appends a failure activity when a task stop is requested without an active session", async () => {
     const harness = await createHarness();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("cmd-task-stop-no-session"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        taskId: "task-stop-orphan",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("cmd-task-stop-no-session"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      taskId: "task-stop-orphan",
+      createdAt: new Date().toISOString(),
+    });
 
     expect(await awaitThreadActivity(harness, "provider.task.stop.failed")).toMatchObject({
       detail: "No active provider session is bound to this thread.",
@@ -16291,15 +15224,13 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-interrupt-rejected"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-1"),
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-interrupt-rejected"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-1"),
+      createdAt: new Date().toISOString(),
+    });
 
     expect(await awaitThreadActivity(harness, "provider.turn.interrupt.failed")).toMatchObject({
       detail: expect.stringContaining("no exact active provider turn is bound"),
@@ -16318,15 +15249,13 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.makeUnsafe("cmd-task-stop-failing"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        taskId: "task-stop-failing",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.task.stop",
+      commandId: CommandId.makeUnsafe("cmd-task-stop-failing"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      taskId: "task-stop-failing",
+      createdAt: new Date().toISOString(),
+    });
 
     expect(await awaitThreadActivity(harness, "provider.task.stop.failed")).toMatchObject({
       detail: expect.stringContaining("task stop exploded"),
@@ -16351,15 +15280,13 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.background",
-        commandId: CommandId.makeUnsafe("cmd-task-background-failing"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        toolUseId: "tool-task-bg-failing",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.task.background",
+      commandId: CommandId.makeUnsafe("cmd-task-background-failing"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      toolUseId: "tool-task-bg-failing",
+      createdAt: new Date().toISOString(),
+    });
 
     expect(await awaitThreadActivity(harness, "provider.task.background.failed")).toMatchObject({
       detail: expect.stringContaining("task background exploded"),
@@ -16388,61 +15315,42 @@ describe("ProviderCommandReactor", () => {
       ThreadId.makeUnsafe(`ack-independent-${index}`),
     );
     for (const [index, threadId] of independent.entries()) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe(`ack-independent-create-${index}`),
-          threadId,
-          projectId: asProjectId("project-1"),
-          title: "Independent",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: `ack-independent-create-${index}`,
+        threadId,
+        title: "Independent",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt: now,
+      });
     }
     await harness.drain();
     const start = (threadId: ThreadId, id: string) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`ack-start-${id}`),
-          threadId,
-          message: {
-            messageId: asMessageId(`ack-message-${id}`),
-            role: "user",
-            text: "hello",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      dispatchHarnessUserTurn(harness, {
+        commandId: `ack-start-${id}`,
+        threadId,
+        messageId: `ack-message-${id}`,
+        text: "hello",
+        createdAt: now,
+      });
     try {
       await start(ThreadId.makeUnsafe("thread-1"), "blocked");
       await waitFor(() => captureCheckpoint.mock.calls.length === 1);
       for (let index = 0; index < 40; index += 1) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: CommandId.makeUnsafe(`ack-tail-${index}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            activity: {
-              id: EventId.makeUnsafe(`ack-tail-${index}`),
-              kind: "tool.progress",
-              tone: "info",
-              summary: "Tool is running",
-              payload: {},
-              turnId: null,
-              createdAt: now,
-            },
+        await harness.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`ack-tail-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          activity: {
+            id: EventId.makeUnsafe(`ack-tail-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Tool is running",
+            payload: {},
+            turnId: null,
             createdAt: now,
-          }),
-        );
+          },
+          createdAt: now,
+        });
       }
       const events = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
       const firstProgress = events.find(
@@ -16505,36 +15413,32 @@ describe("ProviderCommandReactor", () => {
     const release = Deferred.makeUnsafe<void>();
     harness.backgroundTask.mockImplementationOnce(() => Deferred.await(release));
     const background = (index: number) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.task.background",
-          commandId: CommandId.makeUnsafe(`bounded-background-${index}`),
-          threadId,
-          toolUseId: `bounded-${index}`,
-          createdAt,
-        }),
-      );
+      harness.dispatch({
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe(`bounded-background-${index}`),
+        threadId,
+        toolUseId: `bounded-${index}`,
+        createdAt,
+      });
     try {
       await background(0);
       await waitFor(() => harness.backgroundTask.mock.calls.length === 1, 1_000);
       for (let index = 1; index <= 40; index++) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: CommandId.makeUnsafe(`bounded-telemetry-${index}`),
-            threadId,
-            activity: {
-              id: EventId.makeUnsafe(`bounded-telemetry-${index}`),
-              kind: "tool.progress",
-              tone: "info",
-              summary: "Working",
-              payload: {},
-              turnId: null,
-              createdAt,
-            },
+        await harness.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`bounded-telemetry-${index}`),
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(`bounded-telemetry-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Working",
+            payload: {},
+            turnId: null,
             createdAt,
-          }),
-        );
+          },
+          createdAt,
+        });
         await background(index);
       }
       await Effect.runPromise(Deferred.succeed(release, undefined));
@@ -16592,76 +15496,61 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     // An independent checkout can capture concurrently; the same physical checkout
     // intentionally shares the baseline/undo lease.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-isolated-create"),
-        threadId: ThreadId.makeUnsafe("thread-isolated"),
-        projectId: asProjectId("project-1"),
-        title: "Independent",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        envMode: "worktree",
-        worktreePath: "/tmp/provider-project-isolated",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe("cmd-isolated-create"),
+      threadId: ThreadId.makeUnsafe("thread-isolated"),
+      projectId: asProjectId("project-1"),
+      title: "Independent",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      envMode: "worktree",
+      worktreePath: "/tmp/provider-project-isolated",
+      createdAt: now,
+    });
     const start = (threadId: string) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-isolated-${threadId}`),
-          threadId: ThreadId.makeUnsafe(threadId),
-          message: {
-            messageId: asMessageId(`message-isolated-${threadId}`),
-            role: "user",
-            text: "hello",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-isolated-${threadId}`,
+        threadId: ThreadId.makeUnsafe(threadId),
+        messageId: `message-isolated-${threadId}`,
+        text: "hello",
+        createdAt: now,
+      });
     try {
       await start("thread-1");
       await waitFor(() => captureCheckpoint.mock.calls.length > 0);
       // A tool/progress burst in the blocked lane must not consume provider
       // delivery admission: these events have no provider side effect.
       for (let index = 0; index < 300; index += 1) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: CommandId.makeUnsafe(`cmd-progress-${index}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            requireUnarchived: true,
-            activity: {
-              id: EventId.makeUnsafe(`progress-${index}`),
-              kind: "tool.progress",
-              tone: "info",
-              summary: "Tool is running",
-              payload: {},
-              turnId: null,
-              createdAt: now,
-            },
+        await harness.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`cmd-progress-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          requireUnarchived: true,
+          activity: {
+            id: EventId.makeUnsafe(`progress-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Tool is running",
+            payload: {},
+            turnId: null,
             createdAt: now,
-          }),
-        );
+          },
+          createdAt: now,
+        });
       }
       // Real intents from one busy thread remain in its durable lane rather
       // than occupying every cross-thread admission slot.
       for (let index = 0; index < 300; index += 1) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.task.background",
-            commandId: CommandId.makeUnsafe(`cmd-busy-intent-${index}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            toolUseId: `busy-tool-${index}`,
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.task.background",
+          commandId: CommandId.makeUnsafe(`cmd-busy-intent-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          toolUseId: `busy-tool-${index}`,
+          createdAt: now,
+        });
       }
       const independentStartedAt = Date.now();
       await start("thread-isolated");
@@ -16704,15 +15593,13 @@ describe("ProviderCommandReactor", () => {
         ),
       );
       expect(consumer.lastAckedSequence).toBeLessThan(blocked.sequence);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.task.background",
-          commandId: CommandId.makeUnsafe("cmd-isolated-same-thread-follower"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          toolUseId: "fifo-follower",
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe("cmd-isolated-same-thread-follower"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        toolUseId: "fifo-follower",
+        createdAt: now,
+      });
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(harness.backgroundTask).not.toHaveBeenCalled();
     } finally {
@@ -16750,22 +15637,12 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    const dispatch = Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-slow-checkpoint"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-slow-checkpoint"),
-          role: "user",
-          text: "hello despite slow git",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    const dispatch = dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-slow-checkpoint",
+      messageId: "user-message-slow-checkpoint",
+      text: "hello despite slow git",
+      createdAt: now,
+    });
 
     await waitFor(() => captureCheckpoint.mock.calls.length === 1);
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -17008,23 +15885,21 @@ describe("ProviderCommandReactor", () => {
       );
       await Effect.runPromise(Deferred.await(acquired));
       try {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`restore-gate-${mode}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            message: {
-              messageId: MessageId.makeUnsafe(`restore-gate-message-${mode}`),
-              role: "user",
-              text: "Start after restore",
-              attachments: [],
-            },
-            ...(mode === "review" ? { reviewTarget: { type: "uncommittedChanges" as const } } : {}),
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`restore-gate-${mode}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: MessageId.makeUnsafe(`restore-gate-message-${mode}`),
+            role: "user",
+            text: "Start after restore",
+            attachments: [],
+          },
+          ...(mode === "review" ? { reviewTarget: { type: "uncommittedChanges" as const } } : {}),
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: new Date().toISOString(),
+        });
         await waitFor(
           async () =>
             (await readHarnessThread(harness))?.activities.some(
@@ -17212,48 +16087,37 @@ describe("ProviderCommandReactor", () => {
       .mockImplementationOnce(claudeStaleResumeFailure)
       .mockImplementationOnce(claudeStaleResumeFailure);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("cmd-import-claude-stale-resume-history"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: asMessageId("user-message-claude-history"),
-            role: "user",
-            text: "Move the changelog navigation to the left.",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("assistant-message-claude-history"),
-            role: "assistant",
-            text: "I moved the changelog navigation into the left rail.",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-stale-resume"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-stale-resume"),
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("cmd-import-claude-stale-resume-history"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: asMessageId("user-message-claude-history"),
           role: "user",
-          text: "nice but bring it on the left.",
-          attachments: [],
+          text: "Move the changelog navigation to the left.",
+          createdAt: now,
+          updatedAt: now,
         },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
-        interactionMode: "debug",
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+        {
+          messageId: asMessageId("assistant-message-claude-history"),
+          role: "assistant",
+          text: "I moved the changelog navigation into the left rail.",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-claude-stale-resume",
+      messageId: "user-message-claude-stale-resume",
+      text: "nice but bring it on the left.",
+      interactionMode: "debug",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
     // Native-resume retry first: stop only the runtime so the persisted cursor survives.
@@ -17291,52 +16155,46 @@ describe("ProviderCommandReactor", () => {
       .mockImplementationOnce(claudeStaleResumeFailure)
       .mockImplementationOnce(claudeStaleResumeFailure);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("cmd-import-goal-continuation-history"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: [
-          {
-            messageId: asMessageId("user-message-before-goal-continuation"),
-            role: "user",
-            text: "Implement the persistence layer first.",
-            createdAt: now,
-            updatedAt: now,
-          },
-          {
-            messageId: asMessageId("assistant-message-before-goal-continuation"),
-            role: "assistant",
-            text: "The persistence layer is complete.",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-stale-continuation-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Finish the remaining goal work",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("cmd-import-goal-continuation-history"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: [
+        {
+          messageId: asMessageId("user-message-before-goal-continuation"),
+          role: "user",
+          text: "Implement the persistence layer first.",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          messageId: asMessageId("assistant-message-before-goal-continuation"),
+          role: "assistant",
+          text: "The persistence layer is complete.",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-stale-continuation-goal"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goal: "Finish the remaining goal work",
+      goalStartBehavior: "defer",
+    });
     const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
     expect(goalStartedAt).toBeTruthy();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation-retry"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalStartedAt: goalStartedAt!,
-        trigger: "turn-completed",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.goal.continue",
+      commandId: CommandId.makeUnsafe("cmd-stale-goal-continuation-retry"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      goalStartedAt: goalStartedAt!,
+      trigger: "turn-completed",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
     const retrySendInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
@@ -17354,23 +16212,13 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     harness.sendTurn.mockImplementationOnce(claudeStaleResumeFailure);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-native-resume-retry"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-native-resume-retry"),
-          role: "user",
-          text: "keep going.",
-          attachments: [],
-        },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-claude-native-resume-retry",
+      messageId: "user-message-claude-native-resume-retry",
+      text: "keep going.",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     // The session restarts once with the persisted cursor intact...
@@ -17394,23 +16242,13 @@ describe("ProviderCommandReactor", () => {
     harness.hasLiveRuntimeTasks.mockImplementation(() => Effect.succeed(true));
     harness.sendTurn.mockImplementationOnce(claudeStaleResumeFailure);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-stale-live-tasks"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-stale-live-tasks"),
-          role: "user",
-          text: "keep going.",
-          attachments: [],
-        },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-claude-stale-live-tasks",
+      messageId: "user-message-claude-stale-live-tasks",
+      text: "keep going.",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     // Live background tasks own the runtime subprocess: the retry must not
@@ -17436,22 +16274,12 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-fails"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-start-fails"),
-          role: "user",
-          text: "hello reactor",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-fails",
+      messageId: "user-message-start-fails",
+      text: "hello reactor",
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
 
@@ -17493,22 +16321,12 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     harness.startSession.mockImplementationOnce(() => Effect.never);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-times-out"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-start-times-out"),
-          role: "user",
-          text: "hello stalled provider",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-times-out",
+      messageId: "user-message-start-times-out",
+      text: "hello stalled provider",
+      createdAt: now,
+    });
 
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
     const thread = await readHarnessThread(harness);
@@ -17529,57 +16347,44 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-home-project-create"),
-        projectId: asProjectId("project-home"),
-        kind: "chat",
-        title: "Home",
-        workspaceRoot: "/Users/tester",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "project.create",
+      commandId: CommandId.makeUnsafe("cmd-home-project-create"),
+      projectId: asProjectId("project-home"),
+      kind: "chat",
+      title: "Home",
+      workspaceRoot: "/Users/tester",
+      defaultModelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-home-thread-create"),
-        threadId: ThreadId.makeUnsafe("thread-home"),
-        projectId: asProjectId("project-home"),
-        title: "Home thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe("cmd-home-thread-create"),
+      threadId: ThreadId.makeUnsafe("thread-home"),
+      projectId: asProjectId("project-home"),
+      title: "Home thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-home-turn-start"),
-        threadId: ThreadId.makeUnsafe("thread-home"),
-        message: {
-          messageId: asMessageId("user-message-home-1"),
-          role: "user",
-          text: "hello from home chat",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-home-turn-start",
+      threadId: ThreadId.makeUnsafe("thread-home"),
+      messageId: "user-message-home-1",
+      text: "hello from home chat",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -17606,14 +16411,12 @@ describe("ProviderCommandReactor", () => {
       }
       return undefined;
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-initial-placeholder"),
-        threadId,
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-initial-placeholder"),
+      threadId,
+      title: "New thread",
+    });
     harness.generateThreadTitle.mockImplementationOnce(() =>
       harness.engine
         .dispatch({
@@ -17624,22 +16427,13 @@ describe("ProviderCommandReactor", () => {
         })
         .pipe(Effect.orDie, Effect.as({ title: "Late automatic title" })),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-auto-title-race"),
-        threadId,
-        message: {
-          messageId: asMessageId("auto-title-race-user"),
-          role: "user",
-          text: "Fix startup",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: new Date().toISOString(),
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-auto-title-race",
+      threadId,
+      messageId: "auto-title-race-user",
+      text: "Fix startup",
+      createdAt: new Date().toISOString(),
+    });
     await harness.drain();
     await titleWriteFinished;
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
@@ -17660,35 +16454,23 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity-generated"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Summarize provider startup failures without Codex",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity-generated"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "Summarize provider startup failures without Codex",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-antigravity-generated-title"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-antigravity-generated-title-1"),
-          role: "user",
-          text: "Summarize provider startup failures without Codex",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "antigravity",
-          model: "Gemini 3.5 Flash",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-antigravity-generated-title",
+      messageId: "user-message-antigravity-generated-title-1",
+      text: "Summarize provider startup failures without Codex",
+      modelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
@@ -17726,44 +16508,40 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-missing-fallback"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-title-missing-fallback"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "New thread",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-missing-fallback-title"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-missing-fallback-title-1"),
-          role: "user",
-          text: "Summarize provider startup failures without Codex",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "antigravity",
-          instanceId: "antigravity",
-          model: "auto-gemini-3",
-        },
-        providerOptions: {
-          codex: {
-            homePath: "/tmp/stale-codex-home",
-            environment: {
-              STALE_CODEX_ENV: "must-not-leak",
-            },
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-turn-start-missing-fallback-title"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-missing-fallback-title-1"),
+        role: "user",
+        text: "Summarize provider startup failures without Codex",
+        attachments: [],
+      },
+      modelSelection: {
+        provider: "antigravity",
+        instanceId: "antigravity",
+        model: "auto-gemini-3",
+      },
+      providerOptions: {
+        codex: {
+          homePath: "/tmp/stale-codex-home",
+          environment: {
+            STALE_CODEX_ENV: "must-not-leak",
           },
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
@@ -17784,35 +16562,23 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "New thread",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-antigravity-title"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-antigravity-title-1"),
-          role: "user",
-          text: "Summarize provider startup failures without Codex",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "antigravity",
-          model: "Gemini 3.5 Flash",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-antigravity-title",
+      messageId: "user-message-antigravity-title-1",
+      text: "Summarize provider startup failures without Codex",
+      modelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+      createdAt: now,
+    });
 
     await waitFor(
       async () =>
@@ -17852,64 +16618,49 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-opencode-title-options"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "opencode",
-          providerInstanceId: "opencode_work",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-opencode-title-options",
+      status: "ready",
+      providerName: "opencode",
+      providerInstanceId: "opencode_work",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-opencode-live-options"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-title-opencode-live-options"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "New thread",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-live-options-title"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-opencode-live-options-title-1"),
-          role: "user",
-          text: "Plan the release workflow and deployment checklist",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "opencode",
-          instanceId: "opencode_work",
-          model: "openai/gpt-5",
-        },
-        providerOptions: {
-          opencode: {
-            serverUrl: "http://127.0.0.1:4096",
-            serverPassword: "stale-opencode-password",
-            environment: {
-              OPENCODE_API_KEY: "stale-opencode-key",
-            },
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-live-options-title"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-opencode-live-options-title-1"),
+        role: "user",
+        text: "Plan the release workflow and deployment checklist",
+        attachments: [],
+      },
+      modelSelection: {
+        provider: "opencode",
+        instanceId: "opencode_work",
+        model: "openai/gpt-5",
+      },
+      providerOptions: {
+        opencode: {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "stale-opencode-password",
+          environment: {
+            OPENCODE_API_KEY: "stale-opencode-key",
           },
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
@@ -17934,19 +16685,17 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        envMode: "worktree",
-        branch: "synara/cb661f0d",
-        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "synara/cb661f0d",
-        associatedWorktreeRef: "synara/cb661f0d",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      envMode: "worktree",
+      branch: "synara/cb661f0d",
+      worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
 
     await dispatchHarnessUserTurn(harness, {
       commandId: "cmd-turn-start-worktree-rename",
@@ -17998,40 +16747,36 @@ describe("ProviderCommandReactor", () => {
     await harness.markGatewayOperationDispatching(operationId);
     const createdAt = new Date().toISOString();
     const other = ThreadId.makeUnsafe("gateway-other-thread");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("gateway-other-create"),
-        threadId: other,
-        projectId: asProjectId("project-1"),
-        title: "Other gateway child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        creationSource: "synara_mcp",
-        gatewayOperationId: operationId,
-        gatewayOperationIndex: 1,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.makeUnsafe("gateway-other-create"),
+      threadId: other,
+      projectId: asProjectId("project-1"),
+      title: "Other gateway child",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      creationSource: "synara_mcp",
+      gatewayOperationId: operationId,
+      gatewayOperationIndex: 1,
+      createdAt,
+    });
     for (const [index, threadId] of [ThreadId.makeUnsafe("thread-1"), other].entries()) {
       const branch = index === 0 ? "synara/cb661f0d" : "synara/cb661f0e";
       const cwd = `/tmp/provider-project/.worktrees/${branch.slice(7)}`;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe(`gateway-other-meta-${index}`),
-          threadId,
-          envMode: "worktree",
-          branch,
-          worktreePath: cwd,
-          associatedWorktreePath: cwd,
-          associatedWorktreeBranch: branch,
-          associatedWorktreeRef: branch,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`gateway-other-meta-${index}`),
+        threadId,
+        envMode: "worktree",
+        branch,
+        worktreePath: cwd,
+        associatedWorktreePath: cwd,
+        associatedWorktreeBranch: branch,
+        associatedWorktreeRef: branch,
+      });
       await dispatchHarnessUserTurn(harness, {
         threadId,
         messageId: `gateway-shared-message-${index}`,
@@ -18070,39 +16815,35 @@ describe("ProviderCommandReactor", () => {
     const createdAt = new Date().toISOString();
     const startChild = async (threadId: ThreadId, index: number) => {
       if (index > 0)
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe(`negative-cache-child-${index}`),
-            threadId,
-            projectId: asProjectId("project-1"),
-            title: "Gateway child",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            creationSource: "synara_mcp",
-            gatewayOperationId: operationId,
-            gatewayOperationIndex: index,
-            branch: null,
-            worktreePath: null,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(`negative-cache-child-${index}`),
+          threadId,
+          projectId: asProjectId("project-1"),
+          title: "Gateway child",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          creationSource: "synara_mcp",
+          gatewayOperationId: operationId,
+          gatewayOperationIndex: index,
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        });
       const branch = index === 0 ? "synara/cb661f0d" : "synara/cb661f0e";
       const cwd = `/tmp/provider-project/.worktrees/${branch.slice(7)}`;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe(`negative-cache-meta-${index}`),
-          threadId,
-          envMode: "worktree",
-          branch,
-          worktreePath: cwd,
-          associatedWorktreePath: cwd,
-          associatedWorktreeBranch: branch,
-          associatedWorktreeRef: branch,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`negative-cache-meta-${index}`),
+        threadId,
+        envMode: "worktree",
+        branch,
+        worktreePath: cwd,
+        associatedWorktreePath: cwd,
+        associatedWorktreeBranch: branch,
+        associatedWorktreeRef: branch,
+      });
       await dispatchHarnessUserTurn(harness, {
         threadId,
         messageId: `negative-cache-message-${index}`,
@@ -18169,16 +16910,14 @@ describe("ProviderCommandReactor", () => {
         ),
       ),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-slow-publication-bootstrap"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        envMode: "worktree",
-        branch: "synara/cb661f0d",
-        worktreePath: "/tmp/provider-project/.worktrees/slow",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-slow-publication-bootstrap"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      envMode: "worktree",
+      branch: "synara/cb661f0d",
+      worktreePath: "/tmp/provider-project/.worktrees/slow",
+    });
     await dispatchHarnessUserTurn(harness, {
       commandId: "cmd-slow-publication-turn",
       messageId: "user-message-slow-publication",
@@ -18223,19 +16962,17 @@ describe("ProviderCommandReactor", () => {
     await harness.reserveGatewayOperation(operationId);
     await harness.markGatewayOperationDispatching(operationId);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-gateway-worktree-bootstrap"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        envMode: "worktree",
-        branch: "synara/cb661f0d",
-        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "synara/cb661f0d",
-        associatedWorktreeRef: "synara/cb661f0d",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-gateway-worktree-bootstrap"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      envMode: "worktree",
+      branch: "synara/cb661f0d",
+      worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
     await dispatchHarnessUserTurn(harness, {
       commandId: "cmd-gateway-turn-start-worktree-rename",
       messageId: "user-message-gateway-worktree-rename",
@@ -18258,19 +16995,17 @@ describe("ProviderCommandReactor", () => {
       Effect.succeed({ branch: "must-not-be-used" }),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-missing-gateway-worktree-bootstrap"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        envMode: "worktree",
-        branch: "synara/cb661f0d",
-        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "synara/cb661f0d",
-        associatedWorktreeRef: "synara/cb661f0d",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-missing-gateway-worktree-bootstrap"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      envMode: "worktree",
+      branch: "synara/cb661f0d",
+      worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
     await dispatchHarnessUserTurn(harness, {
       commandId: "cmd-missing-gateway-turn-start-worktree-rename",
       messageId: "user-message-missing-gateway-worktree-rename",
@@ -18306,40 +17041,28 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-worktree-keep-temporary"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        envMode: "worktree",
-        branch: "synara/cb661f0d",
-        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "synara/cb661f0d",
-        associatedWorktreeRef: "synara/cb661f0d",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-worktree-keep-temporary"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      envMode: "worktree",
+      branch: "synara/cb661f0d",
+      worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-worktree-keep-temporary"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-worktree-keep-temporary"),
-          role: "user",
-          text: "This entire message must never become the branch name",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "antigravity",
-          model: "Gemini 3.5 Flash",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-worktree-keep-temporary",
+      messageId: "user-message-worktree-keep-temporary",
+      text: "This entire message must never become the branch name",
+      modelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.generateBranchName).not.toHaveBeenCalled();
@@ -18369,46 +17092,33 @@ describe("ProviderCommandReactor", () => {
       harness.generateThreadTitle.mockImplementation(() =>
         Effect.succeed({ title: "Server recovery" }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("title-backlog-placeholder"),
-          threadId,
-          title: extraMessages > 0 ? "New thread" : firstPrompt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("title-backlog-placeholder"),
+        threadId,
+        title: extraMessages > 0 ? "New thread" : firstPrompt,
+      });
       // A restart can replay the first send after later user messages are durable.
       // Eligibility belongs to the first message, not the current message count.
       for (const [index, text] of [firstPrompt, "Please preserve the current UI"].entries()) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`title-backlog-send-${index}`),
-            threadId,
-            message: {
-              messageId: asMessageId(`title-backlog-message-${index}`),
-              role: "user",
-              text,
-              attachments: [],
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            createdAt: now,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: `title-backlog-send-${index}`,
+          threadId,
+          messageId: `title-backlog-message-${index}`,
+          text,
+          createdAt: now,
+        });
       }
       expect(
         (await readHarnessThread(harness))?.messages.filter((message) => message.role === "user"),
       ).toHaveLength(2);
       if (manualTitle !== null) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: CommandId.makeUnsafe("title-backlog-manual"),
-            threadId,
-            title: manualTitle,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("title-backlog-manual"),
+          threadId,
+          title: manualTitle,
+        });
       }
       if (extraMessages > 0) {
         // Fill the real projection window with later narration without creating provider calls.
@@ -18445,22 +17155,13 @@ describe("ProviderCommandReactor", () => {
             (message) => message.id === asMessageId("title-backlog-message-0"),
           ),
         ).toBe(false);
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("title-window-later-send"),
-            threadId,
-            message: {
-              messageId: asMessageId("title-window-later-message"),
-              role: "user",
-              text: "A later prompt must not own first naming",
-              attachments: [],
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            createdAt: now,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "title-window-later-send",
+          threadId,
+          messageId: "title-window-later-message",
+          text: "A later prompt must not own first naming",
+          createdAt: now,
+        });
       }
       await harness.startReactor();
       await harness.drain();
@@ -18488,38 +17189,32 @@ describe("ProviderCommandReactor", () => {
       messageId,
       text: "Name the first queued message",
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("title-queue-manual"),
-        threadId,
-        title: "New thread",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("title-queue-manual"),
+      threadId,
+      title: "New thread",
+    });
     const now = new Date().toISOString();
     const thread = await readHarnessThread(harness);
     harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("title-queue-ready"),
-        threadId,
-        session: { ...thread!.session!, status: "ready", activeTurnId: null, updatedAt: now },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe("title-queue-ready"),
+      threadId,
+      session: { ...thread!.session!, status: "ready", activeTurnId: null, updatedAt: now },
+      createdAt: now,
+    });
     // Promotion is a new start event for the old message; it must not move the naming fence.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.dispatch-queued",
-        commandId: CommandId.makeUnsafe("title-queue-promote"),
-        threadId,
-        messageId,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.dispatch-queued",
+      commandId: CommandId.makeUnsafe("title-queue-promote"),
+      threadId,
+      messageId,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
     await harness.startReactor();
     await harness.drain();
     expect(harness.sendTurn).toHaveBeenCalled();
@@ -18545,40 +17240,27 @@ describe("ProviderCommandReactor", () => {
       status: "running",
       activeTurnId: input.liveTurnId,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe(`cmd-session-running-${input.messageId}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: input.liveTurnId,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: `cmd-session-running-${input.messageId}`,
+      status: "running",
+      activeTurnId: input.liveTurnId,
+      at: now,
+    });
     harness.sendTurn.mockClear();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe(`cmd-turn-${input.messageId}`),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: input.messageId,
-          role: "user",
-          text: input.text,
-          attachments: [...(input.attachments ?? [])],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe(`cmd-turn-${input.messageId}`),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: input.messageId,
+        role: "user",
+        text: input.text,
+        attachments: [...(input.attachments ?? [])],
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
@@ -18963,22 +17645,14 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-child-thread-create"),
-        threadId: ThreadId.makeUnsafe("thread-child"),
-        projectId: asProjectId("project-1"),
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-child-thread-create",
+      threadId: ThreadId.makeUnsafe("thread-child"),
+      title: "Child",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
 
     // The child shares the parent's provider session, which is mid-turn.
     harness.setRuntimeSessionTurnState({
@@ -19017,22 +17691,14 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-child-thread-create-before-parent-stop"),
-        threadId: ThreadId.makeUnsafe("thread-child-before-parent-stop"),
-        projectId: asProjectId("project-1"),
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Queued child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-child-thread-create-before-parent-stop",
+      threadId: ThreadId.makeUnsafe("thread-child-before-parent-stop"),
+      title: "Queued child",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
 
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
@@ -19058,14 +17724,12 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("cmd-parent-session-stop-with-child-queued"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("cmd-parent-session-stop-with-child-queued"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: now,
+    });
     await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
 
     await settleLiveTurn(harness, {
@@ -19082,22 +17746,14 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
 
     for (const childId of ["thread-child-a", "thread-child-b"] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe(`cmd-${childId}-create`),
-          threadId: ThreadId.makeUnsafe(childId),
-          projectId: asProjectId("project-1"),
-          parentThreadId: ThreadId.makeUnsafe("thread-1"),
-          title: childId,
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: `cmd-${childId}-create`,
+        threadId: ThreadId.makeUnsafe(childId),
+        title: childId,
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt: now,
+      });
     }
 
     harness.setRuntimeSessionTurnState({
@@ -19120,22 +17776,13 @@ describe("ProviderCommandReactor", () => {
       ["thread-child-a", "msg-child-a", "first child follow-up"],
       ["thread-child-b", "msg-child-b", "second child follow-up"],
     ] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-${messageId}`),
-          threadId: ThreadId.makeUnsafe(threadId),
-          message: {
-            messageId: asMessageId(messageId),
-            role: "user",
-            text,
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-${messageId}`,
+        threadId: ThreadId.makeUnsafe(threadId),
+        messageId,
+        text,
+        createdAt: now,
+      });
     }
 
     await harness.drain();
@@ -19157,22 +17804,14 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-direct-failure-child-create"),
-        threadId: ThreadId.makeUnsafe("thread-direct-failure-child"),
-        projectId: asProjectId("project-1"),
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Queued child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-direct-failure-child-create",
+      threadId: ThreadId.makeUnsafe("thread-direct-failure-child"),
+      title: "Queued child",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt: now,
+    });
 
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
@@ -19323,23 +17962,14 @@ describe("ProviderCommandReactor", () => {
     harness.steerTurn.mockClear();
     harness.interruptTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-steer-codex"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-steer-codex"),
-          role: "user",
-          text: "pivot now",
-          attachments: [],
-        },
-        dispatchMode: "steer",
-        runtimeMode: "approval-required",
-        interactionMode: "debug",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-steer-codex",
+      messageId: "msg-steer-codex",
+      text: "pivot now",
+      interactionMode: "debug",
+      dispatchMode: "steer",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.steerTurn.mock.calls.length === 1);
     await harness.drain();
@@ -19379,23 +18009,13 @@ describe("ProviderCommandReactor", () => {
     harness.steerTurn.mockClear();
     harness.interruptTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-steer-codex-stale"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-steer-codex-stale"),
-          role: "user",
-          text: "steer but nothing is running",
-          attachments: [],
-        },
-        dispatchMode: "steer",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-steer-codex-stale",
+      messageId: "msg-steer-codex-stale",
+      text: "steer but nothing is running",
+      dispatchMode: "steer",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await harness.drain();
@@ -19441,23 +18061,13 @@ describe("ProviderCommandReactor", () => {
     harness.steerTurn.mockClear();
     harness.interruptTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-queue-cursor"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-queue-cursor"),
-          role: "user",
-          text: "one more thing",
-          attachments: [],
-        },
-        dispatchMode: "queue",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-queue-cursor",
+      messageId: "msg-queue-cursor",
+      text: "one more thing",
+      dispatchMode: "queue",
+      createdAt: now,
+    });
 
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -19514,23 +18124,13 @@ describe("ProviderCommandReactor", () => {
     harness.steerTurn.mockClear();
     harness.interruptTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-steer-cursor"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-steer-cursor"),
-          role: "user",
-          text: "switch directions",
-          attachments: [],
-        },
-        dispatchMode: "steer",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-steer-cursor",
+      messageId: "msg-steer-cursor",
+      text: "switch directions",
+      dispatchMode: "steer",
+      createdAt: now,
+    });
 
     await harness.drain();
     expect(harness.steerTurn).not.toHaveBeenCalled();
@@ -19584,16 +18184,14 @@ describe("ProviderCommandReactor", () => {
       await Effect.runPromise(harness.engine.getReadModel())
     ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-cursor");
     expect(message).toMatchObject({ turnId: "turn-1", startsNewTurn: true });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.user.bind-turn",
-        commandId: CommandId.makeUnsafe("cmd-bind-steer-cursor-same-turn-again"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("msg-steer-cursor"),
-        turnId: asTurnId("turn-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.user.bind-turn",
+      commandId: CommandId.makeUnsafe("cmd-bind-steer-cursor-same-turn-again"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: asMessageId("msg-steer-cursor"),
+      turnId: asTurnId("turn-1"),
+      createdAt: now,
+    });
     await harness.drain();
     const projectedMessages = await Effect.runPromise(
       harness.sql<{
@@ -19631,48 +18229,27 @@ describe("ProviderCommandReactor", () => {
           cwd: "/tmp/provider-project",
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("seed-relocation-session"),
-          threadId,
-          createdAt: now,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "claudeAgent",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "project.meta.update",
-          commandId: CommandId.makeUnsafe("relocate-project"),
-          projectId: ProjectId.makeUnsafe("project-1"),
-          workspaceRoot: "/tmp/restored-provider-project",
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "seed-relocation-session",
+        threadId,
+        status: "ready",
+        providerName: "claudeAgent",
+        at: now,
+      });
+      await harness.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.makeUnsafe("relocate-project"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        workspaceRoot: "/tmp/restored-provider-project",
+      });
       harness.hasLiveRuntimeTasks.mockImplementation(() => Effect.succeed(backgroundTasks));
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("resume-relocated-thread"),
-          threadId,
-          message: {
-            messageId: asMessageId("message-relocated"),
-            role: "user",
-            text: "Continue our existing work",
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "resume-relocated-thread",
+        threadId,
+        messageId: "message-relocated",
+        text: "Continue our existing work",
+        createdAt: now,
+      });
       if (backgroundTasks) {
         await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
@@ -19703,23 +18280,21 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const startTurn = (id: string, extra: { modelSelection?: ModelSelection } = {}) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
-          threadId,
-          message: {
-            messageId: asMessageId(`user-message-${id}`),
-            role: "user",
-            text: id,
-            attachments: [],
-          },
-          ...extra,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
+        threadId,
+        message: {
+          messageId: asMessageId(`user-message-${id}`),
+          role: "user",
+          text: id,
+          attachments: [],
+        },
+        ...extra,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
 
     await startTurn("claude-bootstrap");
     await waitFor(() => harness.startSession.mock.calls.length === 1);
@@ -19730,18 +18305,16 @@ describe("ProviderCommandReactor", () => {
     harness.startSession.mockClear();
 
     // A stored pick never restarts the idle session on its own.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-1m"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { contextWindow: "1m" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-1m"),
+      threadId,
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { contextWindow: "1m" },
+      },
+    });
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
 
@@ -19761,18 +18334,16 @@ describe("ProviderCommandReactor", () => {
     harness.startSession.mockClear();
 
     // Effort is fixed at subprocess spawn, so an effort change restarts at the next turn.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
+      threadId,
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max" },
+      },
+    });
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
     await startTurn("claude-max");
@@ -19791,36 +18362,32 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const startTurn = (id: string, extra: { modelSelection?: ModelSelection } = {}) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
-          threadId,
-          message: {
-            messageId: asMessageId(`user-message-${id}`),
-            role: "user",
-            text: id,
-            attachments: [],
-          },
-          ...extra,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
+        threadId,
+        message: {
+          messageId: asMessageId(`user-message-${id}`),
+          role: "user",
+          text: id,
+          attachments: [],
+        },
+        ...extra,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
 
     await startTurn("restart-only-bootstrap");
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-meta-restart-only-pick"),
-        threadId,
-        modelSelection: { provider: "codex", model: "gpt-5.5" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-meta-restart-only-pick"),
+      threadId,
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+    });
     await harness.drain();
     // No idle restart: the session would publish `starting` without a turn.
     expect(harness.startSession.mock.calls.length).toBe(1);
@@ -19843,22 +18410,13 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-live-model-change"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-live-model-change"),
-          role: "user",
-          text: "start a long turn",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-live-model-change",
+      threadId,
+      messageId: "user-message-live-model-change",
+      text: "start a long turn",
+      createdAt: now,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
@@ -19875,14 +18433,12 @@ describe("ProviderCommandReactor", () => {
     );
     expect((await readHarnessThread(harness))?.session?.activeTurnId).toBeNull();
 
-    const change = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-meta-live-model-change"),
-        threadId,
-        modelSelection: { provider: "codex", model: "gpt-5.5" },
-      }),
-    );
+    const change = await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-meta-live-model-change"),
+      threadId,
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+    });
     await waitFor(async () => {
       const state = await Effect.runPromise(
         harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
@@ -19917,59 +18473,38 @@ describe("ProviderCommandReactor", () => {
         modelSelection: initialSelection,
       }),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-direct-claude-session-set"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: importedSession.updatedAt,
-        },
-        createdAt: importedSession.updatedAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-direct-claude-session-set",
+      threadId,
+      status: "ready",
+      providerName: "claudeAgent",
+      at: importedSession.updatedAt,
+    });
     harness.startSession.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-direct-claude-effort-update"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-direct-claude-effort-update"),
+      threadId,
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max" },
+      },
+    });
 
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
 
     // The next turn compares the stored pick with the spawn profile learned from
     // thread.created, even though the reactor did not start this session.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-direct-claude-turn"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-direct-claude"),
-          role: "user",
-          text: "continue",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: importedSession.updatedAt,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-direct-claude-turn",
+      threadId,
+      messageId: "user-message-direct-claude",
+      text: "continue",
+      createdAt: importedSession.updatedAt,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
@@ -19988,78 +18523,49 @@ describe("ProviderCommandReactor", () => {
     const turnId = asTurnId("turn-active-selection-change");
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-bootstrap"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-active-selection-bootstrap"),
-          role: "user",
-          text: "bootstrap",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-active-selection-bootstrap",
+      threadId,
+      messageId: "user-message-active-selection-bootstrap",
+      text: "bootstrap",
+      createdAt: now,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     harness.startSession.mockClear();
 
     harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-session-running"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-active-selection-session-running",
+      threadId,
+      status: "running",
+      providerName: "claudeAgent",
+      activeTurnId: turnId,
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-effort"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { autoCompactWindow: "200k" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-active-selection-effort"),
+      threadId,
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { autoCompactWindow: "200k" },
+      },
+    });
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
 
     harness.sendTurn.mockClear();
     harness.steerTurn.mockClear();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-reject-context-steer"),
-        threadId,
-        dispatchMode: "steer",
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        message: {
-          messageId: asMessageId("reject-context-steer"),
-          role: "user",
-          text: "steer",
-          attachments: [],
-        },
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-reject-context-steer",
+      threadId,
+      messageId: "reject-context-steer",
+      text: "steer",
+      dispatchMode: "steer",
+      createdAt: now,
+    });
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -20074,41 +18580,22 @@ describe("ProviderCommandReactor", () => {
     });
 
     harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-session-ready"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-active-selection-session-ready",
+      threadId,
+      status: "ready",
+      providerName: "claudeAgent",
+      at: now,
+    });
 
     // No explicit selection: the persisted desired override must still apply.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-idle-context-send"),
-        threadId,
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        message: {
-          messageId: asMessageId("idle-context-send"),
-          role: "user",
-          text: "continue",
-          attachments: [],
-        },
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-idle-context-send",
+      threadId,
+      messageId: "idle-context-send",
+      text: "continue",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -20150,15 +18637,13 @@ describe("ProviderCommandReactor", () => {
         lastError: formatProviderDeliveryBlockDetail("Synthetic uncertain send"),
         updatedAt: now,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("retry-stop-idle-session"),
-          threadId,
-          session,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("retry-stop-idle-session"),
+        threadId,
+        session,
+        createdAt: now,
+      });
       await harness.drain();
       const receipt = {
         controlRequestId: "command:original-explicit-stop",
@@ -20201,16 +18686,14 @@ describe("ProviderCommandReactor", () => {
           };
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("new-explicit-retry-stop"),
-          threadId,
-          turnId: firstTurnId,
-          requestedBy: scenario === "non-user idle" ? "agent" : "user",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("new-explicit-retry-stop"),
+        threadId,
+        turnId: firstTurnId,
+        requestedBy: scenario === "non-user idle" ? "agent" : "user",
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       expect(cleanupCompleted).toBe(scenario === "retained cleanup");
       expect(harness.stopRuntimeSession).toHaveBeenCalledTimes(
@@ -20300,23 +18783,13 @@ describe("ProviderCommandReactor", () => {
       text: "Ambiguous synthetic send",
       createdAt: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("rewound-idle-session"),
-        threadId,
-        session: {
-          threadId,
-          providerName: "claudeAgent",
-          status: scenario === "interrupted projection" ? "interrupted" : "stopped",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "rewound-idle-session",
+      threadId,
+      status: scenario === "interrupted projection" ? "interrupted" : "stopped",
+      providerName: "claudeAgent",
+      at: now,
+    });
     if (hasBlocker) {
       await Effect.runPromise(
         harness.deliveryRepository.claim({
@@ -20387,18 +18860,16 @@ describe("ProviderCommandReactor", () => {
       );
     }
     const commandId = CommandId.makeUnsafe("rewound-new-explicit-stop");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId,
-        threadId,
-        ...(scenario === "interrupted projection" || retryStop
-          ? { turnId: asTurnId("old-turn-never-projected") }
-          : {}),
-        requestedBy: userStop ? "user" : "agent",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId,
+      threadId,
+      ...(scenario === "interrupted projection" || retryStop
+        ? { turnId: asTurnId("old-turn-never-projected") }
+        : {}),
+      requestedBy: userStop ? "user" : "agent",
+      createdAt: now,
+    });
     await harness.drain();
     if (retryStop) {
       const incomplete = await Effect.runPromise(readTarget({ threadId }));
@@ -20421,16 +18892,14 @@ describe("ProviderCommandReactor", () => {
         );
       if (retryT2 || retryEpoch)
         await Effect.runPromise(provider.sendTurn({ threadId, input: "Replacement after Stop" }));
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("rewound-explicit-retry"),
-          threadId,
-          turnId: asTurnId("old-turn-never-projected"),
-          requestedBy: "user",
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("rewound-explicit-retry"),
+        threadId,
+        turnId: asTurnId("old-turn-never-projected"),
+        requestedBy: "user",
+        createdAt: now,
+      });
       await harness.drain();
       expect(
         stops.mock.calls.map(([input]) => [input?.controlRequestId, input?.onlyIfNoActiveTurn]),
@@ -20529,23 +18998,15 @@ describe("ProviderCommandReactor", () => {
         text: "Ambiguous synthetic send",
         createdAt: now,
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("real-public-stop-running"),
-          threadId,
-          session: {
-            threadId,
-            providerName: "claudeAgent",
-            status: "running",
-            runtimeMode: "approval-required",
-            activeTurnId: turn.turnId,
-            lastError: formatProviderDeliveryBlockDetail("Synthetic ambiguity"),
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "real-public-stop-running",
+        threadId,
+        status: "running",
+        providerName: "claudeAgent",
+        activeTurnId: turn.turnId,
+        lastError: formatProviderDeliveryBlockDetail("Synthetic ambiguity"),
+        at: now,
+      });
       // Keep the original send uncertain without executing or replaying it.
       await Effect.runPromise(
         harness.deliveryRepository.claim({
@@ -20611,24 +19072,22 @@ describe("ProviderCommandReactor", () => {
         );
       await harness.startReactor();
       const commandId = CommandId.makeUnsafe("real-public-explicit-stop");
-      await Effect.runPromise(
-        harness.engine.dispatch(
-          stopKind === "session stop"
-            ? {
-                type: "thread.session.stop",
-                commandId,
-                threadId,
-                createdAt: now,
-              }
-            : {
-                type: "thread.turn.interrupt",
-                commandId,
-                threadId,
-                turnId: turn.turnId,
-                requestedBy: "user",
-                createdAt: now,
-              },
-        ),
+      await harness.dispatch(
+        stopKind === "session stop"
+          ? {
+              type: "thread.session.stop",
+              commandId,
+              threadId,
+              createdAt: now,
+            }
+          : {
+              type: "thread.turn.interrupt",
+              commandId,
+              threadId,
+              turnId: turn.turnId,
+              requestedBy: "user",
+              createdAt: now,
+            },
       );
       await harness.drain();
       const retired = await Effect.runPromise(readStopTarget({ threadId }));
@@ -20729,34 +19188,24 @@ describe("ProviderCommandReactor", () => {
     );
     const now = new Date().toISOString();
     if (scenario === "known child owner") {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("recovery-proof-child-create"),
-          threadId,
-          projectId: asProjectId("project-1"),
-          title: "Recovery child",
-          modelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          parentThreadId: ThreadId.makeUnsafe("thread-1"),
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: "recovery-proof-child-create",
+        threadId,
+        title: "Recovery child",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+        createdAt: now,
+      });
       await startNativeChildTurn(harness, "recovery-child", "claudeAgent");
     }
     const stopCommandId = CommandId.makeUnsafe("recovery-proof-stop");
     const recordStop = () =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: stopCommandId,
-          threadId,
-          createdAt: now,
-        }),
-      );
+      harness.dispatch({
+        type: "thread.session.stop",
+        commandId: stopCommandId,
+        threadId,
+        createdAt: now,
+      });
     if (scenario === "old Stop receipt") await recordStop();
     let source = await dispatchHarnessUserTurn(harness, {
       messageId: "recovery-proof-message",
@@ -20765,35 +19214,24 @@ describe("ProviderCommandReactor", () => {
       threadId,
     });
     if (scenario === "live edit resend") {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("recovery-proof-edit-running"),
-          threadId,
-          session: {
-            threadId,
-            providerName: "claudeAgent",
-            status: "running",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("recovery-original"),
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
-      source = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.message.edit-and-resend",
-          commandId: CommandId.makeUnsafe("recovery-proof-edit"),
-          threadId,
-          messageId: asMessageId("recovery-proof-message"),
-          text: "Edited synthetic send",
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "recovery-proof-edit-running",
+        threadId,
+        status: "running",
+        providerName: "claudeAgent",
+        activeTurnId: asTurnId("recovery-original"),
+        at: now,
+      });
+      source = await harness.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("recovery-proof-edit"),
+        threadId,
+        messageId: asMessageId("recovery-proof-message"),
+        text: "Edited synthetic send",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: now,
+      });
     } else if (scenario === "live cache Continue") {
       const review = {
         reviewId: "recovery-proof-review",
@@ -20807,27 +19245,23 @@ describe("ProviderCommandReactor", () => {
           source: "request-usage" as const,
         },
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.set",
-          commandId: CommandId.makeUnsafe("recovery-proof-review-set"),
-          threadId,
-          review,
-          expectedReviewId: null,
-          createdAt: now,
-        }),
-      );
-      source = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.claude-cache.respond",
-          commandId: CommandId.makeUnsafe("recovery-proof-continue"),
-          threadId,
-          reviewId: review.reviewId,
-          messageId: review.messageId,
-          decision: "continue",
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.claude-cache.set",
+        commandId: CommandId.makeUnsafe("recovery-proof-review-set"),
+        threadId,
+        review,
+        expectedReviewId: null,
+        createdAt: now,
+      });
+      source = await harness.dispatch({
+        type: "thread.claude-cache.respond",
+        commandId: CommandId.makeUnsafe("recovery-proof-continue"),
+        threadId,
+        reviewId: review.reviewId,
+        messageId: review.messageId,
+        decision: "continue",
+        createdAt: now,
+      });
     }
     if (
       scenario !== "old Stop receipt" &&
@@ -21003,18 +19437,14 @@ describe("ProviderCommandReactor", () => {
         ["promoted-stale-steer", "Old redirect", "steer"],
         ["stale-steer-follower", "Follow after the stale redirect", "queue"],
       ] as const) {
-        const requested = await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`cmd-${messageId}`),
-            threadId,
-            message: { messageId: asMessageId(messageId), role: "user", text, attachments: [] },
-            dispatchMode,
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            createdAt: now,
-          }),
-        );
+        const requested = await dispatchHarnessUserTurn(harness, {
+          commandId: `cmd-${messageId}`,
+          threadId,
+          messageId,
+          text,
+          dispatchMode,
+          createdAt: now,
+        });
         queuedRequests.push({
           queuedEventSequence: requested.sequence,
           threadId,
@@ -21072,24 +19502,14 @@ describe("ProviderCommandReactor", () => {
       );
       try {
         await harness.startReactor();
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("cmd-promoted-stale-ready"),
-            threadId,
-            session: {
-              threadId,
-              providerName: "claudeAgent",
-              providerInstanceId: "claudeAgent",
-              status: "ready",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "cmd-promoted-stale-ready",
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          at: now,
+        });
         await harness.drain();
         for (const request of queuedRequests) {
           await Effect.runPromise(harness.queuedTurnPromotionRepository.enqueue(request));
@@ -21184,23 +19604,14 @@ describe("ProviderCommandReactor", () => {
       ),
     );
     try {
-      const response = await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("stale-steer-request"),
-          threadId,
-          message: {
-            messageId: asMessageId("stale-steer-message"),
-            role: "user",
-            text: "Old redirect",
-            attachments: [],
-          },
-          dispatchMode: "steer",
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      const response = await dispatchHarnessUserTurn(harness, {
+        commandId: "stale-steer-request",
+        threadId,
+        messageId: "stale-steer-message",
+        text: "Old redirect",
+        dispatchMode: "steer",
+        createdAt: new Date().toISOString(),
+      });
       await waitFor(() => harness.steerTurn.mock.calls.length === 1);
       const replacementTurnId = asTurnId("stale-steer-replacement");
       harness.setRuntimeSessionTurnState({
@@ -21216,15 +19627,13 @@ describe("ProviderCommandReactor", () => {
         updatedAt: "2099-01-01T00:00:00.000Z",
         lastError: null,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("stale-steer-replacement-projected"),
-          threadId,
-          session: replacement,
-          createdAt: replacement.updatedAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("stale-steer-replacement-projected"),
+        threadId,
+        session: replacement,
+        createdAt: replacement.updatedAt,
+      });
       release();
       await harness.drain();
       expect((await readHarnessThread(harness))?.session).toEqual(replacement);
@@ -21395,33 +19804,29 @@ describe("ProviderCommandReactor", () => {
     });
     await harness.drain();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-same-effort"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: {
-          provider: "droid",
-          model: "claude-sonnet-4-6",
-          options: { reasoningEffort: "medium" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-same-effort"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "medium" },
+      },
+    });
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-effort"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: {
-          provider: "droid",
-          model: "claude-sonnet-4-6",
-          options: { reasoningEffort: "high" },
-        },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-effort"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "high" },
+      },
+    });
 
     await harness.drain();
     expect(harness.startSession).not.toHaveBeenCalled();
@@ -21452,22 +19857,13 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-debug"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-debug"),
-          role: "user",
-          text: "reproduce the crash",
-          attachments: [],
-        },
-        interactionMode: "debug",
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-debug",
+      messageId: "user-message-debug",
+      text: "reproduce the crash",
+      interactionMode: "debug",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -21488,26 +19884,16 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-provider-first"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-provider-first"),
-          role: "user",
-          text: "hello claude",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-provider-first",
+      messageId: "user-message-provider-first",
+      text: "hello claude",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
@@ -21705,14 +20091,12 @@ describe("ProviderCommandReactor", () => {
 
       // Group settings applies a new coordinator model by writing the stored
       // selection durably; the next turn must rebind rather than error.
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe(`cmd-${provider}-rebind-meta-update`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          modelSelection: { provider: "claudeAgent", model: target },
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`cmd-${provider}-rebind-meta-update`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: target },
+      });
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `user-message-${provider}-rebind-2`,
@@ -21793,43 +20177,32 @@ describe("ProviderCommandReactor", () => {
       ["unrelated-owner", null, "unrelated-agent"],
       ["independent-owner", "thread-1", "independent-agent"],
     ] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe(`create-${id}`),
-          threadId: ThreadId.makeUnsafe(id),
-          projectId: asProjectId("project-1"),
-          title: id,
-          modelSelection: { provider: "devin", model: "swe-1.7" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
-          parentThreadId: parentId ? ThreadId.makeUnsafe(parentId) : null,
-          subagentAgentId: agentId,
-          creationSource: "provider_native",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe(`create-${id}`),
+        threadId: ThreadId.makeUnsafe(id),
+        projectId: asProjectId("project-1"),
+        title: id,
+        modelSelection: { provider: "devin", model: "swe-1.7" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        parentThreadId: parentId ? ThreadId.makeUnsafe(parentId) : null,
+        subagentAgentId: agentId,
+        creationSource: "provider_native",
+        createdAt: new Date().toISOString(),
+      });
     }
     // A linked child with its own runtime does not belong to this Devin session.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("independent-owner-session"),
-        threadId: ThreadId.makeUnsafe("independent-owner"),
-        session: {
-          threadId: ThreadId.makeUnsafe("independent-owner"),
-          status: "ready",
-          providerName: "devin",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-10-11T00:00:03.000Z",
-        },
-        createdAt: "2026-10-11T00:00:03.000Z",
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "independent-owner-session",
+      threadId: ThreadId.makeUnsafe("independent-owner"),
+      status: "ready",
+      providerName: "devin",
+      runtimeMode: "full-access",
+      at: "2026-10-11T00:00:03.000Z",
+    });
     await Effect.runPromise(
       appendActivity(
         "independent-stop",
@@ -21884,7 +20257,7 @@ describe("ProviderCommandReactor", () => {
     });
     expect(retirementCommands).toHaveLength(1);
     for (const command of retirementCommands) {
-      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.dispatch(command);
     }
     // Session shutdown can record an ordinary local stop even though the
     // remote Devin child survives. Repeated native resumes must retain its
@@ -21961,14 +20334,12 @@ describe("ProviderCommandReactor", () => {
 
       // A plain model save (not Hand off) moves the stored selection to the target.
       // ProviderService refuses to drop Codex history unless the start says so.
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-codex-rebind-meta-update"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          modelSelection: selection,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-codex-rebind-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: selection,
+      });
       await dispatchHarnessUserTurn(harness, {
         messageId: "user-message-codex-rebind-2",
         text: `now on ${selection.provider}`,
@@ -22054,14 +20425,12 @@ describe("ProviderCommandReactor", () => {
     harness.sendTurn.mockImplementationOnce(() =>
       Effect.succeed({ threadId, turnId: previousTurnId }),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("rebind-retry-opencode-selection"),
-        threadId,
-        modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("rebind-retry-opencode-selection"),
+      threadId,
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+    });
     await dispatchHarnessUserTurn(harness, {
       messageId: "rebind-retry-opencode-turn",
       text: "Continue in OpenCode.",
@@ -22077,14 +20446,12 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => previousActivityAttempts > 0);
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("rebind-retry-claude-selection"),
-        threadId,
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("rebind-retry-claude-selection"),
+      threadId,
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+    });
     await dispatchHarnessUserTurn(harness, {
       messageId: "rebind-retry-claude-turn",
       text: "Continue in Claude before its turn settles.",
@@ -22143,14 +20510,12 @@ describe("ProviderCommandReactor", () => {
     harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
 
     // Only Hand off may stop background tasks, after the user agrees to.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-rebind-tasks-meta-update"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-rebind-tasks-meta-update"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+    });
     await dispatchHarnessUserTurn(harness, {
       messageId: "user-message-rebind-tasks-2",
       text: "now on claude",
@@ -22255,14 +20620,12 @@ describe("ProviderCommandReactor", () => {
       activeTurnId: asTurnId("turn-deferred-live"),
       at: now,
     });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-meta-deferred-claude"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-meta-deferred-claude"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(harness.startSession.mock.calls.length).toBe(1);
 
@@ -22318,27 +20681,23 @@ describe("ProviderCommandReactor", () => {
     // explicit stop even suppresses synthetic context on the next start. A
     // provider rebind is the one start that must ignore that suppression,
     // because the new provider cannot resume the old history natively.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("cmd-stopped-rebind-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("cmd-stopped-rebind-stop"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: now,
+    });
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
 
     // Group settings writes the new coordinator model durably. With no live
     // session, nothing applies the selection now — the recorded spawn
     // selection must keep reading 'grok' so the next turn sees the rebind.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-stopped-rebind-meta-update"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-stopped-rebind-meta-update"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
 
     await dispatchHarnessUserTurn(harness, {
       commandId: "cmd-turn-start-stopped-rebind-2",
@@ -22366,74 +20725,51 @@ describe("ProviderCommandReactor", () => {
 
     async function runFirstGrokTurn(harness: Awaited<ReturnType<typeof createHarness>>) {
       const now = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-handoff-turn-1"),
-          threadId,
-          message: {
-            messageId: asMessageId("user-message-handoff-1"),
-            role: "user",
-            text: "first turn on grok",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "cmd-handoff-turn-1",
+        threadId,
+        messageId: "user-message-handoff-1",
+        text: "first turn on grok",
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-handoff-session-ready"),
-          threadId,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "grok",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-handoff-session-ready",
+        threadId,
+        status: "ready",
+        providerName: "grok",
+        at: now,
+      });
     }
 
     const dispatchHandoff = (harness: Awaited<ReturnType<typeof createHarness>>) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
-          threadId,
-          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-          providerHandoff: true,
-        }),
-      );
+      harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
+        threadId,
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        providerHandoff: true,
+      });
 
     const sendSecondTurn = (
       harness: Awaited<ReturnType<typeof createHarness>>,
       enableComputerControl?: boolean,
     ) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-handoff-turn-2"),
-          threadId,
-          message: {
-            messageId: asMessageId("user-message-handoff-2"),
-            role: "user",
-            text: "continue after the handoff",
-            attachments: [],
-          },
-          ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-handoff-turn-2"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-handoff-2"),
+          role: "user",
+          text: "continue after the handoff",
+          attachments: [],
+        },
+        ...(enableComputerControl !== undefined ? { enableComputerControl } : {}),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      });
 
     it("starts the target in the same thread and carries context through computer control activation", async () => {
       const harness = await createHarness({
@@ -22517,14 +20853,12 @@ describe("ProviderCommandReactor", () => {
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
       });
       await runFirstGrokTurn(harness);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.makeUnsafe("cmd-handoff-stop"),
-          threadId,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-handoff-stop"),
+        threadId,
+        createdAt: new Date().toISOString(),
+      });
       await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
 
       await dispatchHandoff(harness);
@@ -22872,16 +21206,14 @@ describe("ProviderCommandReactor", () => {
       await runFirstGrokTurn(harness);
       harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
-          threadId,
-          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-          providerHandoff: true,
-          providerHandoffStopsBackgroundTasks: true,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
+        threadId,
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        providerHandoff: true,
+        providerHandoffStopsBackgroundTasks: true,
+      });
 
       // Clearing the source continuation stops its runtime and the tasks in it.
       await waitFor(() => harness.startSession.mock.calls.length === 2);
@@ -22905,15 +21237,13 @@ describe("ProviderCommandReactor", () => {
       await runFirstGrokTurn(harness);
 
       await expect(
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: CommandId.makeUnsafe("cmd-stop-tasks-without-handoff"),
-            threadId,
-            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-            providerHandoffStopsBackgroundTasks: true,
-          }),
-        ),
+        harness.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-stop-tasks-without-handoff"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          providerHandoffStopsBackgroundTasks: true,
+        }),
       ).rejects.toThrow(/only allowed as part of a provider handoff/);
       expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
     });
@@ -22924,23 +21254,14 @@ describe("ProviderCommandReactor", () => {
       });
       await runFirstGrokTurn(harness);
       const now = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-handoff-session-running"),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "grok",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId("turn-handoff-live"),
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-handoff-session-running",
+        threadId,
+        status: "running",
+        providerName: "grok",
+        activeTurnId: asTurnId("turn-handoff-live"),
+        at: now,
+      });
 
       await expect(dispatchHandoff(harness)).rejects.toThrow(/still has a running turn/);
       const thread = await readHarnessThread(harness);
@@ -22963,36 +21284,24 @@ describe("ProviderCommandReactor", () => {
     });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-keepbound-meta-update"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-keepbound-meta-update"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
     // The stored update waits for the next turn, which rebinds the session.
     await harness.drain();
     expect(harness.startSession.mock.calls.length).toBe(1);
 
     // An explicit turn naming the stored provider rebinds to it.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-keepbound-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-keepbound-2"),
-          role: "user",
-          text: "continue on claude",
-          attachments: [],
-        },
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-keepbound-2",
+      messageId: "user-message-keepbound-2",
+      text: "continue on claude",
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     expect(harness.startSession.mock.calls.length).toBe(2);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
@@ -23005,23 +21314,13 @@ describe("ProviderCommandReactor", () => {
     // A turn explicitly requesting the pre-rebind provider is now a foreign
     // request — neither bound nor stored — and must be rejected rather than
     // silently resurrecting grok.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-keepbound-3"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-keepbound-3"),
-          role: "user",
-          text: "back to grok",
-          attachments: [],
-        },
-        modelSelection: { provider: "grok", model: "grok-code-fast-1" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-keepbound-3",
+      messageId: "user-message-keepbound-3",
+      text: "back to grok",
+      modelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const thread = await readHarnessThread(harness);
@@ -23075,15 +21374,13 @@ describe("ProviderCommandReactor", () => {
     const before = await readHarnessThread(harness);
     const eventsBefore = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
     for (const runtimeMode of ["auto", "full-access", "auto", "full-access"] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.runtime-mode.set",
-          commandId: CommandId.makeUnsafe(crypto.randomUUID()),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          runtimeMode,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        runtimeMode,
+        createdAt: now,
+      });
       await harness.drain();
       const after = await readHarnessThread(harness);
       expect(after?.runtimeMode).toBe(runtimeMode);
@@ -23104,45 +21401,32 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-initial-full-access"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-initial-full-access"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-runtime-mode-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-runtime-mode-1"),
-          role: "user",
-          text: "first",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-runtime-mode-1",
+      messageId: "user-message-runtime-mode-1",
+      text: "first",
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-1"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(
       async () => (await readHarnessThread(harness))?.runtimeMode === "approval-required",
@@ -23160,22 +21444,13 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 2);
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-runtime-mode-3"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-runtime-mode-3"),
-          role: "user",
-          text: "third",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-runtime-mode-3",
+      messageId: "user-message-runtime-mode-3",
+      text: "third",
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 3);
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
 
@@ -23307,50 +21582,46 @@ describe("ProviderCommandReactor", () => {
       },
     };
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-codex-account-same-1"),
-          role: "user",
-          text: "first account",
-          attachments: [],
-        },
-        providerOptions,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-1"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-codex-account-same-1"),
+        role: "user",
+        text: "first account",
+        attachments: [],
+      },
+      providerOptions,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-codex-account-same-2"),
-          role: "user",
-          text: "same account",
-          attachments: [],
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-2"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-codex-account-same-2"),
+        role: "user",
+        text: "same account",
+        attachments: [],
+      },
+      providerOptions: {
+        codex: {
+          accountId: "personal",
+          homePath: "/tmp/shared-codex-home",
+          shadowHomePath: "/tmp/personal-codex-home",
         },
-        providerOptions: {
-          codex: {
-            accountId: "personal",
-            homePath: "/tmp/shared-codex-home",
-            shadowHomePath: "/tmp/personal-codex-home",
-          },
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     expect(harness.startSession.mock.calls.length).toBe(1);
@@ -23521,15 +21792,13 @@ describe("ProviderCommandReactor", () => {
     const readsPerSessionSet: number[] = [];
     for (const commandId of ["empty-options-session-set-1", "empty-options-session-set-2"]) {
       const settingsReadsBefore = settingsReads;
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(commandId),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(commandId),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session,
+        createdAt: now,
+      });
       await harness.drain();
       readsPerSessionSet.push(settingsReads - settingsReadsBefore);
     }
@@ -23593,23 +21862,13 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-enabled-instance"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-enabled-instance"),
-          role: "user",
-          text: "start on the enabled work account",
-          attachments: [],
-        },
-        modelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-enabled-instance",
+      messageId: "user-message-enabled-instance",
+      text: "start on the enabled work account",
+      modelSelection,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -23670,27 +21929,17 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-unbound-instance-switch"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-unbound-instance-switch"),
-          role: "user",
-          text: "start this with claude work",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "claudeAgent",
-          instanceId: "claude_work",
-          model: "claude-opus-4-6",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-unbound-instance-switch",
+      messageId: "user-message-unbound-instance-switch",
+      text: "start this with claude work",
+      modelSelection: {
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        model: "claude-opus-4-6",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -23730,46 +21979,24 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-instance-switch"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "stopped",
-          providerName: "codex",
-          providerInstanceId: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-stopped-instance-switch",
+      status: "stopped",
+      providerInstanceId: "codex",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-stopped-instance-switch"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-stopped-instance-switch"),
-          role: "user",
-          text: "restart on work account",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "codex",
-          instanceId: "codex_work",
-          model: "gpt-5.4",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-stopped-instance-switch",
+      messageId: "user-message-stopped-instance-switch",
+      text: "restart on work account",
+      modelSelection: {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5.4",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -23808,79 +22035,55 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-original-turn-start-stopped-edit"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-stopped-edit"),
-          role: "user",
-          text: "old prompt",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "codex",
-          instanceId: "codex",
-          model: "gpt-5.4",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-original-turn-start-stopped-edit",
+      threadId,
+      messageId: "user-message-stopped-edit",
+      text: "old prompt",
+      modelSelection: {
+        provider: "codex",
+        instanceId: "codex",
+        model: "gpt-5.4",
+      },
+      createdAt: now,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.makeUnsafe("cmd-assistant-complete-stopped-edit"),
-        threadId,
-        messageId: asMessageId("assistant-stopped-edit"),
-        turnId: asTurnId("turn-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe("cmd-assistant-complete-stopped-edit"),
+      threadId,
+      messageId: asMessageId("assistant-stopped-edit"),
+      turnId: asTurnId("turn-1"),
+      createdAt: now,
+    });
     await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-edit-instance-switch"),
-        threadId,
-        session: {
-          threadId,
-          status: "stopped",
-          providerName: "codex",
-          providerInstanceId: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-stopped-edit-instance-switch",
+      threadId,
+      status: "stopped",
+      providerInstanceId: "codex",
+      at: now,
+    });
     harness.startSession.mockClear();
     harness.sendTurn.mockClear();
     harness.stopRuntimeSession.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-stopped-instance-resend"),
-        threadId,
-        messageId: asMessageId("user-message-stopped-edit"),
-        text: "edited prompt for work account",
-        modelSelection: {
-          provider: "codex",
-          instanceId: "codex_work",
-          model: "gpt-5.4",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.message.edit-and-resend",
+      commandId: CommandId.makeUnsafe("cmd-edit-stopped-instance-resend"),
+      threadId,
+      messageId: asMessageId("user-message-stopped-edit"),
+      text: "edited prompt for work account",
+      modelSelection: {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -23908,27 +22111,17 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-missing-instance"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-missing-instance"),
-          role: "user",
-          text: "start on the removed account",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "codex",
-          instanceId: "codex_removed",
-          model: "gpt-5.4",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-missing-instance",
+      messageId: "user-message-missing-instance",
+      text: "start on the removed account",
+      modelSelection: {
+        provider: "codex",
+        instanceId: "codex_removed",
+        model: "gpt-5.4",
+      },
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
@@ -23948,27 +22141,17 @@ describe("ProviderCommandReactor", () => {
       lastError: expect.stringContaining("Unknown provider instance 'codex_removed'."),
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-valid-instance-retry"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-valid-instance-retry"),
-          role: "user",
-          text: "retry on the valid account",
-          attachments: [],
-        },
-        modelSelection: {
-          provider: "codex",
-          instanceId: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-valid-instance-retry",
+      messageId: "user-message-valid-instance-retry",
+      text: "retry on the valid account",
+      modelSelection: {
+        provider: "codex",
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -24009,23 +22192,21 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness();
       const now = new Date().toISOString();
       const startTurn = (id: string, text: string, selection?: typeof modelSelection) =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            message: {
-              messageId: asMessageId(`user-message-${id}`),
-              role: "user",
-              text,
-              attachments: [],
-            },
-            ...(selection ? { modelSelection: selection } : {}),
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "approval-required",
-            createdAt: now,
-          }),
-        );
+        harness.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-${id}`),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          ...(selection ? { modelSelection: selection } : {}),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
 
       await startTurn("binding-first", "first");
       await waitFor(() => harness.startSession.mock.calls.length === 1);
@@ -24077,33 +22258,22 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-account-handoff-1"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-account-handoff-1"),
-          role: "user",
-          text: "first turn on the default account",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-account-handoff-1",
+      threadId,
+      messageId: "user-message-account-handoff-1",
+      text: "first turn on the default account",
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-account-handoff"),
-        threadId,
-        modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
-        providerHandoff: true,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-account-handoff"),
+      threadId,
+      modelSelection: { provider: "codex", instanceId: "codex_work", model: "gpt-5.4" },
+      providerHandoff: true,
+    });
 
     await waitFor(async () =>
       Boolean(
@@ -24169,22 +22339,13 @@ describe("ProviderCommandReactor", () => {
       if (!repository) throw new Error("Expected real provider persistence");
       const threadId = ThreadId.makeUnsafe("thread-1");
       const send = async (id: string) => {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(id),
-            threadId,
-            message: {
-              messageId: asMessageId(id),
-              role: "user",
-              text: "Continue",
-              attachments: [],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: id,
+          threadId,
+          messageId: id,
+          text: "Continue",
+          createdAt: new Date().toISOString(),
+        });
         await harness.drain();
       };
       await send("account-handoff-initial-turn");
@@ -24195,15 +22356,13 @@ describe("ProviderCommandReactor", () => {
         resumeCursor: sourceCursor,
       });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("account-handoff-switch"),
-          threadId,
-          modelSelection: { provider: "claudeAgent", instanceId: targetAccountId, model: "sonnet" },
-          providerHandoff: true,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("account-handoff-switch"),
+        threadId,
+        modelSelection: { provider: "claudeAgent", instanceId: targetAccountId, model: "sonnet" },
+        providerHandoff: true,
+      });
       await harness.drain();
       const targetStart = starts.mock.calls.find(
         ([input]) => input.providerInstanceId === targetAccountId,
@@ -24240,32 +22399,21 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-initial-full-access-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-initial-full-access-2"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-restart-failure-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-restart-failure-1"),
-          role: "user",
-          text: "first",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-restart-failure-1",
+      messageId: "user-message-restart-failure-1",
+      text: "first",
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -24274,37 +22422,25 @@ describe("ProviderCommandReactor", () => {
       (_: unknown, __: unknown) => Effect.fail(new Error("simulated restart failure")) as never,
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-restart-failure"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-restart-failure"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
 
     await waitFor(
       async () => (await readHarnessThread(harness))?.runtimeMode === "approval-required",
     );
     await harness.drain();
     expect(harness.startSession).toHaveBeenCalledTimes(1);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-restart-failure-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-restart-failure-2"),
-          role: "user",
-          text: "second",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-restart-failure-2",
+      messageId: "user-message-restart-failure-2",
+      text: "second",
+      createdAt: now,
+    });
     await waitFor(() => harness.startSession.mock.calls.length === 2);
     await harness.drain();
 
@@ -24335,22 +22471,14 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-permission-projection-initial"),
-        threadId,
-        message: {
-          messageId: asMessageId("permission-projection-initial"),
-          role: "user",
-          text: "first",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-permission-projection-initial",
+      threadId,
+      messageId: "permission-projection-initial",
+      text: "first",
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await harness.drain();
 
@@ -24360,15 +22488,13 @@ describe("ProviderCommandReactor", () => {
     // A failed rebind used to project the requested mode without changing the
     // process. A later dispatch must consult the actual runtime even if such
     // stale state has already been persisted.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-permission-projection-stale"),
-        threadId,
-        session: { ...currentSession, runtimeMode: "approval-required" },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe("cmd-permission-projection-stale"),
+      threadId,
+      session: { ...currentSession, runtimeMode: "approval-required" },
+      createdAt: now,
+    });
     expect(await Effect.runPromise(harness.listSessions())).toEqual(
       expect.arrayContaining([expect.objectContaining({ runtimeMode: "full-access" })]),
     );
@@ -24430,17 +22556,14 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const now = new Date().toISOString();
       const startTurn = (id: string, runtimeMode: "full-access" | "approval-required") =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`cmd-${id}`),
-            threadId,
-            message: { messageId: asMessageId(id), role: "user", text: id, attachments: [] },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode,
-            createdAt: now,
-          }),
-        );
+        dispatchHarnessUserTurn(harness, {
+          commandId: `cmd-${id}`,
+          threadId,
+          messageId: id,
+          text: id,
+          runtimeMode,
+          createdAt: now,
+        });
 
       await startTurn("retained-rebind-first", "full-access");
       await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "ready");
@@ -24453,15 +22576,13 @@ describe("ProviderCommandReactor", () => {
       const settled = (await readHarnessThread(harness))?.session;
       if (!settled) throw new Error("Expected an established provider session");
       const setSession = (id: string, session: OrchestrationSession) =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`cmd-${id}`),
-            threadId,
-            session,
-            createdAt: now,
-          }),
-        );
+        harness.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-${id}`),
+          threadId,
+          session,
+          createdAt: now,
+        });
       if (staleProjection) {
         // An earlier failed rebind can leave the projection claiming the
         // requested mode, so only the process listing knows the real one.
@@ -24474,14 +22595,12 @@ describe("ProviderCommandReactor", () => {
           status: "running",
           activeTurnId: asTurnId(`${provider}-turn`),
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: CommandId.makeUnsafe("cmd-retained-rebind-switch"),
-            threadId,
-            modelSelection: switchTo,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-retained-rebind-switch"),
+          threadId,
+          modelSelection: switchTo,
+        });
         await harness.drain();
         await setSession("retained-rebind-settled", settled);
       }
@@ -24525,17 +22644,14 @@ describe("ProviderCommandReactor", () => {
         ]),
     });
     const startTurn = (id: string, runtimeMode: "full-access" | "approval-required") =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-${id}`),
-          threadId,
-          message: { messageId: asMessageId(id), role: "user", text: id, attachments: [] },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode,
-          createdAt: now,
-        }),
-      );
+      dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-${id}`,
+        threadId,
+        messageId: id,
+        text: id,
+        runtimeMode,
+        createdAt: now,
+      });
 
     await startTurn("live-and-retained-first", "full-access");
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -24566,14 +22682,12 @@ describe("ProviderCommandReactor", () => {
       const now = new Date().toISOString();
       harness.pendingPriorTranscriptBootstraps.add(threadId);
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.makeUnsafe(`${provider}-pending-bootstrap-stop`),
-          threadId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe(`${provider}-pending-bootstrap-stop`),
+        threadId,
+        createdAt: now,
+      });
       await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
 
       expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
@@ -24612,14 +22726,12 @@ describe("ProviderCommandReactor", () => {
         .mockImplementationOnce(cleanupFailure)
         .mockImplementationOnce(cleanupFailure);
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.makeUnsafe(`${provider}-failed-bootstrap-cleanup-stop`),
-          threadId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe(`${provider}-failed-bootstrap-cleanup-stop`),
+        threadId,
+        createdAt: now,
+      });
       await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
 
       await dispatchHarnessUserTurn(harness, {
@@ -24702,23 +22814,14 @@ describe("ProviderCommandReactor", () => {
           status: "running",
           activeTurnId: rejectedTurnId,
         });
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("cmd-pending-claude-bootstrap-steer"),
-            threadId,
-            message: {
-              messageId: asMessageId("pending-claude-bootstrap-steer"),
-              role: "user",
-              text: "Focus on the current recovery turn.",
-              attachments: [],
-            },
-            dispatchMode: "steer",
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt: now,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "cmd-pending-claude-bootstrap-steer",
+          threadId,
+          messageId: "pending-claude-bootstrap-steer",
+          text: "Focus on the current recovery turn.",
+          dispatchMode: "steer",
+          createdAt: now,
+        });
         await harness.drain();
         expect(harness.steerTurn).toHaveBeenCalledTimes(1);
         expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
@@ -24791,56 +22894,45 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness();
       const now = new Date().toISOString();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.fork.create",
-          commandId: CommandId.makeUnsafe(`cmd-${provider}-sidechat-create`),
-          threadId,
-          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-          sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-          projectId: asProjectId("project-1"),
-          title: `${provider} sidechat`,
-          modelSelection: { provider, model: "openai/gpt-5" },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          importedMessages: [
-            {
-              messageId: asMessageId(`${provider}-sidechat-imported-user`),
-              role: "user",
-              text: "The imported sidechat color is amber.",
-              createdAt: now,
-              updatedAt: now,
-            },
-            {
-              messageId: asMessageId(`${provider}-sidechat-imported-assistant`),
-              role: "assistant",
-              text: "I will retain amber for this sidechat.",
-              createdAt: now,
-              updatedAt: now,
-            },
-          ],
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-${provider}-sidechat-turn`),
-          threadId,
-          message: {
-            messageId: asMessageId(`${provider}-sidechat-native-user`),
+      await harness.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe(`cmd-${provider}-sidechat-create`),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: `${provider} sidechat`,
+        modelSelection: { provider, model: "openai/gpt-5" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId(`${provider}-sidechat-imported-user`),
             role: "user",
-            text: "Which color did the sidechat retain?",
-            attachments: [],
+            text: "The imported sidechat color is amber.",
+            createdAt: now,
+            updatedAt: now,
           },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt: now,
-        }),
-      );
+          {
+            messageId: asMessageId(`${provider}-sidechat-imported-assistant`),
+            role: "assistant",
+            text: "I will retain amber for this sidechat.",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      });
+      await dispatchHarnessUserTurn(harness, {
+        commandId: `cmd-${provider}-sidechat-turn`,
+        threadId,
+        messageId: `${provider}-sidechat-native-user`,
+        text: "Which color did the sidechat retain?",
+        createdAt: now,
+      });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
       const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
@@ -24912,23 +23004,13 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
     harness.pendingPriorTranscriptBootstraps.add(threadId);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-opencode-idle-stopped"),
-        threadId,
-        session: {
-          threadId,
-          status: "stopped",
-          providerName: "opencode",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-opencode-idle-stopped",
+      threadId,
+      status: "stopped",
+      providerName: "opencode",
+      at: now,
+    });
 
     await dispatchHarnessUserTurn(harness, {
       messageId: "opencode-idle-stopped-follow-up",
@@ -25167,21 +23249,19 @@ describe("ProviderCommandReactor", () => {
       threadModelSelection: { provider, model: "openai/gpt-5" },
     });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.messages.import",
-        commandId: CommandId.makeUnsafe("import-long-recovery-history"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messages: Array.from({ length: 160 }, (_, index) => ({
-          messageId: asMessageId(`recovery-history-${index}`),
-          role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-          text: `Historical decision ${index}: ${"detail ".repeat(60)}`,
-          createdAt: now,
-          updatedAt: now,
-        })),
+    await harness.dispatch({
+      type: "thread.messages.import",
+      commandId: CommandId.makeUnsafe("import-long-recovery-history"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messages: Array.from({ length: 160 }, (_, index) => ({
+        messageId: asMessageId(`recovery-history-${index}`),
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text: `Historical decision ${index}: ${"detail ".repeat(60)}`,
         createdAt: now,
-      }),
-    );
+        updatedAt: now,
+      })),
+      createdAt: now,
+    });
     await dispatchHarnessUserTurn(harness, {
       messageId: "recovery-seed",
       text: "Keep the most recent release decision.",
@@ -25516,40 +23596,18 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stale"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-stale",
+      status: "ready",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-stale"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-stale"),
-          role: "user",
-          text: "resume codex",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-stale",
+      messageId: "user-message-stale",
+      text: "resume codex",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -25573,44 +23631,29 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness();
       const threadId = ThreadId.makeUnsafe("thread-1");
       const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("idle-stop-goal"),
-          threadId,
-          goal: "Keep the user's goal paused after Stop",
-          goalStartBehavior: "defer",
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("idle-stop-goal"),
+        threadId,
+        goal: "Keep the user's goal paused after Stop",
+        goalStartBehavior: "defer",
+      });
       if (status !== "missing") {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("idle-stop-session"),
-            threadId,
-            session: {
-              threadId,
-              status,
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: createdAt,
-            },
-            createdAt,
-          }),
-        );
+        await setHarnessSession(harness, {
+          commandId: "idle-stop-session",
+          threadId,
+          status,
+          at: createdAt,
+        });
         if (status !== "stopped") harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
       }
       for (const attempt of [1, 2]) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe(`idle-stop-${attempt}`),
-            threadId,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe(`idle-stop-${attempt}`),
+          threadId,
+          createdAt,
+        });
       }
       await harness.drain();
       const thread = await readHarnessThread(harness);
@@ -25628,23 +23671,12 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness();
       const threadId = ThreadId.makeUnsafe("thread-1");
       const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("fenced-startup-session"),
-          threadId,
-          session: {
-            threadId,
-            status: "starting",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "fenced-startup-session",
+        threadId,
+        status: "starting",
+        at: createdAt,
+      });
       harness.setRuntimeSessionTurnState({ threadId, status: "connecting" });
       if (projectionStatus === "stopped") {
         const runtimes = await Effect.runPromise(harness.listSessions());
@@ -25679,14 +23711,12 @@ describe("ProviderCommandReactor", () => {
           }),
         ),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("stale-startup-stop"),
-          threadId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("stale-startup-stop"),
+        threadId,
+        createdAt,
+      });
       await harness.drain();
       expect(cancelQueued).not.toHaveBeenCalled();
       expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
@@ -25712,15 +23742,13 @@ describe("ProviderCommandReactor", () => {
         lastError: null,
         updatedAt: createdAt,
       };
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("connecting-before-update"),
-          threadId,
-          session,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("connecting-before-update"),
+        threadId,
+        session,
+        createdAt,
+      });
       harness.setRuntimeSessionTurnState({ threadId, status: "connecting" });
       const sessions = await Effect.runPromise(harness.listSessions());
       let updatePending = true;
@@ -25742,14 +23770,12 @@ describe("ProviderCommandReactor", () => {
           return sessions;
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("stop-before-progress-update"),
-          threadId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("stop-before-progress-update"),
+        threadId,
+        createdAt,
+      });
       await harness.drain();
       expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
       expect(harness.stopRuntimeSession).toHaveBeenCalledTimes(1);
@@ -25774,35 +23800,23 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const turnId = asTurnId("busy-conditional-turn");
       const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("busy-conditional-session"),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "busy-conditional-session",
+        threadId,
+        status: "running",
+        activeTurnId: turnId,
+        at: createdAt,
+      });
       harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
       const cancelQueued = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
       harness.pendingPriorTranscriptBootstraps.add(threadId);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("busy-conditional-stop"),
-          threadId,
-          turnId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("busy-conditional-stop"),
+        threadId,
+        turnId,
+        createdAt,
+      });
       await harness.drain();
       expect((await readHarnessThread(harness))?.session).toMatchObject({
         status: "running",
@@ -25820,40 +23834,22 @@ describe("ProviderCommandReactor", () => {
     const child = ThreadId.makeUnsafe("subagent:thread-1:stale-stop-child");
     const turnId = asTurnId("stale-child-turn");
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("stale-stop-child-create"),
-        threadId: child,
-        parentThreadId: parent,
-        projectId: asProjectId("project-1"),
-        title: "Running child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "stale-stop-child-create",
+      threadId: child,
+      title: "Running child",
+      parentThreadId: parent,
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      createdAt,
+    });
     for (const threadId of [parent, child]) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`stale-stop-${threadId}`),
-          threadId,
-          session: {
-            threadId,
-            status: threadId === child ? "running" : "ready",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: threadId === child ? turnId : null,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: `stale-stop-${threadId}`,
+        threadId,
+        status: threadId === child ? "running" : "ready",
+        activeTurnId: threadId === child ? turnId : null,
+        at: createdAt,
+      });
     }
     harness.setRuntimeSessionTurnState({ threadId: parent, status: "ready" });
     harness.interruptTurn
@@ -25877,15 +23873,13 @@ describe("ProviderCommandReactor", () => {
       );
     const cancelQueued = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
     harness.pendingPriorTranscriptBootstraps.add(child);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("stale-child-stop"),
-        threadId: child,
-        turnId,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("stale-child-stop"),
+      threadId: child,
+      turnId,
+      createdAt,
+    });
     await harness.drain();
     expect(harness.interruptTurn).toHaveBeenCalledTimes(2);
     expect(harness.interruptTurn.mock.calls[1]?.[0]).toEqual({
@@ -25909,23 +23903,12 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("runtime-target-persistence-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "starting",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "runtime-target-persistence-session",
+      threadId,
+      status: "starting",
+      at: createdAt,
+    });
     harness.setRuntimeSessionTurnState({ threadId, status: "connecting" });
     harness.getRuntimeSessionStopTarget.mockImplementationOnce(() =>
       Effect.fail(
@@ -25935,14 +23918,12 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("runtime-target-persistence-stop"),
-        threadId,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("runtime-target-persistence-stop"),
+      threadId,
+      createdAt,
+    });
     await harness.drain();
     expect(harness.getRuntimeSessionStopTarget).toHaveBeenCalledTimes(2);
     expect(harness.stopRuntimeSession).toHaveBeenCalledTimes(1);
@@ -25968,34 +23949,23 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId(`${providerName}-turn`);
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("real-stop-start"),
-        threadId,
-        message: {
-          messageId: asMessageId("real-stop-first-message"),
-          role: "user",
-          text: "First turn",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "real-stop-start",
+      threadId,
+      messageId: "real-stop-first-message",
+      text: "First turn",
+      createdAt,
+    });
     await harness.drain();
     const established = (await readHarnessThread(harness))?.session;
     if (!established) throw new Error("Expected an established real runtime");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("real-stop-running"),
-        threadId,
-        session: { ...established, status: "running", activeTurnId: turnId },
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.makeUnsafe("real-stop-running"),
+      threadId,
+      session: { ...established, status: "running", activeTurnId: turnId },
+      createdAt,
+    });
     await harness.drain();
     return { harness, provider, repository, threadId, turnId, createdAt };
   }
@@ -26055,15 +24025,13 @@ describe("ProviderCommandReactor", () => {
       const interrupt = vi.spyOn(provider, "interruptTurn");
       const cancelQueue = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
       const commandId = CommandId.makeUnsafe("unrecorded-stop-command");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId,
-          threadId,
-          turnId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId,
+        threadId,
+        turnId,
+        createdAt,
+      });
       const source = (
         await Effect.runPromise(
           Stream.runCollect(
@@ -26126,33 +24094,22 @@ describe("ProviderCommandReactor", () => {
       const { harness, provider, repository, threadId, turnId, createdAt } =
         await createRealRunningStopHarness("cursor");
       if (directGoalStop) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: CommandId.makeUnsafe("real-stop-active-goal"),
-            threadId,
-            goal: "Finish the current objective",
-            goalStartBehavior: "defer",
-            goalPaused: false,
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("real-queued-before-goal-stop"),
-            threadId,
-            message: {
-              messageId: asMessageId("real-steer-message"),
-              role: "user",
-              text: "Queued message before Goal Stop",
-              attachments: [],
-            },
-            dispatchMode: "queue",
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("real-stop-active-goal"),
+          threadId,
+          goal: "Finish the current objective",
+          goalStartBehavior: "defer",
+          goalPaused: false,
+        });
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "real-queued-before-goal-stop",
+          threadId,
+          messageId: "real-steer-message",
+          text: "Queued message before Goal Stop",
+          dispatchMode: "queue",
+          createdAt,
+        });
         await harness.drain();
       }
       const write = repository.upsert;
@@ -26180,33 +24137,22 @@ describe("ProviderCommandReactor", () => {
       const interrupt = vi.spyOn(provider, "interruptTurn");
       const sends = vi.spyOn(provider, "sendTurn");
       if (directGoalStop) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("real-steer-command"),
-            threadId,
-            turnId,
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("real-steer-command"),
+          threadId,
+          turnId,
+          createdAt,
+        });
       } else {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("real-steer-command"),
-            threadId,
-            message: {
-              messageId: asMessageId("real-steer-message"),
-              role: "user",
-              text: "Steer must survive receipt replay",
-              attachments: [],
-            },
-            dispatchMode: "steer",
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            createdAt,
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "real-steer-command",
+          threadId,
+          messageId: "real-steer-message",
+          text: "Steer must survive receipt replay",
+          dispatchMode: "steer",
+          createdAt,
+        });
       }
       await harness.drain();
       const interruptEvent = (
@@ -26270,34 +24216,23 @@ describe("ProviderCommandReactor", () => {
       const turnId = asTurnId("codex-turn");
       const projectedTurnId = staleProjection ? asTurnId("stale-projected-turn") : turnId;
       const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("receipt-first-start"),
-          threadId,
-          message: {
-            messageId: asMessageId("receipt-first-message"),
-            role: "user",
-            text: "Start",
-            attachments: [],
-          },
-          runtimeMode: "approval-required",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "receipt-first-start",
+        threadId,
+        messageId: "receipt-first-message",
+        text: "Start",
+        createdAt,
+      });
       await harness.drain();
       const established = (await readHarnessThread(harness))?.session;
       if (!established) throw new Error("Expected an established real provider runtime");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("receipt-first-running"),
-          threadId,
-          session: { ...established, status: "running", activeTurnId: projectedTurnId },
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("receipt-first-running"),
+        threadId,
+        session: { ...established, status: "running", activeTurnId: projectedTurnId },
+        createdAt,
+      });
       await harness.drain();
       const originalTarget = await Effect.runPromise(
         provider.getRuntimeSessionStopTarget({ threadId }),
@@ -26340,15 +24275,13 @@ describe("ProviderCommandReactor", () => {
       const stopSpy = vi.spyOn(provider, "stopRuntimeSession");
       const queuedSend = vi.spyOn(provider, "sendTurn");
       const commandId = CommandId.makeUnsafe(`receipt-stop-${replaceRuntime}`);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId,
-          threadId,
-          ...(!omitTurnId ? { turnId: projectedTurnId } : {}),
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId,
+        threadId,
+        ...(!omitTurnId ? { turnId: projectedTurnId } : {}),
+        createdAt,
+      });
       await waitFor(() => failed);
       let replacementTarget: ProviderRuntimeSessionStopTarget | undefined;
       if (replaceRuntime) {
@@ -26363,41 +24296,30 @@ describe("ProviderCommandReactor", () => {
         replacementTarget = await Effect.runPromise(readRuntime({ threadId }));
         expect(replacementTarget.lifecycleGeneration).not.toBe(originalTarget.lifecycleGeneration);
         // The new runtime deliberately reuses the exact same provider turn ID.
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe("receipt-replacement-running"),
-            threadId,
-            session: {
-              ...established,
-              status: "running",
-              activeTurnId: turnId,
-              updatedAt: new Date().toISOString(),
-            },
-            createdAt,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("receipt-replacement-running"),
+          threadId,
+          session: {
+            ...established,
+            status: "running",
+            activeTurnId: turnId,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt,
+        });
       }
       if (newQueuedWork) {
         // Real command admission while Stop is retrying: the future turn is not
         // allowed to bypass its owning delivery, and must survive its cleanup.
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("receipt-queued-after-stop"),
-            threadId,
-            message: {
-              messageId: asMessageId("receipt-queued-message"),
-              role: "user",
-              text: "Queued after the first Stop",
-              attachments: [],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            dispatchMode: "queue",
-            createdAt: new Date().toISOString(),
-          }),
-        );
+        await dispatchHarnessUserTurn(harness, {
+          commandId: "receipt-queued-after-stop",
+          threadId,
+          messageId: "receipt-queued-message",
+          text: "Queued after the first Stop",
+          dispatchMode: "queue",
+          createdAt: new Date().toISOString(),
+        });
       }
       await Effect.runPromise(Deferred.succeed(replayReady, undefined));
       await harness.drain();
@@ -26465,32 +24387,20 @@ describe("ProviderCommandReactor", () => {
     });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("running-runtime-missing-turn-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("projected-missing-runtime-turn"),
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "running-runtime-missing-turn-session",
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("projected-missing-runtime-turn"),
+      at: createdAt,
+    });
     harness.setRuntimeSessionTurnState({ threadId, status: "running" });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("running-runtime-missing-turn-stop"),
-        threadId,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("running-runtime-missing-turn-stop"),
+      threadId,
+      createdAt,
+    });
     await harness.drain();
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId,
@@ -26516,33 +24426,21 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("uncertain-stop-turn");
     const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("uncertain-stop-session"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "uncertain-stop-session",
+      threadId,
+      status: "running",
+      activeTurnId: turnId,
+      at: createdAt,
+    });
     harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("uncertain-stop-command"),
-        threadId,
-        turnId,
-        createdAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("uncertain-stop-command"),
+      threadId,
+      turnId,
+      createdAt,
+    });
     await harness.drain();
     const thread = await readHarnessThread(harness);
     const failure = thread?.activities.find(
@@ -26570,32 +24468,19 @@ describe("ProviderCommandReactor", () => {
       });
       const threadId = ThreadId.makeUnsafe("thread-1");
       const createdAt = new Date().toISOString();
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("connecting-session"),
-          threadId,
-          session: {
-            threadId,
-            status,
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-          createdAt,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "connecting-session",
+        threadId,
+        status,
+        at: createdAt,
+      });
       harness.setRuntimeSessionTurnState({ threadId, status: "connecting" });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("stop-initialization"),
-          threadId,
-          createdAt,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("stop-initialization"),
+        threadId,
+        createdAt,
+      });
       await harness.drain();
       const thread = await readHarnessThread(harness);
       expect(thread?.session).toMatchObject({ status: "stopped", activeTurnId: null });
@@ -26610,38 +24495,25 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stale-interrupt"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-projected-stale"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-stale-interrupt",
+      status: "running",
+      activeTurnId: asTurnId("turn-projected-stale"),
+      at: now,
+    });
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
       status: "running",
       activeTurnId: asTurnId("turn-live-current"),
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-stale-projection"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-projected-stale"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-turn-interrupt-stale-projection"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-projected-stale"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
@@ -26664,23 +24536,13 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const turnId = asTurnId("turn-stop-after-provider-end");
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-session-set-stop-after-provider-end"),
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-session-set-stop-after-provider-end",
+        threadId,
+        status: "running",
+        activeTurnId: turnId,
+        at: now,
+      });
       // "ready": the provider already ended the turn (or was retired by the
       // interrupt) while its terminal event is still on its way.
       harness.setRuntimeSessionTurnState({
@@ -26689,15 +24551,13 @@ describe("ProviderCommandReactor", () => {
         ...(hasTurnId ? { activeTurnId: turnId } : {}),
       });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("cmd-turn-interrupt-after-provider-end"),
-          threadId,
-          turnId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-after-provider-end"),
+        threadId,
+        turnId,
+        createdAt: now,
+      });
       await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
       await harness.drain();
 
@@ -26745,37 +24605,25 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const now = new Date().toISOString();
       const setProjectedTurn = (turnId: string) =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
-            threadId,
-            session: {
-              threadId,
-              status: "running",
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: asTurnId(turnId),
-              lastError: null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-        );
+        setHarnessSession(harness, {
+          commandId: `cmd-session-${turnId}`,
+          threadId,
+          status: "running",
+          activeTurnId: asTurnId(turnId),
+          at: now,
+        });
       await setProjectedTurn("turn-interrupted");
       harness.setRuntimeSessionTurnState({
         threadId,
         status: "running",
         activeTurnId: asTurnId("turn-interrupted"),
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
-          threadId,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
+        threadId,
+        createdAt: now,
+      });
       await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
 
       // The next runtime turn already finished, but its terminal event is still
@@ -26820,39 +24668,20 @@ describe("ProviderCommandReactor", () => {
       const now = new Date().toISOString();
       const parent = ThreadId.makeUnsafe("thread-1");
       const child = ThreadId.makeUnsafe("subagent:thread-1:owner-fifo-child");
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("create-owner-fifo-child"),
-          threadId: child,
-          parentThreadId: parent,
-          projectId: asProjectId("project-1"),
-          title: "Child",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("session-owner-fifo-parent"),
-          threadId: parent,
-          session: {
-            threadId: parent,
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            updatedAt: now,
-            lastError: null,
-          },
-          createdAt: now,
-        }),
-      );
+      await createHarnessThread(harness, {
+        commandId: "create-owner-fifo-child",
+        threadId: child,
+        title: "Child",
+        parentThreadId: parent,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt: now,
+      });
+      await setHarnessSession(harness, {
+        commandId: "session-owner-fifo-parent",
+        threadId: parent,
+        status: "ready",
+        at: now,
+      });
       await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout("1 second")));
       const entered = Deferred.makeUnsafe<void>();
       const release = Deferred.makeUnsafe<void>();
@@ -26871,15 +24700,13 @@ describe("ProviderCommandReactor", () => {
         Effect.sync(() => calls.push("parent-background")),
       );
       try {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.task.stop",
-            commandId: CommandId.makeUnsafe("owner-fifo-parent-stop"),
-            threadId: parent,
-            taskId: "parent-task",
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.task.stop",
+          commandId: CommandId.makeUnsafe("owner-fifo-parent-stop"),
+          threadId: parent,
+          taskId: "parent-task",
+          createdAt: now,
+        });
         await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("1 second")));
         if (projectionState !== "ready") {
           const missingThread = projectionState === "missing-child-shell" ? child : parent;
@@ -26890,24 +24717,20 @@ describe("ProviderCommandReactor", () => {
           );
         }
 
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.interrupt",
-            commandId: CommandId.makeUnsafe("owner-fifo-child-interrupt"),
-            threadId: child,
-            turnId: asTurnId("child-turn"),
-            createdAt: now,
-          }),
-        );
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.task.background",
-            commandId: CommandId.makeUnsafe("owner-fifo-parent-background"),
-            threadId: parent,
-            toolUseId: "parent-followup",
-            createdAt: now,
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("owner-fifo-child-interrupt"),
+          threadId: child,
+          turnId: asTurnId("child-turn"),
+          createdAt: now,
+        });
+        await harness.dispatch({
+          type: "thread.task.background",
+          commandId: CommandId.makeUnsafe("owner-fifo-parent-background"),
+          threadId: parent,
+          toolUseId: "parent-followup",
+          createdAt: now,
+        });
         await new Promise((resolve) => setTimeout(resolve, 50));
         await Effect.runPromise(Deferred.succeed(release, undefined));
         await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout("1 second")));
@@ -26932,41 +24755,28 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const parent = ThreadId.makeUnsafe("thread-1");
     const target = ThreadId.makeUnsafe("owner-native-fork-target");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("create-owner-native-fork"),
-        threadId: target,
-        sourceThreadId: parent,
-        projectId: asProjectId("project-1"),
-        title: "Fork",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [],
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("session-owner-native-parent"),
-        threadId: parent,
-        session: {
-          threadId: parent,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          updatedAt: now,
-          lastError: null,
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("create-owner-native-fork"),
+      threadId: target,
+      sourceThreadId: parent,
+      projectId: asProjectId("project-1"),
+      title: "Fork",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [],
+      createdAt: now,
+    });
+    await setHarnessSession(harness, {
+      commandId: "session-owner-native-parent",
+      threadId: parent,
+      status: "ready",
+      at: now,
+    });
     await harness.drain();
     const entered = Deferred.makeUnsafe<void>();
     const release = Deferred.makeUnsafe<void>();
@@ -26985,32 +24795,21 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     try {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.task.stop",
-          commandId: CommandId.makeUnsafe("owner-fork-source-stop"),
-          threadId: parent,
-          taskId: "source-task",
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("owner-fork-source-stop"),
+        threadId: parent,
+        taskId: "source-task",
+        createdAt: now,
+      });
       await Effect.runPromise(Deferred.await(entered));
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("owner-fork-target-start"),
-          threadId: target,
-          message: {
-            messageId: asMessageId("owner-fork-message"),
-            role: "user",
-            text: "Fork now",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        }),
-      );
+      await dispatchHarnessUserTurn(harness, {
+        commandId: "owner-fork-target-start",
+        threadId: target,
+        messageId: "owner-fork-message",
+        text: "Fork now",
+        createdAt: now,
+      });
       await new Promise((resolve) => setTimeout(resolve, 50));
       await Effect.runPromise(Deferred.succeed(release, undefined));
       await harness.drain();
@@ -27059,23 +24858,13 @@ describe("ProviderCommandReactor", () => {
         status: "running" | "ready",
         activeTurnId: string | null,
       ) =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(commandId),
-            threadId,
-            session: {
-              threadId,
-              status,
-              providerName: "codex",
-              runtimeMode: "approval-required",
-              activeTurnId: activeTurnId ? asTurnId(activeTurnId) : null,
-              lastError: null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-        );
+        setHarnessSession(harness, {
+          commandId,
+          threadId,
+          status,
+          activeTurnId: activeTurnId ? asTurnId(activeTurnId) : null,
+          at: now,
+        });
 
       await setSession(
         `cmd-session-set-parent-${slug}`,
@@ -27083,32 +24872,28 @@ describe("ProviderCommandReactor", () => {
         childSession ? "running" : "ready",
         childSession ? "turn-parent" : null,
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe(`cmd-thread-create-${slug}`),
-          threadId: child,
-          projectId: asProjectId("project-1"),
-          title: "Halley [explorer]",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          ...(parentMetadata ? { parentThreadId: parent } : {}),
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe(`cmd-thread-create-${slug}`),
+        threadId: child,
+        projectId: asProjectId("project-1"),
+        title: "Halley [explorer]",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        ...(parentMetadata ? { parentThreadId: parent } : {}),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      });
       if (childSession) await setSession(`cmd-session-set-${slug}`, child, "running", "turn-child");
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.makeUnsafe(`cmd-turn-interrupt-${slug}`),
-          threadId: child,
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe(`cmd-turn-interrupt-${slug}`),
+        threadId: child,
+        createdAt: now,
+      });
 
       await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
       expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
@@ -27135,56 +24920,29 @@ describe("ProviderCommandReactor", () => {
       sizeBytes: 12,
     };
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-synthetic-steer-parent"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-synthetic-steer-parent"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-create-synthetic-steer-child"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
-        projectId: asProjectId("project-1"),
-        title: "Synthetic child",
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-synthetic-steer-parent",
+      status: "running",
+      activeTurnId: asTurnId("turn-synthetic-steer-parent"),
+      at: now,
+    });
+    await createHarnessThread(harness, {
+      commandId: "cmd-thread-create-synthetic-steer-child",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
+      title: "Synthetic child",
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      createdAt: now,
+    });
     await harness.stageAttachment(attachment, "subagent:thread-1:child-provider-steer");
     await startNativeChildTurn(harness, "child-provider-steer", "claudeAgent");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-synthetic-attachment-steer"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
-        message: {
-          messageId: asMessageId("msg-synthetic-attachment-steer"),
-          role: "user",
-          text: "",
-          attachments: [attachment],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-turn-start-synthetic-attachment-steer",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
+      messageId: "msg-synthetic-attachment-steer",
+      text: "",
+      attachments: [attachment],
+      createdAt: now,
+    });
 
     await waitFor(() => harness.steerSubagent.mock.calls.length === 1);
     expect(harness.steerSubagent.mock.calls[0]?.[0]).toEqual({
@@ -27202,57 +24960,41 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-approval"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-approval",
+      status: "running",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-approval-request-before-response"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-approval-request-before-response"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Command approval requested",
-          payload: {
-            requestId: "approval-request-1",
-            requestKind: "command",
-            lifecycleGeneration: "approval-generation-1",
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-approval-request-before-response"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-approval-request-before-response"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-request-1",
+          requestKind: "command",
+          lifecycleGeneration: "approval-generation-1",
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.makeUnsafe("cmd-approval-respond"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("approval-request-1"),
-        lifecycleGeneration: "approval-generation-1",
-        decision: "accept",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.approval.respond",
+      commandId: CommandId.makeUnsafe("cmd-approval-respond"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("approval-request-1"),
+      lifecycleGeneration: "approval-generation-1",
+      decision: "accept",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.respondToRequest.mock.calls.length === 1);
     expect(harness.respondToRequest.mock.calls[0]?.[0]).toEqual({
@@ -27297,61 +25039,45 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-user-input"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-user-input",
+      status: "running",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-user-input-request-before-response"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-user-input-request-before-response"),
-          tone: "info",
-          kind: "user-input.requested",
-          summary: "User input requested",
-          payload: {
-            requestId: "user-input-request-1",
-            lifecycleGeneration: "user-input-generation-1",
-            questions: [],
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-user-input-request-before-response"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-user-input-request-before-response"),
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "user-input-request-1",
+          lifecycleGeneration: "user-input-generation-1",
+          questions: [],
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.makeUnsafe("cmd-user-input-respond"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-1"),
-        lifecycleGeneration: "user-input-generation-1",
-        // Single, array, and mixed answer shapes all reach the provider unchanged.
-        answers: {
-          sandbox_mode: "workspace-write",
-          features: ["CLI scaffolding", "Type checking"],
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-respond"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-1"),
+      lifecycleGeneration: "user-input-generation-1",
+      // Single, array, and mixed answer shapes all reach the provider unchanged.
+      answers: {
+        sandbox_mode: "workspace-write",
+        features: ["CLI scaffolding", "Type checking"],
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.respondToUserInput.mock.calls.length === 1);
     expect(harness.respondToUserInput.mock.calls[0]?.[0]).toEqual({
@@ -27377,95 +25103,74 @@ describe("ProviderCommandReactor", () => {
       resolvedAt: null,
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.makeUnsafe("cmd-user-input-respond-duplicate"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-1"),
-        lifecycleGeneration: "user-input-generation-1",
-        answers: { sandbox_mode: "danger-full-access" },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-respond-duplicate"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-1"),
+      lifecycleGeneration: "user-input-generation-1",
+      answers: { sandbox_mode: "danger-full-access" },
+      createdAt: now,
+    });
     await harness.drain();
     expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["thread.approval.respond", "thread.user-input.respond"] as const)(
-    "does not forward a %s response without a durable pending claim",
-    async (type) => {
-      const harness = await createHarness();
+  it("does not forward approval or user input without a durable pending claim", async () => {
+    const harness = await createHarness();
+    for (const type of ["thread.approval.respond", "thread.user-input.respond"] as const) {
       const base = {
         commandId: CommandId.makeUnsafe(`cmd-${type}-early`),
         threadId: ThreadId.makeUnsafe("thread-1"),
         requestId: asApprovalRequestId(`${type}-request-early`),
         createdAt: new Date().toISOString(),
       };
-      await Effect.runPromise(
-        harness.engine.dispatch(
-          type === "thread.approval.respond"
-            ? { type, ...base, decision: "accept" }
-            : { type, ...base, answers: { input: "continue" } },
-        ),
+      await harness.dispatch(
+        type === "thread.approval.respond"
+          ? { type, ...base, decision: "accept" }
+          : { type, ...base, answers: { input: "continue" } },
       );
 
       await harness.drain();
       expect(harness.respondToRequest).not.toHaveBeenCalled();
       expect(harness.respondToUserInput).not.toHaveBeenCalled();
-    },
-  );
+    }
+  });
 
-  it("does not forward approval responses when the projected session is stopped", async () => {
+  it("does not forward approval or user input when the projected session is stopped", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-approval"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "stopped",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-stopped-approval",
+      status: "stopped",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-approval-requested-stopped"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-approval-requested-stopped"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Command approval requested",
-          payload: { requestId: "approval-request-stopped", requestKind: "command" },
-          turnId: null,
-          createdAt: now,
-        },
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-approval-requested-stopped"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-approval-requested-stopped"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: { requestId: "approval-request-stopped", requestKind: "command" },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.makeUnsafe("cmd-approval-respond-stopped"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("approval-request-stopped"),
-        decision: "accept",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.approval.respond",
+      commandId: CommandId.makeUnsafe("cmd-approval-respond-stopped"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("approval-request-stopped"),
+      decision: "accept",
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
@@ -27492,60 +25197,33 @@ describe("ProviderCommandReactor", () => {
       decision: "accept",
       resolvedAt: expect.any(String),
     });
-  });
 
-  it("does not forward user-input responses when the projected session is stopped", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-user-input"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "stopped",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-user-input-requested-stopped"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-user-input-requested-stopped"),
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: { requestId: "user-input-request-stopped", questions: [] },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-user-input-requested-stopped"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-user-input-requested-stopped"),
-          tone: "info",
-          kind: "user-input.requested",
-          summary: "User input requested",
-          payload: { requestId: "user-input-request-stopped", questions: [] },
-          turnId: null,
-          createdAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.makeUnsafe("cmd-user-input-respond-stopped"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-stopped"),
-        answers: {
-          input: "continue",
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-respond-stopped"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-stopped"),
+      answers: {
+        input: "continue",
+      },
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
@@ -27587,55 +25265,39 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-approval-error"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-approval-error",
+      status: "running",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-approval-requested"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-approval-requested"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Command approval requested",
-          payload: {
-            requestId: "approval-request-1",
-            requestKind: "command",
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-approval-requested"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-approval-requested"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-request-1",
+          requestKind: "command",
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.makeUnsafe("cmd-approval-respond-stale"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("approval-request-1"),
-        decision: "acceptForSession",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.approval.respond",
+      commandId: CommandId.makeUnsafe("cmd-approval-respond-stale"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("approval-request-1"),
+      decision: "acceptForSession",
+      createdAt: now,
+    });
 
     await waitFor(
       async () =>
@@ -27710,55 +25372,40 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-approval-ack-error"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "opencode",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-approval-ack-error",
+      status: "running",
+      providerName: "opencode",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-approval-ack-requested"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-approval-ack-requested"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Permission approval requested",
-          payload: {
-            requestId: "approval-request-ack",
-            requestKind: "permissions",
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-approval-ack-requested"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-approval-ack-requested"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Permission approval requested",
+        payload: {
+          requestId: "approval-request-ack",
+          requestKind: "permissions",
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.makeUnsafe("cmd-approval-ack-respond"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("approval-request-ack"),
-        decision: "accept",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.approval.respond",
+      commandId: CommandId.makeUnsafe("cmd-approval-ack-respond"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("approval-request-ack"),
+      decision: "accept",
+      createdAt: now,
+    });
 
     await waitFor(
       async () =>
@@ -27814,69 +25461,54 @@ describe("ProviderCommandReactor", () => {
         ),
       );
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-session-set-for-user-input-error"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            status: "running",
-            providerName: "claudeAgent",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-session-set-for-user-input-error",
+        status: "running",
+        providerName: "claudeAgent",
+        at: now,
+      });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.makeUnsafe("cmd-user-input-requested"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          activity: {
-            id: EventId.makeUnsafe("activity-user-input-requested"),
-            tone: "info",
-            kind: "user-input.requested",
-            summary: "User input requested",
-            payload: {
-              requestId: "user-input-request-1",
-              questions: [
-                {
-                  id: "sandbox_mode",
-                  header: "Sandbox",
-                  question: "Which mode should be used?",
-                  options: [
-                    {
-                      label: "workspace-write",
-                      description: "Allow workspace writes only",
-                    },
-                  ],
-                },
-              ],
-            },
-            turnId: null,
-            createdAt: now,
+      await harness.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-1",
+            questions: [
+              {
+                id: "sandbox_mode",
+                header: "Sandbox",
+                question: "Which mode should be used?",
+                options: [
+                  {
+                    label: "workspace-write",
+                    description: "Allow workspace writes only",
+                  },
+                ],
+              },
+            ],
           },
+          turnId: null,
           createdAt: now,
-        }),
-      );
+        },
+        createdAt: now,
+      });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.user-input.respond",
-          commandId: CommandId.makeUnsafe("cmd-user-input-respond-stale"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          requestId: asApprovalRequestId("user-input-request-1"),
-          answers: {
-            sandbox_mode: "workspace-write",
-          },
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-stale"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-1"),
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+        createdAt: now,
+      });
 
       await waitFor(
         async () =>
@@ -27923,18 +25555,16 @@ describe("ProviderCommandReactor", () => {
 
       // Explicit invalidation is terminal, unlike an ambiguous delivery failure.
       harness.respondToUserInput.mockImplementation(() => Effect.void);
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.user-input.respond",
-          commandId: CommandId.makeUnsafe("cmd-user-input-respond-retry"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          requestId: asApprovalRequestId("user-input-request-1"),
-          answers: {
-            sandbox_mode: "workspace-write",
-          },
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-1"),
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+        createdAt: new Date().toISOString(),
+      });
       await harness.drain();
       expect(
         (await readHarnessThread(harness))?.activities.filter(
@@ -27971,53 +25601,38 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-full-context",
+      status: "running",
+      providerName: "claudeAgent",
+      at: now,
+    });
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-user-input-requested-full-context"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      activity: {
+        id: EventId.makeUnsafe("activity-user-input-requested-full-context"),
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "user-input-request-full-context",
+          questions: [],
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-user-input-requested-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-user-input-requested-full-context"),
-          tone: "info",
-          kind: "user-input.requested",
-          summary: "User input requested",
-          payload: {
-            requestId: "user-input-request-full-context",
-            questions: [],
-          },
-          turnId: null,
-          createdAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.makeUnsafe("cmd-user-input-respond-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-full-context"),
-        answers: { continue: "Yes" },
-        createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-respond-full-context"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-full-context"),
+      answers: { continue: "Yes" },
+      createdAt: now,
+    });
 
     await waitFor(
       async () =>
@@ -28047,53 +25662,29 @@ describe("ProviderCommandReactor", () => {
     });
 
     const stoppedAt = new Date(Date.now() + 1).toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-stopped-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "stopped",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: stoppedAt,
-        },
-        createdAt: stoppedAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-stopped-full-context",
+      status: "stopped",
+      providerName: "claudeAgent",
+      at: stoppedAt,
+    });
 
     const recoveredAt = new Date(Date.now() + 2).toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-recovered-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: recoveredAt,
-        },
-        createdAt: recoveredAt,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-recovered-full-context",
+      status: "running",
+      providerName: "claudeAgent",
+      at: recoveredAt,
+    });
     harness.respondToUserInput.mockImplementation(() => Effect.void);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.makeUnsafe("cmd-user-input-retry-full-context"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-full-context"),
-        answers: { continue: "Yes" },
-        createdAt: recoveredAt,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-retry-full-context"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-full-context"),
+      answers: { continue: "Yes" },
+      createdAt: recoveredAt,
+    });
 
     await waitFor(() => harness.respondToUserInput.mock.calls.length === 2);
     const retriedResponse = await Effect.runPromise(
@@ -28115,60 +25706,45 @@ describe("ProviderCommandReactor", () => {
       const harness = await createHarness();
       const now = new Date().toISOString();
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe("cmd-session-set-for-unclaimable"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            status: "running",
-            providerName: "claudeAgent",
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        }),
-      );
+      await setHarnessSession(harness, {
+        commandId: "cmd-session-set-for-unclaimable",
+        status: "running",
+        providerName: "claudeAgent",
+        at: now,
+      });
 
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.makeUnsafe("cmd-user-input-requested-unclaimable"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          activity: {
-            id: EventId.makeUnsafe("activity-user-input-requested-unclaimable"),
-            tone: "info",
-            kind: "user-input.requested",
-            summary: "User input requested",
-            payload: {
-              requestId: "user-input-request-unclaimable",
-              lifecycleGeneration: "generation-current",
-              questions: [],
-            },
-            turnId: null,
-            createdAt: now,
+      await harness.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-unclaimable"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-unclaimable"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-unclaimable",
+            lifecycleGeneration: "generation-current",
+            questions: [],
           },
+          turnId: null,
           createdAt: now,
-        }),
-      );
+        },
+        createdAt: now,
+      });
 
       // A response carrying a lifecycle generation the durable row does not have
       // can never claim it. This used to be dropped with no activity and no
       // resolution, leaving the prompt permanently stuck.
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.user-input.respond",
-          commandId: CommandId.makeUnsafe("cmd-user-input-respond-unclaimable"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          requestId: asApprovalRequestId("user-input-request-unclaimable"),
-          ...(generation ? { lifecycleGeneration: generation } : {}),
-          answers: { input: "continue" },
-          createdAt: now,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-unclaimable"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-unclaimable"),
+        ...(generation ? { lifecycleGeneration: generation } : {}),
+        answers: { input: "continue" },
+        createdAt: now,
+      });
 
       await waitFor(
         async () =>
@@ -28189,27 +25765,25 @@ describe("ProviderCommandReactor", () => {
           generation ? "Stale pending user-input request:" : "generation is missing",
         ),
       });
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: CommandId.makeUnsafe("old-reconciliation"),
-          threadId: ThreadId.makeUnsafe("thread-1"),
+      await harness.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("old-reconciliation"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+        activity: {
+          id: EventId.makeUnsafe("old-reconciliation"),
+          kind: "provider.user-input.respond.failed",
+          tone: "error",
+          summary: "Old callback expired",
+          turnId: null,
           createdAt: now,
-          activity: {
-            id: EventId.makeUnsafe("old-reconciliation"),
-            kind: "provider.user-input.respond.failed",
-            tone: "error",
-            summary: "Old callback expired",
-            turnId: null,
-            createdAt: now,
-            payload: {
-              requestId: "user-input-request-unclaimable",
-              lifecycleGeneration: "generation-stale",
-              detail: "Stale pending user-input request: user-input-request-unclaimable",
-            },
+          payload: {
+            requestId: "user-input-request-unclaimable",
+            lifecycleGeneration: "generation-stale",
+            detail: "Stale pending user-input request: user-input-request-unclaimable",
           },
-        }),
-      );
+        },
+      });
       const outstanding = await Effect.runPromise(
         harness.pendingInteractionRepository.listUnsettled({
           threadId: ThreadId.makeUnsafe("thread-1"),
@@ -28227,41 +25801,28 @@ describe("ProviderCommandReactor", () => {
     });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("goal-before-session-gap-stop"),
-        threadId,
-        goal: "Finish the work",
-        goalStartBehavior: "defer",
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("goal-before-session-gap-stop"),
+      threadId,
+      goal: "Finish the work",
+      goalStartBehavior: "defer",
+    });
     // Recovery has already settled its old turn. No adapter terminal event remains.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("session-gap-before-stop"),
-        threadId,
-        session: {
-          threadId,
-          status: "interrupted",
-          providerName: "devin",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("session-gap-user-stop"),
-        threadId,
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "session-gap-before-stop",
+      threadId,
+      status: "interrupted",
+      providerName: "devin",
+      runtimeMode: "full-access",
+      at: now,
+    });
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("session-gap-user-stop"),
+      threadId,
+      createdAt: now,
+    });
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
     expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
     expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -28271,32 +25832,18 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ omitStopRuntimeSession: true });
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-missing-runtime-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-missing-runtime-stop",
+      status: "ready",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("cmd-session-stop-missing-runtime-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("cmd-session-stop-missing-runtime-stop"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
@@ -28345,21 +25892,13 @@ describe("ProviderCommandReactor", () => {
         });
         const threadId = ThreadId.makeUnsafe("thread-healthy-after-cleanup-failure");
         const now = new Date().toISOString();
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("cmd-create-cleanup-failure"),
-            threadId,
-            projectId: asProjectId("project-1"),
-            title: "Healthy thread",
-            modelSelection: { provider: "codex", model: "gpt-5.4" },
-            runtimeMode: "approval-required",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          }),
-        );
+        await createHarnessThread(harness, {
+          commandId: "cmd-create-cleanup-failure",
+          threadId,
+          title: "Healthy thread",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          createdAt: now,
+        });
         const queuedSequence = await seedQueuedTurnBehindLiveTurn(harness, {
           liveTurnId: asTurnId("turn-before-cleanup-failure"),
           messageId: asMessageId("queued-before-cleanup-failure"),
@@ -28369,13 +25908,11 @@ describe("ProviderCommandReactor", () => {
           harness.queuedTurnPromotionRepository.getBySequence(queuedSequence),
         );
         expect(queuedBeforeDelete.pipe(Option.getOrThrow).state).toBe("queued");
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.delete",
-            commandId: CommandId.makeUnsafe("cmd-delete-cleanup-failure"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-          }),
-        );
+        await harness.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.makeUnsafe("cmd-delete-cleanup-failure"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+        });
         await expect(harness.drain()).resolves.toBeUndefined();
         expect(removed).toHaveBeenCalledWith(ThreadId.makeUnsafe("thread-1"));
         const promotion = await Effect.runPromise(
@@ -28401,31 +25938,17 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-for-archive"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-for-archive",
+      status: "ready",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.archive",
-        commandId: CommandId.makeUnsafe("cmd-archive-active-provider-session"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.makeUnsafe("cmd-archive-active-provider-session"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
 
     await waitFor(async () => {
       if (harness.stopRuntimeSession.mock.calls.length !== 1) return false;
@@ -28476,24 +25999,20 @@ describe("ProviderCommandReactor", () => {
           return { threadId, turnId: asTurnId("turn-after-computer-restore") };
         }),
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.archive",
-          commandId: CommandId.makeUnsafe("cmd-computer-archive-held"),
-          threadId,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.makeUnsafe("cmd-computer-archive-held"),
+        threadId,
+      });
       await waitFor(() => order.includes("archive-held"));
       await expect(manager.withAgentActivity(threadId, async () => undefined)).rejects.toThrow(
         "revoked",
       );
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.unarchive",
-          commandId: CommandId.makeUnsafe("cmd-computer-unarchive-ordered"),
-          threadId,
-        }),
-      );
+      await harness.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.makeUnsafe("cmd-computer-unarchive-ordered"),
+        threadId,
+      });
       await dispatchHarnessUserTurn(harness, {
         messageId: "user-after-computer-restore",
         text: "Continue after unarchive",
@@ -28522,53 +26041,42 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.fork.create",
-        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-create"),
-        threadId,
-        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Stopped Droid sidechat",
-        modelSelection: {
-          provider: "droid",
-          model: "claude-sonnet-4-6",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        envMode: "local",
-        branch: null,
-        worktreePath: null,
-        importedMessages: [
-          {
-            messageId: asMessageId("stopped-droid-sidechat-imported-user"),
-            role: "user",
-            text: "Context cleared by stop",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-overlong"),
-        threadId,
-        message: {
-          messageId: asMessageId("stopped-droid-sidechat-overlong-user"),
+    await harness.dispatch({
+      type: "thread.fork.create",
+      commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-create"),
+      threadId,
+      sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: asProjectId("project-1"),
+      title: "Stopped Droid sidechat",
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      importedMessages: [
+        {
+          messageId: asMessageId("stopped-droid-sidechat-imported-user"),
           role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
-          attachments: [],
+          text: "Context cleared by stop",
+          createdAt: now,
+          updatedAt: now,
         },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+      ],
+      createdAt: now,
+    });
+
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-stopped-droid-sidechat-overlong",
+      threadId,
+      messageId: "stopped-droid-sidechat-overlong-user",
+      text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
+      createdAt: now,
+    });
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
@@ -28576,14 +26084,12 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-stop"),
-        threadId,
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-stop"),
+      threadId,
+      createdAt: now,
+    });
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
@@ -28592,22 +26098,13 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-fresh-turn"),
-        threadId,
-        message: {
-          messageId: asMessageId("stopped-droid-sidechat-fresh-user"),
-          role: "user",
-          text: "Start fresh after stop",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
+    await dispatchHarnessUserTurn(harness, {
+      commandId: "cmd-stopped-droid-sidechat-fresh-turn",
+      threadId,
+      messageId: "stopped-droid-sidechat-fresh-user",
+      text: "Start fresh after stop",
+      createdAt: now,
+    });
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     // Explicit stop keeps the provider binding: only the runtime is stopped.
@@ -28623,70 +26120,39 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-parent"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-parent"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-parent",
+      status: "running",
+      activeTurnId: asTurnId("turn-parent"),
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        projectId: asProjectId("project-1"),
-        title: "Halley [explorer]",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-thread-create-subagent",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      title: "Halley [explorer]",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-subagent"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-child"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-subagent",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      status: "running",
+      activeTurnId: asTurnId("turn-child"),
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent"),
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
@@ -28702,52 +26168,30 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-parent-sessionless"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-parent-sessionless",
+      status: "ready",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent-sessionless"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
-        projectId: asProjectId("project-1"),
-        title: "Halley [explorer]",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-thread-create-subagent-sessionless",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+      title: "Halley [explorer]",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent-sessionless"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent-sessionless"),
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
@@ -28762,70 +26206,38 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-parent-for-child-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-parent-for-child-stop",
+      status: "ready",
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent-for-stop"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        projectId: asProjectId("project-1"),
-        title: "Agent",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        parentThreadId: ThreadId.makeUnsafe("thread-1"),
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
+    await createHarnessThread(harness, {
+      commandId: "cmd-thread-create-subagent-for-stop",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      title: "Agent",
+      parentThreadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-subagent-for-stop"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-child-stop"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-session-set-subagent-for-stop",
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      status: "running",
+      activeTurnId: asTurnId("turn-child-stop"),
+      at: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.stop",
-        commandId: CommandId.makeUnsafe("cmd-session-stop-subagent"),
-        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.makeUnsafe("cmd-session-stop-subagent"),
+      threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+      createdAt: now,
+    });
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
 
@@ -28860,33 +26272,21 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-mode-session-running"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-mode-active"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-mode-session-running",
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-mode-active"),
+      at: now,
+    });
 
-    const midTurn = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-mode-set-mid-turn"),
-        threadId,
-        runtimeMode: "full-access",
-        createdAt: now,
-      }),
-    );
+    const midTurn = await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-mode-set-mid-turn"),
+      threadId,
+      runtimeMode: "full-access",
+      createdAt: now,
+    });
     await waitFor(async () => {
       const state = await Effect.runPromise(
         harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
@@ -28902,32 +26302,20 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls.length).toBe(0);
     expect(harness.stopSession.mock.calls.length).toBe(0);
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-mode-session-settled"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    const settled = await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.runtime-mode.set",
-        commandId: CommandId.makeUnsafe("cmd-mode-set-settled"),
-        threadId,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+    await setHarnessSession(harness, {
+      commandId: "cmd-mode-session-settled",
+      threadId,
+      status: "ready",
+      runtimeMode: "full-access",
+      at: now,
+    });
+    const settled = await harness.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.makeUnsafe("cmd-mode-set-settled"),
+      threadId,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
     await waitFor(async () => {
       const state = await Effect.runPromise(
         harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
