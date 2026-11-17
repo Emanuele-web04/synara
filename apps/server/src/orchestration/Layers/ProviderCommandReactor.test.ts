@@ -13348,6 +13348,85 @@ describe("ProviderCommandReactor", () => {
       );
     }
 
+    it("attributes context-loss markers to interrupt escalation when history is gone", async () => {
+      const harness = await createHarness({
+        interruptTurn: () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "turn/interrupt",
+              detail: "connection closed after request write",
+            }),
+          ),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "interrupt-escalation-context-seed",
+        text: "Remember that the release train is amber.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("turn-1"),
+      });
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-interrupt-escalation-context-loss"),
+          threadId,
+          turnId: asTurnId("turn-1"),
+          createdAt: now,
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+      expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
+        threadId,
+        controlRequestId: "command:cmd-interrupt-escalation-context-loss",
+        expectedLifecycleGeneration: "harness-session-1",
+      });
+
+      // Simulate residual cursor loss after the escalated stop (e.g. provider-side wipe).
+      await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
+
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "interrupt-escalation-context-follow-up",
+        text: "What release train did we pick?",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      const followUpInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      expect(followUpInput.input).toBe("What release train did we pick?");
+
+      await waitFor(async () => {
+        const lifecycleActivities = (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.context.changed",
+        );
+        return lifecycleActivities?.length === 1;
+      });
+      const [lifecycleActivity] = (await readHarnessThread(harness))?.activities.filter(
+        (activity) => activity.kind === "provider.context.changed",
+      ) ?? [undefined];
+      expect(lifecycleActivity).toMatchObject({
+        tone: "error",
+        summary: "The turn could not be stopped cleanly, so the session was restarted.",
+        payload: {
+          provider: "codex",
+          nativeHistory: "unavailable",
+          sessionRestarted: true,
+          restartReason: "interrupt-escalation",
+          recapInjected: false,
+          recapCharacters: 0,
+          recapPreview: null,
+          recapPreviewTruncated: false,
+        },
+      });
+    });
+
     it.each(["attachment", "send"] as const)(
       "retains observed context loss after a failed %s dispatch",
       async (failure) => {
@@ -28538,6 +28617,145 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).not.toContain("<thread_context>");
     expect(input?.input).not.toContain("Context cleared by stop");
     expect(input?.input).toContain("Start fresh after stop");
+  });
+
+  it("routes subagent interrupts through the parent provider session using the child provider thread id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-parent"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-parent"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+        projectId: asProjectId("project-1"),
+        title: "Halley [explorer]",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-subagent"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-child"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-child",
+      providerThreadId: "child-provider-1",
+      controlRequestId: "command:cmd-turn-interrupt-subagent",
+      expectedLifecycleGeneration: null,
+    });
+  });
+
+  it("routes subagent interrupts even when the child thread has no session of its own", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-parent-sessionless"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent-sessionless"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+        projectId: asProjectId("project-1"),
+        title: "Halley [explorer]",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent-sessionless"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+      providerThreadId: "child-provider-2",
+      controlRequestId: "command:cmd-turn-interrupt-subagent-sessionless",
+      expectedLifecycleGeneration: null,
+    });
   });
 
   it("interrupts active subagent sessions without stopping the parent provider session", async () => {
