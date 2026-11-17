@@ -18724,72 +18724,87 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("does not pass the Home chat container workspace root through as provider cwd", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
+  it.each([
+    {
+      provider: "codex",
+      model: "gpt-5-codex",
+      label: "the shared Home container",
+      dedicated: false,
+    },
+    {
+      provider: "pi",
+      model: "openai/gpt-4o",
+      label: "the shared Home container",
+      dedicated: false,
+    },
+    { provider: "pi", model: "openai/gpt-4o", label: "a dedicated chat folder", dedicated: true },
+  ] as const)(
+    "starts $provider with the correct working directory for $label",
+    async ({ provider, model, dedicated }) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      const { chatWorkspaceRoot } = await harness.runtime.runPromise(ServerConfig.asEffect());
+      const workspaceRoot = dedicated
+        ? path.join(chatWorkspaceRoot, "2026-11-17", "pi-example")
+        : chatWorkspaceRoot;
+      const modelSelection = { provider, model } as const;
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-home-project-create"),
-        projectId: asProjectId("project-home"),
-        kind: "chat",
-        title: "Home",
-        workspaceRoot: "/Users/tester",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt: now,
-      }),
-    );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-home-project-create"),
+          projectId: asProjectId("project-home"),
+          kind: "chat",
+          title: "Home",
+          workspaceRoot,
+          defaultModelSelection: modelSelection,
+          createdAt: now,
+        }),
+      );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-home-thread-create"),
-        threadId: ThreadId.makeUnsafe("thread-home"),
-        projectId: asProjectId("project-home"),
-        title: "Home thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-home-thread-create"),
+          threadId: ThreadId.makeUnsafe("thread-home"),
+          projectId: asProjectId("project-home"),
+          title: "Home thread",
+          modelSelection,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        }),
+      );
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-home-turn-start"),
+          threadId: ThreadId.makeUnsafe("thread-home"),
+          message: {
+            messageId: asMessageId("user-message-home-1"),
+            role: "user",
+            text: "hello from home chat",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => harness.startSession.mock.calls.length === 1);
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        modelSelection,
         runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-home-turn-start"),
-        threadId: ThreadId.makeUnsafe("thread-home"),
-        message: {
-          messageId: asMessageId("user-message-home-1"),
-          role: "user",
-          text: "hello from home chat",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5-codex",
-      },
-      runtimeMode: "approval-required",
-    });
-    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("cwd");
-  });
+      });
+      expect(harness.startSession.mock.calls[0]?.[1]?.cwd).toBe(
+        dedicated ? workspaceRoot : undefined,
+      );
+    },
+  );
 
   it("keeps a manual rename made during automatic first-turn title generation", async () => {
     const harness = await createHarness();

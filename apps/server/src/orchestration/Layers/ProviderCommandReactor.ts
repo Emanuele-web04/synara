@@ -2819,7 +2819,6 @@ const make = Effect.gen(function* () {
         ? providerStartOptionsFromInstance(desiredProviderInstance)
         : undefined,
     );
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -2846,7 +2845,16 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-    const additionalDirectories = Option.getOrUndefined(workspaceProject)?.additionalFolders ?? [];
+    const project = Option.getOrUndefined(workspaceProject);
+    const effectiveCwd = project
+      ? resolveThreadWorkspaceCwd({
+          thread,
+          projects: [project],
+          dedicatedChatWorkspaceParent:
+            preferredProvider === "pi" ? serverConfig.chatWorkspaceRoot : undefined,
+        })
+      : undefined;
+    const additionalDirectories = project?.additionalFolders ?? [];
     if (additionalDirectories.length > 0) {
       const folderIssue = projectFoldersSessionIssue({ provider: preferredProvider });
       if (folderIssue !== null) {
