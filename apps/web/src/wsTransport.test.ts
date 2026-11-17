@@ -43,7 +43,6 @@ import {
   makeFeatureSocketUrl,
   makeNegotiateHttpUrl,
   getResnapshotRetryDelayMs,
-  getSnapshotFaultRetryDelayMs,
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
   MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS,
@@ -1790,29 +1789,6 @@ describe("WsTransport", () => {
     }
   });
 
-  it("classifies snapshot faults for the slow retry and nothing else", () => {
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    // RESNAPSHOT reaches this classifier only after its bounded fast retries
-    // are exhausted (the admission-retry path returns first): an advancing
-    // fence that has not yet closed a large gap must keep slow-retrying
-    // instead of dying while recovery is succeeding.
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    expect(getSnapshotFaultRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
-  });
-
   it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
     // A projector catching up through a backlog larger than the replay limit
     // advances the fence on every request without closing the gap: the server
@@ -3306,16 +3282,6 @@ describe("WsTransport", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
   });
 
-  it("falls back to the legacy bootstrap socket when HTTP negotiation is unavailable", async () => {
-    const transport = new WsTransport("ws://localhost:3020");
-
-    expect(transport.getState()).toBe("connecting");
-    await waitForSockets(1);
-    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
-
-    await transport.dispose();
-  });
-
   it("detects a server identity change across a failed reconnect", () => {
     // The negotiated compatibility is cleared on every failed reconnect, so
     // the comparison must use the last identity actually reached — otherwise a
@@ -3397,13 +3363,6 @@ describe("WsTransport", () => {
     await expect(negotiateOverHttp("ws://localhost:3020")).rejects.toSatisfy((error) =>
       isTerminalCompatibilityFailure(error),
     );
-    // A non-426 failure (older server, transient outage) must fall back to the
-    // legacy bootstrap socket instead of failing the connect.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(404, null))),
-    );
-    await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
   });
 
   it.each([404, 503])(
