@@ -63,28 +63,18 @@ function typeIntoField(raw: string): string {
 }
 
 describe("DeviceCodeField input normalization", () => {
-  it("uppercases what the user types", () => {
-    expect(typeIntoField("abcdefgh")).toBe("ABCDEFGH");
-  });
-
-  it("accepts a code typed in mixed case", () => {
-    expect(typeIntoField("aBcD23gH")).toBe("ABCD23GH");
-  });
-
   // The alphabet excludes I/O/0/1 precisely because they are the characters
   // people mistype off another screen; a rejected character must disappear as
   // you type rather than fail after you submit and burn a rate-limited attempt.
-  it("drops the ambiguous characters the alphabet excludes", () => {
-    expect(typeIntoField("IO01")).toBe("");
-    expect(typeIntoField("AIBOC0D1")).toBe("ABCD");
-  });
-
-  it("accepts the displayed grouped form when pasted back", () => {
-    expect(typeIntoField("abcd-efgh")).toBe("ABCDEFGH");
-  });
-
-  it("stops at the code length", () => {
-    expect(typeIntoField("ABCDEFGHJKLM")).toBe("ABCDEFGH");
+  it.each([
+    ["uppercases what the user types", "abcdefgh", "ABCDEFGH"],
+    ["accepts mixed case", "aBcD23gH", "ABCD23GH"],
+    ["drops only ambiguous characters", "IO01", ""],
+    ["drops ambiguous characters among valid ones", "AIBOC0D1", "ABCD"],
+    ["accepts the displayed grouped form when pasted back", "abcd-efgh", "ABCDEFGH"],
+    ["stops at the code length", "ABCDEFGHJKLM", "ABCDEFGH"],
+  ])("%s", (_name, raw, expected) => {
+    expect(typeIntoField(raw)).toBe(expected);
   });
 });
 
