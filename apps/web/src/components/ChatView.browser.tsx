@@ -5145,6 +5145,16 @@ describe("ChatView transcript geometry (full app)", () => {
       {
         provider: "codex" as const,
         model: "gpt-5.3-codex",
+        sessionStatus: "ready" as const,
+      },
+      {
+        provider: "claudeAgent" as const,
+        model: "claude-opus-4-6",
+        sessionStatus: "running" as const,
+      },
+      {
+        provider: "codex" as const,
+        model: "gpt-5.3-codex",
         sessionStatus: "running" as const,
       },
     ])(
