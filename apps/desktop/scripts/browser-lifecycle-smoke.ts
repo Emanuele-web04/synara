@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { app, BrowserWindow, type WebContents } from "electron";
 import { BetterWright } from "betterwright";
 import { configureElectronNetwork } from "betterwright/electron";
@@ -86,12 +87,7 @@ async function checkCookieImportMetadata(contents: WebContents) {
 }
 
 // Exercise Synara's actual call boundary, which tears down each CDP worker.
-async function checkRunRequestLifetime(
-  contents: WebContents,
-  url: string,
-  releaseXhr: () => void,
-  releaseNavigation: () => void,
-) {
+async function checkRunRequestLifetime(contents: WebContents, url: string, releaseXhr: () => void) {
   const run = (code: string, signal = new AbortController().signal, timeoutMs = 10_000) =>
     runBetterwright({ home: join(home, "request-worker"), contents, code, signal, timeoutMs });
   const started = Date.now();
@@ -125,7 +121,6 @@ async function checkRunRequestLifetime(
   await run(
     "await page.evaluate(() => { location.href = '/slow-document'; }); return 'navigating'",
   );
-  releaseNavigation();
   await navigation;
   assert.equal(contents.getTitle(), "Navigation survived");
   await contents.loadURL(url);
@@ -184,12 +179,17 @@ async function smoke() {
   const blockedPort = (blocked.address() as { port: number }).port;
   const blockedUrl = `http://127.0.0.1:${blockedPort}`;
   const xhrResponse = Promise.withResolvers<void>();
-  const navigationResponse = Promise.withResolvers<void>();
   const allowed = createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     if (request.url?.startsWith("/slow")) {
       const navigation = request.url === "/slow-document";
-      await (navigation ? navigationResponse.promise : xhrResponse.promise);
+      if (navigation) {
+        // Release the document independently of worker exit. The navigation
+        // can itself delay completion of the worker's CDP evaluation.
+        await delay(1_000);
+      } else {
+        await xhrResponse.promise;
+      }
       if (response.destroyed) return;
       response.setHeader("Content-Type", navigation ? "text/html" : "application/json");
       response.end(
@@ -356,12 +356,7 @@ async function smoke() {
     await assert.rejects(session.fetch(`${blockedUrl}/between-runs`, { cache: "no-store" }));
     await checkCookieImportMetadata(contents);
     assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
-    await checkRunRequestLifetime(
-      contents,
-      allowedUrl,
-      xhrResponse.resolve,
-      navigationResponse.resolve,
-    );
+    await checkRunRequestLifetime(contents, allowedUrl, xhrResponse.resolve);
 
     // Install the real upstream capture sensor into a live Electron isolated
     // world, then verify its script, scoped binding, and disposal.
@@ -401,7 +396,6 @@ async function smoke() {
     );
   } finally {
     xhrResponse.resolve();
-    navigationResponse.resolve();
     await siblingTarget.revokeAll(true);
     await siblingBrowser.close();
     await target.revokeAll(true);
