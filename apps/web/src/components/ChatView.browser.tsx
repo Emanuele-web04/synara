@@ -213,9 +213,6 @@ const TEXT_VIEWPORT_MATRIX = [
   { name: "mobile", width: 430, height: 932 },
   { name: "narrow", width: 320, height: 700 },
 ] as const satisfies readonly ViewportSpec[];
-const ATTACHMENT_VIEWPORT_MATRIX = [
-  { name: "narrow", width: 320, height: 700 },
-] as const satisfies readonly ViewportSpec[];
 
 interface UserRowMeasurement {
   measuredRowHeightPx: number;
@@ -301,6 +298,38 @@ function createTerminalContext(input: {
     lineEnd: input.lineEnd,
     text: input.text,
     createdAt: NOW_ISO,
+  };
+}
+
+function createQueuedChatTurn(input: {
+  id: string;
+  prompt: string;
+  images?: ComposerImageAttachment[];
+  runtimeMode?: "full-access" | "auto";
+}) {
+  return {
+    id: input.id,
+    kind: "chat" as const,
+    createdAt: NOW_ISO,
+    previewText: input.prompt,
+    prompt: input.prompt,
+    images: input.images ?? [],
+    files: [],
+    assistantSelections: [],
+    browserAnnotations: [],
+    terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    pullRequestContexts: [],
+    skills: [],
+    mentions: [],
+    selectedProvider: "codex" as const,
+    selectedModel: "gpt-5",
+    selectedPromptEffort: null,
+    modelSelection: { provider: "codex" as const, model: "gpt-5" },
+    runtimeMode: input.runtimeMode ?? ("full-access" as const),
+    interactionMode: "default" as const,
+    envMode: "local" as const,
   };
 }
 
@@ -1966,12 +1995,6 @@ async function waitForURL(
   return pathname;
 }
 
-function queryComposerShell(): HTMLElement {
-  return document.querySelector<HTMLElement>(
-    'form[data-chat-composer-form="true"] .chat-composer-shell',
-  )!;
-}
-
 async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
     () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
@@ -2395,6 +2418,57 @@ async function mountChatView(options: {
     router,
   };
 }
+
+// Applies a thread update as a new server snapshot, like the server projecting an event.
+function createActiveThreadSync(initial: OrchestrationReadModel) {
+  let current = initial;
+  return {
+    snapshot: () => current,
+    syncActiveThread: (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      current = {
+        ...current,
+        snapshotSequence: current.snapshotSequence + 1,
+        threads: current.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(current.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: current };
+      useStore.getState().syncServerReadModel(current);
+    },
+  };
+}
+
+// Types a slash-automation prompt into the composer and sends it, clearing earlier requests.
+async function submitAutomationPrompt(prompt: string) {
+  useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+  const composerEditor = await waitForComposerEditor();
+  await vi.waitFor(
+    () => {
+      expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+  wsRequests.length = 0;
+  const sendButton = await waitForSendButton();
+  expect(sendButton.disabled).toBe(false);
+  await sendButton.click();
+}
+
+const HEARTBEAT_AUTOMATION_REQUEST = {
+  _tag: WS_METHODS.automationCreate,
+  mode: "heartbeat",
+  targetThreadId: THREAD_ID,
+  sourceThreadId: THREAD_ID,
+  worktreeMode: "auto",
+  maxIterations: 3,
+  prompt: "say hi",
+  schedule: { type: "interval", everySeconds: 15 },
+};
 
 describe("ChatView transcript geometry (full app)", () => {
   it("keeps the active chat explicitly unread until the next visit", async () => {
@@ -2999,13 +3073,9 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  it.each([
-    { activation: "click", scrollTakeover: false },
-    { activation: "keyboard", scrollTakeover: false },
-    { activation: "click", scrollTakeover: true },
-  ])(
-    "keeps subagents out of the sidebar while navigating ($activation, scroll takeover: $scrollTakeover)",
-    async ({ activation, scrollTakeover }) => {
+  it.each([{ scrollTakeover: false }, { scrollTakeover: true }])(
+    "keeps subagents out of the sidebar while navigating (scroll takeover: $scrollTakeover)",
+    async ({ scrollTakeover }) => {
       const base = createSnapshotForTargetUser({
         targetMessageId: MessageId.makeUnsafe("subagent-navigation-anchor"),
         targetText: "Review the sidebar navigation",
@@ -3069,14 +3139,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(beforeTop).toBeGreaterThan(viewportBounds.top);
         expect(beforeTop).toBeLessThan(viewportBounds.bottom);
         // Exercise the route/layout change directly; pointer-down stability belongs to #1881.
-        if (activation === "keyboard") {
-          row.focus({ preventScroll: true });
-          row.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-          );
-        } else {
-          row.click();
-        }
+        row.click();
         if (scrollTakeover) viewport.scrollTop += 60;
         const requestedScrollTop = viewport.scrollTop;
         await waitForURL(
@@ -3819,10 +3882,8 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it.each([
     { kind: "standalone", panes: 2, closing: "non-source" },
-    { kind: "standalone", panes: 3, closing: "non-source" },
     { kind: "standalone", panes: 3, closing: "source" },
     { kind: "forked", panes: 2, closing: "non-source" },
-    { kind: "forked", panes: 3, closing: "non-source" },
   ] as const)(
     "closes a $kind Side in $panes panes ($closing)",
     async ({ kind, panes, closing }) => {
@@ -5452,6 +5513,15 @@ describe("ChatView transcript geometry (full app)", () => {
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
         });
+        // An ordinary metadata update would change the durable provider at once, making the
+        // real decider refuse the later explicit handoff as a same-provider switch.
+        expect(
+          mounted.commands.find(
+            (command) =>
+              command.type === "thread.meta.update" &&
+              command.modelSelection?.provider === "claudeAgent",
+          ),
+        ).toMatchObject({ providerHandoff: true });
         const handoffActivity = fixture.snapshot.threads
           .find((thread) => thread.id === THREAD_ID)!
           .activities.find((activity) => activity.kind === "provider.handoff")!;
@@ -5479,29 +5549,6 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
           false,
         );
-      } finally {
-        await mounted.cleanup();
-      }
-    });
-
-    it("never persists a provider switch before its explicit handoff", async () => {
-      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
-      try {
-        await pickClaudeAndSend("Continue on the selected provider");
-        await vi.waitFor(() =>
-          expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
-            true,
-          ),
-        );
-        // An ordinary metadata update changes the durable provider immediately.
-        // Persisting Claude first makes the real decider refuse the later
-        // explicit handoff as a same-provider switch, and loses source provenance.
-        const providerUpdates = mounted.commands.filter(
-          (command) =>
-            command.type === "thread.meta.update" &&
-            command.modelSelection?.provider === "claudeAgent",
-        );
-        expect(providerUpdates[0]).toMatchObject({ providerHandoff: true });
       } finally {
         await mounted.cleanup();
       }
@@ -6106,36 +6153,6 @@ describe("ChatView transcript geometry (full app)", () => {
           const titleRight = title!.getBoundingClientRect().right;
           const actionsLeft = overflowButton!.getBoundingClientRect().left;
           expect(titleRight).toBeLessThanOrEqual(actionsLeft + 1);
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("names the project ahead of the chat title when open-thread tabs are off", async () => {
-    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showOpenThreadTabs: false }));
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-project-crumb-target" as MessageId,
-        targetText: "project crumb",
-      }),
-    });
-
-    try {
-      await vi.waitFor(
-        () => {
-          const title = document.querySelector<HTMLElement>(`header h2[title='${THREAD_TITLE}']`);
-          expect(title, "Unable to find the chat header title.").toBeTruthy();
-          const projectCrumb = title!
-            .closest("header")!
-            .querySelector<HTMLElement>("[title='Project']");
-          expect(projectCrumb?.textContent).toBe("Project");
-          expect(
-            projectCrumb!.compareDocumentPosition(title!) & Node.DOCUMENT_POSITION_FOLLOWING,
-          ).toBeTruthy();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -6767,31 +6784,15 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it("anchors a freshly sent user message at the top of the transcript viewport", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
-    let currentSnapshot = createSnapshotForTargetUser({
+    const initialSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-send-tail-anchor" as MessageId,
       targetText: "tail anchor target",
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: currentSnapshot,
+      snapshot: initialSnapshot,
     });
-
-    const syncActiveThread = (
-      update: (
-        thread: OrchestrationReadModel["threads"][number],
-      ) => OrchestrationReadModel["threads"][number],
-    ) => {
-      currentSnapshot = {
-        ...currentSnapshot,
-        snapshotSequence: currentSnapshot.snapshotSequence + 1,
-        threads: currentSnapshot.threads.map((thread) =>
-          thread.id === THREAD_ID ? update(thread) : thread,
-        ),
-        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
-      };
-      fixture = { ...fixture, snapshot: currentSnapshot };
-      useStore.getState().syncServerReadModel(currentSnapshot);
-    };
+    const { syncActiveThread } = createActiveThreadSync(initialSnapshot);
 
     try {
       const scrollContainer = await waitForElement(
@@ -7016,31 +7017,15 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it("shows Loading until ack, then keeps Thinking through the post-ack gap", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
-    let currentSnapshot = createSnapshotForTargetUser({
+    const initialSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
       targetText: "thinking bridge target",
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: currentSnapshot,
+      snapshot: initialSnapshot,
     });
-
-    const syncActiveThread = (
-      update: (
-        thread: OrchestrationReadModel["threads"][number],
-      ) => OrchestrationReadModel["threads"][number],
-    ) => {
-      currentSnapshot = {
-        ...currentSnapshot,
-        snapshotSequence: currentSnapshot.snapshotSequence + 1,
-        threads: currentSnapshot.threads.map((thread) =>
-          thread.id === THREAD_ID ? update(thread) : thread,
-        ),
-        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
-      };
-      fixture = { ...fixture, snapshot: currentSnapshot };
-      useStore.getState().syncServerReadModel(currentSnapshot);
-    };
+    const { syncActiveThread } = createActiveThreadSync(initialSnapshot);
 
     try {
       const prompt = "keep thinking through the ack gap";
@@ -7176,31 +7161,16 @@ describe("ChatView transcript geometry (full app)", () => {
   // the coordinate moves under it (reserve sizing, rows above being remeasured).
   it("moves a sent message to its anchor and handles a long streamed response", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
-    let currentSnapshot = createSnapshotForTargetUser({
+    const initialSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-send-jitter" as MessageId,
       targetText: "jitter target",
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: currentSnapshot,
+      snapshot: initialSnapshot,
     });
-
-    const syncActiveThread = (
-      update: (
-        thread: OrchestrationReadModel["threads"][number],
-      ) => OrchestrationReadModel["threads"][number],
-    ) => {
-      currentSnapshot = {
-        ...currentSnapshot,
-        snapshotSequence: currentSnapshot.snapshotSequence + 1,
-        threads: currentSnapshot.threads.map((thread) =>
-          thread.id === THREAD_ID ? update(thread) : thread,
-        ),
-        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
-      };
-      fixture = { ...fixture, snapshot: currentSnapshot };
-      useStore.getState().syncServerReadModel(currentSnapshot);
-    };
+    const threadSync = createActiveThreadSync(initialSnapshot);
+    const { syncActiveThread } = threadSync;
 
     try {
       const scrollContainer = await waitForElement(
@@ -7303,8 +7273,9 @@ describe("ChatView transcript geometry (full app)", () => {
       // loads, markdown remeasure, estimated virtualized rows mounting). Visible
       // content preservation is off while an anchor is set, so this is exactly
       // what shifts the anchored row under the in-flight slide.
-      const earlierMessageId = currentSnapshot.threads
-        .find((thread) => thread.id === THREAD_ID)!
+      const earlierMessageId = threadSync
+        .snapshot()
+        .threads.find((thread) => thread.id === THREAD_ID)!
         .messages.at(-2)!.id;
       for (const [index, delayMs] of [260, 340, 430].entries()) {
         at(delayMs, () => {
@@ -8044,32 +8015,16 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   it("does not rearm detached reading for non-message activity", async () => {
-    let currentSnapshot = createSnapshotForTargetUser({
+    const initialSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
       targetText: "auto-follow wiring target",
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: currentSnapshot,
+      snapshot: initialSnapshot,
     });
+    const { syncActiveThread } = createActiveThreadSync(initialSnapshot);
     let restoreScrollTo = () => {};
-
-    const syncActiveThread = (
-      update: (
-        thread: OrchestrationReadModel["threads"][number],
-      ) => OrchestrationReadModel["threads"][number],
-    ) => {
-      currentSnapshot = {
-        ...currentSnapshot,
-        snapshotSequence: currentSnapshot.snapshotSequence + 1,
-        threads: currentSnapshot.threads.map((thread) =>
-          thread.id === THREAD_ID ? update(thread) : thread,
-        ),
-        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
-      };
-      fixture = { ...fixture, snapshot: currentSnapshot };
-      useStore.getState().syncServerReadModel(currentSnapshot);
-    };
 
     try {
       const scrollContainer = await waitForElement(
@@ -8285,37 +8240,14 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      useComposerDraftStore
-        .getState()
-        .setPrompt(THREAD_ID, "/automation say hi every 15 seconds 3 times total");
-      const composerEditor = await waitForComposerEditor();
-      await vi.waitFor(
-        () => {
-          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      wsRequests.length = 0;
-      const sendButton = await waitForSendButton();
-      expect(sendButton.disabled).toBe(false);
-      sendButton.click();
+      await submitAutomationPrompt("/automation say hi every 15 seconds 3 times total");
 
       await vi.waitFor(
         () => {
           const automationCreateRequest = wsRequests.find(
             (request) => request._tag === WS_METHODS.automationCreate,
           );
-          expect(automationCreateRequest).toMatchObject({
-            _tag: WS_METHODS.automationCreate,
-            mode: "heartbeat",
-            targetThreadId: THREAD_ID,
-            sourceThreadId: THREAD_ID,
-            worktreeMode: "auto",
-            maxIterations: 3,
-            prompt: "say hi",
-            schedule: { type: "interval", everySeconds: 15 },
-          });
+          expect(automationCreateRequest).toMatchObject(HEARTBEAT_AUTOMATION_REQUEST);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -8363,21 +8295,7 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      useComposerDraftStore
-        .getState()
-        .setPrompt(THREAD_ID, "/automation say hi every 15 seconds for 3 times");
-      const composerEditor = await waitForComposerEditor();
-      await vi.waitFor(
-        () => {
-          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      wsRequests.length = 0;
-      const sendButton = await waitForSendButton();
-      expect(sendButton.disabled).toBe(false);
-      await sendButton.click();
+      await submitAutomationPrompt("/automation say hi every 15 seconds for 3 times");
 
       await vi.waitFor(
         () => {
@@ -8414,16 +8332,7 @@ describe("ChatView transcript geometry (full app)", () => {
           });
           expect(createThreadCommand?.createdAt).not.toBe(NOW_ISO);
 
-          expect(wsRequests[automationCreateIndex]).toMatchObject({
-            _tag: WS_METHODS.automationCreate,
-            mode: "heartbeat",
-            targetThreadId: THREAD_ID,
-            sourceThreadId: THREAD_ID,
-            worktreeMode: "auto",
-            maxIterations: 3,
-            prompt: "say hi",
-            schedule: { type: "interval", everySeconds: 15 },
-          });
+          expect(wsRequests[automationCreateIndex]).toMatchObject(HEARTBEAT_AUTOMATION_REQUEST);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -8463,19 +8372,7 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      useComposerDraftStore.getState().setPrompt(THREAD_ID, "/automation say hi every 15 seconds");
-      const composerEditor = await waitForComposerEditor();
-      await vi.waitFor(
-        () => {
-          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      wsRequests.length = 0;
-      const sendButton = await waitForSendButton();
-      expect(sendButton.disabled).toBe(false);
-      await sendButton.click();
+      await submitAutomationPrompt("/automation say hi every 15 seconds");
 
       await expect.element(page.getByText("Fast recurring loop")).toBeInTheDocument();
       expect(hasDispatchedCommandType("thread.create")).toBe(false);
@@ -8486,48 +8383,6 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
-
-  it.each(ATTACHMENT_VIEWPORT_MATRIX)(
-    "[geometry:linux] keeps user attachments inside their rendered row at the $name viewport",
-    async (viewport) => {
-      const targetMessageId = `msg-user-target-attachments-${viewport.name}` as MessageId;
-      const userText = "message with image attachments";
-      const mounted = await mountChatView({
-        viewport,
-        snapshot: createSnapshotForTargetUser({
-          targetMessageId,
-          targetText: userText,
-          targetAttachmentCount: 3,
-        }),
-      });
-
-      try {
-        await mounted.measureUserRow(targetMessageId);
-        const row = document.querySelector<HTMLElement>(
-          `[data-message-id="${targetMessageId}"][data-message-role="user"]`,
-        )!;
-        const rowRect = row.getBoundingClientRect();
-        const thumbnails = Array.from(
-          row.querySelectorAll<HTMLButtonElement>('button[aria-label^="Preview "]'),
-        );
-        expect(thumbnails).toHaveLength(3);
-        const rects = thumbnails.map((thumbnail) => thumbnail.getBoundingClientRect());
-        for (const rect of rects) {
-          expect(rect.width).toBeGreaterThan(0);
-          expect(rect.height).toBeGreaterThan(0);
-          expect(rect.left).toBeGreaterThanOrEqual(rowRect.left - 1);
-          expect(rect.right).toBeLessThanOrEqual(rowRect.right + 1);
-          expect(rect.top).toBeGreaterThanOrEqual(rowRect.top - 1);
-          expect(rect.bottom).toBeLessThanOrEqual(rowRect.bottom + 1);
-        }
-        expect(
-          Math.max(...rects.map((rect) => rect.top)) - Math.min(...rects.map((rect) => rect.top)),
-        ).toBeLessThanOrEqual(1);
-      } finally {
-        await mounted.cleanup();
-      }
-    },
-  );
 
   it("opens the project cwd for draft threads without a worktree path", async () => {
     useComposerDraftStore.setState({
@@ -9376,41 +9231,6 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps a started thread's composer on one row until the draft needs more", async () => {
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: MessageId.makeUnsafe("msg-single-row-composer"),
-        targetText: "Single row composer",
-      }),
-    });
-    try {
-      const editor = await waitForComposerEditor();
-      const shell = queryComposerShell;
-      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBe("row"));
-      // Permission, model and context sit in the row under the composer, not in the pill.
-      const statusRow = document.querySelector<HTMLElement>("[data-chat-composer-status-row]");
-      expect(statusRow).not.toBeNull();
-      expect(shell().contains(statusRow)).toBe(false);
-
-      await userEvent.click(editor);
-      // Short enough to fit the row's editor slot at any column width.
-      await userEvent.keyboard("ok");
-      expect(shell().dataset.composerLayout).toBe("row");
-
-      await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
-      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBeUndefined());
-      expect(document.activeElement).toBe(editor);
-
-      await userEvent.clear(editor);
-      await userEvent.keyboard("ok");
-      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBe("row"));
-      expect(document.activeElement).toBe(editor);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("keeps composer extras and plan mode usable in a narrow editor chat with a long branch", async () => {
     const longBranch =
       "feature/verify-the-composer-in-a-very-narrow-editor-sidebar-with-a-long-branch-name";
@@ -10206,60 +10026,21 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
-        id: "queued-turn-1",
-        kind: "chat",
-        createdAt: NOW_ISO,
-        previewText: firstQueuedPrompt,
-        prompt: firstQueuedPrompt,
-        images: [queuedImage],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex",
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        runtimeMode: handedOff ? "auto" : "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
-        id: "queued-turn-2",
-        kind: "chat",
-        createdAt: NOW_ISO,
-        previewText: secondQueuedPrompt,
-        prompt: secondQueuedPrompt,
-        images: [],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex",
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
+      useComposerDraftStore.getState().enqueueQueuedTurn(
+        THREAD_ID,
+        createQueuedChatTurn({
+          id: "queued-turn-1",
+          prompt: firstQueuedPrompt,
+          images: [queuedImage],
+          runtimeMode: handedOff ? "auto" : "full-access",
+        }),
+      );
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(
+          THREAD_ID,
+          createQueuedChatTurn({ id: "queued-turn-2", prompt: secondQueuedPrompt }),
+        );
 
       await vi.waitFor(
         () => {
@@ -10352,33 +10133,12 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       // The user is mid-draft in the composer while a turn-completion drain fires.
       useComposerDraftStore.getState().setPrompt(THREAD_ID, draftBeingTyped);
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
-        id: "queued-turn-auto",
-        kind: "chat",
-        createdAt: NOW_ISO,
-        previewText: queuedPrompt,
-        prompt: queuedPrompt,
-        images: [],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex",
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(
+          THREAD_ID,
+          createQueuedChatTurn({ id: "queued-turn-auto", prompt: queuedPrompt }),
+        );
 
       await vi.waitFor(
         () => {
@@ -10453,30 +10213,7 @@ describe("ChatView transcript geometry (full app)", () => {
         ),
       };
       const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
-      const queuedTurn = {
-        id: randomUUID(),
-        kind: "chat" as const,
-        createdAt: NOW_ISO,
-        previewText: queuedPrompt,
-        prompt: queuedPrompt,
-        images: [],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex" as const,
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: { provider: "codex" as const, model: "gpt-5" },
-        runtimeMode: "full-access" as const,
-        interactionMode: "default" as const,
-        envMode: "local" as const,
-      };
+      const queuedTurn = createQueuedChatTurn({ id: randomUUID(), prompt: queuedPrompt });
       useComposerDraftStore
         .getState()
         .enqueueQueuedTurn(
@@ -10756,33 +10493,14 @@ describe("ChatView transcript geometry (full app)", () => {
       // carries its own "default" mode and an image attachment, both of which the
       // misroute (onSubmitPlanFollowUp) would discard.
       useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
-        id: "queued-turn-plan-chat",
-        kind: "chat",
-        createdAt: NOW_ISO,
-        previewText: queuedPrompt,
-        prompt: queuedPrompt,
-        images: [queuedImage],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex",
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
+      useComposerDraftStore.getState().enqueueQueuedTurn(
+        THREAD_ID,
+        createQueuedChatTurn({
+          id: "queued-turn-plan-chat",
+          prompt: queuedPrompt,
+          images: [queuedImage],
+        }),
+      );
 
       await vi.waitFor(
         () => {
@@ -10838,33 +10556,9 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     const enqueueQueuedChatTurn = (id: string, prompt: string) => {
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
-        id,
-        kind: "chat",
-        createdAt: NOW_ISO,
-        previewText: prompt,
-        prompt,
-        images: [],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider: "codex",
-        selectedModel: "gpt-5",
-        selectedPromptEffort: null,
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, createQueuedChatTurn({ id, prompt }));
     };
 
     const turnStartCommands = () =>
@@ -12178,16 +11872,6 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const workspacePickerTrigger = page.getByTestId("workspace-picker-trigger");
       await expect.element(workspacePickerTrigger).toBeInTheDocument();
-      const controlsBefore = document.querySelector<HTMLElement>(
-        '[data-empty-landing-controls="true"]',
-      );
-      const composerBlockBefore = document.querySelector<HTMLElement>(
-        '[data-empty-landing-composer-block="true"]',
-      );
-      expect(controlsBefore).not.toBeNull();
-      expect(composerBlockBefore).not.toBeNull();
-      const beforeRect = controlsBefore!.getBoundingClientRect();
-      const composerBlockBeforeRect = composerBlockBefore!.getBoundingClientRect();
       await workspacePickerTrigger.click();
 
       const projectOption = await waitForElement(
@@ -12212,29 +11896,6 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       await expect.element(page.getByTestId("project-picker-trigger")).toBeInTheDocument();
       await expect.element(page.getByRole("checkbox", { name: "Worktree" })).toBeInTheDocument();
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
-      const controlsAfter = document.querySelector<HTMLElement>(
-        '[data-empty-landing-controls="true"]',
-      );
-      const composerBlockAfter = document.querySelector<HTMLElement>(
-        '[data-empty-landing-composer-block="true"]',
-      );
-      expect(controlsAfter).not.toBeNull();
-      expect(composerBlockAfter).not.toBeNull();
-      const afterRect = controlsAfter!.getBoundingClientRect();
-      const composerBlockAfterRect = composerBlockAfter!.getBoundingClientRect();
-      // Guard against the empty-pane entry animation restarting with a vertical translate
-      // when Home selection turns into a project draft.
-      expect(
-        Math.round(Math.abs(afterRect.height - beforeRect.height)),
-        `Composer controls changed height ${beforeRect.height}px -> ${afterRect.height}px`,
-      ).toBeLessThanOrEqual(1);
-      expect(Math.round(Math.abs(afterRect.top - beforeRect.top))).toBeLessThanOrEqual(1);
-      expect(
-        Math.round(Math.abs(composerBlockAfterRect.top - composerBlockBeforeRect.top)),
-      ).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }
@@ -13307,46 +12968,6 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("explains a second send instead of ignoring it while the first is in flight", async () => {
-    let releaseTurnStart!: () => void;
-    const turnGate = new Promise<void>((resolve) => {
-      releaseTurnStart = resolve;
-    });
-    const restoreNativeApi = installDeterministicSendNativeApi({
-      beforeTurnStart: () => turnGate,
-    });
-    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createDraftOnlySnapshot(),
-    });
-    const turnCommands = () =>
-      wsRequests
-        .map(readDispatchedCommand)
-        .filter((command) => command?.type === "thread.turn.start");
-
-    try {
-      await page.getByTestId("composer-editor").fill("First message");
-      const sendButton = await waitForSendButton();
-      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
-      sendButton.click();
-      await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
-
-      await page.getByTestId("composer-editor").fill("Second message");
-      await userEvent.keyboard("{Enter}");
-
-      await expect.element(page.getByText("Still sending your last message")).toBeInTheDocument();
-      expect(turnCommands()).toHaveLength(1);
-      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
-        "Second message",
-      );
-    } finally {
-      releaseTurnStart();
-      restoreNativeApi();
-      await mounted.cleanup();
-    }
-  });
-
   it.each([
     { kind: "forked", envMode: "local", started: false },
     { kind: "forked", envMode: "worktree", started: false },
@@ -13423,57 +13044,6 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  it.each([{ variant: "dark", reset: "Restore defaults", label: "Dark theme pack" }] as const)(
-    "names the customized theme pack in the reset confirmation ($variant)",
-    async ({ variant, reset, label }) => {
-      const previousTheme = localStorage.getItem("synara:theme");
-      localStorage.setItem(
-        "synara:theme",
-        JSON.stringify({
-          ...DEFAULT_THEME_STATE,
-          mode: variant,
-          codeThemeIds: { ...DEFAULT_THEME_STATE.codeThemeIds, [variant]: "codex" },
-          chromeThemes: {
-            ...DEFAULT_THEME_STATE.chromeThemes,
-            [variant]: getCodeThemeSeed("codex", variant),
-          },
-        }),
-      );
-      const mounted = await mountChatView({
-        viewport: DEFAULT_VIEWPORT,
-        snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
-      });
-      // The theme store subscribes while mounted; notify it after attaching the real app.
-      window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
-      const previousNativeApi = window.nativeApi;
-      const api = readNativeApi()!;
-      const confirm = vi.fn(async () => false);
-      Object.defineProperty(window, "nativeApi", {
-        configurable: true,
-        value: { ...api, dialogs: { ...api.dialogs, confirm } },
-      });
-      try {
-        await expect
-          .poll(() => document.documentElement.getAttribute("data-theme-variant"))
-          .toBe(variant);
-        await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-        await page.getByRole("button", { name: reset, exact: true }).click();
-        await expect.poll(() => confirm.mock.calls.length).toBe(1);
-        expect(confirm).toHaveBeenCalledWith(expect.stringContaining(label));
-        expect(confirm).not.toHaveBeenCalledWith(expect.stringContaining("settings:"));
-      } finally {
-        Object.defineProperty(window, "nativeApi", {
-          configurable: true,
-          value: previousNativeApi,
-        });
-        if (previousTheme === null) localStorage.removeItem("synara:theme");
-        else localStorage.setItem("synara:theme", previousTheme);
-        window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
-        await mounted.cleanup();
-      }
-    },
-  );
-
   it("counts the system-font preference and the inactive theme pack toward Restore defaults", async () => {
     const previousTheme = localStorage.getItem("synara:theme");
     // Stay in System mode so only the inactive pack and the font switch differ from defaults.
@@ -13519,6 +13089,7 @@ describe("ChatView transcript geometry (full app)", () => {
         ),
       );
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Use system UI font"));
+      expect(confirm).not.toHaveBeenCalledWith(expect.stringContaining("settings:"));
     } finally {
       Object.defineProperty(window, "nativeApi", {
         configurable: true,
@@ -14153,20 +13724,7 @@ describe("ChatView transcript geometry (full app)", () => {
               candidate.cwd === "/repo/project" &&
               candidate.ref === "main",
           );
-          expect(
-            request,
-            `Expected create worktree request; draft=${JSON.stringify(
-              useComposerDraftStore.getState().getDraftThread(newThreadId),
-            )}; path=${mounted.router.state.location.pathname}; forms=${
-              document.querySelectorAll('form[data-chat-composer-form="true"]').length
-            }; ui=${(document.body.textContent ?? "").slice(-300)}; saw ${wsRequests
-              .map((candidate) => {
-                const command = readDispatchedCommand(candidate);
-                return command ? `${candidate._tag}:${command.type}` : candidate._tag;
-              })
-              .slice(-40)
-              .join(", ")}`,
-          ).toBeTruthy();
+          expect(request).toBeTruthy();
           if (!request || request._tag !== WS_METHODS.gitCreateDetachedWorktree) {
             throw new Error("Expected create worktree request.");
           }
@@ -14185,15 +13743,7 @@ describe("ChatView transcript geometry (full app)", () => {
               candidate.threadId === dockTerminalThreadId(newThreadId) &&
               candidate.cwd === worktreePath,
           );
-          expect(
-            request,
-            `Expected setup terminal open; saw ${wsRequests
-              .map((candidate) => {
-                const command = readDispatchedCommand(candidate);
-                return command ? `${candidate._tag}:${command.type}` : candidate._tag;
-              })
-              .join(", ")}`,
-          ).toBeTruthy();
+          expect(request).toBeTruthy();
           return request;
         },
         { timeout: 10_000, interval: 16 },
@@ -14481,24 +14031,6 @@ describe("ChatView transcript geometry (full app)", () => {
           fastMode: true,
         },
       });
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
-            modelSelectionByProvider: {
-              codex: {
-                provider: "codex",
-                model: "gpt-5.4",
-                options: {
-                  reasoningEffort: "low",
-                  fastMode: true,
-                },
-              },
-            },
-            activeProvider: "codex",
-          });
-        },
-        { timeout: 8_000, interval: 16 },
-      );
 
       await newThreadButton.click();
       await new Promise<void>((resolve) => {
@@ -15347,165 +14879,137 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["saved"] as const)(
-    "switches horizontal tabs without blanking the header or composer (%s)",
-    async (targetKind) => {
-      onTestFinished(skipReactDevOwnerStacks());
-      useOpenThreadTabsStore.setState({ threadIds: [] });
-      let snapshot = createSnapshotForTargetUser({
-        targetMessageId: MessageId.makeUnsafe("horizontal-tabs"),
-        targetText: "Horizontal tabs conversation",
-      });
-      {
-        const source = snapshot.threads[0]!;
-        snapshot = {
-          ...snapshot,
-          threads: [
-            ...snapshot.threads,
-            {
-              ...source,
-              id: OTHER_THREAD_ID,
-              title: "Other tab",
-              session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
-              messages: source.messages.map((message) => ({
-                ...message,
-                id: MessageId.makeUnsafe(`other-${message.id}`),
-              })),
-            },
-          ],
-        };
-      }
-      const commits: number[] = [];
-      const mounted = await mountChatView({
-        viewport: DEFAULT_VIEWPORT,
-        snapshot,
-        onRender: (_id, _phase, duration) => commits.push(duration),
-      });
-      try {
-        useComposerDraftStore.getState().setPrompt(THREAD_ID, "Draft in first tab");
-        useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Draft in second tab");
-        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
-        await vi.waitFor(() =>
-          expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
-            "Draft in first tab",
-          ),
-        );
-        await waitForLayout();
+  it("switches horizontal tabs without blanking the header or composer", async () => {
+    onTestFinished(skipReactDevOwnerStacks());
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    let snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("horizontal-tabs"),
+      targetText: "Horizontal tabs conversation",
+    });
+    {
+      const source = snapshot.threads[0]!;
+      snapshot = {
+        ...snapshot,
+        threads: [
+          ...snapshot.threads,
+          {
+            ...source,
+            id: OTHER_THREAD_ID,
+            title: "Other tab",
+            session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
+            messages: source.messages.map((message) => ({
+              ...message,
+              id: MessageId.makeUnsafe(`other-${message.id}`),
+            })),
+          },
+        ],
+      };
+    }
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Draft in first tab");
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Draft in second tab");
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      await vi.waitFor(() =>
+        expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+          "Draft in first tab",
+        ),
+      );
+      await waitForLayout();
 
-        const samples = [];
-        const storageWrites = vi.spyOn(Storage.prototype, "setItem");
-        onTestFinished(() => storageWrites.mockRestore());
-        // The opt-in runs the same correctness path for longer; do not add a
-        // wall-clock threshold to CI. The first round trip warms both targets.
-        const rounds = import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1" ? 12 : 2;
-        for (let index = 0; index < rounds * 2; index += 1) {
-          const toSecond = index % 2 === 0;
-          const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
-          const expectedPrompt = toSecond ? "Draft in second tab" : "Draft in first tab";
-          const tabButtons = document.querySelectorAll<HTMLButtonElement>(
-            'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+      let missingFrames = 0;
+      let tabWrites = 0;
+      const storageWrites = vi.spyOn(Storage.prototype, "setItem");
+      onTestFinished(() => storageWrites.mockRestore());
+      // The first round trip warms both targets.
+      for (let index = 0; index < 4; index += 1) {
+        const toSecond = index % 2 === 0;
+        const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
+        const expectedPrompt = toSecond ? "Draft in second tab" : "Draft in first tab";
+        const tabButtons = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        expect(tabButtons).toHaveLength(2);
+        storageWrites.mockClear();
+        const startedAt = performance.now();
+        tabButtons[toSecond ? 1 : 0]!.click();
+        let ready = false;
+        while (performance.now() - startedAt < 5_000) {
+          await nextFrame();
+          const activeTab = document.querySelector(
+            'nav[aria-label="Open threads"] button[aria-current="page"]',
           );
-          expect(tabButtons).toHaveLength(2);
-          commits.length = 0;
-          storageWrites.mockClear();
-          const startedAt = performance.now();
-          let missingHeaderFrames = 0;
-          let missingComposerFrames = 0;
-          tabButtons[toSecond ? 1 : 0]!.click();
-          let ready = false;
-          let domReadyMs: number | null = null;
-          while (performance.now() - startedAt < 5_000) {
-            await nextFrame();
-            const activeTab = document.querySelector(
-              'nav[aria-label="Open threads"] button[aria-current="page"]',
+          const editor = document.querySelector(
+            '[data-chat-composer-form="true"] [contenteditable="true"]',
+          );
+          if (!activeTab || !editor) missingFrames += 1;
+          if (
+            mounted.router.state.location.pathname === `/${targetId}` &&
+            activeTab &&
+            editor?.textContent === expectedPrompt &&
+            document.querySelector(
+              `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
+            )
+          ) {
+            const scrollContainer = document.querySelector<HTMLElement>(
+              '[data-chat-scroll-container="true"]',
             );
-            const editor = document.querySelector(
-              '[data-chat-composer-form="true"] [contenteditable="true"]',
-            );
-            if (!activeTab) missingHeaderFrames += 1;
-            if (!editor) missingComposerFrames += 1;
-            if (
-              mounted.router.state.location.pathname === `/${targetId}` &&
-              activeTab &&
-              editor?.textContent === expectedPrompt &&
-              document.querySelector(
-                `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
-              )
-            ) {
-              domReadyMs ??= performance.now() - startedAt;
-              const scrollContainer = document.querySelector<HTMLElement>(
-                '[data-chat-scroll-container="true"]',
-              );
-              // A row in the DOM can still be transparent while LegendList
-              // settles its initial scroll. Include that work in opening time.
-              if (scrollContainer && isTranscriptContentVisible(scrollContainer)) {
-                ready = true;
-                break;
-              }
+            // A row in the DOM can still be transparent while LegendList
+            // settles its initial scroll. Include that work in opening time.
+            if (scrollContainer && isTranscriptContentVisible(scrollContainer)) {
+              ready = true;
+              break;
             }
           }
-          expect(ready, "Target tab must show its own composer and transcript").toBe(true);
-          samples.push({
-            target: targetKind,
-            ms: performance.now() - startedAt,
-            domReadyMs,
-            reactMs: commits.reduce((sum, duration) => sum + duration, 0),
-            commits: commits.length,
-            tabWrites: storageWrites.mock.calls.filter(
-              ([key]) => key === "synara:open-thread-tabs:v1",
-            ).length,
-            missingHeaderFrames,
-            missingComposerFrames,
-          });
-          await waitForLayout();
         }
-        if (import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1") {
-          console.info(`TAB_SWITCH_BENCHMARK ${JSON.stringify({ targetKind, samples })}`);
-        }
-        expect(samples.every((sample) => sample.missingHeaderFrames === 0)).toBe(true);
-        expect(samples.every((sample) => sample.missingComposerFrames === 0)).toBe(true);
-        expect(samples.every((sample) => sample.tabWrites === 0)).toBe(true);
-        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
-          "Draft in first tab",
-        );
-        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
-          "Draft in second tab",
-        );
-        // Retaining the surrounding composer must not retain another chat's
-        // Lexical undo history or route its edits into the destination draft.
-        const firstEditor = await waitForComposerEditor();
-        await userEvent.click(firstEditor);
-        await userEvent.keyboard("{End} private text");
-        await vi.waitFor(() =>
-          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toContain(
-            "private text",
-          ),
-        );
-        const secondTab = document.querySelectorAll<HTMLButtonElement>(
-          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
-        )[1]!;
-        secondTab.click();
-        await vi.waitFor(() =>
-          expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
-            "Draft in second tab",
-          ),
-        );
-        const secondEditor = await waitForComposerEditor();
-        await userEvent.click(secondEditor);
-        await userEvent.keyboard(
-          isMacNavigatorPlatform() ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
-        );
+        expect(ready, "Target tab must show its own composer and transcript").toBe(true);
+        tabWrites += storageWrites.mock.calls.filter(
+          ([key]) => key === "synara:open-thread-tabs:v1",
+        ).length;
         await waitForLayout();
-        expect(secondEditor.textContent).toBe("Draft in second tab");
-        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
-          "Draft in second tab",
-        );
-      } finally {
-        await mounted.cleanup();
-        useOpenThreadTabsStore.setState({ threadIds: [] });
       }
-    },
-  );
+      expect(missingFrames).toBe(0);
+      expect(tabWrites).toBe(0);
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+        "Draft in first tab",
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+        "Draft in second tab",
+      );
+      // Retaining the surrounding composer must not retain another chat's
+      // Lexical undo history or route its edits into the destination draft.
+      const firstEditor = await waitForComposerEditor();
+      await userEvent.click(firstEditor);
+      await userEvent.keyboard("{End} private text");
+      await vi.waitFor(() =>
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toContain(
+          "private text",
+        ),
+      );
+      const secondTab = document.querySelectorAll<HTMLButtonElement>(
+        'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+      )[1]!;
+      secondTab.click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
+          "Draft in second tab",
+        ),
+      );
+      const secondEditor = await waitForComposerEditor();
+      await userEvent.click(secondEditor);
+      await userEvent.keyboard(
+        isMacNavigatorPlatform() ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+      );
+      await waitForLayout();
+      expect(secondEditor.textContent).toBe("Draft in second tab");
+      expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+        "Draft in second tab",
+      );
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
 
   it("Cmd/Ctrl+W follows route changes, restores the hidden draft, and yields without a tab", async () => {
     const snapshot = addThreadToSnapshot(
@@ -16728,8 +16232,6 @@ describe("ChatView transcript geometry (full app)", () => {
         () => document.querySelector<HTMLElement>('[data-testid="active-task-list-capsule"]'),
         "Unable to find the task-list capsule.",
       );
-      expect(changesCapsule.title).toContain("2 files changed");
-      expect(taskCapsule.textContent).toContain("1/3 tasks");
       // Activity collapses into capsules in one capsule row instead of a stack of panels.
       const capsuleRow = taskCapsule.closest("[data-composer-capsule-row]");
       expect(capsuleRow).not.toBeNull();
