@@ -95,6 +95,9 @@ type HarnessProps = {
     typeof ComposerModelPicker
   >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
+  runtimeModelsByProviderInstance?: React.ComponentProps<
+    typeof ComposerModelPicker
+  >["runtimeModelsByProviderInstance"];
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
   onRefreshModels?: React.ComponentProps<typeof ComposerModelPicker>["onRefreshModels"];
 };
@@ -124,6 +127,12 @@ function Harness(props: HarnessProps) {
         ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
         : {})}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.runtimeModelsByProviderInstance
+        ? { runtimeModelsByProviderInstance: props.runtimeModelsByProviderInstance }
+        : {})}
+      runtimeModel={props.runtimeModelsByProviderInstance?.[
+        props.selectedProviderInstanceId ?? "codex"
+      ]?.find((model) => model.slug === (selectedModel ?? GPT_5_5))}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       {...(props.onRefreshModels ? { onRefreshModels: props.onRefreshModels } : {})}
       threadId={THREAD_ID}
@@ -555,6 +564,84 @@ describe("ComposerModelPicker", () => {
         .toHaveAttribute("aria-valuetext", "Medium");
       await expect.element(fastToggle).toHaveAttribute("aria-pressed", "false");
       await expect.element(reset).toBeDisabled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("offers Ultrafast only for the selected account's model and saves the chosen speed", async () => {
+    const model = { slug: GPT_5_5, name: "GPT-5.5", supportsFastMode: true };
+    const props: HarnessProps = {
+      effortControl: "slider",
+      providers: [readyProvider("codex"), WORK_ACCOUNT_STATUS],
+      providerInstances: CODEX_ACCOUNTS,
+      runtimeModelsByProviderInstance: {
+        codex: [
+          {
+            ...model,
+            supportsUltrafastMode: true,
+            fastModeDescription: "2x speed, increased usage",
+          },
+        ],
+        codex_work: [model],
+      },
+    };
+    const screen = await mountPicker(props);
+    try {
+      const speed = page.getByRole("menuitem", { name: "Speed", exact: true });
+      await speed.click();
+      await expect.element(page.getByText("2x speed, increased usage")).toBeVisible();
+      const ultrafast = page.getByRole("menuitemradio", { name: "Ultrafast", exact: true });
+      await ultrafast.click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Ultrafast");
+
+      await speed.click();
+      await expect.element(ultrafast).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "Standard", exact: true }).click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Standard");
+
+      await screen.rerender(<Harness {...props} selectedProviderInstanceId="codex_work" />);
+      await expect.element(page.getByRole("button", { name: "Fast mode" })).toBeVisible();
+      await expect.element(speed).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("restores a Standard preset when the model offers Ultrafast without Fast", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker({
+      effortControl: "slider",
+      runtimeModelsByProviderInstance: {
+        codex: [
+          {
+            slug: GPT_5_5,
+            name: "GPT-5.5",
+            supportsFastMode: false,
+            supportsUltrafastMode: true,
+          },
+        ],
+      },
+      onProviderModelChange,
+    });
+    try {
+      await page
+        .getByRole("button", { name: "Star GPT-5.5 with its current effort and speed" })
+        .click();
+      const speed = page.getByRole("menuitem", { name: "Speed", exact: true });
+      await speed.click();
+      await page.getByRole("menuitemradio", { name: "Ultrafast", exact: true }).click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Ultrafast");
+
+      await page.getByRole("tab", { name: "Starred" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_5, {
+        instanceId: "codex",
+        modelOptions: expect.objectContaining({ fastMode: false }),
+      });
+      expect(onProviderModelChange.mock.lastCall?.[2].modelOptions).not.toHaveProperty(
+        "serviceTier",
+      );
     } finally {
       await screen.unmount();
     }

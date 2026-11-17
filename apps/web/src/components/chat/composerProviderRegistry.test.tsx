@@ -533,6 +533,25 @@ describe("getComposerProviderState", () => {
     },
   );
 
+  it("dispatches Ultrafast only for a catalog that advertises it", () => {
+    const runtimeModel = { slug: "gpt-6.2-sol", name: "GPT-6.2 Sol", supportsFastMode: true };
+    const input = {
+      provider: "codex" as const,
+      model: runtimeModel.slug,
+      prompt: "",
+      modelOptions: { codex: { serviceTier: "ultrafast" as const } },
+    };
+    expect(
+      getComposerProviderState({
+        ...input,
+        runtimeModel: { ...runtimeModel, supportsUltrafastMode: true },
+      }).modelOptionsForDispatch,
+    ).toEqual({ serviceTier: "ultrafast" });
+    expect(getComposerProviderState({ ...input, runtimeModel }).modelOptionsForDispatch).toEqual({
+      fastMode: false,
+    });
+  });
+
   it("preserves explicit Codex Fast off for dispatch while keeping the selected effort label", () => {
     const state = getComposerProviderState({
       provider: "codex",

@@ -69,11 +69,17 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
           ? rawEffort
           : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const ultrafastRequested = providerOptions?.serviceTier === "ultrafast";
+      const speedOptions = ultrafastRequested
+        ? runtimeModel?.supportsUltrafastMode === true
+          ? { serviceTier: "ultrafast" as const }
+          : { fastMode: false }
+        : fastModeEnabled || providerOptions?.fastMode === false
+          ? { fastMode: fastModeEnabled }
+          : {};
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastModeEnabled || providerOptions?.fastMode === false
-          ? { fastMode: fastModeEnabled }
-          : {}),
+        ...speedOptions,
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;

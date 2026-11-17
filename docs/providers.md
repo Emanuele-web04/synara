@@ -27,6 +27,10 @@ A ready secondary account keeps the provider available when its default account 
 disabled. Implicit new-chat selection prefers a usable configured account from the
 selected provider. Explicit account picks and live sessions keep their exact account.
 
+For Codex, the model picker's Speed menu offers Ultrafast when the selected account's
+Codex CLI catalog advertises it for that model. Availability depends on the account
+and its workspace permissions. [Codex speed modes](https://learn.chatgpt.com/docs/agent-configuration/speed#ultrafast-mode)
+
 A build that encounters a newer server settings format preserves the file and
 provider credentials. Open the same app channel on a build that supports the
 saved format.

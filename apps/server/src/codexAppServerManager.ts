@@ -1756,9 +1756,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         turnStartParams.summary = "none";
       }
     }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
+    const switchingAwayFromUltrafast =
+      context.serviceTier === "ultrafast" &&
+      normalizedModel !== undefined &&
+      normalizedModel !== context.session.model;
+    const serviceTier =
+      input.serviceTier === undefined && switchingAwayFromUltrafast ? "default" : input.serviceTier;
+    if (serviceTier !== undefined) turnStartParams.serviceTier = serviceTier;
     if (input.effort) {
       turnStartParams.effort = input.effort;
     }
@@ -1783,7 +1787,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
-    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+    if (serviceTier !== undefined) context.serviceTier = serviceTier;
 
     this.updateSession(context, {
       status: "running",
