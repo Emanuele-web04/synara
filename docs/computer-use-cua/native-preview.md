@@ -33,11 +33,15 @@ armed, live, hidden-for-task and ended. Only live surfaces attach streams.
 Hiding a preview does not stop the task. Task completion, target replacement,
 host shutdown and helper death have separate cleanup paths. A failed native
 target is not repeatedly respawned within the same task; a new target/task can
-start a new stream.
+start a new stream. When the owning task ends, its fallback stills stop even
+if a preview subscriber remains attached.
 
 The native helper is owned by thread, turn, PID and window identity. Socket
-permissions and bounded frames isolate its transport. Helper lifecycle output
-and image bytes use separate channels. These implementation boundaries are
+permissions and bounded frames isolate its transport. On macOS, ordinary
+retirement waits for ScreenCaptureKit to stop the stream before the helper
+exits. A reported failure also retires the helper, and a new target waits for
+process exit. Helper lifecycle output and image bytes use separate channels.
+These implementation boundaries are
 covered by host, store and renderer tests; they do not replace packaged testing.
 
 ## Failure visibility and known limits

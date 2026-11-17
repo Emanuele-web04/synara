@@ -54,7 +54,9 @@ do {
         }
 
         withExtendedLifetime((coordinator, gestureSource, requestListener, parentProcessMonitor)) {
-            RunLoop.main.run()
+            // Capture feedback owns AppKit windows. Pump WindowServer events
+            // for the lifetime of the watcher, including between captures.
+            NSApplication.shared.run()
         }
     case .shield:
         _ = NSApplication.shared.setActivationPolicy(.accessory)
@@ -91,10 +93,17 @@ do {
         )
         let parentProcessMonitor = ParentProcessMonitor()
         parentProcessMonitor.start()
+
+        // The host sends SIGTERM for ordinary preview retirement. Keep the
+        // event loop alive until ScreenCaptureKit finishes stopping the stream.
+        signal(SIGTERM, SIG_IGN)
+        let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminationSource.setEventHandler { tap.stop() }
+        terminationSource.resume()
         tap.start()
 
-        withExtendedLifetime((tap, parentProcessMonitor)) {
-            RunLoop.main.run()
+        withExtendedLifetime((tap, parentProcessMonitor, terminationSource)) {
+            NSApplication.shared.run()
         }
     case .escapeMonitor:
         _ = NSApplication.shared.setActivationPolicy(.accessory)

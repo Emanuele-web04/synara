@@ -3939,6 +3939,26 @@ describe("preview stills target scope", () => {
     await f.backend.dispose();
   });
 
+  it("stops requesting window stills when the owning task ends with a preview attached", async () => {
+    const f = fixture();
+    try {
+      await withComputerTask(task, () => f.backend.focusWindow("cua:10:20"));
+      await f.backend.attachStream(() => undefined);
+
+      await f.backend.endTask(task.threadId, "older-turn");
+      f.calls.length = 0;
+      await f.backend.requestKeyframe();
+      expect(f.calls.some((call) => call.name === "get_window_state")).toBe(true);
+
+      await f.backend.endTask(task.threadId, task.turnId);
+      f.calls.length = 0;
+      await f.backend.requestKeyframe();
+      expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+    } finally {
+      await f.backend.dispose();
+    }
+  });
+
   it("captures a bound browser tab through the driver's screenshot route", async () => {
     const f = fixture();
     f.onTool("get_browser_state", (args) =>
