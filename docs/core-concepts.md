@@ -421,6 +421,10 @@ A task runs in one of two common environments.
 A worktree is another working directory attached to the same Git repository. It shares repository
 history while keeping files and branch state separate.
 
+When a managed worktree copies changes from an existing checkout, untracked nested repositories and
+linked worktrees stay in the source checkout. Relative symbolic links remain relative in the new
+checkout.
+
 Read the [Git worktrees guide](https://www.trysynara.com/docs/workflows/worktrees) before starting
 several tasks in the same repository.
 
