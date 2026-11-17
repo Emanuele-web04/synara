@@ -88,9 +88,7 @@ describe("IosBetaAnnouncement", () => {
     await renderAnnouncement();
     await page.getByRole("button", { name: "Join the beta" }).click();
 
-    expect(fixture.openExternal).toHaveBeenCalledExactlyOnceWith(
-      "https://testflight.apple.com/join/56E3Edeu",
-    );
+    expect(fixture.openExternal).toHaveBeenCalledExactlyOnceWith("https://trysynara.com/ios");
     expect(acknowledged()).toEqual({ acknowledged: true });
     await expect.element(page.getByRole("dialog", { name: TITLE })).not.toBeInTheDocument();
   });

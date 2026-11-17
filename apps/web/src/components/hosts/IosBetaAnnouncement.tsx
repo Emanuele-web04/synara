@@ -1,5 +1,5 @@
 // FILE: IosBetaAnnouncement.tsx
-// Purpose: Shows at most one connection launch sheet per startup and links to TestFlight.
+// Purpose: Shows at most one connection launch sheet per startup and links to Synara for iPhone.
 // Layer: Root web overlay
 // Exports: ConnectionLaunchAnnouncements, IOS_BETA_ANNOUNCEMENT_STORAGE_KEY
 //
@@ -28,7 +28,7 @@ import {
 } from "./RemoteConnectionsAnnouncementHero";
 
 export const IOS_BETA_ANNOUNCEMENT_STORAGE_KEY = "synara:ios-beta-announcement:v1";
-const IOS_BETA_PAGE_URL = "https://testflight.apple.com/join/56E3Edeu";
+const IOS_BETA_PAGE_URL = "https://trysynara.com/ios";
 // The top of the iPhone Inbox; the band crops the rest of the phone.
 const IPHONE_SCREEN_SRC = "/announcements/ios-beta-iphone.png";
 
