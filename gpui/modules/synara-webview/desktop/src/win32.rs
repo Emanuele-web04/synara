@@ -294,12 +294,13 @@ impl WindowsWebView {
             let to_point = to_point.clone();
             element = element.on_scroll_wheel(move |event, window, _cx| {
                 // The wheel delta rides in the data's high word, like
-                // WM_MOUSEWHEEL's wParam: one line is 120 raw units, a pixel
-                // scroll maps ~4:1 onto it.
+                // WM_MOUSEWHEEL's wParam — same sign gpui already carries:
+                // positive means the wheel moved forward (scroll up). One
+                // line is 120 raw units, a pixel scroll maps ~4:1 onto it.
                 let (delta_x, delta_y) = match event.delta {
-                    gpui::ScrollDelta::Lines(lines) => (-lines.x * 120.0, -lines.y * 120.0),
+                    gpui::ScrollDelta::Lines(lines) => (lines.x * 120.0, lines.y * 120.0),
                     gpui::ScrollDelta::Pixels(pixels) => {
-                        (-f32::from(pixels.x) * 4.0, -f32::from(pixels.y) * 4.0)
+                        (f32::from(pixels.x) * 4.0, f32::from(pixels.y) * 4.0)
                     }
                 };
                 let (kind, data) = if delta_y.abs() >= delta_x.abs() {
