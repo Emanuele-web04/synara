@@ -3905,10 +3905,24 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const onPhase = options?.onPhase ?? (() => Effect.void);
         const newBranch = input.newBranch ?? null;
-        const refResult = yield* executeGit(
-          "GitCore.createDetachedWorktree.resolveRef",
-          input.cwd,
-          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        // Parallel checkout (one worker per core) cuts `worktree add` time on large
+        // repositories, but a user who configured `checkout.workers` keeps their
+        // value. The lookup runs alongside ref resolution so it adds no wall time;
+        // an unreadable config keeps git's default rather than overriding it.
+        const [refResult, useParallelCheckout] = yield* Effect.all(
+          [
+            executeGit("GitCore.createDetachedWorktree.resolveRef", input.cwd, [
+              "rev-parse",
+              "--verify",
+              "--end-of-options",
+              `${input.ref}^{commit}`,
+            ]),
+            readConfigValue(input.cwd, "checkout.workers").pipe(
+              Effect.map((configured) => configured === null),
+              Effect.catch(() => Effect.succeed(false)),
+            ),
+          ],
+          { concurrency: "unbounded" },
         );
         const resolvedRef = refResult.stdout.trim();
         if (input.copyChangesFrom) {
@@ -3958,9 +3972,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const addWorktree = executeGit(
           "GitCore.createDetachedWorktree",
           input.cwd,
-          newBranch
-            ? ["worktree", "add", worktreePath, newBranch]
-            : ["worktree", "add", "--detach", worktreePath, resolvedRef],
+          [
+            ...(useParallelCheckout ? ["-c", "checkout.workers=0"] : []),
+            ...(newBranch
+              ? ["worktree", "add", worktreePath, newBranch]
+              : ["worktree", "add", "--detach", worktreePath, resolvedRef]),
+          ],
           GIT_MUTATION_OPTIONS,
         );
         yield* newBranch
