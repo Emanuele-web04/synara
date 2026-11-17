@@ -12,6 +12,7 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type OrchestrationEvent,
   type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -36,8 +37,45 @@ import {
   makeShellSnapshot,
   threadsOf,
 } from "./storeTestFixtures";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 import { derivePendingApprovals, derivePendingUserInputs } from "./pendingInteractionDerivation";
+
+const makeLatestTurn = (
+  overrides: Partial<NonNullable<Thread["latestTurn"]>> = {},
+): NonNullable<Thread["latestTurn"]> => ({
+  turnId: TurnId.makeUnsafe("turn-1"),
+  state: "running",
+  requestedAt: "2026-02-27T00:01:00.000Z",
+  startedAt: "2026-02-27T00:01:05.000Z",
+  completedAt: null,
+  assistantMessageId: null,
+  ...overrides,
+});
+
+type SessionSetPayload = Extract<OrchestrationEvent, { type: "thread.session-set" }>["payload"];
+
+const makeSessionSetEvent = (
+  session: Partial<SessionSetPayload["session"]> &
+    Pick<SessionSetPayload["session"], "status" | "updatedAt">,
+  eventOverrides: Parameters<typeof makeDomainEvent>[2] = {},
+) => {
+  const threadId = ThreadId.makeUnsafe("thread-1");
+  return makeDomainEvent(
+    "thread.session-set",
+    {
+      threadId,
+      session: {
+        threadId,
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        ...session,
+      },
+    },
+    eventOverrides,
+  );
+};
 
 describe("store event reducer", () => {
   it.each(["approval", "userInput"] as const)(
@@ -276,155 +314,48 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
   });
 
-  it("updates thread error and marks the running latest turn failed from session-set events", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.session-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "error",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: "provider crashed",
-          updatedAt: "2026-02-27T00:02:00.000Z",
-        },
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.error).toBe("provider crashed");
-    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-running"),
-      state: "error",
-      completedAt: "2026-02-27T00:02:00.000Z",
-    });
-  });
-
-  it("does not settle the running turn while an interrupted session still retains it", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
-    );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.session-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "interrupted",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: TurnId.makeUnsafe("turn-running"),
-          lastError: null,
-          updatedAt: "2026-02-27T00:02:00.000Z",
-        },
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
-      turnId: TurnId.makeUnsafe("turn-running"),
-      state: "running",
-      completedAt: null,
-    });
-  });
-
   it.each([
-    { status: "ready", expectedState: "completed" },
-    { status: "interrupted", expectedState: "interrupted" },
-  ] as const)(
-    "settles the running latest turn when a session-set event leaves running ($status → $expectedState)",
-    ({ status, expectedState }) => {
-      const initialState = makeState(
-        makeThread({
-          latestTurn: {
-            turnId: TurnId.makeUnsafe("turn-running"),
-            state: "running",
-            requestedAt: "2026-02-27T00:01:00.000Z",
-            startedAt: "2026-02-27T00:01:05.000Z",
-            completedAt: null,
-            assistantMessageId: null,
-          },
-        }),
-      );
-
-      const next = applyOrchestrationEvents(initialState, [
-        makeDomainEvent("thread.session-set", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          session: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            status,
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: "2026-02-27T00:02:00.000Z",
-          },
-        }),
-      ]);
-
-      expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
-        turnId: TurnId.makeUnsafe("turn-running"),
-        state: expectedState,
-        completedAt: "2026-02-27T00:02:00.000Z",
-      });
+    {
+      name: "error settles the running turn and records the thread error",
+      session: { status: "error", lastError: "provider crashed" },
+      expectedTurn: { state: "error", completedAt: "2026-02-27T00:02:00.000Z" },
+      expectedError: "provider crashed",
     },
-  );
-
-  it("does not settle a running turn from a stale session-set that predates its start", () => {
-    const initialState = makeState(
-      makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
-      }),
+    {
+      name: "ready settles the running turn as completed",
+      session: { status: "ready" },
+      expectedTurn: { state: "completed", completedAt: "2026-02-27T00:02:00.000Z" },
+    },
+    {
+      name: "interrupted without an active turn settles the running turn as interrupted",
+      session: { status: "interrupted" },
+      expectedTurn: { state: "interrupted", completedAt: "2026-02-27T00:02:00.000Z" },
+    },
+    {
+      name: "interrupted while the session still retains the turn does not settle it",
+      session: { status: "interrupted", activeTurnId: TurnId.makeUnsafe("turn-running") },
+      expectedTurn: { state: "running", completedAt: null },
+    },
+    {
+      name: "a stale ready session that predates the turn start does not settle it",
+      session: { status: "ready", updatedAt: "2026-02-27T00:01:00.000Z" },
+      expectedTurn: { state: "running", completedAt: null },
+    },
+  ] as const)("session-set: $name", ({ session, expectedTurn, ...rest }) => {
+    const next = applyOrchestrationEvents(
+      makeState(
+        makeThread({ latestTurn: makeLatestTurn({ turnId: TurnId.makeUnsafe("turn-running") }) }),
+      ),
+      [makeSessionSetEvent({ updatedAt: "2026-02-27T00:02:00.000Z", ...session })],
     );
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.session-set", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:01:00.000Z",
-        },
-      }),
-    ]);
 
     expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
-      state: "running",
-      completedAt: null,
+      ...expectedTurn,
     });
+    if ("expectedError" in rest) {
+      expect(threadsOf(next)[0]?.error).toBe(rest.expectedError);
+    }
   });
 
   it("adds projects immediately from live project.created events", () => {
@@ -567,14 +498,10 @@ describe("store event reducer", () => {
           createdAt: "2026-02-27T00:01:00.000Z",
           updatedAt: "2026-02-27T00:01:00.000Z",
         },
-        latestTurn: {
+        latestTurn: makeLatestTurn({
           turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
           assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-        },
+        }),
       }),
     );
 
@@ -604,14 +531,10 @@ describe("store event reducer", () => {
   it("keeps the latest turn running when interrupt is only requested", () => {
     const initialState = makeState(
       makeThread({
-        latestTurn: {
+        latestTurn: makeLatestTurn({
           turnId: TurnId.makeUnsafe("turn-running"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
           assistantMessageId: MessageId.makeUnsafe("assistant-running"),
-        },
+        }),
       }),
     );
 
@@ -740,17 +663,11 @@ describe("store event reducer", () => {
     const queuedTurn = TurnId.makeUnsafe("turn-2");
     const queuedId = MessageId.makeUnsafe("queued-request");
     const runningSession = (activeTurnId: TurnId, updatedAt: string) =>
-      makeDomainEvent("thread.session-set", {
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "full-access",
-          activeTurnId,
-          lastError: null,
-          updatedAt,
-        },
+      makeSessionSetEvent({
+        status: "running",
+        providerName: "claudeAgent",
+        activeTurnId,
+        updatedAt,
       });
     const turnStartRequested = makeDomainEvent("thread.turn-start-requested", {
       threadId,
@@ -863,20 +780,8 @@ describe("store event reducer", () => {
       createdAt,
     };
     const running = (activeTurnId: TurnId, sequence: number) =>
-      makeDomainEvent(
-        "thread.session-set",
-        {
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "claudeAgent",
-            runtimeMode: "full-access",
-            activeTurnId,
-            lastError: null,
-            updatedAt: createdAt,
-          },
-        },
+      makeSessionSetEvent(
+        { status: "running", providerName: "claudeAgent", activeTurnId, updatedAt: createdAt },
         { sequence },
       );
 
@@ -1010,19 +915,12 @@ describe("store event reducer", () => {
               13,
             );
             state = reduce(state, [
-              makeDomainEvent(
-                "thread.session-set",
+              makeSessionSetEvent(
                 {
-                  threadId,
-                  session: {
-                    threadId,
-                    status: "running",
-                    providerName: "claudeAgent",
-                    runtimeMode: "full-access",
-                    activeTurnId: TurnId.makeUnsafe("unrelated-turn"),
-                    lastError: null,
-                    updatedAt: createdAt,
-                  },
+                  status: "running",
+                  providerName: "claudeAgent",
+                  activeTurnId: TurnId.makeUnsafe("unrelated-turn"),
+                  updatedAt: createdAt,
                 },
                 { sequence: 14 },
               ),
@@ -1038,7 +936,6 @@ describe("store event reducer", () => {
   });
 
   it("waits for authoritative request links when the turn start request was not observed", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = TurnId.makeUnsafe("turn-1");
     const request = (id: string, createdAt: string) => ({
       id: MessageId.makeUnsafe(id),
@@ -1049,17 +946,11 @@ describe("store event reducer", () => {
       streaming: false,
       source: "native" as const,
     });
-    const runningSession = makeDomainEvent("thread.session-set", {
-      threadId,
-      session: {
-        threadId,
-        status: "running",
-        providerName: "claudeAgent",
-        runtimeMode: "full-access",
-        activeTurnId: turnId,
-        lastError: null,
-        updatedAt: "2026-02-27T00:01:02.000Z",
-      },
+    const runningSession = makeSessionSetEvent({
+      status: "running",
+      providerName: "claudeAgent",
+      activeTurnId: turnId,
+      updatedAt: "2026-02-27T00:01:02.000Z",
     });
 
     const single = applyOrchestrationEvents(
@@ -1100,41 +991,30 @@ describe("store event reducer", () => {
     ]);
   });
 
-  it("does not adopt runtime/interaction modes from automation-dispatched turns", () => {
-    const initialState = makeState(makeThread({ runtimeMode: "approval-required" }));
+  it.each([
+    { dispatchOrigin: "automation", expectedRuntimeMode: "approval-required" },
+    { dispatchOrigin: "user", expectedRuntimeMode: "full-access" },
+  ] as const)(
+    "turn-start-requested from $dispatchOrigin dispatch ends with runtime mode $expectedRuntimeMode",
+    ({ dispatchOrigin, expectedRuntimeMode }) => {
+      const next = applyOrchestrationEvents(
+        makeState(makeThread({ runtimeMode: "approval-required" })),
+        [
+          makeDomainEvent("thread.turn-start-requested", {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            messageId: MessageId.makeUnsafe("dispatched-message"),
+            runtimeMode: "full-access",
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            dispatchMode: "queue",
+            dispatchOrigin,
+            createdAt: "2026-02-27T00:01:00.000Z",
+          }),
+        ],
+      );
 
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-start-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("automation-message"),
-        runtimeMode: "full-access",
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        dispatchMode: "queue",
-        dispatchOrigin: "automation",
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.runtimeMode).toBe("approval-required");
-  });
-
-  it("adopts runtime mode from user-dispatched turns", () => {
-    const initialState = makeState(makeThread({ runtimeMode: "approval-required" }));
-
-    const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.turn-start-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: MessageId.makeUnsafe("user-message"),
-        runtimeMode: "full-access",
-        interactionMode: DEFAULT_INTERACTION_MODE,
-        dispatchMode: "queue",
-        dispatchOrigin: "user",
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
-    ]);
-
-    expect(threadsOf(next)[0]?.runtimeMode).toBe("full-access");
-  });
+      expect(threadsOf(next)[0]?.runtimeMode).toBe(expectedRuntimeMode);
+    },
+  );
 
   it("replaces streamed assistant text when a non-streaming completion diverges from the local prefix", () => {
     const assistantId = MessageId.makeUnsafe("assistant-message");
@@ -1535,14 +1415,7 @@ describe("store event reducer", () => {
   it("updates turn diffs and latest turn immediately from live events", () => {
     const initialState = makeState(
       makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
+        latestTurn: makeLatestTurn({}),
         pendingSourceProposedPlan: {
           threadId: ThreadId.makeUnsafe("thread-source"),
           planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
@@ -1576,14 +1449,7 @@ describe("store event reducer", () => {
     const existingAssistantMessageId = MessageId.makeUnsafe("assistant-real");
     const initialState = makeState(
       makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: existingAssistantMessageId,
-        },
+        latestTurn: makeLatestTurn({ assistantMessageId: existingAssistantMessageId }),
       }),
     );
 
@@ -1606,14 +1472,7 @@ describe("store event reducer", () => {
   it("keeps an active turn running when an interim provider diff placeholder arrives", () => {
     const initialState = makeState(
       makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-        },
+        latestTurn: makeLatestTurn({}),
       }),
     );
 
@@ -1641,14 +1500,7 @@ describe("store event reducer", () => {
   it("keeps a settled turn intact when a late provider diff placeholder arrives", () => {
     const initialState = makeState(
       makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: "2026-02-27T00:01:30.000Z",
-          assistantMessageId: null,
-        },
+        latestTurn: makeLatestTurn({ state: "completed", completedAt: "2026-02-27T00:01:30.000Z" }),
       }),
     );
 
@@ -1715,14 +1567,11 @@ describe("store event reducer", () => {
     const existingAssistantMessageId = MessageId.makeUnsafe("assistant-turn-1");
     const initialState = makeState(
       makeThread({
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
+        latestTurn: makeLatestTurn({
           state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
           completedAt: "2026-02-27T00:01:30.000Z",
           assistantMessageId: existingAssistantMessageId,
-        },
+        }),
       }),
     );
 
@@ -1778,14 +1627,12 @@ describe("store event reducer", () => {
   it("cleans thread state on revert and clears pending proposed plans", () => {
     const initialState = makeState(
       makeThread({
-        latestTurn: {
+        latestTurn: makeLatestTurn({
           turnId: TurnId.makeUnsafe("turn-2"),
           state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
           completedAt: "2026-02-27T00:03:00.000Z",
           assistantMessageId: MessageId.makeUnsafe("assistant-2"),
-        },
+        }),
         pendingSourceProposedPlan: {
           threadId: ThreadId.makeUnsafe("thread-source"),
           planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
@@ -1885,14 +1732,12 @@ describe("store event reducer", () => {
     const initialState = makeState(
       makeThread({
         latestHumanMessageAt: "2026-02-27T00:01:00.000Z",
-        latestTurn: {
+        latestTurn: makeLatestTurn({
           turnId: TurnId.makeUnsafe("turn-2"),
           state: "completed",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
           completedAt: "2026-02-27T00:03:00.000Z",
           assistantMessageId: MessageId.makeUnsafe("assistant-2"),
-        },
+        }),
         pendingSourceProposedPlan: {
           threadId: ThreadId.makeUnsafe("thread-source"),
           planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
@@ -2057,14 +1902,12 @@ describe("store event reducer", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const activityEvent = (activity: ReturnType<typeof makeActivity>, sequence: number) =>
       makeDomainEvent("thread.activity-appended", { threadId, activity }, { sequence });
-    const settledTurn = {
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "completed" as const,
+    const settledTurn = makeLatestTurn({
+      state: "completed",
       requestedAt: "2026-02-27T00:00:00.000Z",
       startedAt: "2026-02-27T00:00:00.000Z",
       completedAt: "2026-02-27T00:01:00.000Z",
-      assistantMessageId: null,
-    };
+    });
     const backgrounded = applyOrchestrationEvents(
       makeState(
         makeThread({
@@ -2768,17 +2611,10 @@ describe("store event reducer", () => {
     const next = applyOrchestrationEventsHotPath(
       initialState,
       [
-        makeDomainEvent("thread.session-set", {
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: "2026-02-27T00:04:00.000Z",
-          },
+        makeSessionSetEvent({
+          status: "running",
+          activeTurnId: turnId,
+          updatedAt: "2026-02-27T00:04:00.000Z",
         }),
       ],
       { updateSidebarSummary: true },
