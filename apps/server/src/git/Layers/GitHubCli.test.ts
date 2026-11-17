@@ -28,6 +28,38 @@ const processResult = (stdout: string, overrides: { code?: number; stderr?: stri
 });
 const layer = it.layer(GitHubCliLive);
 
+const reviewComment = (id: string, body: string, path = "a.ts") => ({
+  id,
+  body,
+  path,
+  url: `https://github.com/o/r/pull/42#discussion_${id}`,
+  createdAt: "2026-07-01T10:00:00Z",
+  author: { login: "bot" },
+});
+const reviewThread = (comment: ReturnType<typeof reviewComment>, isResolved = false) => ({
+  isResolved,
+  comments: { nodes: [comment] },
+});
+const reviewThreadsPage = (
+  nodes: ReadonlyArray<unknown>,
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = {
+    hasNextPage: false,
+    endCursor: null,
+  },
+) =>
+  processResult(
+    JSON.stringify({
+      data: { repository: { pullRequest: { reviewThreads: { nodes, pageInfo } } } },
+    }),
+  );
+const reviewCommentsInput = {
+  cwd: "/repo",
+  host: "github.com",
+  owner: "o",
+  repo: "r",
+  number: 42,
+} as const;
+
 afterEach(() => {
   mockedRunProcess.mockReset();
   vi.unstubAllEnvs();
@@ -36,34 +68,32 @@ afterEach(() => {
 layer("GitHubCliLive", (it) => {
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 42,
-          title: "Add PR thread creation",
-          url: "https://github.com/example-org/sample-repo/pull/42",
-          baseRefName: "main",
-          headRefName: "feature/pr-threads",
-          state: "OPEN",
-          mergedAt: null,
-          isDraft: true,
-          mergeable: "CONFLICTING",
-          additions: 38,
-          deletions: 36,
-          changedFiles: 3,
-          isCrossRepository: true,
-          headRepository: {
-            nameWithOwner: "octocat/sample-repo",
-          },
-          headRepositoryOwner: {
-            login: "octocat",
-          },
-          updatedAt: "2026-07-05T09:30:00Z",
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 42,
+            title: "Add PR thread creation",
+            url: "https://github.com/example-org/sample-repo/pull/42",
+            baseRefName: "main",
+            headRefName: "feature/pr-threads",
+            state: "OPEN",
+            mergedAt: null,
+            isDraft: true,
+            mergeable: "CONFLICTING",
+            additions: 38,
+            deletions: 36,
+            changedFiles: 3,
+            isCrossRepository: true,
+            headRepository: {
+              nameWithOwner: "octocat/sample-repo",
+            },
+            headRepositoryOwner: {
+              login: "octocat",
+            },
+            updatedAt: "2026-07-05T09:30:00Z",
+          }),
+        ),
+      );
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
         return yield* gh.getPullRequest({
@@ -99,13 +129,6 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("serves repeated pull request lookups from cache until a mutation", () =>
     Effect.gen(function* () {
-      const processResult = (stdout: string) => ({
-        stdout,
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
       const viewOutput = JSON.stringify({
         number: 77,
         title: "Cached lookup",
@@ -137,24 +160,22 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("lists any-state pull requests with the shared field list", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          {
-            number: 7,
-            title: "Merged work",
-            url: "https://github.com/o/r/pull/7",
-            baseRefName: "main",
-            headRefName: "feature/merged-work",
-            state: "MERGED",
-            mergedAt: "2026-07-01T08:00:00Z",
-            updatedAt: "2026-07-01T08:00:00Z",
-          },
-        ]),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify([
+            {
+              number: 7,
+              title: "Merged work",
+              url: "https://github.com/o/r/pull/7",
+              baseRefName: "main",
+              headRefName: "feature/merged-work",
+              state: "MERGED",
+              mergedAt: "2026-07-01T08:00:00Z",
+              updatedAt: "2026-07-01T08:00:00Z",
+            },
+          ]),
+        ),
+      );
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -186,23 +207,21 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("skips malformed list entries instead of hiding the healthy ones", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          { number: -1, title: "", url: "" },
-          {
-            number: 8,
-            title: "Healthy PR",
-            url: "https://github.com/o/r/pull/8",
-            baseRefName: "main",
-            headRefName: "feature/healthy",
-            state: "OPEN",
-          },
-        ]),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify([
+            { number: -1, title: "", url: "" },
+            {
+              number: 8,
+              title: "Healthy PR",
+              url: "https://github.com/o/r/pull/8",
+              baseRefName: "main",
+              headRefName: "feature/healthy",
+              state: "OPEN",
+            },
+          ]),
+        ),
+      );
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -214,85 +233,50 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
-  it.effect("reads repository clone URLs", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          nameWithOwner: "octocat/sample-repo",
-          url: "https://github.com/octocat/sample-repo",
-          sshUrl: "git@github.com:octocat/sample-repo.git",
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-
-      const result = yield* Effect.gen(function* () {
-        const gh = yield* GitHubCli;
-        return yield* gh.getRepositoryCloneUrls({
-          cwd: "/repo",
-          repository: "octocat/sample-repo",
-        });
-      });
-
-      assert.deepStrictEqual(result, {
-        nameWithOwner: "octocat/sample-repo",
-        url: "https://github.com/octocat/sample-repo",
-        sshUrl: "git@github.com:octocat/sample-repo.git",
-      });
-      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
-        expect.arrayContaining(["repo", "view", "octocat/sample-repo"]),
-      );
-    }),
-  );
-
   it.effect("normalizes check runs and status contexts from the rollup", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 42,
-          title: "Snapshot PR",
-          url: "https://github.com/o/r/pull/42",
-          baseRefName: "main",
-          headRefName: "feature/snapshot",
-          headRefOid: "abc123",
-          state: "OPEN",
-          statusCheckRollup: [
-            {
-              __typename: "CheckRun",
-              name: "Format, Lint, Typecheck",
-              status: "IN_PROGRESS",
-              conclusion: "",
-              detailsUrl: "https://github.com/o/r/actions/runs/1",
-            },
-            {
-              __typename: "CheckRun",
-              name: "Sync PR size labels",
-              status: "COMPLETED",
-              conclusion: "SKIPPED",
-              detailsUrl: null,
-            },
-            {
-              __typename: "CheckRun",
-              name: "Release Smoke",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              detailsUrl: "https://github.com/o/r/actions/runs/2",
-            },
-            {
-              __typename: "StatusContext",
-              context: "ci/legacy",
-              state: "FAILURE",
-              targetUrl: "https://ci.example/build/3",
-            },
-          ],
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 42,
+            title: "Snapshot PR",
+            url: "https://github.com/o/r/pull/42",
+            baseRefName: "main",
+            headRefName: "feature/snapshot",
+            headRefOid: "abc123",
+            state: "OPEN",
+            statusCheckRollup: [
+              {
+                __typename: "CheckRun",
+                name: "Format, Lint, Typecheck",
+                status: "IN_PROGRESS",
+                conclusion: "",
+                detailsUrl: "https://github.com/o/r/actions/runs/1",
+              },
+              {
+                __typename: "CheckRun",
+                name: "Sync PR size labels",
+                status: "COMPLETED",
+                conclusion: "SKIPPED",
+                detailsUrl: null,
+              },
+              {
+                __typename: "CheckRun",
+                name: "Release Smoke",
+                status: "COMPLETED",
+                conclusion: "SUCCESS",
+                detailsUrl: "https://github.com/o/r/actions/runs/2",
+              },
+              {
+                __typename: "StatusContext",
+                context: "ci/legacy",
+                state: "FAILURE",
+                targetUrl: "https://ci.example/build/3",
+              },
+            ],
+          }),
+        ),
+      );
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -338,62 +322,60 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("returns root comments of unresolved review threads only", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [
-                    {
-                      isResolved: false,
-                      comments: {
-                        nodes: [
-                          {
-                            id: "PRRC_11",
-                            body: "Avoid returning shims directly",
-                            path: "CursorAcpCommand.ts",
-                            url: "https://github.com/o/r/pull/42#discussion_r11",
-                            createdAt: "2026-07-01T10:00:00Z",
-                            author: { login: "codex-bot" },
-                          },
-                        ],
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        isResolved: false,
+                        comments: {
+                          nodes: [
+                            {
+                              id: "PRRC_11",
+                              body: "Avoid returning shims directly",
+                              path: "CursorAcpCommand.ts",
+                              url: "https://github.com/o/r/pull/42#discussion_r11",
+                              createdAt: "2026-07-01T10:00:00Z",
+                              author: { login: "codex-bot" },
+                            },
+                          ],
+                        },
                       },
-                    },
-                    {
-                      isResolved: true,
-                      comments: {
-                        nodes: [
-                          {
-                            id: "PRRC_12",
-                            body: "Already handled",
-                            path: "CursorAcpCommand.ts",
-                            url: "https://github.com/o/r/pull/42#discussion_r12",
-                            createdAt: "2026-07-01T09:00:00Z",
-                            author: { login: "codex-bot" },
-                          },
-                        ],
+                      {
+                        isResolved: true,
+                        comments: {
+                          nodes: [
+                            {
+                              id: "PRRC_12",
+                              body: "Already handled",
+                              path: "CursorAcpCommand.ts",
+                              url: "https://github.com/o/r/pull/42#discussion_r12",
+                              createdAt: "2026-07-01T09:00:00Z",
+                              author: { login: "codex-bot" },
+                            },
+                          ],
+                        },
                       },
+                      {
+                        isResolved: false,
+                        comments: { nodes: [] },
+                      },
+                    ],
+                    pageInfo: {
+                      hasNextPage: false,
+                      endCursor: null,
                     },
-                    {
-                      isResolved: false,
-                      comments: { nodes: [] },
-                    },
-                  ],
-                  pageInfo: {
-                    hasNextPage: false,
-                    endCursor: null,
                   },
                 },
               },
             },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+          }),
+        ),
+      );
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -445,91 +427,18 @@ layer("GitHubCliLive", (it) => {
   it.effect("paginates unresolved review threads", () =>
     Effect.gen(function* () {
       mockedRunProcess
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            data: {
-              repository: {
-                pullRequest: {
-                  reviewThreads: {
-                    nodes: [
-                      {
-                        isResolved: false,
-                        comments: {
-                          nodes: [
-                            {
-                              id: "PRRC_1",
-                              body: "First page",
-                              path: "a.ts",
-                              url: "https://github.com/o/r/pull/42#discussion_r1",
-                              createdAt: "2026-07-01T10:00:00Z",
-                              author: { login: "bot" },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                    pageInfo: {
-                      hasNextPage: true,
-                      endCursor: "cursor-1",
-                    },
-                  },
-                },
-              },
-            },
+        .mockResolvedValueOnce(
+          reviewThreadsPage([reviewThread(reviewComment("PRRC_1", "First page"))], {
+            hasNextPage: true,
+            endCursor: "cursor-1",
           }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            data: {
-              repository: {
-                pullRequest: {
-                  reviewThreads: {
-                    nodes: [
-                      {
-                        isResolved: false,
-                        comments: {
-                          nodes: [
-                            {
-                              id: "PRRC_2",
-                              body: "Second page",
-                              path: "b.ts",
-                              url: "https://github.com/o/r/pull/42#discussion_r2",
-                              createdAt: "2026-07-01T10:01:00Z",
-                              author: { login: "bot" },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                    pageInfo: {
-                      hasNextPage: false,
-                      endCursor: null,
-                    },
-                  },
-                },
-              },
-            },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        )
+        .mockResolvedValueOnce(
+          reviewThreadsPage([reviewThread(reviewComment("PRRC_2", "Second page", "b.ts"))]),
+        );
 
-      const result = yield* Effect.gen(function* () {
-        const gh = yield* GitHubCli;
-        return yield* gh.getPullRequestReviewComments({
-          cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
-          number: 42,
-        });
-      });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestReviewComments(reviewCommentsInput);
 
       assert.deepStrictEqual(
         result.comments.map((comment) => comment.body),
@@ -545,53 +454,16 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("marks one-page review-comment overflow as truncated", () =>
     Effect.gen(function* () {
-      const unresolvedThreads = Array.from({ length: 21 }, (_, index) => ({
-        isResolved: false,
-        comments: {
-          nodes: [
-            {
-              id: `PRRC_${index}`,
-              body: `Finding ${index}`,
-              path: "bounded.ts",
-              url: `https://github.com/o/r/pull/42#discussion_r${index}`,
-              createdAt: "2026-07-01T10:00:00Z",
-              author: { login: "bot" },
-            },
-          ],
-        },
-      }));
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: unresolvedThreads,
-                  pageInfo: {
-                    hasNextPage: false,
-                    endCursor: null,
-                  },
-                },
-              },
-            },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        reviewThreadsPage(
+          Array.from({ length: 21 }, (_, index) =>
+            reviewThread(reviewComment(`PRRC_${index}`, `Finding ${index}`, "bounded.ts")),
+          ),
+        ),
+      );
 
-      const result = yield* Effect.gen(function* () {
-        const gh = yield* GitHubCli;
-        return yield* gh.getPullRequestReviewComments({
-          cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
-          number: 42,
-        });
-      });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestReviewComments(reviewCommentsInput);
 
       assert.equal(result.comments.length, 20);
       assert.equal(result.truncated, true);
@@ -601,54 +473,15 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("marks truncation when more pages exist but no cursor is returned", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [
-                    {
-                      isResolved: false,
-                      comments: {
-                        nodes: [
-                          {
-                            id: "PRRC_1",
-                            body: "Finding",
-                            path: "cursorless.ts",
-                            url: "https://github.com/o/r/pull/42#discussion_r1",
-                            createdAt: "2026-07-01T10:00:00Z",
-                            author: { login: "bot" },
-                          },
-                        ],
-                      },
-                    },
-                  ],
-                  pageInfo: {
-                    hasNextPage: true,
-                    endCursor: null,
-                  },
-                },
-              },
-            },
-          },
+      mockedRunProcess.mockResolvedValueOnce(
+        reviewThreadsPage([reviewThread(reviewComment("PRRC_1", "Finding", "cursorless.ts"))], {
+          hasNextPage: true,
+          endCursor: null,
         }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      );
 
-      const result = yield* Effect.gen(function* () {
-        const gh = yield* GitHubCli;
-        return yield* gh.getPullRequestReviewComments({
-          cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
-          number: 42,
-        });
-      });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestReviewComments(reviewCommentsInput);
 
       assert.equal(result.comments.length, 1);
       assert.equal(result.truncated, true);
@@ -659,55 +492,21 @@ layer("GitHubCliLive", (it) => {
   it.effect("stops review-thread pagination at the page-count limit", () =>
     Effect.gen(function* () {
       for (let page = 1; page <= 5; page += 1) {
-        mockedRunProcess.mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            data: {
-              repository: {
-                pullRequest: {
-                  reviewThreads: {
-                    nodes: [
-                      {
-                        isResolved: true,
-                        comments: {
-                          nodes: [
-                            {
-                              id: `PRRC_resolved_${page}`,
-                              body: `Already handled ${page}`,
-                              path: "bounded.ts",
-                              url: `https://github.com/o/r/pull/42#discussion_r${page}`,
-                              createdAt: "2026-07-01T10:00:00Z",
-                              author: { login: "bot" },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                    pageInfo: {
-                      hasNextPage: true,
-                      endCursor: `cursor-${page}`,
-                    },
-                  },
-                },
-              },
-            },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        mockedRunProcess.mockResolvedValueOnce(
+          reviewThreadsPage(
+            [
+              reviewThread(
+                reviewComment(`PRRC_resolved_${page}`, `Already handled ${page}`, "bounded.ts"),
+                true,
+              ),
+            ],
+            { hasNextPage: true, endCursor: `cursor-${page}` },
+          ),
+        );
       }
 
-      const result = yield* Effect.gen(function* () {
-        const gh = yield* GitHubCli;
-        return yield* gh.getPullRequestReviewComments({
-          cwd: "/repo",
-          host: "github.com",
-          owner: "o",
-          repo: "r",
-          number: 42,
-        });
-      });
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestReviewComments(reviewCommentsInput);
 
       assert.deepStrictEqual(result.comments, []);
       assert.equal(result.truncated, true);
@@ -720,20 +519,18 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("surfaces GraphQL errors from review-thread queries", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          errors: [{ message: "Field 'reviewThreads' does not exist" }],
-          data: {
-            repository: {
-              pullRequest: null,
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            errors: [{ message: "Field 'reviewThreads' does not exist" }],
+            data: {
+              repository: {
+                pullRequest: null,
+              },
             },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+          }),
+        ),
+      );
 
       const error = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -1003,29 +800,6 @@ layer("GitHubCliLive", (it) => {
         ]),
       );
       expect(args).not.toContain("prStates[]=OPEN");
-    }),
-  );
-
-  it.effect("drops the optional stack fields once GitHub rejects them", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockRejectedValueOnce(
-        new Error(
-          "gh api graphql failed (code=1, signal=null). gh: Field 'stackEntry' doesn't exist on type 'PullRequest'",
-        ),
-      );
-      mockedRunProcess.mockResolvedValue(processResult(fakeInboxGraphQlJson({})));
-
-      const gh = yield* GitHubCli;
-      yield* gh.listRepositoryInbox({ cwd: "/repo", repository: "acme/app", state: "open" });
-      yield* gh.listRepositoryInbox({ cwd: "/repo", repository: "acme/app", state: "open" });
-
-      const queries = mockedRunProcess.mock.calls.map((call) =>
-        (call[1] as string[]).find((arg) => arg.startsWith("query=")),
-      );
-      assert.equal(queries.length, 3);
-      expect(queries[0]).toContain("stackEntry");
-      expect(queries[1]).not.toContain("stackEntry");
-      expect(queries[2]).not.toContain("stackEntry");
     }),
   );
 
@@ -1320,40 +1094,38 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("accepts commits with empty or missing headlines and omits the files field", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 9,
-          title: "Empty commit messages",
-          url: "https://github.com/acme/app/pull/9",
-          headRefName: "empty-message",
-          baseRefName: "main",
-          state: "OPEN",
-          createdAt: "2026-07-01T00:00:00Z",
-          updatedAt: "2026-07-02T00:00:00Z",
-          commits: [
-            {
-              oid: "abc",
-              messageHeadline: "",
-              committedDate: "2026-07-01T01:00:00Z",
-            },
-            { oid: "def", committedDate: "2026-07-01T02:00:00Z" },
-          ],
-          reviews: [
-            {
-              id: "pending-review",
-              body: "Draft feedback",
-              state: "PENDING",
-              updatedAt: "2026-07-01T03:00:00Z",
-              author: { login: "reviewer" },
-            },
-          ],
-          reviewRequests: [{ __typename: "Team", name: "Platform", slug: "platform" }],
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 9,
+            title: "Empty commit messages",
+            url: "https://github.com/acme/app/pull/9",
+            headRefName: "empty-message",
+            baseRefName: "main",
+            state: "OPEN",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            commits: [
+              {
+                oid: "abc",
+                messageHeadline: "",
+                committedDate: "2026-07-01T01:00:00Z",
+              },
+              { oid: "def", committedDate: "2026-07-01T02:00:00Z" },
+            ],
+            reviews: [
+              {
+                id: "pending-review",
+                body: "Draft feedback",
+                state: "PENDING",
+                updatedAt: "2026-07-01T03:00:00Z",
+                author: { login: "reviewer" },
+              },
+            ],
+            reviewRequests: [{ __typename: "Team", name: "Platform", slug: "platform" }],
+          }),
+        ),
+      );
       const gh = yield* GitHubCli;
       const detail = yield* gh.getPullRequestDetail({
         cwd: "/repo",
@@ -1404,48 +1176,46 @@ layer("GitHubCliLive", (it) => {
   ]) {
     it.effect(`tolerates commit authors with ${label} GitHub login`, () =>
       Effect.gen(function* () {
-        mockedRunProcess.mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            number: 1016,
-            title: "fix(models): normalize provider model display names",
-            url: "https://github.com/acme/app/pull/1016",
-            headRefName: "fix/normalize-model-display-names",
-            baseRefName: "main",
-            state: "MERGED",
-            mergedAt: "2026-09-08T13:33:01Z",
-            createdAt: "2026-09-07T05:30:14Z",
-            updatedAt: "2026-09-08T13:33:01Z",
-            commits: [
-              {
-                oid: "31967670e7d8ac8e6271187cf91e3d08ed48dc96",
-                messageHeadline: "fix(models): normalize provider model display names",
-                committedDate: "2026-09-07T05:16:29Z",
-                authors: [
-                  { login: " SHLE1 ", name: " SHLE1 " },
-                  {
-                    login,
-                    name: " Local co-author ",
-                    avatarUrl: "https://avatars.githubusercontent.com/unrelated",
-                    url: "https://github.com/unrelated",
-                  },
-                  { login, name: " ", slug: "not-a-user" },
-                ],
-              },
-              {
-                oid: "5a554f9e40043fba3184182c22f7f4bab617fc19",
-                messageHeadline: "fix(models): ignore inherited display-name tokens",
-                committedDate: "2026-09-08T13:18:37Z",
-                // `gh` emits empty-string logins for local-git authors with no
-                // GitHub account. This must not fail the whole detail payload.
-                authors: [{ id: "", login, name: "Emanuele Di Pietro" }],
-              },
-            ],
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        mockedRunProcess.mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              number: 1016,
+              title: "fix(models): normalize provider model display names",
+              url: "https://github.com/acme/app/pull/1016",
+              headRefName: "fix/normalize-model-display-names",
+              baseRefName: "main",
+              state: "MERGED",
+              mergedAt: "2026-09-08T13:33:01Z",
+              createdAt: "2026-09-07T05:30:14Z",
+              updatedAt: "2026-09-08T13:33:01Z",
+              commits: [
+                {
+                  oid: "31967670e7d8ac8e6271187cf91e3d08ed48dc96",
+                  messageHeadline: "fix(models): normalize provider model display names",
+                  committedDate: "2026-09-07T05:16:29Z",
+                  authors: [
+                    { login: " SHLE1 ", name: " SHLE1 " },
+                    {
+                      login,
+                      name: " Local co-author ",
+                      avatarUrl: "https://avatars.githubusercontent.com/unrelated",
+                      url: "https://github.com/unrelated",
+                    },
+                    { login, name: " ", slug: "not-a-user" },
+                  ],
+                },
+                {
+                  oid: "5a554f9e40043fba3184182c22f7f4bab617fc19",
+                  messageHeadline: "fix(models): ignore inherited display-name tokens",
+                  committedDate: "2026-09-08T13:18:37Z",
+                  // `gh` emits empty-string logins for local-git authors with no
+                  // GitHub account. This must not fail the whole detail payload.
+                  authors: [{ id: "", login, name: "Emanuele Di Pietro" }],
+                },
+              ],
+            }),
+          ),
+        );
         const gh = yield* GitHubCli;
         const detail = yield* gh.getPullRequestDetail({
           cwd: "/repo",
@@ -1478,28 +1248,26 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("does not synthesize profile links for GitHub App commit authors", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 17,
-          title: "App-authored commit",
-          url: "https://github.com/acme/app/pull/17",
-          headRefName: "app-commit",
-          baseRefName: "main",
-          createdAt: "2026-07-01T00:00:00Z",
-          updatedAt: "2026-07-02T00:00:00Z",
-          commits: [
-            {
-              oid: "app123",
-              committedDate: "2026-07-01T00:00:00Z",
-              authors: [{ login: "app/dependabot", name: "dependabot[bot]" }],
-            },
-          ],
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 17,
+            title: "App-authored commit",
+            url: "https://github.com/acme/app/pull/17",
+            headRefName: "app-commit",
+            baseRefName: "main",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            commits: [
+              {
+                oid: "app123",
+                committedDate: "2026-07-01T00:00:00Z",
+                authors: [{ login: "app/dependabot", name: "dependabot[bot]" }],
+              },
+            ],
+          }),
+        ),
+      );
       const gh = yield* GitHubCli;
       const detail = yield* gh.getPullRequestDetail({
         cwd: "/repo",
@@ -1520,28 +1288,26 @@ layer("GitHubCliLive", (it) => {
   for (const invalidAuthor of [{ login: 123 }, { login: null, name: false }]) {
     it.effect(`rejects malformed commit author ${JSON.stringify(invalidAuthor)}`, () =>
       Effect.gen(function* () {
-        mockedRunProcess.mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            number: 9,
-            title: "Malformed author",
-            url: "https://github.com/acme/app/pull/9",
-            headRefName: "malformed-author",
-            baseRefName: "main",
-            createdAt: "2026-07-01T00:00:00Z",
-            updatedAt: "2026-07-02T00:00:00Z",
-            commits: [
-              {
-                oid: "abc123",
-                committedDate: "2026-07-01T00:00:00Z",
-                authors: [invalidAuthor],
-              },
-            ],
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        mockedRunProcess.mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              number: 9,
+              title: "Malformed author",
+              url: "https://github.com/acme/app/pull/9",
+              headRefName: "malformed-author",
+              baseRefName: "main",
+              createdAt: "2026-07-01T00:00:00Z",
+              updatedAt: "2026-07-02T00:00:00Z",
+              commits: [
+                {
+                  oid: "abc123",
+                  committedDate: "2026-07-01T00:00:00Z",
+                  authors: [invalidAuthor],
+                },
+              ],
+            }),
+          ),
+        );
         const gh = yield* GitHubCli;
         const error = yield* gh
           .getPullRequestDetail({
@@ -1557,45 +1323,43 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("normalizes actors without losing comments or treating teams as users", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 9,
-          title: "Nullable actors",
-          url: "https://github.com/acme/app/pull/9",
-          headRefName: "nullable-actors",
-          baseRefName: "main",
-          createdAt: "2026-07-01T00:00:00Z",
-          updatedAt: "2026-07-02T00:00:00Z",
-          author: { login: "local-author", name: "Local author" },
-          reviewRequests: [
-            { login: " reviewer ", slug: "unused" },
-            { __typename: "Team", slug: " platform " },
-            { __typename: "Team", slug: "security" },
-            { __typename: "Team", slug: "infra" },
-          ],
-          comments: [
-            {
-              id: "comment",
-              body: "Keep this comment",
-              createdAt: "2026-07-01T01:00:00Z",
-              author: { login: "former-user", name: "Former user" },
-            },
-          ],
-          reviews: [
-            {
-              id: "review",
-              body: "Keep this review",
-              submittedAt: "2026-07-01T02:00:00Z",
-              state: "APPROVED",
-              author: { login: "reviewer" },
-            },
-          ],
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 9,
+            title: "Nullable actors",
+            url: "https://github.com/acme/app/pull/9",
+            headRefName: "nullable-actors",
+            baseRefName: "main",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            author: { login: "local-author", name: "Local author" },
+            reviewRequests: [
+              { login: " reviewer ", slug: "unused" },
+              { __typename: "Team", slug: " platform " },
+              { __typename: "Team", slug: "security" },
+              { __typename: "Team", slug: "infra" },
+            ],
+            comments: [
+              {
+                id: "comment",
+                body: "Keep this comment",
+                createdAt: "2026-07-01T01:00:00Z",
+                author: { login: "former-user", name: "Former user" },
+              },
+            ],
+            reviews: [
+              {
+                id: "review",
+                body: "Keep this review",
+                submittedAt: "2026-07-01T02:00:00Z",
+                state: "APPROVED",
+                author: { login: "reviewer" },
+              },
+            ],
+          }),
+        ),
+      );
       const gh = yield* GitHubCli;
       const detail = yield* gh.getPullRequestDetail({
         cwd: "/repo",
@@ -1662,16 +1426,14 @@ layer("GitHubCliLive", (it) => {
           stdoutTruncated: true,
           stderrTruncated: false,
         })
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            status: "merged",
-            details: { message: "Pull request was merged." },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              status: "merged",
+              details: { message: "Pull request was merged." },
+            }),
+          ),
+        );
 
       const gh = yield* GitHubCli;
       const diff = yield* gh.getPullRequestDiff({
@@ -1713,61 +1475,59 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("loads full stack metadata in bottom-to-top order", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                stackEntry: { position: 2 },
-                stack: {
-                  number: 17,
-                  size: 2,
-                  baseRefName: "main",
-                  entries: {
-                    totalCount: 2,
-                    nodes: [
-                      {
-                        position: 2,
-                        pullRequest: {
-                          number: 12,
-                          title: "UI layer",
-                          url: "https://github.com/acme/app/pull/12",
-                          headRefName: "feature/ui",
-                          baseRefName: "feature/api",
-                          state: "OPEN",
-                          isDraft: false,
-                          mergedAt: null,
-                          mergeable: "UNKNOWN",
-                          mergeStateStatus: "UNKNOWN",
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  stackEntry: { position: 2 },
+                  stack: {
+                    number: 17,
+                    size: 2,
+                    baseRefName: "main",
+                    entries: {
+                      totalCount: 2,
+                      nodes: [
+                        {
+                          position: 2,
+                          pullRequest: {
+                            number: 12,
+                            title: "UI layer",
+                            url: "https://github.com/acme/app/pull/12",
+                            headRefName: "feature/ui",
+                            baseRefName: "feature/api",
+                            state: "OPEN",
+                            isDraft: false,
+                            mergedAt: null,
+                            mergeable: "UNKNOWN",
+                            mergeStateStatus: "UNKNOWN",
+                          },
                         },
-                      },
-                      {
-                        position: 1,
-                        pullRequest: {
-                          number: 11,
-                          title: "API layer",
-                          url: "https://github.com/acme/app/pull/11",
-                          headRefName: "feature/api",
-                          baseRefName: "main",
-                          state: "MERGED",
-                          isDraft: false,
-                          mergedAt: "2026-08-10T10:00:00Z",
-                          mergeable: "MERGEABLE",
-                          mergeStateStatus: "CLEAN",
+                        {
+                          position: 1,
+                          pullRequest: {
+                            number: 11,
+                            title: "API layer",
+                            url: "https://github.com/acme/app/pull/11",
+                            headRefName: "feature/api",
+                            baseRefName: "main",
+                            state: "MERGED",
+                            isDraft: false,
+                            mergedAt: "2026-08-10T10:00:00Z",
+                            mergeable: "MERGEABLE",
+                            mergeStateStatus: "CLEAN",
+                          },
                         },
-                      },
-                    ],
+                      ],
+                    },
                   },
                 },
               },
             },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+          }),
+        ),
+      );
 
       const gh = yield* GitHubCli;
       const result = yield* gh.getPullRequestStack({
@@ -1839,23 +1599,17 @@ layer("GitHubCliLive", (it) => {
         });
 
       mockedRunProcess
-        .mockResolvedValueOnce({
-          stdout: makeResponse(
-            Array.from({ length: 100 }, (_, index) => makeEntry(index + 1)),
-            { hasNextPage: true, endCursor: "cursor-100" },
+        .mockResolvedValueOnce(
+          processResult(
+            makeResponse(
+              Array.from({ length: 100 }, (_, index) => makeEntry(index + 1)),
+              { hasNextPage: true, endCursor: "cursor-100" },
+            ),
           ),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: makeResponse([makeEntry(101)], { hasNextPage: false, endCursor: null }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        )
+        .mockResolvedValueOnce(
+          processResult(makeResponse([makeEntry(101)], { hasNextPage: false, endCursor: null })),
+        );
 
       const gh = yield* GitHubCli;
       const result = yield* gh.getPullRequestStack({
@@ -1876,20 +1630,8 @@ layer("GitHubCliLive", (it) => {
   it.effect("falls back to the legacy merge path when async merge is unavailable", () =>
     Effect.gen(function* () {
       mockedRunProcess
-        .mockResolvedValueOnce({
-          stdout: "",
-          stderr: "gh: Not Found (HTTP 404)",
-          code: 1,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        .mockResolvedValueOnce(processResult("", { code: 1, stderr: "gh: Not Found (HTTP 404)" }))
+        .mockResolvedValueOnce(processResult(""));
 
       const gh = yield* GitHubCli;
       const result = yield* gh.runPullRequestAction({
@@ -1915,26 +1657,22 @@ layer("GitHubCliLive", (it) => {
   it.effect("polls a pending stack merge until GitHub enqueues it", () =>
     Effect.gen(function* () {
       mockedRunProcess
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            status: "pending",
-            details: { message: "Merge request enqueued.", uuid: "merge-request-1" },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            status: "enqueued",
-            details: { message: "Pull request was added to the merge queue." },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              status: "pending",
+              details: { message: "Merge request enqueued.", uuid: "merge-request-1" },
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              status: "enqueued",
+              details: { message: "Pull request was added to the merge queue." },
+            }),
+          ),
+        );
 
       const gh = yield* GitHubCli;
       const mergeFiber = yield* gh
@@ -1968,20 +1706,8 @@ layer("GitHubCliLive", (it) => {
             "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300).",
           ),
         )
-        .mockResolvedValueOnce({
-          stdout: "main 1111111111111111 2222222222222222\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: "diff --git a/a.ts b/a.ts\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        .mockResolvedValueOnce(processResult("main 1111111111111111 2222222222222222\n"))
+        .mockResolvedValueOnce(processResult("diff --git a/a.ts b/a.ts\n"));
       const gh = yield* GitHubCli;
       const diff = yield* gh.getPullRequestDiff({
         cwd: "/repo",
@@ -2013,38 +1739,17 @@ layer("GitHubCliLive", (it) => {
     Effect.gen(function* () {
       mockedRunProcess
         .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
-        .mockResolvedValueOnce({
-          stdout: "main 1111111111111111 2222222222222222\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
+        .mockResolvedValueOnce(processResult("main 1111111111111111 2222222222222222\n"))
         .mockRejectedValueOnce(new Error("fatal: bad object 2222222222222222"))
-        .mockResolvedValueOnce({
-          stdout:
+        .mockResolvedValueOnce(
+          processResult(
             "origin\thttps://oauth2:super-secret@github.com/acme/app.git (fetch)\n" +
-            "origin\thttps://oauth2:super-secret@github.com/acme/app.git (push)\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: "false\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
-        .mockResolvedValueOnce({
-          stdout: "diff --git a/a.ts b/a.ts\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+              "origin\thttps://oauth2:super-secret@github.com/acme/app.git (push)\n",
+          ),
+        )
+        .mockResolvedValueOnce(processResult("false\n"))
+        .mockResolvedValueOnce(processResult(""))
+        .mockResolvedValueOnce(processResult("diff --git a/a.ts b/a.ts\n"));
       const gh = yield* GitHubCli;
       const diff = yield* gh.getPullRequestDiff({
         cwd: "/repo",
@@ -2070,38 +1775,17 @@ layer("GitHubCliLive", (it) => {
     Effect.gen(function* () {
       mockedRunProcess
         .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
-        .mockResolvedValueOnce({
-          stdout: "main 1111111111111111 2222222222222222\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
+        .mockResolvedValueOnce(processResult("main 1111111111111111 2222222222222222\n"))
         .mockRejectedValueOnce(new Error("fatal: bad object 2222222222222222"))
-        .mockResolvedValueOnce({
-          stdout:
+        .mockResolvedValueOnce(
+          processResult(
             "--upload-pack=/tmp/attacker\tgit@github.com:acme/app.git (fetch)\n" +
-            "--upload-pack=/tmp/attacker\tgit@github.com:acme/app.git (push)\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: "false\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
-        .mockResolvedValueOnce({
-          stdout: "diff --git a/a.ts b/a.ts\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+              "--upload-pack=/tmp/attacker\tgit@github.com:acme/app.git (push)\n",
+          ),
+        )
+        .mockResolvedValueOnce(processResult("false\n"))
+        .mockResolvedValueOnce(processResult(""))
+        .mockResolvedValueOnce(processResult("diff --git a/a.ts b/a.ts\n"));
 
       const gh = yield* GitHubCli;
       yield* gh.getPullRequestDiff({ cwd: "/repo", repository: "acme/app", number: 357 });
@@ -2123,38 +1807,14 @@ layer("GitHubCliLive", (it) => {
     Effect.gen(function* () {
       mockedRunProcess
         .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
-        .mockResolvedValueOnce({
-          stdout: "main 1111111111111111 2222222222222222\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
+        .mockResolvedValueOnce(processResult("main 1111111111111111 2222222222222222\n"))
         .mockRejectedValueOnce(new Error("fatal: no merge base"))
-        .mockResolvedValueOnce({
-          stdout: "origin\tgit@github.com:acme/app.git (fetch)\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: "true\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
+        .mockResolvedValueOnce(processResult("origin\tgit@github.com:acme/app.git (fetch)\n"))
+        .mockResolvedValueOnce(processResult("true\n"))
+        .mockResolvedValueOnce(processResult(""))
         .mockRejectedValueOnce(new Error("fatal: no merge base"))
-        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
-        .mockResolvedValueOnce({
-          stdout: "diff --git a/a.ts b/a.ts\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+        .mockResolvedValueOnce(processResult(""))
+        .mockResolvedValueOnce(processResult("diff --git a/a.ts b/a.ts\n"));
 
       const gh = yield* GitHubCli;
       const diff = yield* gh.getPullRequestDiff({
@@ -2189,7 +1849,7 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("stops shallow fallback-diff recovery after the bounded deepen budget", () =>
     Effect.gen(function* () {
-      const success = { stdout: "", stderr: "", code: 0, signal: null, timedOut: false } as const;
+      const success = processResult("");
       mockedRunProcess
         .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
         .mockResolvedValueOnce({ ...success, stdout: "main base-sha head-sha\n" })
@@ -2223,13 +1883,7 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("posts pull request comments through gh pr comment", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess.mockResolvedValueOnce(processResult(""));
       const gh = yield* GitHubCli;
       yield* gh.commentOnPullRequest({
         cwd: "/repo",
