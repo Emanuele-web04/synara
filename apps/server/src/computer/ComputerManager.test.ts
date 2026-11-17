@@ -3827,6 +3827,21 @@ describe("ComputerManager foreground containment", () => {
 });
 
 describe("ComputerManager foregroundWithRestore", () => {
+  it("refuses an explicit false authorization the same way", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(
+        manager.foregroundWithRestore("thread-1", "fake-calculator", undefined, {
+          userRequestedVisibleUse: false,
+        }),
+      ).rejects.toMatchObject({ code: "foreground_not_requested" });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("restores the previously frontmost window after raising the target", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
