@@ -613,20 +613,25 @@ const turnPreparationLayer = it.layer(
 );
 
 turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
-  it.effect("clears Fast mode on the next turn while preserving an unspecified tier", () =>
+  it.effect("dispatches the selected Codex speed and preserves an unspecified tier", () =>
     Effect.gen(function* () {
       turnPreparationManager.sendTurnImpl.mockClear();
       const adapter = yield* CodexAdapter;
 
-      for (const fastMode of [true, false, undefined]) {
+      for (const options of [
+        { serviceTier: "ultrafast" as const },
+        { fastMode: true },
+        { fastMode: false },
+        undefined,
+      ]) {
         yield* adapter.sendTurn({
           threadId: asThreadId("thread-tier-toggle"),
           input: "Continue",
           attachments: [],
           modelSelection: {
             provider: "codex",
-            model: "gpt-5.4",
-            ...(fastMode !== undefined ? { options: { fastMode } } : {}),
+            model: "gpt-6.2-sol",
+            ...(options !== undefined ? { options } : {}),
           },
         });
       }
@@ -634,9 +639,9 @@ turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
       const requests = turnPreparationManager.sendTurnImpl.mock.calls.map(([input]) => input);
       assert.deepStrictEqual(
         requests.map((input) => input.serviceTier),
-        ["fast", "default", undefined],
+        ["ultrafast", "fast", "default", undefined],
       );
-      assert.equal(Object.hasOwn(requests[2]!, "serviceTier"), false);
+      assert.equal(Object.hasOwn(requests[3]!, "serviceTier"), false);
     }),
   );
   it.effect("prepares equivalent rich send and steer manager payloads", () =>

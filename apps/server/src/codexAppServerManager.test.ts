@@ -3011,6 +3011,20 @@ describe("startSession", () => {
 });
 
 describe("sendTurn", () => {
+  it("returns to Standard when a model switch would inherit Ultrafast", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    const threadId = asThreadId("thread_1");
+
+    await manager.sendTurn({ threadId, input: "Start", serviceTier: "ultrafast" });
+    await manager.sendTurn({ threadId, input: "Switch models", model: "gpt-6.2-astra" });
+
+    expect(sendRequest).toHaveBeenLastCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({ model: "gpt-6.2-astra", serviceTier: "default" }),
+    );
+  });
+
   it("keeps collaboration receiver routing for live children across a new turn", async () => {
     const { manager, context } = createSendTurnHarness();
     context.collabReceiverTurns.set("live-child", "old-turn");

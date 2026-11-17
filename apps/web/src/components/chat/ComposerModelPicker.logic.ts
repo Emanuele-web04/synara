@@ -6,6 +6,7 @@
 import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 
+import { t } from "~/i18n";
 import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
 import {
   formatProviderModelOptionName,
@@ -20,6 +21,7 @@ import {
 } from "./composerTraits";
 
 type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
+type StarredTraits = Pick<StarredModel, "effort" | "fastMode" | "serviceTier" | "thinking">;
 
 /** Tab id of the starred presets list; every other tab id is a provider account
  *  (instance id; a provider's default account shares the provider id). */
@@ -67,12 +69,14 @@ export function resolveStarredTraits(
     | "effortLevels"
     | "fastModeDescriptor"
     | "fastModeEnabled"
+    | "ultrafastModeEnabled"
     | "thinkingEnabled"
   >,
-): Pick<StarredModel, "effort" | "fastMode" | "thinking"> {
+): StarredTraits {
   return {
     effort: selection.effortLevels.length > 0 ? selection.effort : null,
     fastMode: supportsComposerFastModeControl(selection) ? selection.fastModeEnabled : null,
+    ...(selection.ultrafastModeEnabled ? { serviceTier: "ultrafast" } : {}),
     thinking: selection.thinkingEnabled,
   };
 }
@@ -82,7 +86,7 @@ export function resolveStarredTraits(
 export function buildStarredModelOptionsPatch(input: {
   provider: ProviderKind;
   selection: ComposerTraitSelection;
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">;
+  starred: StarredTraits;
 }): Record<string, unknown> {
   const { provider, selection, starred } = input;
   const patch: Record<string, unknown> = {};
@@ -98,7 +102,10 @@ export function buildStarredModelOptionsPatch(input: {
       Object.assign(patch, plan.patch);
     }
   }
-  if (starred.fastMode !== null && supportsComposerFastModeControl(selection)) {
+  if (provider === "codex" && starred.serviceTier === "ultrafast") {
+    if (selection.supportsUltrafastMode) patch.serviceTier = starred.serviceTier;
+    else patch.fastMode = false;
+  } else if (starred.fastMode !== null && supportsComposerFastModeControl(selection)) {
     patch.fastMode = starred.fastMode;
   }
   if (starred.thinking !== null && selection.thinkingEnabled !== null) {
@@ -109,7 +116,7 @@ export function buildStarredModelOptionsPatch(input: {
 
 // "High · Fast" style summary of a preset, labelled through the target model's ladder.
 export function formatStarredTraitsLabel(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
+  starred: StarredTraits,
   effortLevels: ComposerTraitSelection["effortLevels"],
 ): string {
   const effortLabel =
@@ -121,20 +128,23 @@ export function formatStarredTraitsLabel(
     effortLabel === null && starred.thinking !== null
       ? `Thinking ${starred.thinking ? "On" : "Off"}`
       : null,
-    starred.fastMode ? "Fast" : null,
+    starred.serviceTier === "ultrafast"
+      ? t("chat:traitsPicker_ultrafast")
+      : starred.fastMode
+        ? "Fast"
+        : null,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
 }
 
 // A preset counts as "current" when every trait it pins matches the composer's.
-export function starredTraitsMatch(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-  current: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-): boolean {
+export function starredTraitsMatch(starred: StarredTraits, current: StarredTraits): boolean {
   return (
     (starred.effort === null || starred.effort === current.effort) &&
-    (starred.fastMode === null || starred.fastMode === current.fastMode) &&
+    (starred.serviceTier || starred.fastMode !== null
+      ? starred.serviceTier === current.serviceTier && starred.fastMode === current.fastMode
+      : true) &&
     (starred.thinking === null || starred.thinking === current.thinking)
   );
 }
@@ -206,14 +216,13 @@ export function buildStarredTabRows(input: {
   /** Name of the account a preset runs in; undefined while its provider has only one. */
   accountLabelFor?: (instanceId: string) => string | undefined;
   query: string;
-  current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
-    StarredModel,
-    "effort" | "fastMode" | "thinking"
-  >;
+  current: { provider: ProviderKind; instanceId: string; model: string } & StarredTraits;
   effortLevelsFor: (
     provider: ProviderKind,
     model: string,
+    instanceId: string,
   ) => ComposerTraitSelection["effortLevels"];
+  supportsUltrafastFor?: (model: string, instanceId: string) => boolean;
 }): ComposerModelPickerRow[] {
   return input.starredModels.flatMap((entry) => {
     const instanceId = starredModelInstanceId(entry);
@@ -235,8 +244,10 @@ export function buildStarredTabRows(input: {
       return [];
     }
     const traitsLabel = formatStarredTraitsLabel(
-      entry,
-      input.effortLevelsFor(entry.provider, entry.model),
+      entry.serviceTier && !input.supportsUltrafastFor?.(entry.model, instanceId)
+        ? { ...entry, serviceTier: undefined }
+        : entry,
+      input.effortLevelsFor(entry.provider, entry.model, instanceId),
     );
     return [
       {

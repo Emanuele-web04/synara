@@ -138,6 +138,9 @@ type ComposerModelPickerProps = {
   runtimeModelsByProvider?: Partial<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor> | null | undefined>
   >;
+  runtimeModelsByProviderInstance?: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
+  >;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
@@ -268,7 +271,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       : (draftSelectionByProvider?.[provider]?.options ??
         stickySelectionByProvider[provider]?.options);
   const promptFor = (provider: ProviderKind) => (provider === props.provider ? props.prompt : "");
-  const traitSelectionFor = (provider: ProviderKind, model: string) =>
+  const runtimeModelsFor = (provider: ProviderKind, instanceId: string) =>
+    provider === "codex"
+      ? (props.runtimeModelsByProviderInstance?.[instanceId as ProviderInstanceId] ??
+        (instanceId === activeInstanceId ? props.runtimeModelsByProvider?.codex : undefined))
+      : props.runtimeModelsByProvider?.[provider];
+  const traitSelectionFor = (provider: ProviderKind, model: string, instanceId: string) =>
     getComposerTraitSelection(
       provider,
       model,
@@ -277,7 +285,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       resolveRuntimeModelDescriptor({
         provider,
         model,
-        runtimeModels: props.runtimeModelsByProvider?.[provider],
+        runtimeModels: runtimeModelsFor(provider, instanceId),
       }),
       t,
     );
@@ -415,7 +423,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               model: props.model,
               ...resolveStarredTraits(currentTraitSelection),
             },
-            effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
+            effortLevelsFor: (provider, model, instanceId) =>
+              traitSelectionFor(provider, model, instanceId).effortLevels,
+            supportsUltrafastFor: (model, instanceId) =>
+              resolveRuntimeModelDescriptor({
+                provider: "codex",
+                model,
+                runtimeModels: runtimeModelsFor("codex", instanceId),
+              })?.supportsUltrafastMode === true,
           })
         : buildProviderTabRows({
             provider: tabAccount.provider,
@@ -465,7 +480,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     const model = row.selectableModel;
     if (model === null) return;
 
-    const selection = traitSelectionFor(row.provider, model);
+    const selection = traitSelectionFor(row.provider, model, row.instanceId ?? row.provider);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
     // footer slider can adjust its effort, including after a preset is applied.
     // Picking the current selection again is the "done" gesture.
@@ -486,7 +501,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     if (props.disabled || model === null) return;
     const plan = planComposerEffortChange({
       provider: row.provider,
-      selection: traitSelectionFor(row.provider, model),
+      selection: traitSelectionFor(row.provider, model, row.instanceId ?? row.provider),
       prompt: promptFor(row.provider),
       value,
     });
@@ -688,7 +703,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                         : null
                     }
                     providerOptions={providerOptionsFor(row.provider)}
-                    runtimeModels={props.runtimeModelsByProvider?.[row.provider]}
+                    runtimeModels={runtimeModelsFor(row.provider, row.instanceId ?? row.provider)}
                     prompt={promptFor(row.provider)}
                     starredModelSlots={starredModelSlots}
                     onSelect={selectRow}

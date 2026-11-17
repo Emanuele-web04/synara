@@ -322,6 +322,15 @@ export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
+export function UltrafastModeIcon() {
+  return (
+    <span aria-hidden="true" className="inline-flex shrink-0 items-center -space-x-1">
+      <FastModeIcon className="size-3.5" />
+      <FastModeIcon className="size-3.5" />
+    </span>
+  );
+}
+
 // Sidebar and panel toggles, expand/collapse, top-bar add, handoff, Hubs, the rail's update
 // button, the one closed / one open folder every project and path row shares, add-folder, and the
 // stacked-folders glyph used as the single representation of a file tree / explorer surface
