@@ -16,6 +16,8 @@ import {
 
 export type ProcessExecutionBackend = "native" | "wsl";
 
+export { ProcessArgumentValidationError } from "./windowsProcess";
+
 /**
  * Best-effort CPU scheduling only: no background I/O or network QoS.
  * Windows callers and unresolved POSIX commands apply this after spawn.

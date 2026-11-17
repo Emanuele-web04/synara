@@ -108,7 +108,10 @@ async function runPrintTurn(input: {
           makeAntigravityAdapterLive({
             ensurePlugin: async () => undefined,
             spawnProcess,
-            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+            teardownProcessTree: async () => {
+              child!.emit("close", null, "SIGTERM");
+              return { escalated: false, signalErrors: [] };
+            },
           }).pipe(
             Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "antigravity-output-" })),
             Layer.provideMerge(NodeServices.layer),
