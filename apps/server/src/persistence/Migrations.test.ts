@@ -39,6 +39,13 @@ it.effect("gives warmed in-memory clients the migrated schema and independent st
         schema: yield* sql.unsafe("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
         migrations: yield* trackerRows(sql),
         foreignKeys: yield* sql.unsafe("PRAGMA foreign_keys"),
+        sequences: yield* sql.unsafe("SELECT name, seq FROM sqlite_sequence ORDER BY name, seq"),
+        commandCursors: yield* sql.unsafe(
+          "SELECT consumer_name, last_acked_sequence FROM orchestration_consumer_state ORDER BY consumer_name",
+        ),
+        runtimeCursors: yield* sql.unsafe(
+          "SELECT consumer_name, last_acked_sequence FROM provider_runtime_event_consumers ORDER BY consumer_name",
+        ),
       };
     });
     const migrated = yield* Effect.gen(function* () {

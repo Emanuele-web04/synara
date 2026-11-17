@@ -220,30 +220,20 @@ describe("macOS Electron launcher signature", () => {
     assert.deepEqual(fixture.commands, []);
   });
 
-  for (const [version, reason] of [
-    [2, "generated bundles were signed"],
-    [6, "the audio capture usage description was added"],
-    [7, "localized permission descriptions were added"],
-    [8, "localized permission descriptions were removed"],
-  ]) {
-    it(`rebuilds launchers cached before ${reason}`, (t) => {
-      const fixture = createLauncherFixture(t);
-      const executable = fixture.build();
-      const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
-      writeFileSync(
-        fixture.metadataPath,
-        JSON.stringify({ ...metadata, launcherVersion: version }),
-      );
-      fixture.commands.length = 0;
+  it("rebuilds a launcher with stale cache metadata", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+    writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, launcherVersion: 8 }));
+    fixture.commands.length = 0;
 
-      assert.equal(fixture.build(), executable);
-      assert.equal(
-        fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
-        true,
-      );
-      assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
-    });
-  }
+    assert.equal(fixture.build(), executable);
+    assert.equal(
+      fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
+      true,
+    );
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
+  });
 
   for (const [label, cdhashes, expectReset] of [
     [

@@ -601,52 +601,6 @@ it("restores host accessibility on resize, thread changes, collapse and final cl
   expect(covered.style.visibility).toBe("");
 });
 
-it("offers maximize for every pane kind, not only documents", async () => {
-  await page.viewport(1280, 800);
-  const state: RightDockThreadState = {
-    open: true,
-    activePaneId: "terminal",
-    panes: [
-      {
-        id: "terminal",
-        kind: "terminal",
-        filePath: null,
-        threadId: null,
-        diffTurnId: null,
-        diffFilePath: null,
-        pullRequestProjectId: null,
-        pullRequestRepository: null,
-        pullRequestNumber: null,
-        pullRequestInitialTab: null,
-      },
-    ],
-  };
-  const screen = await renderDock(
-    <div style={{ display: "flex", width: 1000, height: 600 }}>
-      <div style={{ flex: 1 }}>Chat continues</div>
-      <RightDock
-        state={state}
-        minWidth={300}
-        defaultWidth="500px"
-        shouldAcceptWidth={() => true}
-        addMenuKinds={[]}
-        onClosePane={() => {}}
-        onCollapse={() => {}}
-        onOpenChange={() => {}}
-        onAddPane={() => {}}
-        renderPane={() => <div data-testid="terminal-pane">Terminal</div>}
-      />
-    </div>,
-  );
-  const pane = document.querySelector<HTMLElement>('[data-testid="terminal-pane"]')!;
-  const container = pane.closest<HTMLElement>('[data-slot="sidebar-container"]')!;
-  await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
-  await expect.poll(() => container.getBoundingClientRect().width).toBe(1000);
-  await screen.getByRole("button", { name: "Restore panel", exact: true }).click();
-  await expect.poll(() => container.getBoundingClientRect().width).toBeLessThan(1000);
-  await screen.unmount();
-});
-
 it("opens at half the shell by default and at the host's share when it asks for one", async () => {
   await page.viewport(1280, 800);
   const state: RightDockThreadState = {

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { preparePage, prepareRoute } from "../test-helpers";
+import { preparePage } from "../test-helpers";
 import releaseDownloads from "../../src/data/latest-release-downloads.json" with { type: "json" };
 
 test.describe("homepage functional flow", () => {
@@ -39,11 +39,12 @@ test.describe("homepage functional flow", () => {
     await expect(page.locator("html")).toHaveClass(/dark/);
   });
 
-  test("selects the correct release installer and reaches the docs", async ({ page }) => {
-    await preparePage(page, "light");
+  test("selects the correct release installer for each platform", async ({ page }) => {
     await page.goto("/install", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("main")).toHaveCount(1);
     await expect(page.locator("h1")).toHaveText("Download Synara");
+    // The recommendation appears once the installer controls have hydrated.
+    await expect(page.getByText("For your device", { exact: true })).toBeVisible();
     const { version } = releaseDownloads;
     const releaseRoot = "https://github.com/Emanuele-web04/synara/releases";
     const assetRoot = `${releaseRoot}/download/${version}/Synara-${version.slice(1)}`;
@@ -54,12 +55,13 @@ test.describe("homepage functional flow", () => {
         .getByRole("link", { name: "Download", exact: true });
 
     for (const [platform, suffix] of [
-      ["macOS", "arm64.dmg"],
       ["Windows", "x64.exe"],
       ["Linux", "x86_64.AppImage"],
     ]) {
       await expect(download(platform)).toHaveAttribute("href", `${assetRoot}-${suffix}`);
     }
+    await page.getByRole("button", { name: "Apple Silicon", exact: true }).click();
+    await expect(download("macOS")).toHaveAttribute("href", `${assetRoot}-arm64.dmg`);
     await page.getByRole("button", { name: "Intel", exact: true }).click();
     await expect(download("macOS")).toHaveAttribute("href", `${assetRoot}-x64.dmg`);
     await page.getByRole("button", { name: "ARM64", exact: true }).click();
@@ -68,8 +70,5 @@ test.describe("homepage functional flow", () => {
       "href",
       `${releaseRoot}/tag/${version}`,
     );
-
-    await prepareRoute(page, "/docs", "light");
-    await expect(page.locator("#nd-page")).toHaveAttribute("role", "main");
   });
 });

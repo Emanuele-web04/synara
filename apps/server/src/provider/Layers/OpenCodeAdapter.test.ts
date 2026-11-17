@@ -3355,7 +3355,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("emits context usage from OpenCode assistant message updates", async () => {
+  it("projects context usage once for identical assistant message updates", async () => {
+    const sentinelText = "usage-dedup-observation-complete";
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime({
       inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
@@ -3365,28 +3366,51 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "content.delta" && event.payload.delta === sentinelText,
+          ),
+          Stream.runCollect,
           Effect.forkChild,
         );
 
-        yield* startFullAccess(adapter, asThreadId("thread-usage-events"));
+        yield* startFullAccess(adapter, asThreadId("thread-usage-dedup"));
 
-        const turn = yield* sendTestTurn(
-          adapter,
-          asThreadId("thread-usage-events"),
-          "count tokens",
-        );
+        const turn = yield* sendTestTurn(adapter, asThreadId("thread-usage-dedup"), "count tokens");
 
-        eventQueue.push(assistantMessageUpdated());
+        const message = assistantMessageUpdated();
+        eventQueue.push(message);
+        eventQueue.push(message);
+        // This later text proves both usage updates passed through the serial event pump.
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "usage-dedup-sentinel-part",
+              messageID: message.properties.info.id,
+              type: "text",
+              text: sentinelText,
+              time: { start: 1 },
+            },
+          },
+        });
 
-        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
-        return { events, turn };
+        return { events: runtimeEvents, turn };
       }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
-    const usageEvent = result.events.find((event) => event.type === "thread.token-usage.updated");
-    expect(usageEvent).toMatchObject({
+    expect(result.events.at(-1)).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: sentinelText },
+    });
+    const usageEvents = result.events.filter(
+      (event) => event.type === "thread.token-usage.updated",
+    );
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]).toMatchObject({
       type: "thread.token-usage.updated",
       turnId: result.turn.turnId,
       payload: {
@@ -3409,60 +3433,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         source: "opencode.sdk.event",
       },
     });
-  });
-
-  it("does not emit duplicate usage for identical assistant message updates", async () => {
-    const sentinelText = "usage-dedup-observation-complete";
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime({
-      inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
-    });
-    routeEventsTo(runtime, eventQueue);
-
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.takeUntil(
-            (event) => event.type === "content.delta" && event.payload.delta === sentinelText,
-          ),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        yield* startFullAccess(adapter, asThreadId("thread-usage-dedup"));
-
-        yield* sendTestTurn(adapter, asThreadId("thread-usage-dedup"), "count tokens");
-
-        const message = assistantMessageUpdated();
-        eventQueue.push(message);
-        eventQueue.push(message);
-        // This later text proves both usage updates passed through the serial event pump.
-        eventQueue.push({
-          type: "message.part.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            part: {
-              id: "usage-dedup-sentinel-part",
-              messageID: message.properties.info.id,
-              type: "text",
-              text: sentinelText,
-              time: { start: 1 },
-            },
-          },
-        });
-
-        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return runtimeEvents;
-      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
-    );
-
-    expect(events.at(-1)).toMatchObject({
-      type: "content.delta",
-      payload: { streamKind: "assistant_text", delta: sentinelText },
-    });
-    expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(1);
   });
 
   it("maps OpenCode todo updates into shared turn tasks", async () => {

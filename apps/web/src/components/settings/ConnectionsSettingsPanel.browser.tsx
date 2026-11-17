@@ -627,8 +627,6 @@ describe("Connections settings", () => {
     await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
     await expect.element(page.getByText(/Expires in \d+:\d\d/)).toBeVisible();
     expect(CREATE_CALLS()).toHaveLength(1);
-    // Let the dialog's open transition settle so the screenshot is legible.
-    await new Promise((resolve) => setTimeout(resolve, 400));
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await expect
       .element(page.getByRole("heading", { name: /Connect a device to this/ }))
@@ -677,7 +675,6 @@ describe("Connections settings", () => {
     await expect
       .element(page.getByRole("button", { name: "Copy fingerprint", exact: true }))
       .toBeVisible();
-    await new Promise((resolve) => setTimeout(resolve, 400));
   });
 
   it("withdraws the code on screen when a new one replaces it", async () => {

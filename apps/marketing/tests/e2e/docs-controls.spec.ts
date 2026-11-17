@@ -5,6 +5,7 @@ test.describe("documentation chrome", () => {
   test("desktop sidebar toggles theme and links Download to /install", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1100 });
     await prepareRoute(page, "/docs", "light");
+    await expect(page.locator("#nd-page")).toHaveAttribute("role", "main");
 
     const sidebar = page.locator("#nd-sidebar");
     const theme = sidebar.getByRole("button", { name: "Switch to dark mode" });
