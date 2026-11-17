@@ -335,14 +335,16 @@ async function main(): Promise<void> {
       createInterface({ input: client })
         .on("line", (line) => {
           if (!authed) {
-            let hello: { capability?: unknown };
+            let hello: { capability?: unknown } | null;
             try {
               hello = JSON.parse(line);
             } catch {
               drop();
               return;
             }
-            if (hello.capability !== capability) {
+            // `JSON.parse("null")` succeeds — a null hello must not
+            // dereference its way into a sidecar crash.
+            if (hello === null || hello.capability !== capability) {
               drop();
               return;
             }
@@ -467,10 +469,21 @@ async function main(): Promise<void> {
       client.once("error", () => appSnapClients.delete(client));
       createInterface({ input: client })
         .on("line", (line) => {
-          let request: { id?: unknown; method?: unknown; args?: unknown; capability?: unknown };
+          let request: {
+            id?: unknown;
+            method?: unknown;
+            args?: unknown;
+            capability?: unknown;
+          } | null;
           try {
             request = JSON.parse(line);
           } catch {
+            return;
+          }
+          // `JSON.parse("null")` (or a bare scalar) yields a non-object —
+          // dereferencing `.capability` on it would crash the sidecar.
+          if (request === null || typeof request !== "object") {
+            drop();
             return;
           }
           if (!authed) {

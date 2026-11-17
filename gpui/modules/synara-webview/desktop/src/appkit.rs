@@ -1029,13 +1029,53 @@ fn parse_update_manifest(text: &str) -> Option<FeedManifest> {
     version.map(|v| FeedManifest { version: v, files })
 }
 
-/// Updater staging files live in the per-user temp dir; `name` components are
-/// sanitized so feed-provided versions can't escape it.
+/// Updater staging files live in a private per-update directory under the
+/// per-user temp dir, created 0700: a local attacker cannot precreate the
+/// files or swap them via symlinks. `name` components are sanitized so
+/// feed-provided versions can't escape it.
 fn update_tmp_path(name: &str) -> String {
-    std::env::temp_dir()
+    static DIR: OnceLock<String> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        for _ in 0..16 {
+            let candidate = std::env::temp_dir().join(format!(
+                "synara-update-{}-{:08x}",
+                std::process::id(),
+                rand_u32()
+            ));
+            if std::fs::create_dir(&candidate).is_ok() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &candidate,
+                        std::fs::Permissions::from_mode(0o700),
+                    );
+                }
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+        std::env::temp_dir().to_string_lossy().into_owned()
+    });
+    std::path::Path::new(dir)
         .join(name)
         .to_string_lossy()
         .into_owned()
+}
+
+fn rand_u32() -> u32 {
+    std::fs::read("/dev/urandom")
+        .ok()
+        .and_then(|b| {
+            b.get(..4)
+                .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        })
+        .unwrap_or_else(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            nanos ^ std::process::id()
+        })
 }
 
 fn sanitize_component(s: &str) -> String {
@@ -1376,11 +1416,15 @@ extern "C" fn did_receive_script_message(this: &Object, _cmd: Sel, _controller: 
 
         let is_dict: bool = msg_send![body, isKindOfClass: class!(NSDictionary)];
         if is_dict {
-            // Origin gate: a page that navigated away from the loaded origin
-            // must not reach native calls.
-            let current: id = msg_send![view, URL];
+            // Gate on the message's own frame: a cross-origin iframe can post
+            // to `synara` while `view.URL` still names the trusted top page,
+            // so only main-frame messages from the loaded origin may call in.
+            let frame_info: id = msg_send![message, frameInfo];
+            let is_main_frame: bool = msg_send![frame_info, isMainFrame];
+            let origin: id = msg_send![frame_info, securityOrigin];
             let allowed = ALLOWED_ORIGIN.lock().map(|g| g.clone()).unwrap_or_default();
-            if allowed.is_empty() || ns_url_origin(current) != allowed {
+            if !is_main_frame || allowed.is_empty() || wk_security_origin_string(origin) != allowed
+            {
                 return;
             }
             let call_id = ns_number_i64(body, "id").unwrap_or(0);
@@ -1802,6 +1846,27 @@ pub fn web_view() -> NativeViewHandle {
 }
 
 /// scheme://host[:port] of an `NSURL`, or "" when any component is absent.
+/// WKSecurityOrigin -> `scheme://host[:port]`, matching `ns_url_origin`.
+unsafe fn wk_security_origin_string(origin: id) -> String {
+    if origin.is_null() {
+        return String::new();
+    }
+    let proto: id = msg_send![origin, protocol];
+    let host: id = msg_send![origin, host];
+    let port: i64 = msg_send![origin, port];
+    let scheme = ns_string_text(proto).to_lowercase();
+    let host_s = ns_string_text(host);
+    if scheme.is_empty() || host_s.is_empty() {
+        return String::new();
+    }
+    let default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
+    if port == 0 || default_port {
+        format!("{scheme}://{host_s}")
+    } else {
+        format!("{scheme}://{host_s}:{port}")
+    }
+}
+
 unsafe fn ns_url_origin(nsurl: id) -> String {
     if nsurl == nil {
         return String::new();

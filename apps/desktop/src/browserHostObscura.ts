@@ -541,6 +541,11 @@ async function toolRun(threadId: string, args: Json, socket?: Socket): Promise<J
   }
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 15_000, 1_000), 120_000);
   const { BetterWright } = await import("betterwright");
+  // Cancellation can land during the import, before any browser exists to
+  // close — never start a snippet for a caller that already went away.
+  if (socket?.destroyed) {
+    throw toolError("BrowserEvaluationFailed", "browser_run was cancelled.");
+  }
   // The worker talks to Obscura's browser-level CDP endpoint directly — it owns
   // its page context (the facade path stalls inside the vendored worker's
   // post-eval channel). Same storage dir, so page state is shared.

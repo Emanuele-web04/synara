@@ -312,22 +312,22 @@ mod lifecycle {
             }
         }
         std::thread::spawn(|| {
-            let (mut was_locked, mut was_off_console) = screen_locked();
+            let (mut was_locked, mut was_on_console) = screen_locked();
             // Publish the initial state too: without a first signal, a frame
             // started on a locked session never pauses the sidecar at all.
-            if was_locked || !was_off_console {
+            if was_locked || !was_on_console {
                 signal_sidecar(SIG_PAUSE);
             }
             loop {
                 std::thread::sleep(Duration::from_secs(2));
                 let (locked, on_console) = screen_locked();
                 let paused = locked || !on_console;
-                let was_paused = was_locked || !was_off_console;
+                let was_paused = was_locked || !was_on_console;
                 if paused != was_paused {
                     signal_sidecar(if paused { SIG_PAUSE } else { SIG_RESUME });
                 }
                 was_locked = locked;
-                was_off_console = on_console;
+                was_on_console = on_console;
             }
         });
     }
