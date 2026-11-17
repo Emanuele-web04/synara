@@ -1,4 +1,4 @@
-package com.synaragpui
+package com.emanueledipietro.synara.gpui
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

@@ -236,7 +236,7 @@ function requireTab(tabId: string | undefined): Tab {
       [...tabs.values()].find((t) => !t.dead));
   if (!tab) {
     const err = new Error("No browser tab is bound to this thread.");
-    (err as Json & { code?: string }).code = "BrowserTabScopeViolation";
+    (err as Error & { code?: string }).code = "BrowserTabScopeViolation";
     throw err;
   }
   return tab;
@@ -510,7 +510,7 @@ async function toolClose(threadId: string, args: Json): Promise<Json> {
 
 function toolError(code: string, message: string): Error {
   const err = new Error(message);
-  (err as Json & { code?: string }).code = code;
+  (err as Error & { code?: string }).code = code;
   return err;
 }
 
@@ -644,7 +644,7 @@ function startPipe(capability: string): void {
           const result = await handleRpc(client, request.method as string, request.params);
           safeWrite(socket, encodeFrame({ jsonrpc: "2.0", id, result }));
         } catch (error) {
-          const code = (error as Json & { code?: string })?.code;
+          const code = (error as Error & { code?: string })?.code;
           safeWrite(
             socket,
             encodeFrame({
@@ -680,7 +680,7 @@ function startPipe(capability: string): void {
       const { timingSafeEqual } = await import("node:crypto");
       if (got.byteLength !== expected.byteLength || !timingSafeEqual(got, expected)) {
         const err = new Error("Browser host authorization denied.");
-        (err as Json & { code?: string }).code = "BrowserAuthorizationDenied";
+        (err as Error & { code?: string }).code = "BrowserAuthorizationDenied";
         throw err;
       }
       if (client.sessionId && client.sessionId !== sessionId) {
@@ -708,12 +708,12 @@ function startPipe(capability: string): void {
       }
       if (typeof threadId !== "string" || !threadId || typeof name !== "string") {
         const err = new Error("executeTool requires thread_id and name");
-        (err as Json & { code?: string }).code = "BrowserInputUnsupported";
+        (err as Error & { code?: string }).code = "BrowserInputUnsupported";
         throw err;
       }
       if (client.threadId && client.threadId !== threadId) {
         const err = new Error("Thread scope violation on this connection");
-        (err as Json & { code?: string }).code = "BrowserTabScopeViolation";
+        (err as Error & { code?: string }).code = "BrowserTabScopeViolation";
         throw err;
       }
       client.threadId = threadId;

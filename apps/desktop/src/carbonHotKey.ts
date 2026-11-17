@@ -148,6 +148,7 @@ function parseAccelerator(accelerator: string): { modifiers: number; keyCode: nu
   const parts = accelerator.split("+");
   if (parts.length < 2) return null;
   const key = parts[parts.length - 1];
+  if (key === undefined) return null;
   let modifiers = 0;
   for (const part of parts.slice(0, -1)) {
     const bit = MODIFIER_BITS[part];

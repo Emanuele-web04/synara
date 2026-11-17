@@ -1,4 +1,4 @@
-package com.synaragpui
+package com.emanueledipietro.synara.gpui
 
 import android.app.Application
 import com.facebook.react.PackageList

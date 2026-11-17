@@ -4,7 +4,7 @@
   "sha256": "d0c276a933465e70765d60e1c244d803276b5b5805e6b9e4311841169620470e",
   "nativeRevision": 41,
   "patchSha256": "6a49640a959cfa19c71c790405a3335da4fdcd2b6affafcb31e4cd088edf337a",
-  "linuxBrowserPatchSha256": "97ef46895b9454e1d0f459bc20a05bdd920f310876e29c9ac3a68510a35fdd30",
+  "linuxBrowserPatchSha256": "6f6788f3795facca6b5a85f891f4bf3eeaf4b84d91fbde0cd19f1ac5d6565ece",
   "linuxBrowserInputControl": 1,
   "rustVersion": "1.97.1"
 }

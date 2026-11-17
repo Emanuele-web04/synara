@@ -25,3 +25,5 @@ async function run(file: string, args: string[], label: string): Promise<void> {
 
 await run("cuaDriverHostMac.ts", cuaArgs, "cua host");
 await run("browserHostObscura.ts", browserArgs, "browser host");
+
+export {};

@@ -70,7 +70,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // A relay client that goes away mid-write raises EPIPE on the write callback
 // and on its readline interface; both must be swallowed or the whole sidecar
 // dies taking every live client with it.
-function safeWrite(client: Socket, data: Buffer | string): void {
+function safeWrite(client: Socket, data: Buffer | Uint8Array | string): void {
   if (client.destroyed || !client.writable) return;
   try {
     client.write(data, () => {});
@@ -131,7 +131,8 @@ function ownPids(): Set<number> {
   const parentOf = new Map<number, number>();
   for (const line of rows.stdout.split("\n")) {
     const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-    if (Number.isFinite(pid) && Number.isFinite(ppid)) parentOf.set(pid, ppid);
+    if (pid !== undefined && ppid !== undefined && Number.isFinite(pid) && Number.isFinite(ppid))
+      parentOf.set(pid, ppid);
   }
   // Children of the shell (and of this host) belong to the app too.
   let changed = true;
@@ -178,6 +179,7 @@ function normalizeOverview(result: { content?: { type: string; data?: string }[]
       encoding: "utf8",
     });
     const [width, height] = [...probe.stdout.matchAll(/pixel\w+: (\d+)/g)].map((m) => Number(m[1]));
+    if (width === undefined || height === undefined) return result;
     if (Math.max(width, height) <= MODEL_SCREEN_IMAGE_MAX_DIMENSION) return result;
     const ratio = MODEL_SCREEN_IMAGE_MAX_DIMENSION / Math.max(width, height);
     const resized = spawnSync(
@@ -538,7 +540,7 @@ async function main(): Promise<void> {
       helperPath,
       onError: (error) => console.error("[cua-driver-host-mac] computer shield failed:", error),
     }),
-    frameTap,
+    ...(frameTap ? { frameTap } : {}),
     normalizeOverview,
   });
 
