@@ -26,6 +26,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   ThreadId,
   TurnId,
+  type ProviderEvent,
   type RuntimeMode,
 } from "@synara/contracts";
 
@@ -2230,6 +2231,119 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it.each(["stderr", "configWarning", "warning"])(
+    "reports the multi-agent deprecation once when %s arrives first",
+    async (first) => {
+      const fake = createSyntheticCodexAppServer();
+      const { manager } = createSyntheticCodexManager(fake);
+      const events: ProviderEvent[] = [];
+      manager.on("event", (event) => events.push(event));
+      try {
+        await manager.startSession({
+          threadId: asThreadId("deprecation-thread"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        });
+        events.length = 0;
+        const message =
+          "`[features].multi_agent` is deprecated. It still controls the V1 fallback. `[agents].enabled = false` disables subagent tools even when the model selects a subagent version, unless `[features].multi_agent_v2` is enabled.";
+        const emit = (source: string) => {
+          const child = fake.children[0]!;
+          if (source === "stderr") {
+            child.stderr.emit(
+              "data",
+              Buffer.from(`2026-11-17T20:21:40Z ERROR codex_app_server: ${message}\n`),
+            );
+          } else {
+            child.stdout.emit(
+              "data",
+              Buffer.from(
+                `${JSON.stringify({ method: source, params: source === "warning" ? { message } : { summary: message, details: null } })}\n`,
+              ),
+            );
+          }
+        };
+        for (const source of [
+          first,
+          ...["stderr", "configWarning", "warning"].filter((s) => s !== first),
+        ])
+          emit(source);
+        expect(events.map((event) => [event.method, event.payload])).toEqual([
+          ["configWarning", { summary: message, details: null }],
+        ]);
+        fake.children[0]!.stdout.emit(
+          "data",
+          Buffer.from(
+            `${JSON.stringify({ method: "warning", params: { message: "A different configuration error" } })}\n`,
+          ),
+        );
+        expect(events.at(-1)?.payload).toEqual({ message: "A different configuration error" });
+        const locatedWarning = {
+          summary: message,
+          path: "/fixture/config.toml",
+          details: "Review this layer",
+        };
+        fake.children[0]!.stdout.emit(
+          "data",
+          Buffer.from(`${JSON.stringify({ method: "configWarning", params: locatedWarning })}\n`),
+        );
+        expect(events.at(-1)?.payload).toEqual(locatedWarning);
+      } finally {
+        await manager.stopAll();
+      }
+    },
+  );
+
+  it.each(["before", "after"])(
+    "collapses repeated MCP subscription stderr with startup status %s the error",
+    async (order) => {
+      const fake = createSyntheticCodexAppServer();
+      const { manager } = createSyntheticCodexManager(fake);
+      const warnings: string[] = [];
+      manager.on("event", (event) => {
+        if (event.method === "process/stderr" && event.message) warnings.push(event.message);
+      });
+      try {
+        await manager.startSession({
+          threadId: asThreadId("mcp-refusal-thread"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        });
+        const emit = (error: string, second: number) =>
+          fake.children[0]!.stderr.emit(
+            "data",
+            Buffer.from(
+              `2026-11-17T20:21:${second}Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(${JSON.stringify(`HTTP 403: ${JSON.stringify({ error })}`)})\n`,
+            ),
+          );
+        const inactive = "subscription_inactive: Subscription status: canceled";
+        const required = "subscription_required: The SuperX API requires an active subscription";
+        const starting = () =>
+          fake.children[0]!.stdout.emit(
+            "data",
+            Buffer.from(
+              `${JSON.stringify({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status: "starting" } })}\n`,
+            ),
+          );
+        if (order === "before") starting();
+        emit(inactive, 40);
+        if (order === "after") starting();
+        emit(inactive, 41);
+        emit(required, 42);
+        emit("permission_denied: Workspace access denied", 43);
+        emit("permission_denied: Workspace access denied", 44);
+        expect(warnings).toHaveLength(4);
+        starting();
+        emit(inactive, 45);
+        expect(warnings).toHaveLength(5);
+      } finally {
+        await manager.stopAll();
+      }
+    },
+  );
+
   it("keeps mirrored user-config notices out of stderr warnings while retaining real project warnings", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-notice-"));
     const configPath = path.join(root, "config.toml");

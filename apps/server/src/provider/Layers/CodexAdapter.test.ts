@@ -745,7 +745,7 @@ it.effect(
         const manager = new FakeCodexManager();
         yield* Effect.gen(function* () {
           const adapter = yield* CodexAdapter;
-          const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
+          const eventsFiber = yield* Stream.take(adapter.streamEvents, 5).pipe(
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -796,18 +796,42 @@ it.effect(
             threadId: asThreadId("review-thread"),
             payload: { message: "Hook unavailable: API_KEY=private-native-warning-key" },
           } satisfies ProviderEvent);
+          manager.emit("event", {
+            id: asEventId("mcp-failure-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "mcpServer/startupStatus/updated",
+            threadId: asThreadId("review-thread"),
+            payload: {
+              name: "fixture",
+              status: "failed",
+              error: "MCP connection failed: API_KEY=private-mcp-warning-key",
+            },
+          } satisfies ProviderEvent);
           emit("session/started", "ready");
 
           const events = Array.from(yield* Fiber.join(eventsFiber));
           assert.deepEqual(
             events.map((event) => event.type),
-            ["runtime.warning", "runtime.warning", "runtime.warning", "session.started"],
+            [
+              "runtime.warning",
+              "runtime.warning",
+              "runtime.warning",
+              "runtime.warning",
+              "session.started",
+            ],
           );
           assert.deepEqual(
             events
               .filter((event) => event.type === "runtime.warning")
               .map((event) => event.payload.message),
-            ["Review denied", "Review aborted", "Hook unavailable: API_KEY=[REDACTED]"],
+            [
+              "Review denied",
+              "Review aborted",
+              "Hook unavailable: API_KEY=[REDACTED]",
+              'MCP server "fixture" failed to start: MCP connection failed: API_KEY=[REDACTED]',
+            ],
           );
         }).pipe(
           Effect.provide(
@@ -827,6 +851,8 @@ it.effect(
         assert.ok(nativeLog.includes('"method":"warning"'));
         assert.equal(nativeLog.includes("private-native-warning-key"), false);
         assert.equal(nativeLog.includes("private-approved-key"), false);
+        assert.ok(nativeLog.includes('"method":"mcpServer/startupStatus/updated"'));
+        assert.equal(nativeLog.includes("private-mcp-warning-key"), false);
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -1017,6 +1043,90 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.summary, "Invalid MCP configuration");
       assert.equal(firstEvent.value.payload.details, "url is not supported for stdio");
       assert.equal(firstEvent.value.payload.path, "mcp_servers.synara");
+    }),
+  );
+
+  it.effect("keeps the consolidated multi-agent deprecation visible in history", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const summary =
+        "`[features].multi_agent` is deprecated. It still controls the V1 fallback. `[agents].enabled = false` disables subagent tools even when the model selects a subagent version, unless `[features].multi_agent_v2` is enabled.";
+      lifecycleManager.emit("event", {
+        id: asEventId("multi-agent-config-warning"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "configWarning",
+        payload: { summary },
+      } satisfies ProviderEvent);
+      const result = yield* Fiber.join(eventFiber);
+      assert.equal(result._tag, "Some");
+      if (result._tag !== "Some") return;
+      const [activity] = projectProviderRuntimeActivities(result.value);
+      assert.equal(activity?.kind, "runtime.warning");
+      const data = activity?.payload;
+      assert.ok(data && typeof data === "object" && "message" in data);
+      assert.equal(data.message, summary);
+    }),
+  );
+
+  it.effect("reports named MCP startup failures without hiding other transport errors", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const sentinel = "MCP fixture complete";
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "runtime.warning" && event.payload.message === sentinel,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+      const failures = [
+        ["billing-a", "subscription_inactive: Subscription status: canceled"],
+        ["billing-b", "subscription_required: The SuperX API requires an active subscription"],
+        ["other", "permission_denied: Workspace access denied"],
+      ];
+      for (const [name, error] of failures) {
+        for (const status of ["starting", "failed"]) {
+          lifecycleManager.emit("event", {
+            id: asEventId(`${name}-${status}`),
+            kind: "notification",
+            provider: "codex",
+            threadId: asThreadId("thread-1"),
+            createdAt: new Date().toISOString(),
+            method: "mcpServer/startupStatus/updated",
+            payload: {
+              name,
+              status,
+              error:
+                status === "failed"
+                  ? `MCP startup failed: HTTP 403: ${JSON.stringify({ error })}`
+                  : null,
+            },
+          } satisfies ProviderEvent);
+        }
+      }
+      lifecycleManager.emit("event", {
+        id: asEventId("mcp-fixture-complete"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "warning",
+        payload: { message: sentinel },
+      } satisfies ProviderEvent);
+      const events = Array.from(yield* Fiber.join(eventsFiber))
+        .slice(0, -1)
+        .filter((event) => event.type === "runtime.warning");
+      assert.equal(events.length, 3);
+      for (const [index, event] of events.entries()) {
+        assert.equal(event.type, "runtime.warning");
+        if (event.type !== "runtime.warning") continue;
+        assert.ok(event.payload.message.includes(failures[index]![0]!));
+        assert.ok(event.payload.message.includes(failures[index]![1]!));
+        const [activity] = projectProviderRuntimeActivities(event);
+        assert.equal(activity?.kind, "runtime.warning");
+        assert.match(JSON.stringify(activity?.payload), /failed/);
+      }
     }),
   );
 
