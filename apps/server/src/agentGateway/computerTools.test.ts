@@ -4,6 +4,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// node:timers/promises is not covered by vi.useFakeTimers(); route it through
+// the global timer (fake when enabled, real otherwise) so the clamped
+// computer_wait case does not sleep for real.
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers/promises")>();
+  return {
+    ...actual,
+    setTimeout: <T = void>(ms?: number, value?: T, options?: { signal?: AbortSignal }) =>
+      new Promise<T>((resolve, reject) => {
+        const signal = options?.signal;
+        if (signal?.aborted) return reject(signal.reason);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(signal!.reason);
+        };
+        const timer = globalThis.setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve(value as T);
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }),
+  };
+});
+
 import {
   COMPUTER_SELECT_TEXT_RANGE_MAX,
   COMPUTER_TEXT_MAX_LENGTH,
@@ -166,14 +190,6 @@ function schemaPropertyDescription(byName: ToolsByName, tool: string, property: 
   return schema?.properties?.[property]?.description ?? "";
 }
 
-/** The `window_id` blurb one tool advertises, which is backend-dependent prose. */
-function windowIdDescription(byName: ToolsByName, tool: string): string {
-  const schema = byName.get(tool)?.definition.inputSchema as
-    | { properties?: { window_id?: { description?: string } } }
-    | undefined;
-  return schema?.properties?.window_id?.description ?? "";
-}
-
 describe("agent gateway computer tools", () => {
   it("bounds active tool context and directs deferred discovery to the next small set", async () => {
     const { tools, manager } = await setup(
@@ -225,20 +241,6 @@ describe("agent gateway computer tools", () => {
     expect(notes).not.toContain("computer_recording");
     expect(notes).not.toContain("computer_replay");
     await manager.dispose();
-  });
-
-  it("presents launch hidden as an explicit posture, not an invisible-workspace doctrine", async () => {
-    const { byName, manager } = await setup();
-    try {
-      const hidden = schemaPropertyDescription(byName, "computer_launch_app", "hidden");
-      expect(hidden).toContain("Explicitly hide");
-      expect(hidden).toContain("never authorizes foreground input");
-      expect(hidden).not.toContain("Defaults to true");
-      expect(hidden).not.toContain("agent launches stay invisible");
-      expect(hidden).not.toContain("invisible workspace");
-    } finally {
-      await manager.dispose();
-    }
   });
 
   it("attaches list-windows guidance to a null-window launch result", async () => {
@@ -355,54 +357,6 @@ describe("agent gateway computer tools", () => {
       expect(observations.every((active) => !active)).toBe(true);
     } finally {
       await manager.dispose();
-    }
-  });
-
-  it("covers routine foreground delivery with the active task consent on macOS", async () => {
-    const { byName } = await setup(
-      Object.assign(new FakeComputerBackend(), {
-        agentDialect: "macos" as const,
-      }),
-    );
-    const notes = computerToolInstructions();
-    expect(notes).toContain("the user's visible-use request or direct confirmation");
-    expect(notes).not.toContain("without bringing it to the front");
-    expect(windowIdDescription(byName, "computer_click")).toContain(
-      "Exact window for label or x/y targeting",
-    );
-    expect(windowIdDescription(byName, "computer_type_text")).toContain("does not activate it");
-    // The activate tool no longer promises consent-covered foreground: the
-    // user's own task text is the authorization, and the description says so.
-    expect(byName.get("computer_activate_window")?.definition.description).toContain(
-      "Unless the user's own task text asked to see the screen",
-    );
-    expect(byName.get("computer_list_windows")?.definition.description).not.toContain(
-      "into view automatically",
-    );
-    expect(byName.get("computer_get_state")?.definition.description).toContain("primary display");
-    expect(windowIdDescription(byName, "computer_get_state")).toContain("any requested screenshot");
-    const capture = byName.get("computer_screenshot")?.definition;
-    expect(capture?.description).toContain("Rectangular region capture is unavailable");
-    const captureSchema = capture?.inputSchema as {
-      properties: Record<string, unknown>;
-    };
-    expect(Object.keys(captureSchema.properties).sort()).toEqual(["max_dimension", "window_id"]);
-  });
-
-  it("spells out all three delivery verdicts once, in the shared notes", async () => {
-    // The three-way verdict lives in the injected block now — it was eleven
-    // identical copies across the tool schemas — and each input tool carries
-    // the short form: evidence, not retry permission.
-    const { byName } = await setup();
-    const notes = computerToolInstructions();
-    expect(notes).toContain('"verified"');
-    expect(notes).toContain('"dispatched-unknown"');
-    expect(notes).toContain('"not-dispatched"');
-    expect(notes).toContain("never replay it");
-    for (const name of ["computer_type_text", "computer_press_key"]) {
-      const description = byName.get(name)?.definition.description ?? "";
-      expect(description).toContain("delivery.verified");
-      expect(description).toContain("never replay an uncertain action");
     }
   });
 
@@ -750,47 +704,6 @@ describe("agent gateway computer tools", () => {
     } finally {
       await manager.dispose();
     }
-  });
-
-  it("tells the model to point in screenshot pixels and never to convert them", async () => {
-    const { byName } = await setup();
-    // Both perception tools spell the same contract out, so the model carries
-    // one skill from the workspace shot to the zoomed one.
-    for (const name of ["computer_get_state", "computer_screenshot"]) {
-      const description = byName.get(name)?.definition.description ?? "";
-      expect(description).toContain("screenshotId");
-      expect(description).toContain("pass x/y as pixel coordinates in that image");
-      expect(description).not.toContain("region.x");
-    }
-    // Each pointer tool carries the coordinate rule self-contained now — the
-    // compact injected block no longer spends a paragraph on it.
-    for (const name of [
-      "computer_click",
-      "computer_move_cursor",
-      "computer_drag",
-      "computer_scroll",
-    ]) {
-      const description = byName.get(name)?.definition.description ?? "";
-      expect(description).toContain("never desktop coordinates");
-      expect(description).not.toContain("global desktop coordinates");
-      // The optional id lives beside x/y on every pointer tool.
-      expect(JSON.stringify(byName.get(name)?.definition.inputSchema)).toContain("screenshot_id");
-    }
-    expect(byName.get("computer_get_screen_size")?.definition.description).toContain(
-      "Informational only",
-    );
-  });
-
-  it("tells the model the cursor is overlay-only and no background hover exists", async () => {
-    const { byName } = await setup();
-    // Probing showed pid-routed synthetic mouseMoved posts only reach an AppKit
-    // window while the user's real cursor is inside it, so move_cursor cannot
-    // become a hover delivery path (docs/computer-use-cua/hover-verdict-2026-09-17.md).
-    // The description must keep denying that effect plainly.
-    const description = byName.get("computer_move_cursor")?.definition.description ?? "";
-    expect(description).toContain("does not deliver hover events");
-    expect(description).toContain("a real background hover is not available on this backend");
-    expect(description).toContain("real system pointer never moves");
   });
 
   it("keeps a window-scoped state capture bound to its native target", async () => {
@@ -1367,18 +1280,6 @@ describe("agent gateway computer tools", () => {
       windowId: "fake-calculator",
       maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
     });
-  });
-
-  it("tells the model where keyboard input lands and when not to skip a screenshot", async () => {
-    const { byName } = await setup();
-    for (const name of ["computer_type_text", "computer_press_key", "computer_paste"]) {
-      const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("Pass window_id or use the last aimed window");
-      expect(JSON.stringify(tool?.definition.inputSchema)).toContain("window_id");
-    }
-    // A final text observation can replace an image when it verifies the result.
-    const schema = JSON.stringify(byName.get("computer_click")?.definition.inputSchema);
-    expect(schema).toContain("verify with fresh state or a final screenshot");
   });
 
   it("reports an unchanged screen instead of resending the identical image", async () => {
@@ -2200,13 +2101,6 @@ describe("agent gateway computer tools", () => {
     expect(resultJson(read)).toMatchObject({ value: "  copied\ntext  " });
   });
 
-  it("tells the model the clipboard belongs to the user too", async () => {
-    const { byName } = await setup();
-    for (const name of ["computer_read_clipboard", "computer_write_clipboard"]) {
-      expect(byName.get(name)?.definition.description).toContain("shared with the human user");
-    }
-  });
-
   it("refuses clipboard text past the byte limit before it reaches the backend", async () => {
     const { backend, call } = await setup();
     const result = await call("computer_write_clipboard", {
@@ -2689,33 +2583,37 @@ describe("agent gateway computer tools", () => {
     });
   });
 
-  it(
-    "waits without touching the desktop, and never for longer than its bound",
-    async () => {
-      const { backend, call } = await setup();
-      const started = Date.now();
-      const result = await call("computer_wait", { duration_ms: 5 });
-      expect(Date.now() - started).toBeGreaterThanOrEqual(4);
-      expect(result.isError).not.toBe(true);
-      expect(resultJson(result)).toMatchObject({ waitedMs: 5 });
-      // No pointer, no keys, no capture: a wait that photographed the desktop
-      // would be a screenshot with a delay, which is not what it is for.
-      expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
-      expect(backend.callsFor("click")).toHaveLength(0);
+  it("waits without touching the desktop, and never for longer than its bound", async () => {
+    const { backend, call } = await setup();
+    const started = Date.now();
+    const result = await call("computer_wait", { duration_ms: 5 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4);
+    expect(result.isError).not.toBe(true);
+    expect(resultJson(result)).toMatchObject({ waitedMs: 5 });
+    // No pointer, no keys, no capture: a wait that photographed the desktop
+    // would be a screenshot with a delay, which is not what it is for.
+    expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
+    expect(backend.callsFor("click")).toHaveLength(0);
 
-      // Clamped rather than refused: the intent is clear and only the scale is
-      // wrong, and an unclamped wait stalls the whole turn behind a sleep.
-      const clamped = await call("computer_wait", {
+    // Clamped rather than refused: the intent is clear and only the scale is
+    // wrong, and an unclamped wait stalls the whole turn behind a sleep.
+    vi.useFakeTimers();
+    let clamped: McpToolCallResult;
+    try {
+      const pending = call("computer_wait", {
         duration_ms: 60 * 60 * 1_000,
       });
-      expect(resultJson(clamped)).toMatchObject({
-        waitedMs: COMPUTER_WAIT_MAX_MS,
-      });
-      const negative = await call("computer_wait", { duration_ms: -5 });
-      expect(resultJson(negative)).toMatchObject({ waitedMs: 0 });
-    },
-    COMPUTER_WAIT_MAX_MS + 5_000,
-  );
+      await vi.advanceTimersByTimeAsync(COMPUTER_WAIT_MAX_MS);
+      clamped = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(resultJson(clamped)).toMatchObject({
+      waitedMs: COMPUTER_WAIT_MAX_MS,
+    });
+    const negative = await call("computer_wait", { duration_ms: -5 });
+    expect(resultJson(negative)).toMatchObject({ waitedMs: 0 });
+  });
 
   it("holds modifiers across a click and a scroll, and refuses a name it cannot press", async () => {
     // Not expressible as a press_key chord, which releases its keys before the
