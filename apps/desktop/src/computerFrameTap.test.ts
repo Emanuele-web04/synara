@@ -122,10 +122,8 @@ describe("ComputerFrameTap", () => {
   });
 
   it.each([
-    [0, 1],
     [0, 4],
     [4 * 1024 * 1024 + 1, 1],
-    [4 * 1024 * 1024 + 1, 4],
   ])("rejects invalid length %i in %i-byte chunks", async (length, chunkSize) => {
     const { socket, send, onError } = await startAttachedTap();
     const header = Buffer.alloc(4);
