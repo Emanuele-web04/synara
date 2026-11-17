@@ -1,60 +1,72 @@
 // FILE: openCodeConfigPaths.ts
-// Purpose: Candidate config file locations for OpenCode-compatible CLIs, plus a
-//          content fingerprint used to invalidate the model discovery cache.
+// Purpose: Fingerprint OpenCode's local configuration for model discovery.
 // Layer: Server provider runtime utility
 // Exports: resolveOpenCodeCompatibleConfigPaths, openCodeCompatibleConfigFingerprint
 //
-// OpenCode reads its provider and model declarations from a JSON/JSONC config
-// file (`opencode.json` / `opencode.jsonc`) resolved from the XDG config home,
-// falling back to `~/.config` on every OS. Synara never reads that file for
-// discovery — it shells out to `opencode models`, which reads it itself — so a
-// rename inside the file changes nothing in the discovery cache key. This module
-// supplies a fingerprint of those files so an edit forces rediscovery.
+// The CLI merges configuration from the account, overrides and project.
+// File metadata lets discovery notice edits without reading config contents.
 
-import { stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
 import nodePath from "node:path";
 
 export interface OpenCodeConfigPathInput {
   readonly homeDir: string;
   readonly env?: NodeJS.ProcessEnv;
-  readonly platform?: NodeJS.Platform;
+  readonly cwd?: string | undefined;
   readonly dataDirectoryName: string;
 }
 
 const CONFIG_FILE_NAMES = ["opencode.json", "opencode.jsonc"] as const;
 
+// Preserve parent segments until the OS resolves any preceding symlink.
+const relativeTo = (directory: string, file: string) =>
+  nodePath.isAbsolute(file)
+    ? file
+    : `${directory}${directory.endsWith(nodePath.sep) ? "" : nodePath.sep}${file}`;
+
 /**
- * Returns the candidate config file paths in precedence order. Kept in step
- * with how OpenCode resolves its own config so the fingerprint watches the
- * files the CLI actually reads.
+ * Enumerate config files using the same account environment and working directory as the CLI.
  */
 export function resolveOpenCodeCompatibleConfigPaths(input: OpenCodeConfigPathInput): string[] {
   const env = input.env ?? {};
-  const paths: string[] = [];
+  const paths = new Set<string>();
   const pushConfigFiles = (directory: string) => {
     for (const fileName of CONFIG_FILE_NAMES) {
-      const filePath = nodePath.join(directory, fileName);
-      if (!paths.includes(filePath)) paths.push(filePath);
+      paths.add(relativeTo(directory, fileName));
     }
   };
 
-  // A per-provider config directory override wins over the XDG default.
-  const configDirOverride =
-    input.dataDirectoryName === "opencode" ? env.OPENCODE_CONFIG_DIR?.trim() : undefined;
-  if (configDirOverride) pushConfigFiles(configDirOverride);
+  const cwd = input.cwd ?? process.cwd();
+  const isOpenCode = input.dataDirectoryName === "opencode";
+  const configFileOverride = isOpenCode ? env.OPENCODE_CONFIG?.trim() : undefined;
+  if (configFileOverride) paths.add(relativeTo(cwd, configFileOverride));
 
+  const configDirOverride = isOpenCode ? env.OPENCODE_CONFIG_DIR?.trim() : undefined;
+  if (configDirOverride) pushConfigFiles(relativeTo(cwd, configDirOverride));
+
+  // An isolated account must never fingerprint the ambient user's config.
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || input.homeDir;
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  if (xdg) pushConfigFiles(nodePath.join(xdg, input.dataDirectoryName));
+  const globalDir = relativeTo(
+    xdg ? relativeTo(cwd, xdg) : nodePath.join(home, ".config"),
+    input.dataDirectoryName,
+  );
+  pushConfigFiles(globalDir);
+  if (isOpenCode) {
+    paths.add(relativeTo(globalDir, "config.json"));
+    pushConfigFiles(nodePath.join(home, ".opencode"));
 
-  // Canonical path on Linux, macOS, and Windows (`xdg-basedir`).
-  pushConfigFiles(nodePath.join(input.homeDir, ".config", input.dataDirectoryName));
-
-  if (input.platform === "win32") {
-    const appData = env.APPDATA?.trim() || nodePath.join(input.homeDir, "AppData", "Roaming");
-    pushConfigFiles(nodePath.join(appData, input.dataDirectoryName));
+    if (!["1", "true"].includes(env.OPENCODE_DISABLE_PROJECT_CONFIG?.toLowerCase() ?? "")) {
+      for (let directory = nodePath.resolve(cwd); ; directory = nodePath.dirname(directory)) {
+        pushConfigFiles(directory);
+        pushConfigFiles(nodePath.join(directory, ".opencode"));
+        if (nodePath.dirname(directory) === directory) break;
+      }
+    }
   }
 
-  return paths;
+  return [...paths];
 }
 
 /**
@@ -71,11 +83,14 @@ export function resolveOpenCodeCompatibleConfigPaths(input: OpenCodeConfigPathIn
 export async function openCodeCompatibleConfigFingerprint(
   input: OpenCodeConfigPathInput,
 ): Promise<string | null> {
-  const parts: string[] = [];
-  for (const filePath of resolveOpenCodeCompatibleConfigPaths(input)) {
-    const stats = await stat(filePath).catch(() => undefined);
-    if (!stats?.isFile()) continue;
-    parts.push(`${filePath}:${stats.size}:${Math.trunc(stats.mtimeMs)}`);
-  }
-  return parts.length > 0 ? parts.join("|") : null;
+  const cwd = input.cwd ?? process.cwd();
+  const effectiveCwd = await realpath(cwd).catch(() => cwd);
+  const stamps = await Promise.all(
+    resolveOpenCodeCompatibleConfigPaths({ ...input, cwd: effectiveCwd }).map(async (filePath) => {
+      const stats = await stat(filePath).catch(() => undefined);
+      return stats?.isFile() ? [filePath, stats.size, stats.mtimeMs, stats.ctimeMs] : null;
+    }),
+  );
+  const files = stamps.filter((stamp) => stamp !== null);
+  return files.length > 0 ? createHash("sha256").update(JSON.stringify(files)).digest("hex") : null;
 }

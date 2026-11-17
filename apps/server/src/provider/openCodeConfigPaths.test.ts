@@ -16,37 +16,23 @@ import {
 const homeDir = "/home/user";
 
 describe("resolveOpenCodeCompatibleConfigPaths", () => {
-  it("uses ~/.config on Linux and does not consult AppData", () => {
+  it("uses the selected account's XDG config home", () => {
     const paths = resolveOpenCodeCompatibleConfigPaths({
       homeDir,
-      platform: "linux",
-      env: {},
+      env: { HOME: "/isolated/home", XDG_CONFIG_HOME: "/isolated/config" },
+      cwd: "/isolated/project",
       dataDirectoryName: "opencode",
     });
-
-    expect(paths).toEqual([
-      nodePath.join(homeDir, ".config", "opencode", "opencode.json"),
-      nodePath.join(homeDir, ".config", "opencode", "opencode.jsonc"),
-    ]);
-    expect(paths.some((value) => /appdata/i.test(value))).toBe(false);
-  });
-
-  it("honors XDG_CONFIG_HOME on every platform before the default ~/.config path", () => {
-    const paths = resolveOpenCodeCompatibleConfigPaths({
-      homeDir,
-      platform: "linux",
-      env: { XDG_CONFIG_HOME: "/custom/config" },
-      dataDirectoryName: "opencode",
-    });
-
-    expect(paths[0]).toBe(nodePath.join("/custom/config", "opencode", "opencode.json"));
-    expect(paths).toContain(nodePath.join(homeDir, ".config", "opencode", "opencode.json"));
+    expect(paths).toContain(nodePath.join("/isolated/config", "opencode", "opencode.json"));
+    expect(paths).not.toContain(nodePath.join(homeDir, ".config", "opencode", "opencode.json"));
+    expect(paths).not.toContain(
+      nodePath.join("/isolated/home", ".config", "opencode", "opencode.json"),
+    );
   });
 
   it("honors the OPENCODE_CONFIG_DIR override first", () => {
     const paths = resolveOpenCodeCompatibleConfigPaths({
       homeDir,
-      platform: "linux",
       env: { OPENCODE_CONFIG_DIR: "/override/opencode" },
       dataDirectoryName: "opencode",
     });
@@ -60,7 +46,6 @@ describe("resolveOpenCodeCompatibleConfigPaths", () => {
   it("uses the driver's own directory name (kilo) without an OPENCODE override", () => {
     const paths = resolveOpenCodeCompatibleConfigPaths({
       homeDir,
-      platform: "linux",
       env: { OPENCODE_CONFIG_DIR: "/should/not/apply" },
       dataDirectoryName: "kilo",
     });
@@ -71,17 +56,17 @@ describe("resolveOpenCodeCompatibleConfigPaths", () => {
     ]);
   });
 
-  it("adds the Windows APPDATA fallback", () => {
+  it("resolves relative config overrides against the CLI working directory", () => {
+    const cwd = nodePath.resolve("workspace", "nested");
     const paths = resolveOpenCodeCompatibleConfigPaths({
       homeDir,
-      platform: "win32",
-      env: {},
+      env: { OPENCODE_CONFIG: "custom.jsonc", OPENCODE_CONFIG_DIR: "../profile" },
+      cwd,
       dataDirectoryName: "opencode",
     });
-
-    expect(paths).toContain(
-      nodePath.join(homeDir, "AppData", "Roaming", "opencode", "opencode.json"),
-    );
+    expect(paths).toContain(nodePath.join(cwd, "custom.jsonc"));
+    expect(paths).toContain(`${cwd}${nodePath.sep}../profile${nodePath.sep}opencode.json`);
+    expect(paths).toContain(nodePath.resolve(cwd, "../.opencode/opencode.jsonc"));
   });
 });
 
@@ -106,7 +91,6 @@ describe("openCodeCompatibleConfigFingerprint", () => {
     await expect(
       openCodeCompatibleConfigFingerprint({
         homeDir: home,
-        platform: "linux",
         env: {},
         dataDirectoryName: "opencode",
       }),
@@ -121,7 +105,6 @@ describe("openCodeCompatibleConfigFingerprint", () => {
     await expect(
       openCodeCompatibleConfigFingerprint({
         homeDir: home,
-        platform: "linux",
         env: {},
         dataDirectoryName: "opencode",
       }),
@@ -132,7 +115,6 @@ describe("openCodeCompatibleConfigFingerprint", () => {
     writeFileSync(configPath, '{"provider":{}}', { flag: "w" });
     const created = await openCodeCompatibleConfigFingerprint({
       homeDir: home,
-      platform: "linux",
       env: {},
       dataDirectoryName: "opencode",
     });
@@ -142,7 +124,6 @@ describe("openCodeCompatibleConfigFingerprint", () => {
     writeFileSync(configPath, '{"provider":{"renamed-model":{}}}');
     const renamed = await openCodeCompatibleConfigFingerprint({
       homeDir: home,
-      platform: "linux",
       env: {},
       dataDirectoryName: "opencode",
     });
