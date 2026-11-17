@@ -133,6 +133,10 @@ fn spawn_cua_host() -> ChildGuard {
 /// IORegisterForSystemPower (the only pre-sleep hook); screen lock and
 /// console-resign come from polling CGSessionCopyCurrentDictionary — all
 /// pure C FFI, matching `registerComputerDesktopLifecycle`'s three gates.
+/// macOS only: the FFI links IOKit/CoreFoundation/ApplicationServices, and
+/// there is no Linux/Windows equivalent wired yet — a no-op keeps the shell
+/// building on the other `run-desktop` targets.
+#[cfg(target_os = "macos")]
 mod lifecycle {
     use super::{kill, CUA_CHILD_PID};
     use std::ffi::c_void;
@@ -282,6 +286,11 @@ mod lifecycle {
             dispatch_async_f(&_dispatch_main_q, std::ptr::null_mut(), lifecycle_deferred);
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod lifecycle {
+    pub fn start() {}
 }
 
 fn main() {
