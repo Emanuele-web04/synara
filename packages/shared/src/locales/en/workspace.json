@@ -1049,5 +1049,8 @@
   "childThreadsWorking_one": "{{count}} running",
   "childThreadsWorking_other": "{{count}} running",
   "childThreadsDoneCount_one": "+{{count}} done",
-  "childThreadsDoneCount_other": "+{{count}} done"
+  "childThreadsDoneCount_other": "+{{count}} done",
+  "introducingSynaraForIphone": "Introducing Synara for iPhone",
+  "iosBetaAnnouncementDescription": "Follow and steer your agents from your phone whenever your computer is awake. Now in beta.",
+  "joinTheBeta": "Join the beta"
 }

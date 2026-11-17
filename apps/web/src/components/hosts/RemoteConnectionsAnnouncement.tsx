@@ -3,7 +3,8 @@
 //          account button. Without Synara Alto the sheet opens the plans in Usage &
 //          limits; with Alto (or where billing is off) it opens Connections.
 // Layer: Root web overlay
-// Exports: RemoteConnectionsAnnouncement, RemoteConnectionsCoachmark
+// Exports: RemoteConnectionsAnnouncement, RemoteConnectionsCoachmark,
+//          useRemoteConnectionsAvailable, useClearOfOutsideDialogs
 //
 // Nothing here may overlap another surface:
 // - Both steps share the announcement slot. The sheet is ordered last among startup
@@ -55,7 +56,7 @@ function useAnnouncementStorage() {
   );
 }
 
-function useRemoteConnectionsAvailable(): boolean {
+export function useRemoteConnectionsAvailable(): boolean {
   const inRemoteWorkspace = useRouterState({
     select: (state) => state.location.pathname === "/remote",
   });
@@ -71,7 +72,7 @@ function useRemoteConnectionsAvailable(): boolean {
  * True once nothing outside the announcement slot can still claim the screen: the
  * account has loaded and, when signed in, no team sharing consent is owed.
  */
-function useClearOfOutsideDialogs(wanted: boolean): boolean {
+export function useClearOfOutsideDialogs(wanted: boolean): boolean {
   const account = useAccount();
   const signedIn = account.status?.state === "signed-in";
   const enrollment = useQuery({
