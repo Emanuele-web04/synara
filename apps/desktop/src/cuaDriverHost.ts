@@ -490,6 +490,8 @@ export class CuaDriverHost {
       releaseHeldInput?: () => Promise<void>;
       /** Bound on each post-handshake startup call; defaults to 5s. */
       startupTimeoutMs?: number;
+      /** Grace for a dead socket's exit event to land before cleanup is judged; defaults to 500ms. */
+      exitGraceMs?: number;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
       frameTap?: ComputerFrameTapHost;
       /**
@@ -2319,7 +2321,8 @@ export class CuaDriverHost {
           // A dead socket can outrun the exit event: the process may already
           // be gone, in which case this is the crash path, not a live driver
           // withholding its acknowledgement. Give the exit a short grace.
-          if (!generation.didExit) await Promise.race([generation.exited, delay(500)]);
+          if (!generation.didExit)
+            await Promise.race([generation.exited, delay(this.options.exitGraceMs ?? 500)]);
           if (generation.didExit) {
             // No input in flight means nothing is uncertain — the dead
             // generation clears outright. With input in flight, only a

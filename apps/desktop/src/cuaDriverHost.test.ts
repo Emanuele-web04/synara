@@ -242,7 +242,7 @@ net.createServer(s=>{
   s.on('error',()=>{});
 }).listen(socket);
 let retiring=false;
-function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},150)}
+function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},20)}
 process.on('SIGTERM',retire);
 process.stdin.resume(); process.stdin.on('end',retire);
 `,
@@ -262,6 +262,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
       : {}),
     ...(options.frameTap ? { frameTap: options.frameTap } : {}),
     ...(options.shield ? { shield: options.shield } : {}),
+    exitGraceMs: 150,
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
     ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
     ...(options.ownPids ? { ownPids: options.ownPids } : {}),
