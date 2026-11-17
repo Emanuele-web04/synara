@@ -4,7 +4,7 @@ import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { cn } from "./utils";
-import { CentralIcon, type CentralIconVariant } from "./central-icons";
+import { CentralIcon, getCentralIconUrl, type CentralIconVariant } from "./central-icons";
 import {
   IconAlertCircle,
   IconAlertOctagon,
@@ -322,13 +322,21 @@ export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
+const fastModeZapMask = `url("${getCentralIconUrl("zap", "fill")}")`;
+const ultrafastEchoMask: CSSProperties = {
+  maskImage: `${fastModeZapMask}, ${fastModeZapMask}`,
+  maskSize: "0.875rem 0.875rem",
+  maskPosition: "0.25rem center, 0.1rem center",
+  maskRepeat: "no-repeat",
+  // Cut a shifted copy of the foreground out of the rear bolt, leaving a clear gap.
+  maskComposite: "subtract",
+};
+
 export function UltrafastModeIcon() {
   return (
     <span aria-hidden="true" className="relative inline-block h-4 w-[1.125rem] shrink-0">
-      <FastModeIcon className="absolute top-0 left-[0.25rem] size-3.5" />
-      <span className="absolute top-0.5 left-0 flex drop-shadow-[1.25px_0_0_var(--popover)]">
-        <FastModeIcon className="size-3.5" />
-      </span>
+      <span className="absolute inset-0 bg-current" style={ultrafastEchoMask} />
+      <FastModeIcon className="absolute top-1/2 left-0 size-3.5 -translate-y-1/2" />
     </span>
   );
 }
