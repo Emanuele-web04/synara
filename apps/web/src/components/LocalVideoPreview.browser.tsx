@@ -10,11 +10,10 @@ import { render } from "vitest-browser-react";
 
 import ChatMarkdown from "./ChatMarkdown";
 import { LocalVideoPreview } from "./LocalVideoPreview";
-import { downloadUrlAsBlob } from "~/lib/browserDownload";
+import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
 import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import type { WorkspaceResourceRequester } from "~/lib/hosts/workspaceResources";
-import { fetchExecutionResourceUrl } from "~/lib/wsHttpUrl";
 
 vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/hosts/executionContext")>()),
@@ -24,16 +23,6 @@ vi.mock("~/lib/hosts/workspaceFrame", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/hosts/workspaceFrame")>()),
   readWorkspaceFrame: vi.fn(),
 }));
-// Exercise the real resource routing (desktop frame or plain fetch) without
-// saving a file from the test browser.
-vi.mock("~/lib/browserDownload", () => ({
-  downloadUrlAsBlob: vi.fn(async ({ url }: { url: string }) => {
-    const response = await fetchExecutionResourceUrl(url);
-    if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-    expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
-  }),
-}));
-
 // A real VP8 WebM recorded in the test browser, so loadedmetadata is genuine.
 async function recordWebm(): Promise<Uint8Array> {
   const canvas = document.createElement("canvas");
@@ -61,6 +50,7 @@ async function recordWebm(): Promise<Uint8Array> {
 
 const webm = await recordWebm();
 const requests: URL[] = [];
+const savedUrls: string[] = [];
 const grants = new Map<string, string>();
 let nextGrant = 0;
 const createLocalFilePreviewGrant = vi.fn(async ({ path }: { path: string }) => {
@@ -126,7 +116,15 @@ beforeEach(() => {
     value: { projects: { createLocalFilePreviewGrant } } as unknown as NativeApi,
   });
   grants.clear();
+  nextGrant = 0;
   requests.length = 0;
+  savedUrls.length = 0;
+  // Intercept only the final programmatic save, after real resource routing.
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+    function (this: HTMLAnchorElement) {
+      savedUrls.push(this.href);
+    },
+  );
   vi.clearAllMocks();
 });
 afterEach(() => {
@@ -134,6 +132,7 @@ afterEach(() => {
   client.clear();
   if (previousNativeApi) Object.defineProperty(window, "nativeApi", previousNativeApi);
   else Reflect.deleteProperty(window, "nativeApi");
+  vi.restoreAllMocks();
 });
 
 function configureDesktopResourceFixture() {
@@ -209,6 +208,10 @@ it("streams a workspace video into a native player and reports readiness once", 
     expect(onPreviewReady).toHaveBeenCalledOnce();
     expect(onPreviewError).not.toHaveBeenCalled();
     expect(document.querySelector("img")).toBeNull();
+
+    const download = screen.getByRole("link", { name: "Download video" });
+    await download.click();
+    await vi.waitFor(() => expect(savedUrls).toEqual([download.element().getAttribute("href")]));
   } finally {
     await screen.unmount();
   }
@@ -266,6 +269,38 @@ it("keeps playback on a renewed grant and adopts it only after the current URL f
   }
 });
 
+it("recovers a projectless file preview after the server invalidates its video grant", async () => {
+  const path = "/Users/tester/Downloads/demo.webm";
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <WorkspaceFilePreview workspaceRoot={null} filePath={path} />
+    </QueryClientProvider>,
+  );
+  try {
+    await vi.waitFor(() => expect(videoElement()?.readyState).toBeGreaterThanOrEqual(1));
+    const video = videoElement()!;
+    const oldGrant = new URL(video.src).searchParams.get("grant")!;
+    grants.delete(oldGrant);
+    video.dispatchEvent(new Event("error"));
+
+    await vi.waitFor(() => expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(new URL(video.src).searchParams.get("grant")).not.toBe(oldGrant));
+    await vi.waitFor(() => expect(videoElement()?.readyState).toBeGreaterThanOrEqual(1));
+    expect(videoElement()).toBe(video);
+
+    // A failed renewal must leave a real Retry action even without a project.
+    const renewedGrant = new URL(video.src).searchParams.get("grant")!;
+    grants.delete(renewedGrant);
+    createLocalFilePreviewGrant.mockRejectedValueOnce(new Error("Preview host is reconnecting."));
+    video.dispatchEvent(new Event("error"));
+    await screen.getByRole("button", { name: "Retry video preview" }).click();
+    await vi.waitFor(() => expect(videoElement()?.readyState).toBeGreaterThanOrEqual(1));
+    expect(new URL(videoElement()!.src).searchParams.get("grant")).not.toBe(renewedGrant);
+  } finally {
+    await screen.unmount();
+  }
+});
+
 it("shows a download card instead of streaming on desktop-frame hosts", async () => {
   configureDesktopResourceFixture();
   const onPreviewReady = vi.fn();
@@ -281,8 +316,7 @@ it("shows a download card instead of streaming on desktop-frame hosts", async ()
     await vi.waitFor(() => expect(onPreviewReady).toHaveBeenCalledOnce());
 
     await screen.getByRole("link", { name: "Download video" }).click();
-    await vi.waitFor(() => expect(downloadUrlAsBlob).toHaveBeenCalledOnce());
-    await vi.mocked(downloadUrlAsBlob).mock.results[0]!.value;
+    await vi.waitFor(() => expect(savedUrls[0]).toMatch(/^blob:/));
     expect(requests).toHaveLength(1);
     expect(requests[0]!.searchParams.get("download")).toBe("1");
     expect(requests[0]!.searchParams.get("path")).toBe("out/clip.webm");
@@ -355,8 +389,7 @@ it("downloads a markdown video outside the workspace on desktop-frame hosts with
     expect(requests).toHaveLength(0);
 
     await screen.getByRole("link", { name: "Download video" }).click();
-    await vi.waitFor(() => expect(downloadUrlAsBlob).toHaveBeenCalledOnce());
-    await vi.mocked(downloadUrlAsBlob).mock.results[0]!.value;
+    await vi.waitFor(() => expect(savedUrls[0]).toMatch(/^blob:/));
     expect(createLocalFilePreviewGrant).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(1);
     expect(requests[0]!.searchParams.get("download")).toBe("1");

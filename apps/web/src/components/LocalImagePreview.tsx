@@ -157,6 +157,7 @@ export function useLocalImageDownloadClick(input: {
   downloadName: string;
   errorTitle?: string | undefined;
   resolveDownloadUrl?: (() => Promise<string>) | undefined;
+  download?: typeof downloadUrlAsBlob | undefined;
 }) {
   const { t } = useTranslation();
 
@@ -166,7 +167,7 @@ export function useLocalImageDownloadClick(input: {
     void Promise.resolve()
       .then(async () => {
         const url = input.resolveDownloadUrl ? await input.resolveDownloadUrl() : input.downloadUrl;
-        await downloadUrlAsBlob({ url, filename: input.downloadName });
+        await (input.download ?? downloadUrlAsBlob)({ url, filename: input.downloadName });
       })
       .catch((error: unknown) => {
         toastManager.add({

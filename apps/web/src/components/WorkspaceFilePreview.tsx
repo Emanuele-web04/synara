@@ -48,6 +48,7 @@ import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileCom
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { PlusIcon } from "~/lib/icons";
+import { buildLocalImageUrl } from "~/lib/localImageUrls";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
 import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import {
@@ -542,6 +543,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
+  // Keep the player mounted across renewal so a temporary grant outage cannot
+  // discard a loaded frame or its seek position.
+  const videoHadGrant = fileIsVideo && localPreviewGrantQuery.data !== undefined;
   const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}\0${binaryPreviewRevision}`;
   // A renewed grant must not remount a playing video; LocalVideoPreview adopts
   // the fresh grant URL itself if the current one stops working.
@@ -928,7 +932,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       )
     );
   }
-  if (fileNeedsLocalPreviewGrant && !localPreviewGrant) {
+  if (fileNeedsLocalPreviewGrant && !localPreviewGrant && !videoHadGrant) {
     if (localPreviewGrantQuery.error) {
       return (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
@@ -976,6 +980,23 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileReadCapacityError = isRpcCapacityExceededError(fileReadError);
   const showFileReadErrorIndicator =
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
+
+  // A rejected Range request may mean the server restarted before the token's
+  // advertised expiry. Fetch a new grant at the point of recovery or download.
+  const resolveGrantedVideoUrl = async (download: boolean) => {
+    const { data: grant } = await localPreviewGrantQuery.refetch({
+      cancelRefetch: false,
+      throwOnError: true,
+    });
+    return buildLocalImageUrl({
+      src: filePath,
+      cwd: props.workspaceRoot ?? undefined,
+      canonicalPath: grant?.canonicalPath,
+      grant: grant?.grant,
+      download,
+      ...(download ? {} : { cacheKey: binaryPreviewRevision }),
+    });
+  };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
@@ -1097,6 +1118,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             label={basenameOfPath(filePath)}
             className="min-h-full"
             videoClassName="max-h-[calc(100vh-13rem)]"
+            resolveRecoveryUrl={
+              fileNeedsLocalPreviewGrant ? () => resolveGrantedVideoUrl(false) : undefined
+            }
+            resolveDownloadUrl={
+              fileNeedsLocalPreviewGrant ? () => resolveGrantedVideoUrl(true) : undefined
+            }
+            onRetry={() => {
+              if (fileNeedsLocalPreviewGrant) {
+                void localPreviewGrantQuery.refetch({ cancelRefetch: false });
+              }
+              handleFileReload();
+            }}
             onPreviewReady={handleBinaryPreviewReady}
             onPreviewError={handleBinaryPreviewError}
           />

@@ -13,6 +13,7 @@
 import { type SyntheticEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useTranslation } from "~/i18n";
+import { VIDEO_DOWNLOAD_BLOB_LIMIT_MIB, downloadVideoUrl } from "~/lib/browserDownload";
 import { DownloadIcon, Loader2Icon } from "~/lib/icons";
 import { buildLocalImageUrl, localImageFileName } from "~/lib/localImageUrls";
 import { cn } from "~/lib/utils";
@@ -123,6 +124,13 @@ export function LocalVideoPreview(props: LocalVideoPreviewProps) {
     downloadName,
     errorTitle: t("common:video_couldNotDownload"),
     resolveDownloadUrl: props.resolveDownloadUrl,
+    download: (input) =>
+      downloadVideoUrl({
+        ...input,
+        tooLargeMessage: t("common:video_downloadTooLarge", {
+          maxMiB: VIDEO_DOWNLOAD_BLOB_LIMIT_MIB,
+        }),
+      }),
   });
 
   const isCurrentEvent = (event: SyntheticEvent<HTMLVideoElement>) =>

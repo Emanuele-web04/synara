@@ -25,7 +25,8 @@ vi.mock("~/lib/hosts/workspaceFrame", async (importOriginal) => ({
   readWorkspaceFrame: vi.fn(),
 }));
 
-vi.mock("~/lib/browserDownload", () => ({
+vi.mock("~/lib/browserDownload", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/browserDownload")>()),
   downloadUrlAsBlob: vi.fn(async ({ url }: { url: string }) => {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Download failed: ${response.status}`);

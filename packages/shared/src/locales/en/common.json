@@ -1228,5 +1228,6 @@
   "video_inlinePlaybackUnavailableDescription": "Download the video to watch it.",
   "video_downloadVideo": "Download video",
   "video_couldNotDownload": "Could not download video",
+  "video_downloadTooLarge": "This connection supports video downloads up to {{maxMiB}} MiB.",
   "video_retryPreview": "Retry video preview"
 }
