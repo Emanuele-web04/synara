@@ -421,6 +421,52 @@ describe("pointer gestures", () => {
     });
   });
 
+  const screen = { width: 402, height: 874 };
+
+  it("tags a drag that starts on the bottom edge as the home gesture", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 200, y: 874 },
+      to: { x: 200, y: 400 },
+      durationMs: 200,
+      screen,
+    });
+    expect(gesture).toMatchObject({ kind: "swipe", edge: "bottom" });
+  });
+
+  it("snaps an edge gesture's start onto the physical edge", () => {
+    // iOS ignores the edge flag when the first contact lands more than a few
+    // points inside the screen, so a start anywhere in the trigger margin is
+    // rewritten onto the edge itself.
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 200, y: 850 },
+      to: { x: 200, y: 400 },
+      durationMs: 200,
+      screen,
+    });
+    expect(gesture).toMatchObject({ kind: "swipe", edge: "bottom", from: { x: 200, y: 874 } });
+  });
+
+  it("leaves a mid-screen drag without an edge", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 200, y: 800 },
+      to: { x: 200, y: 400 },
+      durationMs: 200,
+      screen,
+    });
+    expect(gesture).toMatchObject({ kind: "swipe" });
+    expect(gesture?.kind === "swipe" ? gesture.edge : undefined).toBeUndefined();
+  });
+
+  it("picks the edge a corner drag moves toward", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 5, y: 870 },
+      to: { x: 150, y: 400 },
+      durationMs: 200,
+      screen,
+    });
+    expect(gesture).toMatchObject({ kind: "swipe", edge: "bottom" });
+  });
+
   it("yields no gesture when the press did not start on the screen", () => {
     expect(
       resolveDevicePointerGesture({ from: null, to: { x: 1, y: 1 }, durationMs: 50 }),

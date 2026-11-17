@@ -25,8 +25,12 @@ import type {
   DeviceScreenshotResult,
   DeviceStartRecordingResult,
   DeviceStopRecordingResult,
+  DeviceTouchEdge,
 } from "@synara/contracts";
 import { DEVICE_MESSAGE_MAX_LENGTH } from "@synara/contracts";
+
+/** The screen edge a gesture starts on; iOS reads it as the OS edge gesture. */
+export type { DeviceTouchEdge };
 
 /**
  * One encoded video frame as the backend produces it. `sequence` is owned by
@@ -81,9 +85,6 @@ export class DeviceBackendError extends Error {
 export interface DeviceListOptions {
   readonly includeShutdown?: boolean;
 }
-
-/** The screen edge a gesture starts on; iOS reads it as the OS edge gesture. */
-export type DeviceTouchEdge = "top" | "left" | "bottom" | "right";
 
 export interface DeviceInputOptions {
   readonly signal?: AbortSignal;

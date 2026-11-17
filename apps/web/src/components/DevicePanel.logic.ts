@@ -16,6 +16,7 @@ import type {
   DeviceSetupStep,
   DeviceSetupStepId,
   DeviceToolchain,
+  DeviceTouchEdge,
   DeviceUdid,
   ThreadDeviceState,
 } from "@synara/contracts";
@@ -273,6 +274,20 @@ function clampToRange(value: number, minimum: number, maximum: number): number {
  */
 export const DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS = 8;
 
+/**
+ * How close to a screen edge a pane swipe must start to be the OS edge
+ * gesture (back, notification shade, home, Control Center). The agent's
+ * `device_swipe` uses a 4pt margin because it picks exact points; a pointer
+ * needs the wider zone iOS itself claims — the status bar for the shade, the
+ * home-indicator strip for home, the bezel margin for back.
+ */
+export const DEVICE_EDGE_SWIPE_MARGINS_POINTS: Readonly<Record<DeviceTouchEdge, number>> = {
+  top: 60,
+  bottom: 34,
+  left: 30,
+  right: 30,
+};
+
 export type DevicePointerGesture =
   | { readonly kind: "tap"; readonly point: DevicePoint }
   | {
@@ -280,17 +295,69 @@ export type DevicePointerGesture =
       readonly from: DevicePoint;
       readonly to: DevicePoint;
       readonly durationMs: number;
+      readonly edge?: DeviceTouchEdge | undefined;
     };
 
 /**
+ * The edge a swipe starts on, when it starts inside that edge's gesture
+ * margin. A corner start qualifies for two edges; the drag's dominant inward
+ * direction picks between them.
+ */
+export function deviceEdgeForSwipeStart(
+  from: DevicePoint,
+  to: DevicePoint,
+  screen: { readonly width: number; readonly height: number },
+): DeviceTouchEdge | undefined {
+  const margins = DEVICE_EDGE_SWIPE_MARGINS_POINTS;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  // Each candidate's score is how far the drag moves inward from that edge.
+  const candidates: { readonly edge: DeviceTouchEdge; readonly score: number }[] = [];
+  if (from.y <= margins.top) candidates.push({ edge: "top", score: dy });
+  if (from.y >= screen.height - margins.bottom) candidates.push({ edge: "bottom", score: -dy });
+  if (from.x <= margins.left) candidates.push({ edge: "left", score: dx });
+  if (from.x >= screen.width - margins.right) candidates.push({ edge: "right", score: -dx });
+  if (candidates.length === 0) return undefined;
+  return candidates.reduce((best, candidate) => (candidate.score > best.score ? candidate : best))
+    .edge;
+}
+
+/**
+ * iOS only honours the edge flag when the first digitizer contact lands within
+ * a few points of the physical edge; a flag with a start 17pt in is ignored.
+ * The trigger margins above are wider than that so the gesture is reachable,
+ * so the start point is snapped onto the edge itself before it is sent.
+ */
+function snapSwipeStartToEdge(
+  from: DevicePoint,
+  edge: DeviceTouchEdge,
+  screen: { readonly width: number; readonly height: number },
+): DevicePoint {
+  switch (edge) {
+    case "top":
+      return { x: from.x, y: 0 };
+    case "bottom":
+      return { x: from.x, y: screen.height };
+    case "left":
+      return { x: 0, y: from.y };
+    case "right":
+      return { x: screen.width, y: from.y };
+  }
+}
+
+/**
  * Classifies a completed pointer interaction. A press that started or ended
- * outside the screen area yields no gesture rather than a clamped one.
+ * outside the screen area yields no gesture rather than a clamped one. Pass
+ * the device screen size in points as `screen` so a drag that begins on a
+ * screen edge is tagged for the OS edge gesture rather than sent as a plain
+ * swipe that the guest ignores.
  */
 export function resolveDevicePointerGesture(input: {
   readonly from: DevicePoint | null;
   readonly to: DevicePoint | null;
   readonly durationMs: number;
   readonly movementThreshold?: number;
+  readonly screen?: { readonly width: number; readonly height: number } | null;
 }): DevicePointerGesture | null {
   const { from, to } = input;
   if (!from) return null;
@@ -301,13 +368,15 @@ export function resolveDevicePointerGesture(input: {
   if (distance <= threshold) {
     return { kind: "tap", point: to };
   }
+  const edge = input.screen ? deviceEdgeForSwipeStart(from, to, input.screen) : undefined;
   return {
     kind: "swipe",
-    from,
+    from: edge && input.screen ? snapSwipeStartToEdge(from, edge, input.screen) : from,
     to,
     // A zero-duration swipe is rejected by the helper as a flick with infinite
     // velocity; clamp to a single frame's worth of time.
     durationMs: Math.max(16, Math.round(input.durationMs)),
+    ...(edge === undefined ? {} : { edge }),
   };
 }
 

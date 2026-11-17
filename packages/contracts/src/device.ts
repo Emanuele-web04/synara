@@ -360,6 +360,10 @@ export type DeviceTapInput = typeof DeviceTapInput.Type;
 export const DEVICE_SWIPE_DURATION_MIN_MS = 0;
 export const DEVICE_SWIPE_DURATION_MAX_MS = 10_000;
 
+/** The screen edge a gesture starts on; iOS reads it as the OS edge gesture. */
+export const DeviceTouchEdge = Schema.Literals(["top", "left", "bottom", "right"]);
+export type DeviceTouchEdge = typeof DeviceTouchEdge.Type;
+
 export const DeviceSwipeInput = Schema.Struct({
   udid: DeviceUdid,
   fromX: DeviceCoordinate,
@@ -372,6 +376,8 @@ export const DeviceSwipeInput = Schema.Struct({
       maximum: DEVICE_SWIPE_DURATION_MAX_MS,
     }),
   ),
+  /** Set for a swipe that starts on an edge: back, notification shade, home, Control Center. */
+  edge: Schema.optional(DeviceTouchEdge),
 });
 export type DeviceSwipeInput = typeof DeviceSwipeInput.Type;
 

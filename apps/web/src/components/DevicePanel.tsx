@@ -528,6 +528,7 @@ export default function DevicePanel(props: {
         from: press.point,
         to: pointFromEvent(event.nativeEvent),
         durationMs: performance.now() - press.startedAt,
+        screen: devicePointSize,
       });
       if (!gesture) return;
 
@@ -543,6 +544,7 @@ export default function DevicePanel(props: {
               toX: gesture.to.x,
               toY: gesture.to.y,
               durationMs: gesture.durationMs,
+              ...(gesture.edge === undefined ? {} : { edge: gesture.edge }),
             });
       void sent.catch((error: unknown) => {
         toastManager.add({
@@ -552,7 +554,7 @@ export default function DevicePanel(props: {
         });
       });
     },
-    [attachedDevice, pointFromEvent, t],
+    [attachedDevice, devicePointSize, pointFromEvent, t],
   );
 
   // ── Keyboard passthrough ───────────────────────────────────────────

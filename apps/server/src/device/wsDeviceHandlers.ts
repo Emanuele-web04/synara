@@ -219,6 +219,7 @@ export function makeWsDeviceHandlers(
             toX: input.toX,
             toY: input.toY,
             durationMs: input.durationMs,
+            edge: input.edge,
           }),
         "Failed to swipe on device",
       ),
