@@ -326,9 +326,7 @@ export class BetterwrightCdpTarget {
       // still need DOM focus, scoped below. Restore only focus owned by a
       // still-active dispatch; teardown must never undo a later human takeover.
       const previousFocus =
-        nativeInput && electron.webContents
-          ? electron.webContents.getFocusedWebContents()
-          : null;
+        nativeInput && electron.webContents ? electron.webContents.getFocusedWebContents() : null;
       try {
         const send = async () => {
           return this.send(

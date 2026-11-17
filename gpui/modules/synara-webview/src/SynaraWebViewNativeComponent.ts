@@ -3,7 +3,7 @@ import {
   type CodegenTypes,
   type HostComponent,
   type ViewProps,
-} from 'react-native';
+} from "react-native";
 
 export type SynaraWebViewLoadEvent = Readonly<{
   /** The address the view finished loading. */
@@ -19,6 +19,6 @@ export interface NativeProps extends ViewProps {
 
 export type SynaraWebViewType = HostComponent<NativeProps>;
 
-export default codegenNativeComponent<NativeProps>('SynaraWebView', {
+export default codegenNativeComponent<NativeProps>("SynaraWebView", {
   interfaceOnly: true,
 });

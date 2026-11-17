@@ -1,6 +1,6 @@
-import React from 'react';
-import {StyleSheet, View} from 'react-native';
-import SynaraWebView from '@local/synara-webview';
+import React from "react";
+import { StyleSheet, View } from "react-native";
+import SynaraWebView from "@local/synara-webview";
 
 function App() {
   return (

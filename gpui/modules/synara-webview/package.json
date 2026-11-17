@@ -2,12 +2,12 @@
   "name": "@local/synara-webview",
   "version": "0.1.0",
   "private": true,
-  "main": "src/index.ts",
   "files": [
     "src",
     "desktop",
     "react-native.config.js"
   ],
+  "main": "src/index.ts",
   "codegenConfig": {
     "name": "SynaraWebViewSpec",
     "type": "all",

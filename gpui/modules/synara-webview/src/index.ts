@@ -1,1 +1,1 @@
-export { default } from './SynaraWebViewNativeComponent';
+export { default } from "./SynaraWebViewNativeComponent";

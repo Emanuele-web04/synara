@@ -1,6 +1,6 @@
-const path = require('path');
-const { makeMetroConfig } = require('@react-native-gpui/core/metro.config');
+const path = require("path");
+const { makeMetroConfig } = require("@react-native-gpui/core/metro.config");
 
 module.exports = makeMetroConfig({
-  projectRoot: path.resolve(__dirname, '..'),
+  projectRoot: path.resolve(__dirname, ".."),
 });

@@ -12,15 +12,15 @@
     "test:e2e": "vitest run --config desktop/vitest.e2e.config.ts"
   },
   "dependencies": {
-    "react": "19.2.3",
-    "react-native": "0.87.1",
-    "@react-native/new-app-screen": "0.87.1",
-    "react-native-safe-area-context": "~5.10.0",
+    "@local/synara-webview": "file:modules/synara-webview",
+    "@react-native-gpui/codegen": "~0.87.0-alpha.0",
     "@react-native-gpui/core": "~0.87.0-alpha.0",
     "@react-native-gpui/hermes": "~0.87.0-alpha.0",
-    "@react-native-gpui/codegen": "~0.87.0-alpha.0",
     "@react-native-gpui/safe-area-context": "~5.10.0-alpha.0",
-    "@local/synara-webview": "file:modules/synara-webview"
+    "@react-native/new-app-screen": "0.87.1",
+    "react": "19.2.3",
+    "react-native": "0.87.1",
+    "react-native-safe-area-context": "~5.10.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -29,6 +29,8 @@
     "@react-native-community/cli": "20.2.0",
     "@react-native-community/cli-platform-android": "20.2.0",
     "@react-native-community/cli-platform-ios": "20.2.0",
+    "@react-native-gpui/cli": "~0.87.0-alpha.0",
+    "@react-native-gpui/testing": "~0.87.0-alpha.0",
     "@react-native/babel-preset": "0.87.1",
     "@react-native/eslint-config": "0.87.1",
     "@react-native/jest-preset": "0.87.1",
@@ -42,9 +44,7 @@
     "prettier": "2.8.8",
     "react-test-renderer": "19.2.3",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.4",
-    "@react-native-gpui/testing": "~0.87.0-alpha.0",
-    "@react-native-gpui/cli": "~0.87.0-alpha.0"
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">= 22.11.0"
