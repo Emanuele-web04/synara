@@ -16,7 +16,23 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it as vitestIt, vi } from "vitest";
+
+// Vitest collects every *.test.mjs here; a node:test suite registers nothing
+// with it and the file fails with "No test suite found". These adapters keep
+// the node:test style (`t.after`, `t.mock.method`) on the vitest runner.
+const cleanups = [];
+afterEach(() => {
+  vi.restoreAllMocks();
+  while (cleanups.length > 0) cleanups.pop()();
+});
+const it = (name, run) =>
+  vitestIt(name, () =>
+    run({
+      after: (cleanup) => cleanups.push(cleanup),
+      mock: { method: (object, key, impl) => vi.spyOn(object, key).mockImplementation(impl) },
+    }),
+  );
 
 import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
