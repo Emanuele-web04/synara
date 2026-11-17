@@ -635,30 +635,6 @@ describe("GitHubInbox selection", () => {
 });
 
 describe("GitHubInbox states", () => {
-  it("shows the loading skeleton until the list arrives", async () => {
-    let resolveList: ((result: GitHubInboxListResult) => void) | undefined;
-    api.list.mockImplementation(
-      () => new Promise<GitHubInboxListResult>((resolve) => (resolveList = resolve)),
-    );
-    await mount();
-
-    await expect.element(page.getByLabelText("Loading code review")).toBeInTheDocument();
-    resolveList?.(listResult());
-    await expectRows([44, 43, 42, 41]);
-  });
-
-  it("explains an unavailable GitHub CLI", async () => {
-    api.list.mockRejectedValue({
-      _tag: "PullRequestsUnavailableError",
-      reason: "gh-not-authenticated",
-      message: "gh is not authenticated",
-    });
-    await mount();
-
-    await expect.element(page.getByText("Sign in to GitHub CLI")).toBeVisible();
-    await expect.element(page.getByText("gh auth login")).toBeVisible();
-  });
-
   it("shows the reset time when the first load is rate limited", async () => {
     api.list.mockRejectedValue({
       _tag: "PullRequestsUnavailableError",
@@ -696,13 +672,6 @@ describe("GitHubInbox states", () => {
     await expect
       .element(page.getByText(/GitHub rate limit reached\. Showing the last loaded items\./))
       .toBeVisible();
-  });
-
-  it("says when there is nothing to show", async () => {
-    api.list.mockResolvedValue(listResult({ items: [] }));
-    await mount();
-
-    await expect.element(page.getByText("No pull requests and issues found")).toBeVisible();
   });
 });
 

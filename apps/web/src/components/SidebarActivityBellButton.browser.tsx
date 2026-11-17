@@ -49,6 +49,7 @@ beforeEach(() => {
   useProjectImportDialogStore.setState({ isOpen: false });
 });
 afterEach(async () => {
+  vi.useRealTimers();
   for (const screen of screens.splice(0)) await screen.unmount();
   for (const client of clients.splice(0)) client.clear();
   for (const key of [activityKey, importKey, tourKey, "synara:tasks-onboarding:v1"])
@@ -122,9 +123,12 @@ it("shows after previously seen announcements and releases the slot when the hin
   const installation = "/repo/.codex/worktrees";
   localStorage.setItem(importKey, JSON.stringify([installation]));
   localStorage.setItem(tourKey, JSON.stringify([installation]));
+  // Only the hint's 8 s expiry timer is faked; polling and rendering use real timers.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await show();
   await expect.element(page.getByText(coachmark)).toBeVisible();
   expect(localStorage.getItem(activityKey)).toBe("seen");
+  await vi.advanceTimersByTimeAsync(8_000);
   await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
   expect(useAnnouncementSheetSlotStore.getState().owner).toBeNull();
   expect(localStorage.getItem(activityKey)).toBe("seen");

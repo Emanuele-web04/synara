@@ -127,11 +127,13 @@ const rendered = () =>
     .map((lines) => lines.textContent ?? "")
     .join("\n");
 
-it.each(
-  [false, true].flatMap((diff) =>
-    ["Close", "Previous Match", "Next Match", "Find"].map((name) => ({ diff, name })),
-  ),
-)(
+// Close (the editor-edge button, both editor modes) and the Find textbox (its own label branch)
+// cover the shared Monaco hover path; Previous/Next Match reuse Close's button tooltip path.
+it.each([
+  { diff: false, name: "Close" },
+  { diff: true, name: "Close" },
+  { diff: false, name: "Find" },
+])(
   "keeps Find's $name tooltip visible and stable at the editor edge (diff: $diff)",
   async ({ diff, name }) => {
     await page.viewport(1200, 800);

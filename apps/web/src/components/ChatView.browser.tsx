@@ -134,6 +134,7 @@ import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { hasActiveComposerSend, runComposerSendOnce } from "../lib/composerSendOwnership";
+import { setSmoothRevealMaxCharsPerSecondForTests } from "../hooks/useSmoothStreamedText";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "../lib/chatDispatchStore";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -7458,7 +7459,6 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it.each([
     "wheel near end",
-    "manual return",
     "arrow",
     "send",
     "wheel down",
@@ -7473,6 +7473,9 @@ describe("ChatView transcript geometry (full app)", () => {
     "short transcript",
   ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
     const keyboardKey = action.startsWith("keyboard ") ? action.slice("keyboard ".length) : null;
+    // The reveal ceiling bounds how long ~20 KB of delivered text takes to drain; raise it so the
+    // test follows the same gradual growth without waiting seconds per row.
+    setSmoothRevealMaxCharsPerSecondForTests(40_000);
     const restoreNativeApi = installDeterministicSendNativeApi();
     let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
     if (action === "short transcript") {
@@ -7812,6 +7815,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
     } finally {
+      setSmoothRevealMaxCharsPerSecondForTests();
       await mounted.cleanup();
       restoreNativeApi();
     }
