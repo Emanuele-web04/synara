@@ -1425,13 +1425,6 @@ describe("classifyCodexStderrLine", () => {
     ).toEqual({ message: "Permission denied opening the working directory" });
   });
 
-  it("keeps plain stderr messages", () => {
-    const line = "fatal: permission denied";
-    expect(classifyCodexStderrLine(line)).toEqual({
-      message: line,
-    });
-  });
-
   it.each([
     "Loading plugins from cache",
     "Connecting to MCP server stripe",

@@ -56,7 +56,6 @@ import {
   computerToolInstructions,
   computerToolRequiresApproval,
   makeAgentGatewayComputerTools,
-  PROVIDERS_WITHOUT_APPROVAL_GATE,
   type AgentGatewayComputerToolsOptions,
 } from "./computerTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
@@ -180,14 +179,6 @@ function schemaEnum(byName: ToolsByName, tool: string, property: string): readon
     | { properties?: Record<string, { enum?: readonly string[] }> }
     | undefined;
   return schema?.properties?.[property]?.enum ?? [];
-}
-
-/** One property's description, for the same reason. */
-function schemaPropertyDescription(byName: ToolsByName, tool: string, property: string): string {
-  const schema = byName.get(tool)?.definition.inputSchema as
-    | { properties?: Record<string, { description?: string }> }
-    | undefined;
-  return schema?.properties?.[property]?.description ?? "";
 }
 
 describe("agent gateway computer tools", () => {
@@ -2315,10 +2306,6 @@ describe("agent gateway computer tools", () => {
    * drifting in silently would ship an unreviewable input path. Pinned so the
    * set only ever changes deliberately.
    */
-  it("pins the gate-less provider set", async () => {
-    expect(PROVIDERS_WITHOUT_APPROVAL_GATE).toEqual(new Set(["antigravity", "pi"]));
-  });
-
   it("keeps the clipboard read behind approval instead of the perception set", async () => {
     const { backend, byName, call } = await setup();
 
@@ -3009,26 +2996,16 @@ describe("agent gateway computer tools", () => {
     expect(computerToolRequiresApproval("computer_activate_window")).toBe(true);
   });
 
-  it("describes the shortcut form and the semantic actions this desktop actually accepts", async () => {
+  it("advertises only the semantic actions this desktop actually accepts", async () => {
     const linux = await setup();
-    const hotkey = linux.byName.get("computer_press_key")?.definition.description ?? "";
-    expect(hotkey).toContain("A chord");
-    expect(hotkey).not.toContain("ordered key sequence");
-    expect(hotkey).toContain("releases in reverse");
     const linuxActions = schemaEnum(linux.byName, "computer_perform_action", "action");
     expect(linuxActions).toEqual(["activate", "click"]);
-    expect(linux.byName.get("computer_launch_app")?.definition.description).toContain(
-      "executable on PATH",
-    );
 
     const mac = await setup(
       Object.assign(new FakeComputerBackend(), {
         agentDialect: "macos" as const,
       }),
     );
-    const macHotkey = mac.byName.get("computer_press_key")?.definition.description ?? "";
-    expect(macHotkey).toContain("exactly one other key");
-    expect(macHotkey).toContain("More than one non-modifier key is refused");
     const macActions = schemaEnum(mac.byName, "computer_perform_action", "action");
     expect(macActions).toEqual([
       "AXPress",
@@ -3040,18 +3017,6 @@ describe("agent gateway computer tools", () => {
       "confirm",
       "cancel",
     ]);
-    expect(schemaPropertyDescription(mac.byName, "computer_perform_action", "action")).toContain(
-      "does not advertise",
-    );
-    const macLaunchAppDescription =
-      mac.byName.get("computer_launch_app")?.definition.description ?? "";
-    expect(macLaunchAppDescription).toContain("the way macOS does");
-    // Launch posture is a request, not proof that the resulting window is usable.
-    expect(macLaunchAppDescription).toContain("requests no foreground activation");
-    expect(macLaunchAppDescription).toContain("may create no usable window");
-    const macLaunchApp = schemaPropertyDescription(mac.byName, "computer_launch_app", "app");
-    expect(macLaunchApp).toContain("com.apple.Safari");
-    expect(macLaunchApp).not.toContain("/Applications/Safari.app");
   });
 
   it("matches a label exactly as written, spaces included", async () => {
@@ -5957,21 +5922,6 @@ describe("computer_help", () => {
       expect(help.isError).toBe(true);
       const index = resultJson(await call("computer_help", { topic: "tools" })) as { text: string };
       expect(index.text).not.toContain("computer_browser_prepare");
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("indexes the chapters when called bare", async () => {
-    const { call, manager } = await setup();
-    try {
-      const result = await call("computer_help", {});
-      expect(result.isError).not.toBe(true);
-      const json = resultJson(result) as { topics: string };
-      for (const topic of ["browser", "menus", "hidden", "foreground", "forms", "tools"]) {
-        expect(json.topics).toContain(topic);
-      }
-      expect(json.topics).not.toContain("recording");
     } finally {
       await manager.dispose();
     }

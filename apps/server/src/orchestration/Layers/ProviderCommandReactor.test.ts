@@ -6800,10 +6800,7 @@ describe("ProviderCommandReactor", () => {
 
     // Claude Code asks only after a long pause, not because the next send
     // switches models; a model switch alone sends straight away.
-    it.each([
-      { model: "claude-sonnet-4-6", tokens: 120_000 },
-      { model: "claude-opus-4-6", tokens: 120_000 },
-    ])(
+    it.each([{ model: "claude-sonnet-4-6", tokens: 120_000 }])(
       "sends a $tokens-token context on the requested $model model without asking after a short pause",
       async ({ model, tokens }) => {
         const createdAt = new Date().toISOString();

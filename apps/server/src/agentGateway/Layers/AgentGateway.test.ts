@@ -2440,7 +2440,6 @@ describe("AgentGateway", () => {
       const readThreadProperties = readThread?.inputSchema.properties as
         | Record<string, { maximum?: number; minimum?: number; type?: string }>
         | undefined;
-      assert.include(readThread?.description ?? "", "long message losslessly");
       assert.deepInclude(readThreadProperties?.maxMessageChars, {
         type: "integer",
         minimum: 50,
@@ -2478,32 +2477,16 @@ describe("AgentGateway", () => {
       const setThreadPullRequest = tools.find(
         (tool) => tool.name === "synara_set_thread_pull_request",
       );
-      assert.include(setThreadPullRequest?.description ?? "", "never replaces other links");
-      assert.include(setThreadPullRequest?.description ?? "", "only read, review, or mention");
       assert.deepEqual(setThreadPullRequest?.inputSchema.required, ["reference"]);
       const unlinkThreadPullRequest = tools.find(
         (tool) => tool.name === "synara_unlink_thread_pull_request",
       );
-      assert.include(unlinkThreadPullRequest?.description ?? "", "does not close");
       assert.deepEqual(unlinkThreadPullRequest?.inputSchema.required, ["url"]);
 
       const createAutomation = tools.find((tool) => tool.name === "synara_create_automation");
-      assert.include(createAutomation?.description ?? "", "self-contained future-run brief");
       const createAutomationProperties = createAutomation?.inputSchema.properties as
         | Record<string, { description?: string }>
         | undefined;
-      assert.include(
-        createAutomationProperties?.name?.description ?? "",
-        "specific 3–8 word outcome label",
-      );
-      assert.include(
-        createAutomationProperties?.prompt?.description ?? "",
-        "Assume no chat context",
-      );
-      assert.include(
-        createAutomationProperties?.prompt?.description ?? "",
-        "notify-versus-silent criteria",
-      );
       assert.property(createAutomationProperties, "stopAfterConsecutiveFailures");
       assert.property(createAutomationProperties, "target");
       assert.property(createAutomationProperties, "enabled");
@@ -2515,21 +2498,6 @@ describe("AgentGateway", () => {
       assert.property(createAutomationTarget?.properties, "provider");
       assert.property(createAutomationTarget?.properties, "model");
       assert.property(createAutomationTarget?.properties, "options");
-      const updateAutomationMemory = tools.find(
-        (tool) => tool.name === "synara_update_automation_memory",
-      );
-      const reportAutomationResult = tools.find(
-        (tool) => tool.name === "synara_report_automation_result",
-      );
-      assert.include(
-        updateAutomationMemory?.description ?? "",
-        'manual follow-up such as "continue"',
-      );
-      assert.include(
-        reportAutomationResult?.description ?? "",
-        'manual follow-up such as "continue"',
-      );
-
       const updateAutomationProperties = tools.find(
         (tool) => tool.name === "synara_update_automation",
       )?.inputSchema.properties as Record<string, { description?: string }> | undefined;

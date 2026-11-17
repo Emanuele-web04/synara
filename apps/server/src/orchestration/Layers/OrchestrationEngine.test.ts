@@ -2633,7 +2633,7 @@ describe("OrchestrationEngine", () => {
       const pending = system.run(
         engine
           .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
-          .pipe(Effect.timeoutOption("2 seconds")),
+          .pipe(Effect.timeoutOption("250 millis")),
       );
       await pending;
       const receipt = await system.run(originalLookup({ commandId }));

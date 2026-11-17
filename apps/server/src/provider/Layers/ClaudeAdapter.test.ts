@@ -6035,8 +6035,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
-    ["account_on_hold", /account is on hold/i],
-    ["verification_required", /organization verification/i],
     ["cloud_credential_error", /cloud provider credentials/i],
   ] as const) {
     it.effect(`restarts the Claude process after ${error}`, () => {

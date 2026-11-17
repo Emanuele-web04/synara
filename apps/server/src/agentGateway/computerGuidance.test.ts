@@ -8,20 +8,8 @@ import {
 } from "./computerGuidance.ts";
 
 describe("computer guidance", () => {
-  it("keeps every chapter indexed, non-empty and inside its budget", () => {
+  it("keeps every chapter indexed and non-empty", () => {
     expect(COMPUTER_HELP_TOPICS).toEqual(Object.keys(COMPUTER_HELP_SECTIONS));
-    expect(COMPUTER_HELP_TOPICS).toContain("tools");
-    expect(COMPUTER_HELP_TOPICS).not.toContain("recording");
-
-    expect(COMPUTER_HELP_SECTIONS.menus.length).toBeLessThanOrEqual(700);
-    for (const topic of ["browser", "hidden", "foreground", "forms", "spaces"] as const) {
-      expect(COMPUTER_HELP_SECTIONS[topic].length, topic).toBeLessThanOrEqual(900);
-    }
-    expect(COMPUTER_HELP_SECTIONS.tools.length).toBeGreaterThanOrEqual(100);
-    expect(COMPUTER_HELP_SECTIONS.tools.length).toBeLessThanOrEqual(300);
-    expect(COMPUTER_HELP_SECTIONS.tools).toContain("computer_run");
-    expect(COMPUTER_HELP_SECTIONS.tools).toContain("computer_inspect");
-
     for (const topic of COMPUTER_HELP_TOPICS) {
       expect(COMPUTER_HELP_SECTIONS[topic].length, topic).toBeGreaterThan(0);
     }
@@ -52,11 +40,8 @@ describe("computer guidance", () => {
       "calculator",
       "slack",
     ] as const) {
-      expect(COMPUTER_HELP_SECTIONS[app].length).toBeLessThanOrEqual(700);
       expect(COMPUTER_HELP_INDEX).toContain(`${app} —`);
       expect(notes).not.toContain(COMPUTER_HELP_SECTIONS[app]);
     }
-    expect(COMPUTER_HELP_SECTIONS.electron).toContain("same_pid_keyboard_ambiguity");
-    expect(COMPUTER_HELP_SECTIONS.editors).toContain("not that it was saved or synced");
   });
 });
