@@ -6,18 +6,24 @@
 //! child window to track — `composited` is what this platform asks native
 //! components to return.
 //!
-//! Every WebView2 call happens on one dedicated STA thread with a message
-//! pump: the interfaces are single-threaded and the pump is what delivers the
-//! async completion callbacks. A poll on the same thread reads the surface
-//! visual's clip rectangle — which the compositor updates every frame — and
-//! keeps `put_Bounds`/`put_IsVisible` in sync with it, the same way the Linux
-//! backend polls its X11 child window's geometry.
+//! Every WebView2 call happens on GPUI's UI thread. The composition
+//! controller and its parent HWND must belong to the same thread: created
+//! on a different thread, the browser process starts up and then shuts down
+//! cleanly a second later. GPUI already pumps this thread's message queue,
+//! which is what delivers WebView2's async completion callbacks and events.
+//! The element's prepaint reports the node's bounds each frame — the
+//! compositor positions the visual, but WebView2 still needs `put_Bounds`
+//! to size its content — and `put_Bounds`/`put_IsVisible` are applied when
+//! they change. (DirectComposition exposes no `GetClip`, so bounds come
+//! from GPUI, not from the visual.)
 //!
-//! Input: mouse and scroll events must be forwarded to the composition
-//! controller, so `element` returns a div wired to `SendMouseInput`. Keyboard
-//! input needs no forwarding: WebView2 takes focus on a pressed event and the
-//! OS then routes keyboard input to it directly (documented behavior of the
-//! composition controller).
+//! Input: the compositor's hit test gives native surfaces their window region
+//! before GPUI elements see it, so element-level listeners never fire here.
+//! The view instead registers a consumer on its composition surface
+//! (`WindowComposition::on_input`), which receives mouse/scroll events in
+//! window pixels and forwards them through `SendMouseInput`. Keyboard input
+//! needs no forwarding: a `MoveFocus` on the first press hands OS focus to
+//! WebView2, which routes keys natively from then on.
 //!
 //! Hardening mirrors the Linux backend: devtools off, host objects and script
 //! dialogs off, navigation limited to http/https/about, `window.open` and
@@ -29,24 +35,27 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
-        mpsc::{Receiver, Sender},
-        Arc, Mutex, Once,
+        mpsc::Receiver,
+        Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use gpui::{canvas, div, prelude::*, AnyElement, MouseButton, NavigationDirection, Window};
+use gpui::{
+    canvas, div, prelude::*, AnyElement, CompositionSurfaceKind, DispatchEventResult, MouseButton,
+    NavigationDirection, PlatformInput, Window,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use react_native_gpui::native_surface::{Error, NativeViewHandle, NativeViewParent, Result};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2,
-    ICoreWebView2CompositionController, ICoreWebView2CompositionController3,
-    ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
-    ICoreWebView2Settings3, ICoreWebView2_4, COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS,
-    COREWEBVIEW2_MOUSE_EVENT_KIND, COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOWN,
+    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2CompositionController,
+    ICoreWebView2Controller, ICoreWebView2Controller3, ICoreWebView2Environment,
+    ICoreWebView2Environment3, ICoreWebView2EnvironmentOptions, ICoreWebView2Settings3,
+    ICoreWebView2_4, COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS, COREWEBVIEW2_MOUSE_EVENT_KIND,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL, COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+    COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOWN,
     COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP, COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
     COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN, COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP,
     COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL, COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN,
@@ -55,47 +64,51 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_LEFT_BUTTON,
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_MIDDLE_BUTTON,
     COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON,
-    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_SHIFT,
-    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON_ONE,
-    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON_TWO, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
-    COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
-    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
+    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_SHIFT, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON1,
+    COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON2, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+    COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION,
+    COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    COREWEBVIEW2_PERMISSION_STATE_DENY,
 };
 use webview2_com::{
-    wait_with_pump, CreateCoreWebView2CompositionControllerCompletedHandler,
+    CoreWebView2EnvironmentOptions, CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, DownloadStartingEventHandler,
     NavigationStartingEventHandler, NewWindowRequestedEventHandler,
     PermissionRequestedEventHandler,
 };
 use windows::{
-    core::{Interface, HSTRING, PCWSTR, PWSTR},
+    core::{Interface, BOOL, HSTRING, PCWSTR, PWSTR},
     Win32::{
-        Foundation::{HWND, POINT, RECT},
-        Graphics::DirectComposition::{IDCompositionRectangleClip, IDCompositionVisual},
-        System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::DirectComposition::IDCompositionVisual,
+        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED},
+        System::Threading::GetCurrentThreadId,
         UI::WindowsAndMessaging::{
-            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
+            DefWindowProcW, DispatchMessageW, EnumThreadWindows, GetClassNameW, GetWindowLongPtrW,
+            GetWindowThreadProcessId, PeekMessageW, PostMessageW, PostThreadMessageW,
+            SetWindowLongPtrW, TranslateMessage, GWLP_WNDPROC, MSG, PM_REMOVE,
         },
     },
 };
 
-/// How often the worker thread reconciles each web view's bounds with its
-/// surface visual's clip rectangle.
-const POLL: Duration = Duration::from_millis(250);
+/// How long `wait_for` pumps the UI thread's queue for a WebView2 async
+/// call before giving up.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A task run on the WebView2 thread.
-type Task = Box<dyn FnOnce() + Send>;
-
-/// A web view living on the WebView2 thread, keyed by its id.
+/// A web view living on the UI thread, keyed by its id.
 struct View {
     controller: ICoreWebView2CompositionController,
     /// The same controller as the plain `ICoreWebView2Controller`, for
     /// `Bounds`/`IsVisible`/`Close`.
     plain: ICoreWebView2Controller,
     webview: ICoreWebView2,
-    /// The composition surface's visual the web view tree hangs from; its clip
-    /// is the bounds source of truth.
-    visual: IDCompositionVisual,
+    /// Kept alive for the controller's lifetime: releasing the last
+    /// environment reference shuts the browser process down.
+    _environment: ICoreWebView2Environment,
+    /// The window's HWND: closing the controller pumps sent messages to it,
+    /// so the wndproc needs the same shield used during setup.
+    hwnd: HWND,
+    /// Last bounds the element reported, in device pixels.
     width: i32,
     height: i32,
 }
@@ -104,20 +117,41 @@ thread_local! {
     static VIEWS: RefCell<HashMap<u64, View>> = RefCell::new(HashMap::new());
 }
 
-/// The embedded web view. Clones share the worker's task queue, so the
-/// element's event handlers can post `SendMouseInput` calls.
+/// The shareable half of a web view: cloned into the element's event
+/// handlers so they can reach the view. Dropping a clone does nothing —
+/// only the owning `WindowsWebView` closes the controller.
 #[derive(Clone)]
-pub struct WindowsWebView {
+struct ViewHandle {
     id: u64,
-    tasks: Sender<Task>,
     gone: Arc<AtomicBool>,
+    /// Width<<32 | height last applied, so the per-frame prepaint skips
+    /// `put_Bounds` when nothing changed.
+    posted_bounds: Arc<AtomicU64>,
+    /// The element's origin in window logical pixels, written each frame by
+    /// the canvas prepaint so incoming platform input can be translated into
+    /// the web view's device-pixel space.
+    origin: Arc<Mutex<(f32, f32)>>,
+}
+
+/// The embedded web view. Everything lives on the UI thread; `element`
+/// clones its `ViewHandle` for event handlers while this stays the single
+/// owner — the element is rebuilt every frame, so a `Drop` on the shared
+/// handle would close the view on the first repaint.
+pub struct WindowsWebView {
+    shared: ViewHandle,
 }
 
 impl WindowsWebView {
     /// Mounts a WebView2 composition controller on `parent`'s surface visual.
     /// `window` supplies the top-level HWND WebView2 uses for focus and
-    /// keyboard routing.
+    /// keyboard routing. Runs on the UI thread, which must be an STA thread
+    /// that owns `window`'s HWND.
     pub fn create(parent: &NativeViewParent<'_>, window: &mut Window, url: &str) -> Result<Self> {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .map_err(|e| Error::msg(format!("CoInitializeEx (UI thread must be STA): {e}")))?;
+        }
         let unknown = parent
             .visual()?
             .downcast::<windows::core::IUnknown>()
@@ -134,20 +168,49 @@ impl WindowsWebView {
         };
 
         let id = next_id();
-        let tasks = ensure_worker()?;
-        let (tx, rx) = mpsc::channel();
-        let url = url.to_string();
-        post(&tasks, move || {
-            let _ = tx.send(build_view(id, hwnd, visual, &url));
-        })?;
-        rx.recv()
-            .unwrap_or_else(|_| Err(Error::msg("WebView2 thread stopped during web view setup")))?;
+        // synchronous `SendMessage`s during setup) runs the window's
+        // wndproc, which borrows `App` — and `App` is already borrowed by
+        // the mount we're inside of. Swap in a `DefWindowProc` shield until
+        // the WebView2 exists so those messages can't reenter GPUI.
+        let _shield = WndProcShield::install(hwnd);
+        build_view(id, hwnd, visual, url)?;
 
-        Ok(Self {
+        let shared = ViewHandle {
             id,
-            tasks,
             gone: Arc::new(AtomicBool::new(false)),
-        })
+            posted_bounds: Arc::new(AtomicU64::new(0)),
+            origin: Arc::new(Mutex::new((0.0, 0.0))),
+        };
+        Self::attach_input(window, &shared)?;
+        Ok(Self { shared })
+    }
+
+    /// Registers the view as its composition surface's input consumer. The
+    /// compositor's hit test hands the region over a native surface to that
+    /// surface before any GPUI element, so element-level listeners would
+    /// never fire; `on_input` is the framework's channel to windowless
+    /// producers. The surface the node created for this view is the newest
+    /// native surface in the tree.
+    fn attach_input(window: &Window, shared: &ViewHandle) -> Result<()> {
+        let composition = window
+            .enable_window_composition()
+            .map_err(|e| Error::msg(format!("window composition: {e:#}")))?;
+        let surface = composition
+            .children(None)
+            .ok()
+            .and_then(|ids| {
+                ids.into_iter().rev().find(|id| {
+                    composition
+                        .surface_kind(*id)
+                        .is_ok_and(|kind| kind == CompositionSurfaceKind::Native)
+                })
+            })
+            .ok_or_else(|| Error::msg("native composition surface not found"))?;
+        let scale = window.scale_factor();
+        let handle = shared.clone();
+        composition
+            .on_input(surface, move |input| handle.platform_input(input, scale))
+            .map_err(|e| Error::msg(format!("composition on_input: {e:#}")))
     }
 
     /// `composited`: the content lives on the surface's visual, which the
@@ -158,19 +221,58 @@ impl WindowsWebView {
 
     /// Loads a different URL in the running web view.
     pub fn set_url(&self, url: &str) {
+        self.shared.set_url(url);
+    }
+
+    /// The element that paints the node's GPUI content and records the
+    /// view's bounds and origin each frame.
+    pub fn element(&self) -> AnyElement {
+        self.shared.element()
+    }
+}
+
+impl ViewHandle {
+    /// Loads a different URL in the running web view.
+    fn set_url(&self, url: &str) {
         if self.gone.load(Ordering::SeqCst) {
             return;
         }
-        let id = self.id;
-        let url = url.to_string();
-        let _ = post(&self.tasks, move || {
-            VIEWS.with(|views| {
-                if let Some(view) = views.borrow().get(&id) {
+        VIEWS.with(|views| {
+            if let Some(view) = views.borrow().get(&self.id) {
+                unsafe {
+                    let _ = view.webview.Navigate(&HSTRING::from(url));
+                }
+            }
+        });
+    }
+
+    /// Pushes a bounds update: `put_Bounds`/`put_IsVisible` are applied only
+    /// when the device-pixel size actually changes. Called from the
+    /// element's prepaint, so it runs once per frame.
+    fn report_bounds(&self, width: i32, height: i32) {
+        if self.gone.load(Ordering::SeqCst) {
+            return;
+        }
+        let packed = ((width.max(0) as u64) << 32) | (height.max(0) as u64);
+        if self.posted_bounds.swap(packed, Ordering::SeqCst) == packed {
+            return;
+        }
+        VIEWS.with(|views| {
+            if let Some(view) = views.borrow_mut().get_mut(&self.id) {
+                if (width, height) != (view.width, view.height) {
+                    view.width = width;
+                    view.height = height;
                     unsafe {
-                        let _ = view.webview.Navigate(&HSTRING::from(url));
+                        let _ = view.plain.SetBounds(RECT {
+                            left: 0,
+                            top: 0,
+                            right: width.max(1),
+                            bottom: height.max(1),
+                        });
+                        let _ = view.plain.SetIsVisible(width > 0 && height > 0);
                     }
                 }
-            });
+            }
         });
     }
 
@@ -185,114 +287,82 @@ impl WindowsWebView {
         if self.gone.load(Ordering::SeqCst) {
             return;
         }
-        let id = self.id;
-        let _ = post(&self.tasks, move || {
-            VIEWS.with(|views| {
-                if let Some(view) = views.borrow().get(&id) {
-                    unsafe {
-                        let _ = view.controller.SendMouseInput(kind, keys, data, point);
-                    }
+        VIEWS.with(|views| {
+            if let Some(view) = views.borrow().get(&self.id) {
+                unsafe {
+                    let _ = view.controller.SendMouseInput(kind, keys, data, point);
                 }
-            });
+            }
         });
     }
 
-    /// The element that paints the node's GPUI content and forwards its mouse
-    /// and scroll events to the web view. Events carry positions in window
-    /// pixels; the canvas child records the element's origin each frame so
-    /// they can be translated into the web view's coordinate space (device
-    /// pixels relative to the surface).
-    pub fn element(&self) -> AnyElement {
-        let origin = Arc::new(Mutex::new((0.0f32, 0.0f32)));
-        let origin_reader = origin.clone();
-        let to_point = move |position: gpui::Point<gpui::Pixels>, window: &Window| {
-            let (ox, oy) = *origin_reader.lock().unwrap();
-            let scale = window.scale_factor();
-            POINT {
-                x: ((f32::from(position.x) - ox) * scale) as i32,
-                y: ((f32::from(position.y) - oy) * scale) as i32,
+    /// Hands OS keyboard focus to WebView2: a press means the user is typing
+    /// into the page, and once focused the browser's own HWND takes keyboard
+    /// input natively.
+    fn move_focus(&self) {
+        if self.gone.load(Ordering::SeqCst) {
+            return;
+        }
+        VIEWS.with(|views| {
+            if let Some(view) = views.borrow().get(&self.id) {
+                unsafe {
+                    let _ = view
+                        .plain
+                        .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+                }
             }
-        };
-        let to_point = std::rc::Rc::new(to_point);
+        });
+    }
 
-        let mut element = div().size_full();
-        for (button, down, up) in [
-            (
-                MouseButton::Left,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
-            ),
-            (
-                MouseButton::Right,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP,
-            ),
-            (
-                MouseButton::Middle,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOWN,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP,
-            ),
-            (
-                MouseButton::Navigate(NavigationDirection::Back),
-                COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP,
-            ),
-            (
-                MouseButton::Navigate(NavigationDirection::Forward),
-                COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN,
-                COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP,
-            ),
-        ] {
-            let view = self.clone();
-            let to_point = to_point.clone();
-            element = element.on_mouse_down(button, move |event, window, _cx| {
-                view.send_mouse(
-                    down,
-                    virtual_keys(event, Some(button)),
-                    0,
-                    to_point(event.position, window),
-                );
-            });
-            let view = self.clone();
-            let to_point = to_point.clone();
-            element = element.on_mouse_up(button, move |event, window, _cx| {
-                view.send_mouse(
-                    up,
-                    virtual_keys(event, None),
-                    0,
-                    to_point(event.position, window),
-                );
-            });
+    /// A window-logical-pixel position in the web view's device-pixel space.
+    fn to_point(&self, position: gpui::Point<gpui::Pixels>, scale: f32) -> POINT {
+        let (ox, oy) = *self.origin.lock().unwrap();
+        POINT {
+            x: ((f32::from(position.x) - ox) * scale) as i32,
+            y: ((f32::from(position.y) - oy) * scale) as i32,
         }
+    }
 
-        {
-            let view = self.clone();
-            let to_point = to_point.clone();
-            element = element.on_mouse_move(move |event, window, _cx| {
-                view.send_mouse(
-                    COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
-                    virtual_keys(event, event.pressed_button),
-                    0,
-                    to_point(event.position, window),
-                );
-            });
-        }
-        {
-            let view = self.clone();
-            let to_point = to_point.clone();
-            element = element.on_mouse_exit(move |event, window, _cx| {
-                view.send_mouse(
-                    COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
-                    virtual_keys(event, event.pressed_button),
-                    0,
-                    to_point(event.position, window),
-                );
-            });
-        }
-        {
-            let view = self.clone();
-            let to_point = to_point.clone();
-            element = element.on_scroll_wheel(move |event, window, _cx| {
+    /// Handles one input event the compositor aimed at the view's surface.
+    /// The events arrive in window logical pixels and are consumed — the
+    /// compositor already kept them away from GPUI elements behind the
+    /// surface, and nothing above the web view should see them either.
+    fn platform_input(&self, input: &PlatformInput, scale: f32) -> DispatchEventResult {
+        match input {
+            PlatformInput::MouseDown(event) => {
+                if let Some(kind) = down_kind(event.button) {
+                    self.move_focus();
+                    self.send_mouse(
+                        kind,
+                        virtual_keys(event, Some(event.button)),
+                        x_button_data(event.button),
+                        self.to_point(event.position, scale),
+                    );
+                }
+            }
+            PlatformInput::MouseUp(event) => {
+                if let Some(kind) = up_kind(event.button) {
+                    self.send_mouse(
+                        kind,
+                        virtual_keys(event, None),
+                        x_button_data(event.button),
+                        self.to_point(event.position, scale),
+                    );
+                }
+            }
+            PlatformInput::MouseMove(event) => self.send_mouse(
+                COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
+                virtual_keys(event, event.pressed_button),
+                0,
+                self.to_point(event.position, scale),
+            ),
+            PlatformInput::MouseExited(event) => self.send_mouse(
+                COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE,
+                virtual_keys(event, event.pressed_button),
+                0,
+                self.to_point(event.position, scale),
+            ),
+            PlatformInput::Scroll(event) => {
                 // The wheel delta rides in the data's high word, like
                 // WM_MOUSEWHEEL's wParam — same sign gpui already carries:
                 // positive means the wheel moved forward (scroll up). One
@@ -314,27 +384,87 @@ impl WindowsWebView {
                         (delta_x as i32 as u32) << 16,
                     )
                 };
-                view.send_mouse(
+                self.send_mouse(
                     kind,
                     virtual_keys(event, None),
                     data,
-                    to_point(event.position, window),
+                    self.to_point(event.position, scale),
                 );
-            });
+            }
+            _ => {
+                return DispatchEventResult {
+                    propagate: true,
+                    default_prevented: false,
+                };
+            }
         }
+        DispatchEventResult {
+            propagate: false,
+            default_prevented: true,
+        }
+    }
 
-        element
+    /// The element that paints the node's GPUI content and records the
+    /// view's origin and bounds each frame: `origin` feeds the platform-input
+    /// translation, `report_bounds` sizes the WebView's content. Input itself
+    /// reaches the view through `attach_input`'s surface consumer — the
+    /// compositor's hit test never offers surface events to elements. The
+    /// element overlays its node absolutely so its bounds match the surface
+    /// the compositor placed for the view.
+    fn element(&self) -> AnyElement {
+        let view = self.clone();
+        div()
+            .absolute()
+            .inset_0()
             .child(
                 canvas(
-                    move |bounds, _window, _cx| {
-                        *origin.lock().unwrap() =
+                    move |bounds, window, _cx| {
+                        let scale = window.scale_factor();
+                        *view.origin.lock().unwrap() =
                             (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                        view.report_bounds(
+                            (f32::from(bounds.size.width) * scale) as i32,
+                            (f32::from(bounds.size.height) * scale) as i32,
+                        );
                     },
                     |_, _, _, _| {},
                 )
                 .size_full(),
             )
             .into_any_element()
+    }
+}
+
+/// The WebView2 event kind of a press, or `None` for a button WebView2 has no
+/// kind for.
+fn down_kind(button: MouseButton) -> Option<COREWEBVIEW2_MOUSE_EVENT_KIND> {
+    Some(match button {
+        MouseButton::Left => COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
+        MouseButton::Right => COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN,
+        MouseButton::Middle => COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_DOWN,
+        MouseButton::Navigate(_) => COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_DOWN,
+        _ => return None,
+    })
+}
+
+/// The WebView2 event kind of a release, or `None` for a button WebView2 has
+/// no kind for.
+fn up_kind(button: MouseButton) -> Option<COREWEBVIEW2_MOUSE_EVENT_KIND> {
+    Some(match button {
+        MouseButton::Left => COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
+        MouseButton::Right => COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP,
+        MouseButton::Middle => COREWEBVIEW2_MOUSE_EVENT_KIND_MIDDLE_BUTTON_UP,
+        MouseButton::Navigate(_) => COREWEBVIEW2_MOUSE_EVENT_KIND_X_BUTTON_UP,
+        _ => return None,
+    })
+}
+
+/// Which X button an event carries, as WebView2's `mouseData` reports it.
+fn x_button_data(button: MouseButton) -> u32 {
+    match button {
+        MouseButton::Navigate(NavigationDirection::Back) => 1,
+        MouseButton::Navigate(NavigationDirection::Forward) => 2,
+        _ => 0,
     }
 }
 
@@ -358,12 +488,11 @@ fn virtual_keys<E: EventModifiers>(
             MouseButton::Right => COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_RIGHT_BUTTON,
             MouseButton::Middle => COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_MIDDLE_BUTTON,
             MouseButton::Navigate(NavigationDirection::Back) => {
-                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON_ONE
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON1
             }
             MouseButton::Navigate(NavigationDirection::Forward) => {
-                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON_TWO
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_X_BUTTON2
             }
-            _ => COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS::default(),
         };
     }
     keys
@@ -395,11 +524,129 @@ impl_event_modifiers!(
     gpui::ScrollEvent
 );
 
-/// Posts a task to the WebView2 thread.
-fn post(tasks: &Sender<Task>, task: impl FnOnce() + Send + 'static) -> Result<()> {
-    tasks
-        .send(Box::new(task))
-        .map_err(|_| Error::msg("WebView2 thread stopped"))
+/// Waits for a WebView2 async call started on this thread to complete,
+/// pumping the message queue meanwhile: WebView2 delivers its completion
+/// callbacks through the queue, and its loader sends synchronous messages
+/// to the parent HWND that must be answered.
+///
+/// Messages addressed to `hwnd` itself are set aside and reposted at the
+/// end: dispatching them here would reenter GPUI's `App` borrow, but
+/// WebView2's own posted messages (and its sent messages, serviced by
+/// `PeekMessage` regardless) have to flow for setup to finish.
+fn wait_for<T>(rx: &Receiver<T>, _hwnd: HWND) -> Result<T> {
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    let mut stashed: Vec<MSG> = Vec::new();
+    // GPUI can own more than one window (the platform window and internal
+    // helpers share its class); their wndproc borrows `App`, which is
+    // already borrowed by the mount we're inside of. Every message headed
+    // for a window of that class is deferred and reposted afterwards.
+    // Process at most one message per iteration: the WebView2 adapter
+    // window reposts a stream of keep-alives, and draining the queue in
+    // an inner loop would starve the channel and deadline checks.
+    let result = loop {
+        match rx.try_recv() {
+            Ok(value) => break Ok(value),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                break Err(Error::msg("WebView2 callback channel closed"))
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if Instant::now() > deadline {
+            break Err(Error::msg("timed out waiting for WebView2"));
+        }
+        let mut msg = MSG::default();
+        if unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            let is_gpui = !msg.hwnd.0.is_null() && {
+                let mut buf = [0u16; 64];
+                let n = unsafe { GetClassNameW(msg.hwnd, &mut buf) } as usize;
+                String::from_utf16_lossy(&buf[..n]).starts_with("GpuiFast::")
+            };
+            if msg.hwnd.0.is_null() || is_gpui {
+                stashed.push(msg);
+            } else {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    let _ = DispatchMessageW(&msg);
+                }
+            }
+        } else {
+            thread::sleep(Duration::from_millis(1));
+        }
+    };
+    // Hand the deferred messages back to the normal loop.
+    for msg in stashed {
+        unsafe {
+            if msg.hwnd.0.is_null() {
+                let _ =
+                    PostThreadMessageW(GetCurrentThreadId(), msg.message, msg.wParam, msg.lParam);
+            } else {
+                let _ = PostMessageW(Some(msg.hwnd), msg.message, msg.wParam, msg.lParam);
+            }
+        }
+    }
+    result
+}
+
+/// Temporarily replaces the wndproc of every thread window sharing
+/// `hwnd`'s class — GPUI owns several and all of them borrow `App` — with
+/// `DefWindowProc`, so messages serviced while waiting on WebView2 cannot
+/// reenter the `App` borrow the mount is holding. Restores each real
+/// wndproc on drop. `hwnd` is only used to identify the thread to scan.
+struct WndProcShield {
+    swapped: Vec<(HWND, isize)>,
+}
+
+unsafe extern "system" fn shield_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+unsafe extern "system" fn enum_same_class(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let (class, out) = unsafe { &mut *(lparam.0 as *mut (String, Vec<HWND>)) };
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
+    if String::from_utf16_lossy(&buf[..n]).starts_with(class.as_str()) {
+        out.push(hwnd);
+    }
+    true.into()
+}
+
+impl WndProcShield {
+    fn install(hwnd: HWND) -> Self {
+        unsafe {
+            let _ = hwnd;
+            let mut targets = ("GpuiFast::".to_string(), Vec::new());
+            let _ = EnumThreadWindows(
+                GetCurrentThreadId(),
+                Some(enum_same_class),
+                LPARAM(&mut targets as *mut _ as _),
+            );
+            let swapped = targets
+                .1
+                .into_iter()
+                .map(|window| {
+                    let prev = GetWindowLongPtrW(window, GWLP_WNDPROC);
+                    SetWindowLongPtrW(window, GWLP_WNDPROC, shield_wndproc as usize as isize);
+                    (window, prev)
+                })
+                .collect();
+            Self { swapped }
+        }
+    }
+}
+
+impl Drop for WndProcShield {
+    fn drop(&mut self) {
+        for (window, prev) in &self.swapped {
+            unsafe {
+                SetWindowLongPtrW(*window, GWLP_WNDPROC, *prev);
+            }
+        }
+    }
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -408,81 +655,29 @@ fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
 
-/// Starts the dedicated WebView2 STA thread once and returns a clone of its
-/// task queue's sender.
-fn ensure_worker() -> Result<Sender<Task>> {
-    static STARTED: Once = Once::new();
-    static WORKER: Mutex<Option<Sender<Task>>> = Mutex::new(None);
-    STARTED.call_once(|| {
-        let (tx, rx) = mpsc::channel::<Task>();
-        if thread::Builder::new()
-            .name("synara-webview-wv2".into())
-            .spawn(move || worker_main(rx))
-            .is_ok()
-        {
-            *WORKER.lock().unwrap() = Some(tx);
-        }
-    });
-    WORKER
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| Error::msg("WebView2 thread failed to start"))
-}
-
-/// The WebView2 thread: STA init, then a loop alternating between queued
-/// tasks, the thread's message pump (which delivers WebView2's async
-/// callbacks), and the bounds poll.
-fn worker_main(rx: Receiver<Task>) {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
-    loop {
-        match rx.recv_timeout(POLL) {
-            Ok(task) => task(),
-            Err(mpsc::RecvTimeoutError::Timeout) => poll_views(),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        // Drain the thread's message queue; WebView2 delivers its async
-        // completion callbacks and events through it.
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            if msg.message == WM_QUIT {
-                unsafe { CoUninitialize() };
-                return;
-            }
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                let _ = DispatchMessageW(&msg);
-            }
-        }
-    }
-    unsafe { CoUninitialize() };
-}
-
-/// Builds the WebView2 on the worker thread: environment, composition
-/// controller rooted at the surface visual, hardening, first navigation.
-/// `wait_with_pump` is safe here because this already runs on the pumping
-/// worker thread.
+/// Builds the WebView2 on the calling (UI) thread: environment,
+/// composition controller rooted at the surface visual, hardening, first
+/// navigation.
 fn build_view(id: u64, hwnd: HWND, visual: IDCompositionVisual, url: &str) -> Result<()> {
-    let environment = create_environment()?;
-    let controller = create_composition_controller(&environment, hwnd)?;
+    let environment = create_environment(hwnd)?;
+    // `CreateCoreWebView2CompositionController` is on `ICoreWebView2Environment3`.
+    let environment3: ICoreWebView2Environment3 = environment
+        .cast()
+        .map_err(|e| Error::msg(format!("ICoreWebView2Environment3: {e}")))?;
+    let controller = create_composition_controller(&environment3, hwnd)?;
     unsafe {
-        let target: windows::core::IUnknown = visual
-            .cast()
-            .map_err(|e| Error::msg(format!("visual cast to IUnknown: {e}")))?;
         controller
-            .SetRootVisualTarget(&target)
-            .map_err(|e| Error::msg(format!("RootVisualTarget: {e}")))?;
+            .SetRootVisualTarget(&visual)
+            .map_err(|e| Error::msg(format!("SetRootVisualTarget: {e}")))?;
     }
     let plain: ICoreWebView2Controller = controller
         .cast()
         .map_err(|e| Error::msg(format!("controller cast: {e}")))?;
-    if let Ok(cc3) = controller.cast::<ICoreWebView2CompositionController3>() {
+    if let Ok(c3) = plain.cast::<ICoreWebView2Controller3>() {
         // The visual tree is in device pixels; raw pixels keeps bounds in the
         // same space instead of logical (DIP) coordinates.
         unsafe {
-            let _ = cc3.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS);
+            let _ = c3.SetBoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS);
         }
     }
     let webview = unsafe {
@@ -514,7 +709,8 @@ fn build_view(id: u64, hwnd: HWND, visual: IDCompositionVisual, url: &str) -> Re
                 controller,
                 plain,
                 webview,
-                visual,
+                _environment: environment,
+                hwnd,
                 width: 1,
                 height: 1,
             },
@@ -525,14 +721,15 @@ fn build_view(id: u64, hwnd: HWND, visual: IDCompositionVisual, url: &str) -> Re
 
 /// Creates the WebView2 environment, pumping this thread until the completion
 /// callback arrives.
-fn create_environment() -> Result<ICoreWebView2Environment> {
+fn create_environment(hwnd: HWND) -> Result<ICoreWebView2Environment> {
     let (tx, rx) = mpsc::channel();
     let user_data = user_data_dir();
+    let options: ICoreWebView2EnvironmentOptions = CoreWebView2EnvironmentOptions::default().into();
     unsafe {
         CreateCoreWebView2EnvironmentWithOptions(
             PCWSTR::null(),
             &HSTRING::from(user_data.to_string_lossy().as_ref()),
-            &ICoreWebView2EnvironmentOptions::from(CoreWebView2EnvironmentOptions::default()),
+            &options,
             &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
                 move |error_code, environment| {
                     let result = (|| {
@@ -549,13 +746,13 @@ fn create_environment() -> Result<ICoreWebView2Environment> {
         )
         .map_err(|e| Error::msg(format!("CreateCoreWebView2EnvironmentWithOptions: {e}")))?;
     }
-    wait_with_pump(rx).map_err(|e| Error::msg(format!("webview2 environment: {e}")))
+    wait_for(&rx, hwnd)?.map_err(|e| Error::msg(format!("webview2 environment creation: {e}")))
 }
 
 /// Creates the composition controller bound to `hwnd` (the window WebView2
 /// uses for focus and keyboard routing), pumping until ready.
 fn create_composition_controller(
-    environment: &ICoreWebView2Environment,
+    environment: &ICoreWebView2Environment3,
     hwnd: HWND,
 ) -> Result<ICoreWebView2CompositionController> {
     let (tx, rx) = mpsc::channel();
@@ -579,7 +776,8 @@ fn create_composition_controller(
             )
             .map_err(|e| Error::msg(format!("CreateCoreWebView2CompositionController: {e}")))?;
     }
-    wait_with_pump(rx).map_err(|e| Error::msg(format!("webview2 composition controller: {e}")))
+    let res = wait_for(&rx, hwnd);
+    res?.map_err(|e| Error::msg(format!("webview2 composition controller creation: {e}")))
 }
 
 /// Applies the same hardening policy as the Linux backend.
@@ -693,68 +891,16 @@ fn user_data_dir() -> std::path::PathBuf {
     dir
 }
 
-/// Worker-thread poll: keeps each web view's `Bounds`/`IsVisible` in sync with
-/// its surface visual's clip (the compositor sets the clip to the node's
-/// device-pixel bounds and zeroes it when the node is hidden), and drops
-/// views whose visual the compositor tore down.
-fn poll_views() {
-    VIEWS.with(|views| {
-        views.borrow_mut().retain(|_, view| {
-            let clip = unsafe {
-                view.visual
-                    .GetClip()
-                    .ok()
-                    .and_then(|clip| clip.cast::<IDCompositionRectangleClip>().ok())
-            };
-            let Some(clip) = clip else {
-                // The surface was torn down: close the web view with it.
+impl Drop for WindowsWebView {
+    fn drop(&mut self) {
+        self.shared.gone.store(true, Ordering::SeqCst);
+        VIEWS.with(|views| {
+            if let Some(view) = views.borrow_mut().remove(&self.shared.id) {
+                let _shield = WndProcShield::install(view.hwnd);
                 unsafe {
                     let _ = view.plain.Close();
                 }
-                return false;
-            };
-            let (width, height) = unsafe {
-                (
-                    clip.GetRight().unwrap_or(0.0),
-                    clip.GetBottom().unwrap_or(0.0),
-                )
-            };
-            let (width, height) = (width as i32, height as i32);
-            if (width, height) != (view.width, view.height) {
-                view.width = width;
-                view.height = height;
-                unsafe {
-                    let _ = view.plain.SetBounds(RECT {
-                        left: 0,
-                        top: 0,
-                        right: width.max(1),
-                        bottom: height.max(1),
-                    });
-                    let _ = view.plain.SetIsVisible(width > 0 && height > 0);
-                }
             }
-            true
         });
-    });
-}
-
-impl Drop for WindowsWebView {
-    fn drop(&mut self) {
-        self.gone.store(true, Ordering::SeqCst);
-        let id = self.id;
-        let (tx, rx) = mpsc::channel();
-        let _ = post(&self.tasks, move || {
-            VIEWS.with(|views| {
-                if let Some(view) = views.borrow_mut().remove(&id) {
-                    unsafe {
-                        let _ = view.plain.Close();
-                    }
-                }
-            });
-            let _ = tx.send(());
-        });
-        // Let the WebView2 thread close the controller before the caller moves
-        // on; bounded so a dead thread cannot hang unmount.
-        let _ = rx.recv_timeout(Duration::from_millis(500));
     }
 }
