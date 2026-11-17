@@ -324,9 +324,11 @@ export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
 export function UltrafastModeIcon() {
   return (
-    <span aria-hidden="true" className="inline-flex shrink-0 items-center -space-x-1">
-      <FastModeIcon className="size-3.5" />
-      <FastModeIcon className="size-3.5" />
+    <span aria-hidden="true" className="relative inline-block h-4 w-[1.125rem] shrink-0">
+      <FastModeIcon className="absolute top-0 left-[0.25rem] size-3.5" />
+      <span className="absolute top-0.5 left-0 flex drop-shadow-[1.25px_0_0_var(--popover)]">
+        <FastModeIcon className="size-3.5" />
+      </span>
     </span>
   );
 }
