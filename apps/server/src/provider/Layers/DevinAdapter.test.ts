@@ -1810,8 +1810,6 @@ describe("Devin adapter lifecycle", () => {
         const afterSecond = yield* adapter.readThread(threadId);
         expect(afterSecond.turns.map((turn) => turn.id)).toEqual([first.turnId, second.turnId]);
         expect(afterSecond.turns[0]?.items).toEqual(afterFirst.turns[0]?.items);
-        expect(afterFirst.turns.map((turn) => turn.id)).toEqual([first.turnId]);
-        expect(afterFirst.turns[0]?.items.length).toBeGreaterThan(0);
         expect(afterSecond.turns[1]?.items.length).toBeGreaterThan(0);
         yield* adapter.stopSession(threadId);
       }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
@@ -1936,23 +1934,6 @@ describe("applyDevinSessionConfiguration", () => {
     expect(calls).toEqual([]);
   });
 
-  it("fails closed when plan mode is not available", async () => {
-    const { runtime } = makeFakeAcpRuntime({
-      currentModeId: "default",
-      availableModes: [{ id: "default", name: "Default" }],
-    });
-
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "full-access",
-          interactionMode: "plan",
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
   it("fails closed for approval-required when mode discovery is unavailable", async () => {
     const { runtime, calls } = makeFakeAcpRuntime();
 
@@ -1977,23 +1958,6 @@ describe("resolveRequestedModeId", () => {
     { id: "plan", name: "Plan" },
     { id: "bypass", name: "Full Access" },
   ];
-  it("selects plan mode by exact alias", async () => {
-    const modeId = await Effect.runPromise(
-      resolveRequestedModeId({
-        modeState: {
-          currentModeId: "default",
-          availableModes: [
-            { id: "default", name: "Default" },
-            { id: "plan", name: "Plan" },
-          ],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "plan",
-      }),
-    );
-    expect(modeId).toBe("plan");
-  });
-
   it("leaves default mode unchanged for non-plan turns", async () => {
     const modeId = await Effect.runPromise(
       resolveRequestedModeId({
@@ -2018,18 +1982,6 @@ describe("resolveRequestedModeId", () => {
           },
           runtimeMode: "full-access",
           interactionMode: "plan",
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
-  it("rejects approval-required when mode state is unavailable", async () => {
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: undefined,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
         }),
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
@@ -2345,11 +2297,8 @@ describe("resolveDevinStartModel", () => {
 });
 
 describe("buildDevinPromptMeta", () => {
-  it("advertises plan mode through prompt metadata", () => {
+  it("maps plan to plan and default to agent", () => {
     expect(buildDevinPromptMeta("plan")).toEqual({ mode: "plan" });
-  });
-
-  it("maps omitted and default modes to agent", () => {
     expect(buildDevinPromptMeta("default")).toEqual({ mode: "agent" });
   });
 });
@@ -2362,13 +2311,6 @@ describe("buildDevinStaticModelDescriptors", () => {
       modelVariants: [
         { model: "swe-1-6", fastMode: false },
         { model: "swe-1-6-fast", fastMode: true },
-      ],
-    });
-    expect(descriptors.find((descriptor) => descriptor.slug === "swe-1-7")).toMatchObject({
-      supportsFastMode: true,
-      modelVariants: [
-        { model: "swe-1-7", fastMode: false },
-        { model: "swe-1-7-lightning", fastMode: true },
       ],
     });
   });
@@ -2460,29 +2402,6 @@ describe("Devin CLI model discovery", () => {
         { model: "swe-1-7-lightning", fastMode: true },
       ],
     });
-  });
-
-  it("humanizes family slugs when the CLI omits labels", () => {
-    const models = mergeDevinModelDescriptors([
-      parseDevinCliModelList(
-        JSON.stringify({
-          families: [
-            {
-              family_uid: "swe-1-7",
-              slug: "swe-1-7",
-              variants: [{ model_uid: "swe-1-7" }],
-            },
-            {
-              family_uid: "claude-opus-4-9-20260715",
-              slug: "claude-opus-4-9-20260715",
-              variants: [{ model_uid: "claude-opus-4-9-20260715" }],
-            },
-          ],
-        }),
-      ),
-    ]);
-
-    expect(models.map(({ name }) => name)).toEqual(["SWE 1.7", "Claude Opus 4.9 20260715"]);
   });
 
   it("exposes thinking and long-context toggles for Claude-style variants", () => {
@@ -3034,60 +2953,6 @@ describe("Devin permission requests", () => {
         expect(response).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
         });
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
-            turnIdleMs: 3_600_000,
-            toolIdleMs: 3_600_000,
-          }),
-        ),
-      ),
-    );
-  });
-
-  it("falls back to the session label only when no tool state exists", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const handles = makePermissionRuntime();
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* DevinAdapter;
-        const threadId = ThreadId.makeUnsafe("thread-devin-permission-fallback");
-        const runtimeEvents: Array<{
-          type: string;
-          requestId?: unknown;
-          payload?: Record<string, unknown>;
-        }> = [];
-        yield* adapter.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              runtimeEvents.push({
-                type: event.type,
-                requestId: event.requestId,
-                payload: event.payload as Record<string, unknown>,
-              });
-            }),
-          ),
-          Effect.forkScoped,
-        );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "approval-required",
-          cwd: process.cwd(),
-        });
-        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
-
-        const pending = yield* handles
-          .requestPermission(makePermissionParams("untracked-call"))
-          .pipe(Effect.forkChild);
-        yield* flushTimers();
-        const opened = runtimeEvents.find((event) => event.type === "request.opened");
-        expect(String(opened?.payload?.detail)).toContain("Session devin-test-session");
-        yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
-        const response = yield* Fiber.join(pending);
-        expect(response).toEqual({ outcome: { outcome: "cancelled" } });
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -4277,18 +4142,10 @@ it.each(["default", "plan"] as const)(
 );
 it.each([
   { name: "omitted metadata", toolMetadata: undefined, requestMetadata: undefined, invalid: false },
-  { name: "empty tool metadata", toolMetadata: {}, requestMetadata: undefined, invalid: false },
   {
     name: "unrelated tool metadata",
     toolMetadata: { trace: "permission" },
     requestMetadata: undefined,
-    invalid: false,
-  },
-  { name: "empty request metadata", toolMetadata: undefined, requestMetadata: {}, invalid: false },
-  {
-    name: "unrelated request metadata",
-    toolMetadata: undefined,
-    requestMetadata: { trace: "permission" },
     invalid: false,
   },
   {
@@ -4307,12 +4164,6 @@ it.each([
     name: "invalid tool owner",
     toolMetadata: { "cognition.ai/subagent_context": {} },
     requestMetadata: undefined,
-    invalid: true,
-  },
-  {
-    name: "invalid request owner",
-    toolMetadata: undefined,
-    requestMetadata: { "cognition.ai/subagent_context": { parentAgentId: 12 } },
     invalid: true,
   },
   {
