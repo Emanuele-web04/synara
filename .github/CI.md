@@ -38,15 +38,17 @@ reader's filtered compilation test and native Bun PTY probe remain separate.
 
 ## Install scopes and caches
 
-The shared setup action defaults to `full`. Typecheck, Linux unit/browser and
-desktop build jobs keep the entire workspace. Only verified consumers opt into
-smaller installs:
+The shared setup action defaults to `full`. Typecheck, core and server unit
+tests, and Desktop Build install the entire workspace. Other jobs select the
+dependencies they use.
 
 - `static`: root and `@synara/scripts`, including its workspace dependencies.
   Identity, Windows boundary, formatting, lint, release smoke and CI contract
   tests all run. Root-only or root + shared installs cannot own release smoke.
 - `runtime`: all workspaces except marketing. Windows runs every existing native
   PTY/process/filesystem/shutdown/recovery test with lifecycle scripts enabled.
+- The `web` scope installs the root and `@synara/web`, including its workspace
+  dependencies, for Web Unit and the six stable Browser jobs.
 - Native release artifact builders exclude marketing with `--ignore-scripts`
   exactly as before. macOS device jobs select `@synara/scripts`, retaining their
   existing `--ignore-scripts`, Xcode pairs, probe, simulator smoke and diagnostics.
@@ -54,21 +56,15 @@ smaller installs:
   `@synara/cli` with `--ignore-scripts`. The smoke also imports the server's
   supervised process teardown, so `@synara/scripts` alone cannot resolve `effect`.
 
-Filtered scopes never restore/save a full `node_modules` archive. Windows
-installs cold rather than extracting the pathological Bun package cache. Its
-install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matching
-the measured install layout and allowing Bun to hardlink package files. Full
-Linux installs restore their modules cache in every lane, but only one job per
-key saves it after a miss (`save-modules`): `static-typecheck` owns the shared
-Linux key, Desktop Build owns the `electron: true` key, and the macOS
-editor-integration job owns its macOS key. Every other lane is restore-only, so a
-miss is archived once instead of by a dozen parallel lanes racing to reserve the
-same key. There is no separate Bun package archive: it hashed the same files as
-the modules key, so it could only miss when modules missed. Frozen installation
-and lifecycle patches still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
-scope: multiple workspace `prepare` hooks patch the same TypeScript files, and
-parallel hooks can read a partially written compiler file. Scripts and dependency
-patches remain enabled. The September measurements below predate this serialization.
+The `full` and `web` scopes use separate exact `node_modules` keys. Static,
+runtime, and Windows jobs install directly. On Windows, `RUNNER_TEMP` puts the
+Bun package cache on the hosted checkout's drive so Bun can hardlink package
+files. Each archive has one writer after a miss. Typecheck and Desktop Build
+own the two full Linux keys, Web Unit owns the Web key, and the macOS editor
+integration job owns its macOS key. Frozen installation and lifecycle patches
+run on cache hits. Every scope uses `--concurrent-scripts=1` to serialize the
+workspace `prepare` hooks that patch the same TypeScript files. The September
+measurements below predate this serialization.
 Turbo persistence is opt-in (Desktop Build). Pull requests restore the newest
 main entry and never save; only pushes to `main` save a per-commit entry, so PR
 runs stop adding PR-scoped archives that no other branch can read.
@@ -146,11 +142,10 @@ chromium only             0.75 /  0.55 /  0.65    0.65
 
 That removes **96.1%** of this preparation segment. The hosted Ubuntu image
 already contains the shared libraries needed by stable tests; `--with-deps` was
-re-running apt and installing rendering fonts on every shard. Stable CI now uses
-`playwright install chromium`. Nightly geometry retains `--with-deps` because
-fonts/layout are part of that quarantine's purpose. If a future runner image loses
-a required system dependency, the blocking browser lane fails rather than silently
-reducing coverage.
+re-running apt and installing rendering fonts on every shard. The current
+stable CI setup uses `playwright install chromium --only-shell` with a dedicated
+cache. The browser config launches Playwright's default headless Chromium.
+Nightly geometry retains `--with-deps` for its font and layout checks.
 
 ### ChatView three-way distribution
 
@@ -266,9 +261,27 @@ On the Mac mini with cold build outputs and Turbo cache, the build and
 lifecycle smoke took 39.09 s and 21.56 s serially. The same build and lifecycle
 checks finished in 36.61 s together, and the generated preload passed its CI
 check. The separate navigation smoke timed out while acquiring initial macOS
-window focus in both the serial run and an isolated reproduction. The overlap
-timing covers the build and lifecycle only. Full Linux Xvfb verification is
-pending.
+window focus in both the serial run and an isolated reproduction. The local
+overlap timing covers the build and lifecycle. Desktop Build finished in 188 s
+on Linux with both Xvfb smokes and the preload check green. The earlier pilot
+took 227 s. Both restored dependency caches against different base lockfiles,
+so the difference includes runner and cache variation.
+[Linux pilot](https://github.com/Emanuele-web04/synara/actions/runs/44199353941)
+
+### Web dependency and Chromium archives
+
+Across 56 cache hits in eight hosted runs, restoring the 933 MB full workspace
+archive took 21.39 s at the median and 25.80 s at p90 in Web Unit and the six
+stable Browser jobs. The pilot Playwright archive was 282 MB and contained both
+headed Chromium and its headless shell.
+
+On the Mac mini, a single cold frozen install per scope took 27.96 s for `full`
+and 11.60 s for `web`. The resulting trees compressed to 692 MB and 276 MB using
+the same tar and zstd settings. With the smaller tree and a separate Playwright
+directory containing only the headless shell and FFmpeg, all six stable Browser
+jobs passed. They exercised 252 component files exactly once and matched the
+265 assigned ChatView cases. Web Unit matched all 6,279 outcomes, including its
+three existing skips. Linux cache size and cold/warm timing are pending.
 
 ## November 2026 critical-path rebalance
 

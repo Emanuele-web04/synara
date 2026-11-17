@@ -6,7 +6,7 @@ inputs:
     description: Install the Electron runtime binary.
     default: "false"
   scope:
-    description: "Install scope: full, static (root and scripts), or runtime (all except marketing)."
+    description: "Install scope: full, static (root and scripts), runtime (all except marketing), or web (root and web)."
     default: "full"
   turbo:
     description: Restore Turbo build artifacts for jobs that use Turbo; pushes to main also save them.
@@ -28,10 +28,10 @@ runs:
         ELECTRON: ${{ inputs.electron }}
       run: |
         case "$WORKSPACE_SCOPE" in
-          full|static|runtime) ;;
+          full|static|runtime|web) ;;
           *) echo "::error::Unknown workspace scope: $WORKSPACE_SCOPE"; exit 1 ;;
         esac
-        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" = "static" ]; then
+        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" != "full" ] && [ "$WORKSPACE_SCOPE" != "runtime" ]; then
           echo "::error::Electron requires a full or runtime install."
           exit 1
         fi
@@ -46,14 +46,12 @@ runs:
       with:
         node-version-file: package.json
 
-    # Small filtered installs cost less than archive transfer/extraction. Never
-    # restore a full tree into a filtered lane or save it under the full key.
-    # Windows isolated links are rebuilt by Bun, not restored from an archive.
-    # Every full lane restores; only the job that sets save-modules writes the
-    # archive after a miss, so parallel lanes never race to upload the same key.
+    # The Web dependency tree has its own exact key. Static and runtime scopes
+    # install directly, as do Windows jobs with Bun's isolated links.
+    # One job per key sets save-modules to seed the archive after a miss.
     - name: Restore node_modules
       id: modules
-      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web') }}
       uses: actions/cache/restore@v5
       with:
         path: |
@@ -61,7 +59,7 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope == 'web' && 'web-' || '' }}${{ hashFiles('bun.lock', 'package.json') }}
 
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
@@ -149,6 +147,7 @@ runs:
           full) bun install --frozen-lockfile --concurrent-scripts=1 ;;
           static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' --concurrent-scripts=1 ;;
           runtime) bun install --frozen-lockfile --filter '!@synara/marketing' --concurrent-scripts=1 ;;
+          web) bun install --frozen-lockfile --filter './' --filter '@synara/web' --concurrent-scripts=1 ;;
         esac
 
     - name: Install Electron test runtime
@@ -168,7 +167,7 @@ runs:
     # Saved after the Electron runtime so an electron:true archive keeps the
     # same contents as before. Restore misses fall back to a cold frozen install.
     - name: Save node_modules
-      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web') && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v5
       with:
         path: |

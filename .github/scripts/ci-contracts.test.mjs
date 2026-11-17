@@ -96,7 +96,6 @@ test("filtered scopes preserve lifecycle scripts and the scripts workspace links
   );
   assert.ok(setup.includes("runtime) bun install --frozen-lockfile --filter '!@synara/marketing'"));
   assert.ok(!setup.includes("--ignore-scripts"));
-  assert.ok(setup.includes("runner.os != 'Windows' && inputs.scope == 'full'"));
   assert.ok(setup.includes("inputs.turbo == 'true'"));
   const turbo = JSON.parse(read("../../turbo.json"));
   assert.equal(turbo.tasks.test.cache, false);
@@ -127,19 +126,20 @@ test("caches restore in every consumer and save from one owner per key", () => {
       .map((step) => [step.split("\n")[0], step]),
   );
   const modulesKey =
-    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}";
+    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope == 'web' && 'web-' || '' }}${{ hashFiles('bun.lock', 'package.json') }}";
+  const modulesConsumers =
+    "runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web')";
   // The Bun package archive shared the modules hash, so it missed whenever it was needed.
   assert.ok(!setup.includes("~/.bun/install/cache"));
   const restore = steps["Restore node_modules"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
-  assert.ok(restore.includes("if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}"));
+  assert.ok(restore.includes(`if: \${{ ${modulesConsumers} }}`));
   assert.ok(restore.includes(`key: ${modulesKey}`));
   assert.ok(!restore.includes("restore-keys"), "modules restore stays exact-key only");
   const save = steps["Save node_modules"];
   assert.ok(save.includes("uses: actions/cache/save@v5"));
   for (const condition of [
-    "runner.os != 'Windows'",
-    "inputs.scope == 'full'",
+    modulesConsumers,
     "inputs.save-modules == 'true'",
     "steps.modules.outputs.cache-hit != 'true'",
   ])
@@ -148,13 +148,35 @@ test("caches restore in every consumer and save from one owner per key", () => {
   assert.equal(setup.match(/actions\/cache\/save@/g)?.length, 1);
   const actionDefault = setup.split("  save-modules:\n")[1].split("\n\n")[0];
   assert.ok(actionDefault.includes('default: "false"'), "restore-only unless a job opts in");
-  // One saver per CI key: typecheck owns electron:false, Desktop Build owns electron:true.
-  const savers = workflow
-    .split(/\n  (?=[a-z_-]+:\n)/)
-    .filter((job) => job.includes('save-modules: "true"'))
-    .map((job) => job.split(":")[0]);
+  // Typecheck and Desktop Build own the two full keys. Web Unit owns the web key.
+  const savers = Object.entries(jobs)
+    .filter(([, job]) => job.steps.some((step) => step.with?.["save-modules"] === "true"))
+    .map(([name]) => name);
   assert.deepEqual(savers, ["static-typecheck", "build"]);
-  assert.equal(workflow.match(/save-modules: "true"/g)?.length, 2);
+  const unitSetup = jobs.unit.steps.find(
+    (step) => step.uses === "./.github/actions/setup-workspace",
+  );
+  assert.deepEqual(unitSetup.with, {
+    scope: "${{ matrix.scope || 'full' }}",
+    "save-modules": "${{ matrix.save-modules || 'false' }}",
+  });
+  assert.deepEqual(
+    jobs.unit.strategy.matrix.include.filter((lane) => lane.scope || lane["save-modules"]),
+    [
+      {
+        pkg: "web",
+        filters: "--filter=@synara/web",
+        "test-args": "",
+        scope: "web",
+        "save-modules": "true",
+      },
+    ],
+  );
+  const browserSetup = jobs.browser.steps.find(
+    (step) => step.uses === "./.github/actions/setup-workspace",
+  );
+  assert.equal(browserSetup.with.scope, "web");
+  assert.equal(browserSetup.with["save-modules"], undefined);
   // Turbo: pull requests restore main's newest entry; only pushes to main save.
   const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   assert.ok(steps["Restore Turbo outputs"].includes("uses: actions/cache/restore@v5"));
@@ -237,7 +259,7 @@ test("web transform cache stays keyed by its inputs and out of production builds
     assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
   }
 });
-test("Windows install uses the runner-volume cache without changing other platforms", () => {
+test("Windows uses the runner-volume cache and Web installs only its dependency closure", () => {
   const install = setup.match(
     /- name: Install dependencies[\s\S]*?      run: \|\n([\s\S]*?)(?=\n    - name:)/,
   )?.[1];
@@ -246,7 +268,12 @@ test("Windows install uses the runner-volume cache without changing other platfo
     .split("\n")
     .map((line) => line.replace(/^        /, ""))
     .join("\n");
-  for (const platform of ["Windows", "Linux", "macOS"]) {
+  for (const [platform, scope, filters] of [
+    ["Windows", "runtime", ["!@synara/marketing"]],
+    ["Linux", "runtime", ["!@synara/marketing"]],
+    ["macOS", "runtime", ["!@synara/marketing"]],
+    ["Linux", "web", ["./", "@synara/web"]],
+  ]) {
     const result = spawnSync(
       "bash",
       [
@@ -260,21 +287,25 @@ test("Windows install uses the runner-volume cache without changing other platfo
           ...process.env,
           RUNNER_OS: platform,
           RUNNER_TEMP: "/runner temp",
-          WORKSPACE_SCOPE: "runtime",
+          WORKSPACE_SCOPE: scope,
           BUN_INSTALL_CACHE_DIR: "/existing-cache",
         },
       },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stdout.includes("arg=--concurrent-scripts=1\n"), platform);
     const expectedCache =
       platform === "Windows" ? "/runner temp/bun-install-cache" : "/existing-cache";
-    assert.ok(result.stdout.includes(`cache=${expectedCache}\n`), platform);
-    assert.ok(
-      result.stdout.includes(
-        "arg=install\narg=--frozen-lockfile\narg=--filter\narg=!@synara/marketing\n",
-      ),
-      platform,
+    assert.deepEqual(
+      result.stdout.trimEnd().split("\n"),
+      [
+        ...(platform === "Windows" ? [`Bun install cache: ${expectedCache}`] : []),
+        `cache=${expectedCache}`,
+        "arg=install",
+        "arg=--frozen-lockfile",
+        ...filters.flatMap((filter) => ["arg=--filter", `arg=${filter}`]),
+        "arg=--concurrent-scripts=1",
+      ],
+      `${platform}/${scope}`,
     );
   }
 });
@@ -340,9 +371,14 @@ test("measured critical-path distribution stays three-way and skips redundant ap
       ?.parallel.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
     ["a", "b"],
   );
-  const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
-  assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
-  assert.ok(!browser.includes("playwright install --with-deps chromium"));
+  const runtime = jobs.browser.steps.find((step) => step.name === "Install browser test runtime");
+  const cache = jobs.browser.steps.find((step) => step.name === "Cache Chromium headless shell");
+  assert.ok(runtime.run.includes("./node_modules/.bin/playwright install chromium --only-shell"));
+  assert.ok(!runtime.run.includes("--with-deps"));
+  assert.ok(runtime.run.includes('PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-headless"'));
+  assert.ok(runtime.run.includes('>> "$GITHUB_ENV"'));
+  assert.equal(cache.with.path, "${{ runner.temp }}/playwright-headless");
+  assert.ok(cache.with.key.includes("-playwright-chromium-shell-"));
 });
 
 test("only the Electron lifecycle smoke overlaps the desktop build", () => {
