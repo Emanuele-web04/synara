@@ -69,13 +69,17 @@ export function resolveStarredTraits(
     | "effortLevels"
     | "fastModeDescriptor"
     | "fastModeEnabled"
+    | "supportsUltrafastMode"
     | "ultrafastModeEnabled"
     | "thinkingEnabled"
   >,
 ): StarredTraits {
   return {
     effort: selection.effortLevels.length > 0 ? selection.effort : null,
-    fastMode: supportsComposerFastModeControl(selection) ? selection.fastModeEnabled : null,
+    fastMode:
+      supportsComposerFastModeControl(selection) || selection.supportsUltrafastMode
+        ? selection.fastModeEnabled
+        : null,
     ...(selection.ultrafastModeEnabled ? { serviceTier: "ultrafast" } : {}),
     thinking: selection.thinkingEnabled,
   };
@@ -105,7 +109,11 @@ export function buildStarredModelOptionsPatch(input: {
   if (provider === "codex" && starred.serviceTier === "ultrafast") {
     if (selection.supportsUltrafastMode) patch.serviceTier = starred.serviceTier;
     else patch.fastMode = false;
-  } else if (starred.fastMode !== null && supportsComposerFastModeControl(selection)) {
+  } else if (
+    starred.fastMode !== null &&
+    (supportsComposerFastModeControl(selection) ||
+      (starred.fastMode === false && selection.supportsUltrafastMode))
+  ) {
     patch.fastMode = starred.fastMode;
   }
   if (starred.thinking !== null && selection.thinkingEnabled !== null) {

@@ -608,6 +608,45 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("restores a Standard preset when the model offers Ultrafast without Fast", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker({
+      effortControl: "slider",
+      runtimeModelsByProviderInstance: {
+        codex: [
+          {
+            slug: GPT_5_5,
+            name: "GPT-5.5",
+            supportsFastMode: false,
+            supportsUltrafastMode: true,
+          },
+        ],
+      },
+      onProviderModelChange,
+    });
+    try {
+      await page
+        .getByRole("button", { name: "Star GPT-5.5 with its current effort and speed" })
+        .click();
+      const speed = page.getByRole("menuitem", { name: "Speed", exact: true });
+      await speed.click();
+      await page.getByRole("menuitemradio", { name: "Ultrafast", exact: true }).click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Ultrafast");
+
+      await page.getByRole("tab", { name: "Starred" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_5, {
+        instanceId: "codex",
+        modelOptions: expect.objectContaining({ fastMode: false }),
+      });
+      expect(onProviderModelChange.mock.lastCall?.[2].modelOptions).not.toHaveProperty(
+        "serviceTier",
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("keeps a started thread on its provider", async () => {
     const screen = await mountPicker({ lockedProvider: "codex" }, undefined, [
       { provider: "claudeAgent", model: SONNET, effort: null, fastMode: null, thinking: null },
