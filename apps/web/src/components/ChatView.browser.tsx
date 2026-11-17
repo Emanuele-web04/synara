@@ -4696,7 +4696,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps a remote project in the rail Space where it was created", async () => {
+  it("keeps an empty remote project in its Space until the user confirms removal", async () => {
     localStorage.setItem(
       REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
       JSON.stringify({ acknowledged: true }),
@@ -4770,6 +4770,18 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       return { projectId, path: "/remote-draft" };
     });
+    const removeEmptyProject = vi.fn(async () => {
+      updateWorkspaceSession(hostId, {
+        summary: { state: "open", path: "/", projects: [], threads: [] },
+      });
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const confirm = vi.fn(async () => false);
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, dialogs: { ...api.dialogs, confirm } },
+    });
     try {
       addWorkspaceSession({
         hostId,
@@ -4785,6 +4797,16 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       updateWorkspaceSession(hostId, {
         navigation: {
+          sidebar: {
+            renameThread: vi.fn(),
+            setThreadPinned: vi.fn(),
+            setThreadSettled: vi.fn(),
+            returnSnoozedThread: vi.fn(),
+            archiveThread: vi.fn(),
+            renameProject: vi.fn(),
+            setProjectPinned: vi.fn(),
+            removeEmptyProject,
+          },
           createProject,
           navigate: vi.fn(),
           newChat: vi.fn(),
@@ -4828,7 +4850,46 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => expect(header.parentElement?.textContent).toContain(projectName), {
         timeout: 2_000,
       });
+      const actions = page.getByRole("button", {
+        name: `Project actions for ${projectName} on Remote test computer`,
+      });
+      const remove = page.getByRole("menuitem", { name: "Remove project", exact: true });
+      await actions.click();
+      await remove.click();
+      await expect.poll(() => confirm.mock.calls.length).toBe(1);
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining("folder and files stay on disk"),
+      );
+      expect(removeEmptyProject).not.toHaveBeenCalled();
+
+      // Archived chats are reported by the owning frame even though no rows are visible.
+      updateWorkspaceSession(hostId, {
+        summary: {
+          state: "open",
+          path: "/",
+          projects: [{ ...projects[0]!, hasThreads: true }],
+          threads: [],
+        },
+      });
+      await actions.click();
+      await expect.element(page.getByRole("menuitem", { name: "Rename project" })).toBeVisible();
+      await expect.element(remove).not.toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+
+      updateWorkspaceSession(hostId, {
+        summary: { state: "open", path: "/", projects, threads: [] },
+      });
+      confirm.mockResolvedValue(true);
+      await actions.click();
+      await remove.click();
+      await expect.poll(() => removeEmptyProject.mock.calls.length).toBe(1);
+      expect(removeEmptyProject).toHaveBeenCalledWith(projectId);
+      await expect.element(actions).not.toBeInTheDocument();
     } finally {
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: previousNativeApi,
+      });
       await mounted.cleanup();
       removeWorkspaceSession(hostId);
       useSpacesUiStore.getState().setActiveSpaceId(null);

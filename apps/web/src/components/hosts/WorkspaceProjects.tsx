@@ -16,6 +16,7 @@ import {
   NewThreadIcon,
   PencilIcon,
   PinIcon,
+  XIcon,
   type LucideIcon,
 } from "../../lib/icons";
 import { createClientPointMenuAnchor } from "../../lib/clientPointMenuAnchor";
@@ -84,6 +85,8 @@ import {
 } from "../../sidebarRowStyles";
 import { cn, randomUUID } from "../../lib/utils";
 import { showUndoToast } from "../../lib/threadUndoToast";
+import { readNativeApi } from "../../nativeApi";
+import { useTranslation } from "~/i18n";
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -508,6 +511,7 @@ export function WorkspaceProjectItem({
     entry: WorkspaceThreadEntry,
   ) => ((anchorId: string) => ReactNode) | undefined;
 }) {
+  const { t } = useTranslation();
   const manualSorting = manualSortingProp ?? false;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
   const [renameSession, setRenameSession] = useState<WorkspaceSession | null>(null);
@@ -537,6 +541,30 @@ export function WorkspaceProjectItem({
       );
   };
   const actionSession = menu?.session ?? session;
+  const canRemove =
+    project.kind === "project" &&
+    !project.hasThreads &&
+    entry.threads.length === 0 &&
+    Boolean(readAvailableWorkspaceNavigation(actionSession)?.sidebar?.removeEmptyProject);
+  const removeProject = async () => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      !(await api.dialogs.confirm(
+        [
+          t("workspace:removeProject", { value0: project.name }),
+          t("workspace:remoteProjectRemovalKeepsFiles"),
+        ].join("\n"),
+      ))
+    ) {
+      return;
+    }
+    await runWorkspaceSidebarAction(actionSession, (actions) => {
+      if (!actions.removeEmptyProject)
+        throw new Error("This computer does not support removing projects.");
+      return actions.removeEmptyProject(project.id);
+    });
+  };
   const openMenu = (position: { x: number; y: number }) => setMenu({ position, session });
 
   return (
@@ -689,6 +717,16 @@ export function WorkspaceProjectItem({
               ).catch(() => undefined);
             },
           },
+          ...(canRemove
+            ? [
+                {
+                  label: t("workspace:removeRemoteProject"),
+                  icon: XIcon,
+                  separator: true,
+                  onClick: () => void removeProject().catch(() => undefined),
+                },
+              ]
+            : []),
         ]}
       >
         {spaceMenu}
