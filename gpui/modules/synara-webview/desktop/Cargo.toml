@@ -1,0 +1,32 @@
+[package]
+name = "synara-webview"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+rn-gpui-module-build = "0.1"
+
+[dependencies]
+react-native-gpui = "0.1"
+rn-gpui-module = "0.1"
+gpui = "0.2"
+serde_json = "1"
+log = "0.4"
+
+# Its own workspace root, like every module crate.
+[workspace]
+
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 3
+
+[profile.dev.package.rn-gpui-sys]
+opt-level = 0
+
+[patch.crates-io]
+# Managed by @react-native-gpui/cli autolink; do not edit between these markers.
+# End managed by autolink.

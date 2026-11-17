@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { webContents, type WebContents } from "electron";
+import * as electron from "electron";
+import type { WebContents } from "electron";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { betterwrightExpectedInputs } from "./betterwrightInput";
 import { BetterwrightKeyboardPolicy } from "./betterwrightKeyboardPolicy";
@@ -324,7 +325,10 @@ export class BetterwrightCdpTarget {
       // then lands in the agent page and reads as a human takeover. Guests
       // still need DOM focus, scoped below. Restore only focus owned by a
       // still-active dispatch; teardown must never undo a later human takeover.
-      const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
+      const previousFocus =
+        nativeInput && electron.webContents
+          ? electron.webContents.getFocusedWebContents()
+          : null;
       try {
         const send = async () => {
           return this.send(
@@ -348,7 +352,7 @@ export class BetterwrightCdpTarget {
             previousFocus &&
             previousFocus !== this.contents &&
             !previousFocus.isDestroyed() &&
-            webContents.getFocusedWebContents() === this.contents
+            electron.webContents?.getFocusedWebContents() === this.contents
           )
             previousFocus.focus();
         } finally {

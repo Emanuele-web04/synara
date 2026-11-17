@@ -1,0 +1,22 @@
+{
+  "productName": "Synara",
+  "identifier": "com.emanueledipietro.synara.gpui",
+  "version": "1.6.0",
+  "urlSchemes": ["synara"],
+  "singleInstance": true,
+  "bundle": {
+    "targets": "all",
+    "macos": {
+      "minimumSystemVersion": "13.0"
+    }
+  },
+  "icon": "assets/icon.png",
+  "window": {
+    "titleBar": "transparent",
+    "trafficLightPosition": {
+      "x": 16,
+      "y": 15
+    },
+    "title": "Synara"
+  }
+}

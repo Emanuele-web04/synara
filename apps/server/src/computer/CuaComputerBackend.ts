@@ -102,6 +102,19 @@ export class CuaActionError extends ComputerBackendError {
     });
   }
 }
+/** Driver screenshot encoding for the model's desktop observation. PNG is
+ * the default; `SYNARA_CUA_SCREENSHOT_FORMAT=jpeg` shrinks the payload ~70%
+ * at a small text-sharpness cost — the operator picks per deployment. */
+function desktopScreenshotFormatArgs(): Record<string, unknown> {
+  const format = process.env.SYNARA_CUA_SCREENSHOT_FORMAT?.trim().toLowerCase();
+  const args: Record<string, unknown> = {};
+  if (format === "png" || format === "jpeg") args.screenshot_format = format;
+  const quality = Number(process.env.SYNARA_CUA_SCREENSHOT_QUALITY);
+  if (Number.isInteger(quality) && quality >= 1 && quality <= 100)
+    args.screenshot_quality = quality;
+  return args;
+}
+
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 const text = (value: unknown, max = 1024): string =>
@@ -811,7 +824,12 @@ export class CuaComputerBackend implements ComputerBackend {
         captureAvailable: captureAccessAvailable(permission, hostPlatform) && !this.captureFailed,
         consecutiveFailures: this.captureFailed ? this.currentHealth.consecutiveFailures : 0,
         ...(monitorUnavailable
-          ? { lastFailure: { at: new Date().toISOString(), message: monitorMessage } }
+          ? {
+              lastFailure: {
+                at: new Date().toISOString(),
+                message: monitorMessage,
+              },
+            }
           : {}),
       });
       // TCC's setup surface is macOS-only: on other platforms the driver's
@@ -1095,7 +1113,8 @@ export class CuaComputerBackend implements ComputerBackend {
         "off_space_capture_unverified",
       );
     const image = result.content?.find(
-      (c) => c.type === "image" && c.mimeType === "image/png" && c.data,
+      (c) =>
+        c.type === "image" && (c.mimeType === "image/png" || c.mimeType === "image/jpeg") && c.data,
     );
     if (!image?.data || data.screenshot_frame_valid === false)
       throw new CuaActionError(
@@ -1103,9 +1122,11 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "capture_unavailable",
       );
-    // The PNG header contains the dimensions; do not decode the full image
+    // The image header contains the dimensions; do not decode the full image
     // until its bytes are needed by the preview transport.
-    const dimensions = pngDimensions(Buffer.from(image.data.slice(0, 32), "base64"));
+    const imageBytes = Buffer.from(image.data, "base64");
+    const dimensions =
+      image.mimeType === "image/jpeg" ? jpegDimensions(imageBytes) : pngDimensions(imageBytes);
     const region = data.window_bounds ? rect(data.window_bounds) : fallback;
     if (!dimensions || !region) throw new Error("Cua screenshot is missing its coordinate frame.");
     const scale = dimensions.width / region.width;
@@ -1123,7 +1144,7 @@ export class CuaComputerBackend implements ComputerBackend {
       });
     }
     return {
-      mimeType: "image/png",
+      mimeType: image.mimeType as "image/png" | "image/jpeg",
       ...dimensions,
       sizeBytes: Buffer.byteLength(image.data, "base64"),
       bytesBase64: image.data,
@@ -1160,7 +1181,12 @@ export class CuaComputerBackend implements ComputerBackend {
    */
   private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
     try {
-      const result = await this.call("get_desktop_state", {}, false, allowModelObservation);
+      const result = await this.call(
+        "get_desktop_state",
+        desktopScreenshotFormatArgs(),
+        false,
+        allowModelObservation,
+      );
       const data = result.structuredContent ?? {};
       const image = this.screenshot(result, {
         x: 0,
@@ -1658,7 +1684,11 @@ export class CuaComputerBackend implements ComputerBackend {
         y >= bounds.height
       )
         throw new CuaActionError("Point is outside the target window.", "not-dispatched");
-      pixel = { x, y, ...(!linux ? { coordinate_space: "window_points" } : {}) };
+      pixel = {
+        x,
+        y,
+        ...(!linux ? { coordinate_space: "window_points" } : {}),
+      };
     }
     assertDesktopOperationActive();
     admitMutation?.();
@@ -1966,7 +1996,11 @@ export class CuaComputerBackend implements ComputerBackend {
       {
         text: value,
         ...(token
-          ? { element_token: token, semantic_only: true, ...(macos ? { delay_ms: 0 } : {}) }
+          ? {
+              element_token: token,
+              semantic_only: true,
+              ...(macos ? { delay_ms: 0 } : {}),
+            }
           : macos && desktopDeliveryMode() !== "foreground"
             ? { delay_ms: 10 }
             : // Approved foreground delivery is visible typing by request.
@@ -2321,7 +2355,9 @@ export class CuaComputerBackend implements ComputerBackend {
       app,
       window: null,
       ...(typeof result.structuredContent?.focus_changed_during_launch === "boolean"
-        ? { focusChangedDuringLaunch: result.structuredContent.focus_changed_during_launch }
+        ? {
+            focusChangedDuringLaunch: result.structuredContent.focus_changed_during_launch,
+          }
         : {}),
       windowStatus: unavailable ? "no_usable_window" : "not_checked",
       ...(unavailable ? { windowReason } : {}),
@@ -2870,7 +2906,12 @@ export class CuaComputerBackend implements ComputerBackend {
       this.stillTarget?.kind === "browser" && this.stillTarget.targetId === targetId
         ? this.stillTarget.tabId
         : undefined;
-    this.stillTarget = { kind: "browser", targetId, tabId: resolved || prior || undefined, task };
+    this.stillTarget = {
+      kind: "browser",
+      targetId,
+      tabId: resolved || prior || undefined,
+      task,
+    };
   }
   async attachStream(listener: ComputerFrameListener) {
     await this.stills.attach(listener);

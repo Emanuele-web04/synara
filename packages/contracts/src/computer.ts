@@ -551,7 +551,7 @@ export const ComputerUiNode: Schema.Codec<ComputerUiNode> = Schema.Struct({
 });
 
 export const ComputerScreenshot = Schema.Struct({
-  mimeType: Schema.Literal("image/png"),
+  mimeType: Schema.Literals(["image/png", "image/jpeg"]),
   width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
   height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
   sizeBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
@@ -1006,7 +1006,9 @@ export type ComputerMoveCursorInput = typeof ComputerMoveCursorInput.Type;
  * change what the human sees on their own screen, which is why it is a tool of
  * its own rather than a flag on the pointer tools.
  */
-export const ComputerActivateWindowInput = Schema.Struct({ windowId: ComputerWindowId });
+export const ComputerActivateWindowInput = Schema.Struct({
+  windowId: ComputerWindowId,
+});
 export type ComputerActivateWindowInput = typeof ComputerActivateWindowInput.Type;
 
 /**
@@ -1109,7 +1111,10 @@ const ComputerInputCoordinate = Schema.Int.check(
 );
 
 const ComputerInputDelta = Schema.Finite.check(
-  Schema.isBetween({ minimum: -COMPUTER_INPUT_SCROLL_LIMIT, maximum: COMPUTER_INPUT_SCROLL_LIMIT }),
+  Schema.isBetween({
+    minimum: -COMPUTER_INPUT_SCROLL_LIMIT,
+    maximum: COMPUTER_INPUT_SCROLL_LIMIT,
+  }),
 );
 
 /** Only the buttons the seat can synthesize as a complete press/release pair. */
@@ -1179,7 +1184,10 @@ export const ComputerActionResult = Schema.Struct({
    */
   scroll: Schema.optional(
     Schema.Struct({
-      requested: Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite }),
+      requested: Schema.Struct({
+        deltaX: Schema.Finite,
+        deltaY: Schema.Finite,
+      }),
       injected: Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite }),
       /** Requested distance limited to preserve overlap between observations. */
       limitedTo: Schema.optional(Schema.Struct({ deltaX: Schema.Finite, deltaY: Schema.Finite })),
