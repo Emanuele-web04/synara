@@ -108,6 +108,12 @@ const text = (value: unknown, max = 1024): string =>
   typeof value === "string" ? value.slice(0, max) : "";
 const number = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : NaN;
+function matchesPreviewTask(owned: CuaComputerTask, scope: CuaComputerTask): boolean {
+  return (
+    owned.threadId === scope.threadId &&
+    (scope.turnId === undefined || owned.turnId === scope.turnId)
+  );
+}
 function captureAccessAvailable(permission: Record<string, unknown>, platform: string): boolean {
   if (platform !== "linux" || typeof permission.screen_recording === "boolean")
     return permission.screen_recording === true;
@@ -376,7 +382,11 @@ export class CuaComputerBackend implements ComputerBackend {
    * is undefined — a display-wide capture is never a pane frame.
    */
   private stillTarget:
-    | { readonly kind: "window"; readonly windowId: string }
+    | {
+        readonly kind: "window";
+        readonly windowId: string;
+        readonly task?: CuaComputerTask;
+      }
     | {
         readonly kind: "browser";
         readonly targetId: string;
@@ -998,10 +1008,13 @@ export class CuaComputerBackend implements ComputerBackend {
     // Selection sends no input. The actual actuator revalidates the exact
     // window immediately before dispatch; reuse the just-observed identity here.
     await this.target(windowId, !this.windows.some((window) => window.id === windowId));
+    assertDesktopOperationActive();
+    const task = currentComputerTask();
+    if (task) this.trackPreviewTask(task);
     this.selectedWindow = windowId;
     // The pane still follows the window the task aims at, so a watching pane
     // mirrors the work without a per-action capture request.
-    this.stillTarget = { kind: "window", windowId };
+    this.stillTarget = { kind: "window", windowId, ...(task ? { task } : {}) };
   }
   async checkInputReady(windowId: string): Promise<void> {
     const { pid, window_id, window } = await this.target(windowId);
@@ -2788,9 +2801,11 @@ export class CuaComputerBackend implements ComputerBackend {
   private async captureStill(): Promise<Uint8Array | undefined> {
     const target = this.stillTarget;
     if (!target || this.disposed) return undefined;
-    return target.kind === "browser"
-      ? await this.captureBrowserStill(target)
-      : await this.captureWindowStill(target.windowId);
+    const frame =
+      target.kind === "browser"
+        ? await this.captureBrowserStill(target)
+        : await this.captureWindowStill(target);
+    return this.stillTarget === target && !this.disposed ? frame : undefined;
   }
   /**
    * The pane still of one exact window: the driver's window capture with the
@@ -2800,8 +2815,11 @@ export class CuaComputerBackend implements ComputerBackend {
    * throws through the shared validation, so unverified pixels never become a
    * pane frame.
    */
-  private async captureWindowStill(windowId: string): Promise<Uint8Array> {
-    const { pid, window_id } = await this.target(windowId);
+  private async captureWindowStill(target: {
+    readonly windowId: string;
+  }): Promise<Uint8Array | undefined> {
+    const { pid, window_id } = await this.target(target.windowId);
+    if (this.stillTarget !== target || this.disposed) return undefined;
     const result = await this.call(
       "get_window_state",
       {
@@ -2884,20 +2902,10 @@ export class CuaComputerBackend implements ComputerBackend {
   async stopInput(task?: { readonly threadId: string; readonly turnId?: string }) {
     if (task) {
       for (const [key, owned] of this.previewTasks) {
-        if (owned.threadId === task.threadId && (!task.turnId || owned.turnId === task.turnId))
-          this.previewTasks.delete(key);
+        if (matchesPreviewTask(owned, task)) this.previewTasks.delete(key);
       }
-      const still = this.stillTarget;
-      // Native window stills have no task attribution. Stop that preview
-      // until a fresh observation supplies a target, rather than reuse a
-      // cancelled task's window for a surviving subscriber.
-      if (
-        still?.kind === "window" ||
-        (still?.kind === "browser" &&
-          still.task.threadId === task.threadId &&
-          (!task.turnId || still.task.turnId === task.turnId))
-      )
-        this.stillTarget = undefined;
+      const owner = this.stillTarget?.task;
+      if (!owner || matchesPreviewTask(owner, task)) this.stillTarget = undefined;
     } else {
       this.previewTasks.clear();
       this.stillTarget = undefined;
@@ -2920,13 +2928,14 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   async endTask(threadId: string, turnId?: string): Promise<void> {
     if (!this.endpoint || this.disposed) return;
-    const matches = [...this.previewTasks].filter(
-      ([, task]) => task.threadId === threadId && (turnId === undefined || task.turnId === turnId),
-    );
+    const task = { threadId, ...(turnId !== undefined ? { turnId } : {}) };
+    const owner = this.stillTarget?.task;
+    if (owner && matchesPreviewTask(owner, task)) this.stillTarget = undefined;
+    const matches = [...this.previewTasks].filter(([, owned]) => matchesPreviewTask(owned, task));
     if (matches.length === 0) return;
     const reply = await this.request<CuaReply>(this.endpoint, {
       method: "end_task",
-      task: { threadId, ...(turnId ? { turnId } : {}) },
+      task,
       capability: this.capability,
     });
     this.observeDesktopInterruption(reply);
@@ -2934,15 +2943,6 @@ export class CuaComputerBackend implements ComputerBackend {
     for (const [key] of matches) {
       this.previewTasks.delete(key);
     }
-    // A pane still must never revive an ended browser session: drop the target
-    // the moment its task ends.
-    const still = this.stillTarget;
-    if (
-      still?.kind === "browser" &&
-      still.task.threadId === threadId &&
-      (turnId === undefined || still.task.turnId === turnId)
-    )
-      this.stillTarget = undefined;
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
     this.observedGeometry.clear();

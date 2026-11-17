@@ -188,4 +188,24 @@ describe("ComputerFrameTap", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(spawn).toHaveBeenCalledTimes(1);
   });
+
+  it("waits for a failed capture helper to exit before opening another stream", async () => {
+    const { tap, spawn, children } = createTap();
+    tap.update(target);
+    tap.setSubscribed(true);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+
+    const original = children[0]!;
+    original.kill.mockReturnValueOnce(true);
+    try {
+      original.stdout.write('{"type":"error","code":"capture_stopped"}\n');
+      tap.update({ ...target, windowId: target.windowId + 1 });
+      await vi.waitFor(() => expect(original.kill).toHaveBeenCalledWith("SIGTERM"));
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      original.emit("exit", 1, null);
+      original.emit("close", 1, null);
+    }
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+  });
 });
