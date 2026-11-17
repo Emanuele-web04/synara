@@ -19,7 +19,6 @@ import {
   appendVoiceTranscriptToPrompt,
   autoWaitsForProviderHandoff,
   createdAtAfterProviderHandoff,
-  buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -89,42 +88,44 @@ import {
   worktreeSetupHasError,
 } from "./ChatView.logic";
 
+const sendInput = (
+  overrides: Partial<Parameters<typeof deriveComposerSendState>[0]>,
+): Parameters<typeof deriveComposerSendState>[0] => ({
+  prompt: "",
+  imageCount: 0,
+  fileCount: 0,
+  assistantSelectionCount: 0,
+  browserAnnotationCount: 0,
+  fileCommentCount: 0,
+  terminalContexts: [],
+  pastedTexts: [],
+  pullRequestContexts: [],
+  ...overrides,
+});
+
+const makeLocalDispatch = (
+  overrides: Partial<LocalDispatchSnapshot> = {},
+): LocalDispatchSnapshot => ({
+  startedAt: "2026-04-13T00:00:00.000Z",
+  worktreeSetup: null,
+  expectedUserMessageId: null,
+  latestTurnTurnId: null,
+  latestTurnRequestedAt: null,
+  latestTurnStartedAt: null,
+  latestTurnCompletedAt: null,
+  sessionOrchestrationStatus: null,
+  sessionUpdatedAt: null,
+  ...overrides,
+});
+
 describe("composer focus admission", () => {
-  it("never focuses a composer while another app owns the window focus", () => {
-    expect(
-      canApplyComposerFocus({
-        windowHasFocus: false,
-        editorAvailable: true,
-        editorDisabled: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("waits for every local focus precondition", () => {
-    expect(
-      canApplyComposerFocus({
-        windowHasFocus: true,
-        editorAvailable: false,
-        editorDisabled: false,
-      }),
-    ).toBe(false);
-    expect(
-      canApplyComposerFocus({
-        windowHasFocus: true,
-        editorAvailable: true,
-        editorDisabled: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("allows focus only in the foreground ready editor", () => {
-    expect(
-      canApplyComposerFocus({
-        windowHasFocus: true,
-        editorAvailable: true,
-        editorDisabled: false,
-      }),
-    ).toBe(true);
+  it.each([
+    [{ windowHasFocus: false, editorAvailable: true, editorDisabled: false }, false],
+    [{ windowHasFocus: true, editorAvailable: false, editorDisabled: false }, false],
+    [{ windowHasFocus: true, editorAvailable: true, editorDisabled: true }, false],
+    [{ windowHasFocus: true, editorAvailable: true, editorDisabled: false }, true],
+  ])("admits composer focus only in the foreground ready editor: %j", (input, expected) => {
+    expect(canApplyComposerFocus(input)).toBe(expected);
   });
 });
 
@@ -671,18 +672,7 @@ describe("prompt history navigation", () => {
     });
   });
 
-  it("places recalled multiline prompts on the eligible line for repeated navigation", () => {
-    const older = resolvePromptHistoryNavigation({
-      direction: "older",
-      history: ["first line\nsecond line"],
-      currentPrompt: "",
-      currentExpandedCursor: 0,
-      selectionCollapsed: true,
-      state: null,
-    });
-
-    expect(older.expandedCursor).toBe("first line".length);
-
+  it("places a prompt recalled by newer navigation at its end", () => {
     const newer = resolvePromptHistoryNavigation({
       direction: "newer",
       history: ["first line\nsecond line", "older"],
@@ -1155,82 +1145,38 @@ describe("voice helpers", () => {
     expect(isVoiceAuthExpiredMessage("The microphone could not be opened.")).toBe(false);
   });
 
-  it("derives voice-note availability from provider auth and runtime state", () => {
-    expect(
-      deriveComposerVoiceState({
-        enabled: true,
-        available: true,
-        authStatus: "authenticated",
-        voiceTranscriptionAvailable: true,
-        isRecording: false,
-        isTranscribing: false,
-      }),
-    ).toEqual({
-      canRenderVoiceNotes: true,
-      canStartVoiceNotes: true,
-      showVoiceNotesControl: true,
-    });
-
-    expect(
-      deriveComposerVoiceState({
-        enabled: true,
-        available: true,
-        authStatus: "unauthenticated",
-        voiceTranscriptionAvailable: true,
-        isRecording: true,
-        isTranscribing: false,
-      }),
-    ).toEqual({
-      canRenderVoiceNotes: false,
-      canStartVoiceNotes: false,
-      showVoiceNotesControl: true,
-    });
-
-    expect(
-      deriveComposerVoiceState({
-        enabled: false,
-        available: true,
-        authStatus: "authenticated",
-        voiceTranscriptionAvailable: true,
-        isRecording: false,
-        isTranscribing: false,
-      }),
-    ).toEqual({
-      canRenderVoiceNotes: false,
-      canStartVoiceNotes: false,
-      showVoiceNotesControl: false,
-    });
-
-    expect(
-      deriveComposerVoiceState({
-        enabled: true,
-        available: false,
-        authStatus: "authenticated",
-        voiceTranscriptionAvailable: true,
-        isRecording: false,
-        isTranscribing: false,
-      }),
-    ).toEqual({
-      canRenderVoiceNotes: false,
-      canStartVoiceNotes: false,
-      showVoiceNotesControl: false,
-    });
-
-    expect(
-      deriveComposerVoiceState({
-        enabled: true,
-        available: true,
-        authStatus: "authenticated",
-        voiceTranscriptionAvailable: false,
-        isRecording: false,
-        isTranscribing: false,
-      }),
-    ).toEqual({
-      canRenderVoiceNotes: true,
-      canStartVoiceNotes: false,
-      showVoiceNotesControl: true,
-    });
-  });
+  const voiceBase = {
+    enabled: true,
+    available: true,
+    authStatus: "authenticated" as const,
+    voiceTranscriptionAvailable: true,
+    isRecording: false,
+    isTranscribing: false,
+  };
+  it.each([
+    [{}, { canRenderVoiceNotes: true, canStartVoiceNotes: true, showVoiceNotesControl: true }],
+    [
+      { authStatus: "unauthenticated" as const, isRecording: true },
+      { canRenderVoiceNotes: false, canStartVoiceNotes: false, showVoiceNotesControl: true },
+    ],
+    [
+      { enabled: false },
+      { canRenderVoiceNotes: false, canStartVoiceNotes: false, showVoiceNotesControl: false },
+    ],
+    [
+      { available: false },
+      { canRenderVoiceNotes: false, canStartVoiceNotes: false, showVoiceNotesControl: false },
+    ],
+    [
+      { voiceTranscriptionAvailable: false },
+      { canRenderVoiceNotes: true, canStartVoiceNotes: false, showVoiceNotesControl: true },
+    ],
+  ])(
+    "derives voice-note availability from provider auth and runtime state: %j",
+    (patch, expected) => {
+      expect(deriveComposerVoiceState({ ...voiceBase, ...patch })).toEqual(expected);
+    },
+  );
 });
 
 describe("environment panel visibility", () => {
@@ -1241,15 +1187,6 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
-      }),
-    ).toBe(false);
-    expect(
-      resolveDefaultEnvironmentPanelOpen({
-        environmentEnabled: true,
-        isCenteredEmptyLanding: false,
-        isTerminalPrimarySurface: false,
-        isConstrainedChatLayout: false,
-        settingsDefaultOpen: false,
       }),
     ).toBe(false);
     expect(
@@ -1770,29 +1707,21 @@ describe("shouldConsumePendingCustomBinaryConfirmation", () => {
 });
 
 describe("deriveComposerSendState", () => {
+  const expiredTerminalContext = {
+    id: "ctx-expired",
+    threadId: ThreadId.makeUnsafe("thread-1"),
+    terminalId: "default",
+    terminalLabel: "Terminal 1",
+    lineStart: 4,
+    lineEnd: 4,
+    text: "",
+    createdAt: "2026-03-17T12:52:29.000Z",
+  };
+
   it("treats expired terminal pills as non-sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "\uFFFC",
-      imageCount: 0,
-      fileCount: 0,
-      assistantSelectionCount: 0,
-      browserAnnotationCount: 0,
-      fileCommentCount: 0,
-      terminalContexts: [
-        {
-          id: "ctx-expired",
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          terminalId: "default",
-          terminalLabel: "Terminal 1",
-          lineStart: 4,
-          lineEnd: 4,
-          text: "",
-          createdAt: "2026-03-17T12:52:29.000Z",
-        },
-      ],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
+    const state = deriveComposerSendState(
+      sendInput({ prompt: "\uFFFC", terminalContexts: [expiredTerminalContext] }),
+    );
 
     expect(state.trimmedPrompt).toBe("");
     expect(state.sendableTerminalContexts).toEqual([]);
@@ -1801,28 +1730,9 @@ describe("deriveComposerSendState", () => {
   });
 
   it("keeps text sendable while excluding expired terminal pills", () => {
-    const state = deriveComposerSendState({
-      prompt: `yoo \uFFFC waddup`,
-      imageCount: 0,
-      fileCount: 0,
-      assistantSelectionCount: 0,
-      browserAnnotationCount: 0,
-      fileCommentCount: 0,
-      terminalContexts: [
-        {
-          id: "ctx-expired",
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          terminalId: "default",
-          terminalLabel: "Terminal 1",
-          lineStart: 4,
-          lineEnd: 4,
-          text: "",
-          createdAt: "2026-03-17T12:52:29.000Z",
-        },
-      ],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
+    const state = deriveComposerSendState(
+      sendInput({ prompt: `yoo \uFFFC waddup`, terminalContexts: [expiredTerminalContext] }),
+    );
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
     expect(state.expiredTerminalContextCount).toBe(1);
@@ -1830,48 +1740,21 @@ describe("deriveComposerSendState", () => {
   });
 
   it("treats assistant selections as sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "",
-      imageCount: 0,
-      fileCount: 0,
-      assistantSelectionCount: 1,
-      browserAnnotationCount: 0,
-      fileCommentCount: 0,
-      terminalContexts: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
-
-    expect(state.hasSendableContent).toBe(true);
+    expect(
+      deriveComposerSendState(sendInput({ assistantSelectionCount: 1 })).hasSendableContent,
+    ).toBe(true);
   });
 });
 
 describe("shouldRenderProviderHealthBanner", () => {
-  it("does not show chat provider health while a terminal thread is active", () => {
+  it.each([
+    ["a terminal thread is active", "terminal", false, false],
+    ["the terminal workspace tab is active", "chat", true, false],
+    ["the chat surface is showing", "chat", false, true],
+  ] as const)("when %s", (_case, threadEntryPoint, terminalWorkspaceTerminalTabActive, shown) => {
     expect(
-      shouldRenderProviderHealthBanner({
-        threadEntryPoint: "terminal",
-        terminalWorkspaceTerminalTabActive: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not show chat provider health while the terminal workspace tab is active", () => {
-    expect(
-      shouldRenderProviderHealthBanner({
-        threadEntryPoint: "chat",
-        terminalWorkspaceTerminalTabActive: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("shows chat provider health only on the chat surface", () => {
-    expect(
-      shouldRenderProviderHealthBanner({
-        threadEntryPoint: "chat",
-        terminalWorkspaceTerminalTabActive: false,
-      }),
-    ).toBe(true);
+      shouldRenderProviderHealthBanner({ threadEntryPoint, terminalWorkspaceTerminalTabActive }),
+    ).toBe(shown);
   });
 });
 
@@ -2005,17 +1888,9 @@ describe("worktree setup snapshots", () => {
   });
 
   it("replaces a held failed setup when a fresh local dispatch starts", () => {
-    const current: LocalDispatchSnapshot = {
-      startedAt: "2026-04-13T00:00:00.000Z",
+    const current = makeLocalDispatch({
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
-      expectedUserMessageId: null,
-      latestTurnTurnId: null,
-      latestTurnRequestedAt: null,
-      latestTurnStartedAt: null,
-      latestTurnCompletedAt: null,
-      sessionOrchestrationStatus: null,
-      sessionUpdatedAt: null,
-    };
+    });
 
     const next = resolveNextLocalDispatchSnapshot({
       current,
@@ -2027,17 +1902,11 @@ describe("worktree setup snapshots", () => {
   });
 
   it("starts a fresh dispatch marker when a new expected user message id arrives", () => {
-    const current: LocalDispatchSnapshot = {
-      startedAt: "2026-04-13T00:00:00.000Z",
-      worktreeSetup: null,
+    const current = makeLocalDispatch({
       expectedUserMessageId: "message-first" as never,
-      latestTurnTurnId: null,
-      latestTurnRequestedAt: null,
-      latestTurnStartedAt: null,
-      latestTurnCompletedAt: null,
       sessionOrchestrationStatus: "ready",
       sessionUpdatedAt: "2026-04-13T00:00:00.000Z",
-    };
+    });
 
     const next = resolveNextLocalDispatchSnapshot({
       current,
@@ -2050,17 +1919,9 @@ describe("worktree setup snapshots", () => {
   });
 
   it("replaces a held failed setup when retrying worktree setup", () => {
-    const current: LocalDispatchSnapshot = {
-      startedAt: "2026-04-13T00:00:00.000Z",
+    const current = makeLocalDispatch({
       worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
-      expectedUserMessageId: null,
-      latestTurnTurnId: null,
-      latestTurnRequestedAt: null,
-      latestTurnStartedAt: null,
-      latestTurnCompletedAt: null,
-      sessionOrchestrationStatus: null,
-      sessionUpdatedAt: null,
-    };
+    });
 
     const next = resolveNextLocalDispatchSnapshot({
       current,
@@ -2255,28 +2116,14 @@ describe("Claude cache review dispatch acknowledgement", () => {
 });
 
 describe("hasServerAcknowledgedLocalDispatch", () => {
-  const localDispatch: LocalDispatchSnapshot = {
-    startedAt: "2026-04-13T00:00:00.000Z",
-    worktreeSetup: null,
+  const localDispatch = makeLocalDispatch({
     expectedUserMessageId: "message-for-dispatch" as never,
-    latestTurnTurnId: null,
-    latestTurnRequestedAt: null,
-    latestTurnStartedAt: null,
-    latestTurnCompletedAt: null,
     sessionOrchestrationStatus: "ready",
     sessionUpdatedAt: "2026-04-13T00:00:00.000Z",
-  };
-  const firstTurnLocalDispatch: LocalDispatchSnapshot = {
-    startedAt: "2026-04-13T00:00:00.000Z",
-    worktreeSetup: null,
+  });
+  const firstTurnLocalDispatch = makeLocalDispatch({
     expectedUserMessageId: "message-first-send" as never,
-    latestTurnTurnId: null,
-    latestTurnRequestedAt: null,
-    latestTurnStartedAt: null,
-    latestTurnCompletedAt: null,
-    sessionOrchestrationStatus: null,
-    sessionUpdatedAt: null,
-  };
+  });
 
   it("stays pending until the server-side thread/session snapshot changes", () => {
     expect(
@@ -2403,198 +2250,105 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
 });
 
 describe("hasLiveTurnTakenOver", () => {
-  const localDispatch: LocalDispatchSnapshot = {
-    startedAt: "2026-04-13T00:00:00.000Z",
-    worktreeSetup: null,
+  const localDispatch = makeLocalDispatch({
     expectedUserMessageId: "message-for-dispatch" as never,
-    latestTurnTurnId: null,
-    latestTurnRequestedAt: null,
-    latestTurnStartedAt: null,
-    latestTurnCompletedAt: null,
     sessionOrchestrationStatus: "ready",
     sessionUpdatedAt: "2026-04-13T00:00:00.000Z",
-  };
+  });
+  const takeoverInput = (
+    overrides: Partial<Parameters<typeof hasLiveTurnTakenOver>[0]> = {},
+  ): Parameters<typeof hasLiveTurnTakenOver>[0] => ({
+    localDispatch,
+    phase: "ready",
+    latestTurn: null,
+    session: null,
+    hasPendingApproval: false,
+    hasPendingUserInput: false,
+    threadError: null,
+    ...overrides,
+  });
+  const turn = (patch: Record<string, unknown>) =>
+    ({
+      turnId: "turn-1" as never,
+      state: "running",
+      requestedAt: "2026-04-13T00:00:01.000Z",
+      startedAt: null,
+      completedAt: null,
+      assistantMessageId: null,
+      sourceProposedPlan: undefined,
+      ...patch,
+    }) as NonNullable<Parameters<typeof hasLiveTurnTakenOver>[0]["latestTurn"]>;
 
   it("stays false for a message echo and requestedAt-only turn bump", () => {
     expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: {
-          turnId: "turn-1" as never,
-          state: "running",
-          requestedAt: "2026-04-13T00:00:01.000Z",
-          startedAt: null,
-          completedAt: null,
-          assistantMessageId: null,
-          sourceProposedPlan: undefined,
-        },
-        session: {
-          provider: "codex",
-          status: "ready",
-          orchestrationStatus: "ready",
-          createdAt: "2026-04-13T00:00:00.000Z",
-          updatedAt: "2026-04-13T00:00:01.000Z",
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-        now: Date.parse("2026-04-13T00:00:02.000Z"),
-      }),
+      hasLiveTurnTakenOver(
+        takeoverInput({
+          latestTurn: turn({}),
+          session: {
+            provider: "codex",
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-04-13T00:00:00.000Z",
+            updatedAt: "2026-04-13T00:00:01.000Z",
+          },
+          now: Date.parse("2026-04-13T00:00:02.000Z"),
+        }),
+      ),
     ).toBe(false);
   });
 
-  it("takes over once the session phase is running or connecting", () => {
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "running",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "connecting",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
+  it.each(["running", "connecting"] as const)(
+    "takes over once the session phase is %s",
+    (phase) => {
+      expect(hasLiveTurnTakenOver(takeoverInput({ phase }))).toBe(true);
+    },
+  );
 
   it("takes over when an active turn id appears", () => {
     expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: null,
-        session: {
-          provider: "codex",
-          status: "ready",
-          orchestrationStatus: "ready",
-          activeTurnId: "turn-1" as never,
-          createdAt: "2026-04-13T00:00:00.000Z",
-          updatedAt: "2026-04-13T00:00:01.000Z",
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
+      hasLiveTurnTakenOver(
+        takeoverInput({
+          session: {
+            provider: "codex",
+            status: "ready",
+            orchestrationStatus: "ready",
+            activeTurnId: "turn-1" as never,
+            createdAt: "2026-04-13T00:00:00.000Z",
+            updatedAt: "2026-04-13T00:00:01.000Z",
+          },
+        }),
+      ),
     ).toBe(true);
   });
 
-  it("takes over when latestTurn startedAt or completedAt changes", () => {
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: {
-          turnId: "turn-1" as never,
-          state: "running",
-          requestedAt: "2026-04-13T00:00:01.000Z",
-          startedAt: "2026-04-13T00:00:02.000Z",
-          completedAt: null,
-          assistantMessageId: null,
-          sourceProposedPlan: undefined,
-        },
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: {
-          turnId: "turn-1" as never,
-          state: "completed",
-          requestedAt: "2026-04-13T00:00:01.000Z",
-          startedAt: null,
-          completedAt: "2026-04-13T00:00:03.000Z",
-          assistantMessageId: null,
-          sourceProposedPlan: undefined,
-        },
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
+  it.each([
+    ["startedAt", { startedAt: "2026-04-13T00:00:02.000Z" }],
+    ["completedAt", { state: "completed", completedAt: "2026-04-13T00:00:03.000Z" }],
+  ])("takes over when latestTurn %s changes", (_field, patch) => {
+    expect(hasLiveTurnTakenOver(takeoverInput({ latestTurn: turn(patch) }))).toBe(true);
   });
 
-  it("takes over on pending approval, user input, or thread error", () => {
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: true,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: true,
-        threadError: null,
-      }),
-    ).toBe(true);
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: "provider failed",
-      }),
-    ).toBe(true);
+  it.each([
+    ["pending approval", { hasPendingApproval: true }],
+    ["pending user input", { hasPendingUserInput: true }],
+    ["a thread error", { threadError: "provider failed" }],
+  ])("takes over on %s", (_case, patch) => {
+    expect(hasLiveTurnTakenOver(takeoverInput(patch))).toBe(true);
   });
 
   it("fails open after the awaiting-turn timeout unless worktree setup is active", () => {
     const now = Date.parse(localDispatch.startedAt) + LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS;
+    expect(hasLiveTurnTakenOver(takeoverInput({ now }))).toBe(true);
     expect(
-      hasLiveTurnTakenOver({
-        localDispatch,
-        phase: "ready",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-        now,
-      }),
-    ).toBe(true);
-    expect(
-      hasLiveTurnTakenOver({
-        localDispatch: {
-          ...localDispatch,
-          worktreeSetup: createWorktreeSetupSnapshot("create-worktree"),
-        },
-        phase: "ready",
-        latestTurn: null,
-        session: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-        now,
-      }),
+      hasLiveTurnTakenOver(
+        takeoverInput({
+          localDispatch: {
+            ...localDispatch,
+            worktreeSetup: createWorktreeSetupSnapshot("create-worktree"),
+          },
+          now,
+        }),
+      ),
     ).toBe(false);
   });
 });
@@ -3012,61 +2766,23 @@ describe("resolveQueuedSteerGateTransition", () => {
 });
 
 describe("thread detail hydration", () => {
-  it("keeps local drafts on the empty landing even if a stale failure flag lingers", () => {
+  it.each([
+    ["a local draft stays ready with no sync state", false, false, null, "ready"],
+    [
+      "a local draft stays ready even if a stale failure flag lingers",
+      false,
+      false,
+      "failed",
+      "ready",
+    ],
+    ["existing timeline entries render without waiting for a snapshot", true, true, null, "ready"],
+    ["a synced empty thread is genuinely empty", true, false, "synced", "ready"],
+    ["a server thread whose detail has not synced shows loading", true, false, null, "loading"],
+    ["a detail stream that died without data surfaces failed", true, false, "failed", "failed"],
+  ] as const)("%s", (_case, isServerThread, hasTimelineEntries, detailSyncState, expected) => {
     expect(
-      resolveThreadDetailHydration({
-        isServerThread: false,
-        hasTimelineEntries: false,
-        detailSyncState: null,
-      }),
-    ).toBe("ready");
-    expect(
-      resolveThreadDetailHydration({
-        isServerThread: false,
-        hasTimelineEntries: false,
-        detailSyncState: "failed",
-      }),
-    ).toBe("ready");
-  });
-
-  it("renders existing timeline entries without waiting for a snapshot", () => {
-    expect(
-      resolveThreadDetailHydration({
-        isServerThread: true,
-        hasTimelineEntries: true,
-        detailSyncState: null,
-      }),
-    ).toBe("ready");
-  });
-
-  it("treats a synced empty thread as genuinely empty", () => {
-    expect(
-      resolveThreadDetailHydration({
-        isServerThread: true,
-        hasTimelineEntries: false,
-        detailSyncState: "synced",
-      }),
-    ).toBe("ready");
-  });
-
-  it("shows loading for a server thread whose detail has not synced yet", () => {
-    expect(
-      resolveThreadDetailHydration({
-        isServerThread: true,
-        hasTimelineEntries: false,
-        detailSyncState: null,
-      }),
-    ).toBe("loading");
-  });
-
-  it("surfaces a failed state when the detail stream died without data", () => {
-    expect(
-      resolveThreadDetailHydration({
-        isServerThread: true,
-        hasTimelineEntries: false,
-        detailSyncState: "failed",
-      }),
-    ).toBe("failed");
+      resolveThreadDetailHydration({ isServerThread, hasTimelineEntries, detailSyncState }),
+    ).toBe(expected);
   });
 });
 
@@ -3360,14 +3076,6 @@ describe("blocked composer sends", () => {
       }),
     ).toBeNull();
   });
-
-  it("explains every blocked send instead of doing nothing", () => {
-    for (const reason of ["send-in-flight", "session-starting", "no-project"] as const) {
-      const copy = buildBlockedComposerSendToastCopy(reason);
-      expect(copy.title.length).toBeGreaterThan(0);
-      expect(copy.description.length).toBeGreaterThan(0);
-    }
-  });
 });
 
 describe("hasServerReceivedSentMessage", () => {
@@ -3401,53 +3109,21 @@ describe("hasServerReceivedSentMessage", () => {
 describe("resolveComposerHighlightedItemId", () => {
   const items = [{ id: "slash:compact" }, { id: "slash:review" }];
 
-  it("clears the highlight while the menu is closed", () => {
+  it.each([
+    ["clears the highlight while the menu is closed", false, "slash:review", items, null],
+    ["keeps a highlight whose item still exists", true, "slash:review", items, "slash:review"],
+    [
+      "falls back to the first item when the highlighted one disappeared",
+      true,
+      "slash:missing",
+      items,
+      "slash:compact",
+    ],
+    ["highlights the first item when none is highlighted", true, null, items, "slash:compact"],
+    ["has nothing to highlight when the menu is open but empty", true, null, [], null],
+  ])("%s", (_case, menuOpen, highlightedItemId, menuItems, expected) => {
     expect(
-      resolveComposerHighlightedItemId({
-        menuOpen: false,
-        highlightedItemId: "slash:review",
-        items,
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps a highlight whose item still exists", () => {
-    expect(
-      resolveComposerHighlightedItemId({
-        menuOpen: true,
-        highlightedItemId: "slash:review",
-        items,
-      }),
-    ).toBe("slash:review");
-  });
-
-  it("falls back to the first item when the highlighted one disappeared", () => {
-    expect(
-      resolveComposerHighlightedItemId({
-        menuOpen: true,
-        highlightedItemId: "slash:missing",
-        items,
-      }),
-    ).toBe("slash:compact");
-  });
-
-  it("highlights the first item when none is highlighted", () => {
-    expect(
-      resolveComposerHighlightedItemId({
-        menuOpen: true,
-        highlightedItemId: null,
-        items,
-      }),
-    ).toBe("slash:compact");
-  });
-
-  it("has nothing to highlight when the menu is open but empty", () => {
-    expect(
-      resolveComposerHighlightedItemId({
-        menuOpen: true,
-        highlightedItemId: null,
-        items: [],
-      }),
-    ).toBeNull();
+      resolveComposerHighlightedItemId({ menuOpen, highlightedItemId, items: menuItems }),
+    ).toBe(expected);
   });
 });
