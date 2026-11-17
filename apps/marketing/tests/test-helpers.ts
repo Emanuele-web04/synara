@@ -1,14 +1,5 @@
 import type { Page } from "@playwright/test";
 
-export const VIEWPORTS = [
-  [1440, 1100],
-  [1280, 900],
-  [1024, 768],
-  [768, 1024],
-  [390, 844],
-  [360, 800],
-] as const;
-
 const FREEZE_MOTION = `
   *, *::before, *::after {
     animation-delay: 0s !important;
@@ -75,11 +66,4 @@ export async function waitForImages(page: Page) {
   if (incomplete !== 0) {
     throw new Error(`Found ${incomplete} incomplete rendered images`);
   }
-}
-
-export async function assertNoOverflow(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  );
-  if (overflow) throw new Error("The page has horizontal overflow");
 }
