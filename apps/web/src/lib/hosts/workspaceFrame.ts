@@ -23,7 +23,7 @@ export interface WorkspaceSummary {
   readonly projects: readonly (Pick<
     Project,
     "id" | "kind" | "name" | "cwd" | "appearance" | "createdAt" | "updatedAt" | "isPinned"
-  > & { readonly section: "projects" | "chats" | "studio" })[];
+  > & { readonly section: "projects" | "chats" | "studio"; readonly hasThreads?: boolean })[];
   readonly threads: readonly (SidebarThreadSummary & {
     readonly status: ThreadStatusPill | null;
     readonly terminalEntryPoint?: boolean;
@@ -79,6 +79,7 @@ export interface WorkspaceSidebarActions {
   archiveThread(threadId: ThreadId, isAvailable?: () => boolean): Promise<void>;
   renameProject(projectId: ProjectId, name: string): Promise<void> | void;
   setProjectPinned(projectId: ProjectId, isPinned: boolean): Promise<void>;
+  removeEmptyProject?(projectId: ProjectId): Promise<void>;
 }
 
 /** The controlling sidebar resolves the chord with the focused frame's terminal scope. */

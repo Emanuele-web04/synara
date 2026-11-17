@@ -560,6 +560,8 @@
   "pasteAnOpenCodeSessionId": "Paste an OpenCode session id",
   "projectsAvailableToImport": "Projects available to import",
   "removeProject": "Remove project \"{{value0}}\"?",
+  "removeRemoteProject": "Remove project",
+  "remoteProjectRemovalKeepsFiles": "This removes the project from Synara. Its folder and files stay on disk.",
   "toast_threadNoLongerExists": "The thread no longer exists.",
   "desktopUpdate_unexpectedError": "An unexpected error occurred.",
   "coordinatedWorkAcrossRepos": "Coordinated work across repos",
