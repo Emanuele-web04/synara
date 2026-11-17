@@ -22,6 +22,7 @@ import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSo
 import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import UsageLimitRecoveryMigration from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
+import { SqlitePersistenceMemory } from "./Layers/Sqlite.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -29,6 +30,31 @@ const trackerRows = (sql: SqlClient.SqlClient) =>
   sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+
+it.effect("gives warmed in-memory clients the migrated schema and independent state", () =>
+  Effect.gen(function* () {
+    const readSchema = Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      return {
+        schema: yield* sql.unsafe("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
+        migrations: yield* trackerRows(sql),
+        foreignKeys: yield* sql.unsafe("PRAGMA foreign_keys"),
+      };
+    });
+    const migrated = yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe("PRAGMA foreign_keys = ON");
+      yield* runMigrations();
+      return yield* readSchema;
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory()));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe("CREATE TABLE snapshot_isolation_probe (id INTEGER PRIMARY KEY)");
+    }).pipe(Effect.provide(Layer.fresh(SqlitePersistenceMemory)));
+    const replayed = yield* readSchema.pipe(Effect.provide(Layer.fresh(SqlitePersistenceMemory)));
+    assert.deepStrictEqual(replayed, migrated);
+  }),
+);
 
 const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   sql<{ readonly name: string }>`

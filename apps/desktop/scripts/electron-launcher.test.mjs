@@ -16,29 +16,15 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 
 import assert from "node:assert/strict";
-import { afterEach, describe, it as vitestIt, vi } from "vitest";
-
-// Vitest collects every *.test.mjs here; a node:test suite registers nothing
-// with it and the file fails with "No test suite found". These adapters keep
-// the node:test style (`t.after`, `t.mock.method`) on the vitest runner.
-const cleanups = [];
-afterEach(() => {
-  vi.restoreAllMocks();
-  while (cleanups.length > 0) cleanups.pop()();
-});
-const it = (name, run) =>
-  vitestIt(name, () =>
-    run({
-      after: (cleanup) => cleanups.push(cleanup),
-      mock: { method: (object, key, impl) => vi.spyOn(object, key).mockImplementation(impl) },
-    }),
-  );
+import { afterEach, describe, it, vi } from "vitest";
 
 import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createLauncherFixture(t, { iconComposer = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "synara-electron-signing-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const desktopDirectory = join(root, "apps", "desktop");
   const iconComposerPath = join(root, "assets", "prod", "Synara.icon");
   const source = join(root, "vendor", "Electron.app");
@@ -203,7 +189,7 @@ describe("macOS Electron launcher signature", () => {
   });
 
   it("still signs and caches the flat icon when actool is unavailable", (t) => {
-    const warn = t.mock.method(console, "warn", () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fixture = createLauncherFixture(t, { iconComposer: true });
     fixture.failIconCompilation({ status: 1, stderr: "actool is unavailable" });
 
@@ -274,7 +260,7 @@ describe("macOS Electron launcher signature", () => {
       writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, appVersion: "0.0.1" }));
       fixture.commands.length = 0;
       fixture.displayCdhashes(...cdhashes);
-      t.mock.method(console, "warn", () => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
 
       fixture.build();
       const resets = fixture.commands.filter(({ command }) => command === "/usr/bin/tccutil");
@@ -459,7 +445,7 @@ describe("macOS source bundle reopen", () => {
 describe("macOS Electron launcher copy", { skip: process.platform !== "darwin" }, () => {
   it("keeps framework symlink targets relative after relocation", (t) => {
     const root = mkdtempSync(join(tmpdir(), "synara-electron-launcher-"));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.onTestFinished(() => rmSync(root, { recursive: true, force: true }));
     const source = join(root, "source", "Electron.app");
     const target = join(root, "runtime", "Synara (Dev).app");
     const framework = join(source, "Contents", "Frameworks", "Electron Framework.framework");

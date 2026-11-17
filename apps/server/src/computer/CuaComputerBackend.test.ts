@@ -3670,6 +3670,7 @@ describe("Cua hardening", () => {
     await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
       effect: "dispatched-unknown",
     });
+    expect(f.calls.filter((call) => isTyping(call.name))).toHaveLength(1);
     // Uncertain delivery may have moved the window: re-observe first.
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       code: "stale_geometry",

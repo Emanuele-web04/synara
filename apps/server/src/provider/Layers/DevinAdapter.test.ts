@@ -1934,20 +1934,27 @@ describe("applyDevinSessionConfiguration", () => {
     expect(calls).toEqual([]);
   });
 
-  it("fails closed for approval-required when mode discovery is unavailable", async () => {
-    const { runtime, calls } = makeFakeAcpRuntime();
+  it.each(["approval-required", "plan"] as const)(
+    "fails closed for unavailable %s mode",
+    async (mode) => {
+      const { runtime, calls } = makeFakeAcpRuntime(
+        mode === "plan"
+          ? { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }] }
+          : undefined,
+      );
 
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-    expect(calls).toEqual([]);
-  });
+      await expect(
+        Effect.runPromise(
+          applyDevinSessionConfiguration({
+            runtime,
+            runtimeMode: mode === "plan" ? "full-access" : "approval-required",
+            interactionMode: mode === "plan" ? "plan" : undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+      expect(calls).toEqual([]);
+    },
+  );
 });
 
 describe("resolveRequestedModeId", () => {

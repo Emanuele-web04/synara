@@ -135,6 +135,8 @@ describe("HostDiscoverabilityPrompt", () => {
     expect(open).toBe(true);
     expect(html).toContain("Share this machine with Acme Engineering?");
     expect(html).toContain("Ada&#x27;s MacBook");
+    expect(html).toContain(">Share</button>");
+    expect(html).toContain(">Keep private</button>");
   });
 
   it("stays shut for a personal workspace", () => {

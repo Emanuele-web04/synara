@@ -175,4 +175,4 @@ Before merging media:
 - [ ] Videos have a poster, captions, transcript, and controls.
 - [ ] No autoplay or third-party embed was introduced.
 - [ ] The source app behavior and terminology were verified.
-- [ ] Documentation, browser, accessibility, visual, and media checks pass.
+- [ ] Documentation, browser, accessibility, performance, and media checks pass.

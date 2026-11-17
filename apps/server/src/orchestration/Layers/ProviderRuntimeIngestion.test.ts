@@ -1942,6 +1942,47 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual(["terminal-progress-4", "terminal-progress-complete"]);
   });
 
+  it("does not resurrect coalesced accepted tool snapshots while rebuilding open-turn state", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    let last: PersistedProviderRuntimeEvent | undefined;
+    for (let index = 0; index < 2; index += 1) {
+      last = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "tool.progress",
+          eventId: asEventId(`accepted-progress-${index}`),
+          provider: "claudeAgent",
+          createdAt: "2026-10-06T12:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-accepted-progress"),
+          payload: { toolUseId: "accepted-tool", summary: `Progress ${index}` },
+        }),
+      );
+    }
+    const activity = projectProviderRuntimeActivities(last!.event, last!.sequence)[0]!;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("accepted-progress-snapshot"),
+        threadId: asThreadId("thread-1"),
+        createdAt: activity.createdAt,
+        activity,
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: last!.sequence,
+        updatedAt: activity.createdAt,
+      }),
+    );
+    await harness.startIngestion();
+    await harness.drain();
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!;
+    expect(
+      thread.activities.filter((entry) => entry.kind === "tool.updated").map((entry) => entry.id),
+    ).toEqual(["accepted-progress-1"]);
+  });
+
   it("recovers a failed tool snapshot after its coalesced prefix was acknowledged", async () => {
     const harness = await createHarness({ startIngestion: false });
     const rows: PersistedProviderRuntimeEvent[] = [];

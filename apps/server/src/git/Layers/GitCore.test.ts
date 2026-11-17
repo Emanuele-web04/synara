@@ -3861,14 +3861,27 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["remote", "add", "origin", remote]);
         yield* writeTextFile(
           path.join(tmp, ".git/hooks/pre-push"),
-          '#!/bin/sh\nsleep 1\nhead -c 1100000 /dev/zero | tr "\\000" x >&2\n',
+          [
+            "#!/bin/sh",
+            ": > .git/pre-push-entered",
+            "attempt=0",
+            "while [ ! -f .git/pre-push-release ]; do",
+            '  [ "$attempt" -lt 200 ] || exit 1',
+            "  attempt=$((attempt + 1))",
+            "  sleep 0.05",
+            "done",
+            'head -c 1100000 /dev/zero | tr "\\000" x >&2',
+            "",
+          ].join("\n"),
         );
         yield* Effect.promise(() => fs.chmod(path.join(tmp, ".git/hooks/pre-push"), 0o755));
-        // The command deadline runs on the Effect clock, so push past it on the
-        // test clock while the hook is still running instead of sleeping 31 s.
         const push = yield* Effect.forkChild((yield* GitCore).pushCurrentBranch(tmp, null));
-        yield* TestClock.withLive(Effect.sleep("300 millis"));
+        // Wait until Git is inside the push before advancing the command's deadline.
+        yield* Effect.promise(() =>
+          vi.waitFor(() => expect(existsSync(path.join(tmp, ".git/pre-push-entered"))).toBe(true)),
+        );
         yield* TestClock.adjust("31 seconds");
+        yield* writeTextFile(path.join(tmp, ".git/pre-push-release"), "");
         const result = yield* Fiber.join(push);
         expect(result.status).toBe("pushed");
         expect(yield* git(remote, ["rev-parse", initialBranch])).toBe(

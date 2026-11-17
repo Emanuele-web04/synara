@@ -1061,6 +1061,24 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 46, y: 46 });
   });
 
+  it("captures the window a scoped action named rather than the focused one", async () => {
+    const { backend, call, see } = await setup();
+    await see();
+    const result = await call("computer_click", {
+      x: 1_100,
+      y: 200,
+      window_id: "fake-calculator",
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsFor("captureScreenshot").at(-1)?.args[0]).toEqual({
+      kind: "window",
+      windowId: "fake-calculator",
+      // Action observations spend a smaller pixel budget than perception ones.
+      maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
+    });
+  });
+
   it("reports a closed target instead of photographing another window", async () => {
     const backend = new FakeComputerBackend();
     const originalClick = backend.click.bind(backend);

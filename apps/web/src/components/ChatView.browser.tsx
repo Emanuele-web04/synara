@@ -134,7 +134,6 @@ import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { hasActiveComposerSend, runComposerSendOnce } from "../lib/composerSendOwnership";
-import { setSmoothRevealMaxCharsPerSecondForTests } from "../hooks/useSmoothStreamedText";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "../lib/chatDispatchStore";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -3138,8 +3137,15 @@ describe("ChatView transcript geometry (full app)", () => {
         const viewportBounds = viewport.getBoundingClientRect();
         expect(beforeTop).toBeGreaterThan(viewportBounds.top);
         expect(beforeTop).toBeLessThan(viewportBounds.bottom);
-        // Exercise the route/layout change directly; pointer-down stability belongs to #1881.
-        row.click();
+        // Exercise both sidebar activation paths without repeating the scroll cases.
+        if (scrollTakeover) {
+          row.click();
+        } else {
+          row.focus({ preventScroll: true });
+          row.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
+        }
         if (scrollTakeover) viewport.scrollTop += 60;
         const requestedScrollTop = viewport.scrollTop;
         await waitForURL(
@@ -7444,9 +7450,12 @@ describe("ChatView transcript geometry (full app)", () => {
     "short transcript",
   ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
     const keyboardKey = action.startsWith("keyboard ") ? action.slice("keyboard ".length) : null;
-    // The reveal ceiling bounds how long ~20 KB of delivered text takes to drain; raise it so the
-    // test follows the same gradual growth without waiting seconds per row.
-    setSmoothRevealMaxCharsPerSecondForTests(40_000);
+    const streamedParagraph = "More streaming output.";
+    const paragraphsPerChunk = 5;
+    // Grow the transcript with paragraphs so the real reveal can fill the viewport quickly.
+    const streamedChunk = Array.from({ length: paragraphsPerChunk }, () => streamedParagraph).join(
+      "\n\n",
+    );
     const restoreNativeApi = installDeterministicSendNativeApi();
     let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
     if (action === "short transcript") {
@@ -7480,7 +7489,7 @@ describe("ChatView transcript geometry (full app)", () => {
         ...thread,
         messages: thread.messages.map((message) =>
           message.id === messageId
-            ? { ...message, text: `${message.text}\n\n${"More streaming output. ".repeat(35)}` }
+            ? { ...message, text: `${message.text}\n\n${streamedChunk}` }
             : message,
         ),
       }));
@@ -7557,7 +7566,8 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(container.scrollHeight).toBeLessThanOrEqual(container.clientHeight + 1);
         await userEvent.wheel(container, { delta: { y: -100 } });
       }
-      for (let index = 0; index < 12; index += 1) {
+      const initialChunks = 12;
+      for (let index = 0; index < initialChunks; index += 1) {
         grow();
         await waitForLayout();
       }
@@ -7568,8 +7578,10 @@ describe("ChatView transcript geometry (full app)", () => {
           const paragraphs = container
             .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
             ?.querySelectorAll("p");
-          expect(paragraphs?.length).toBe(13);
-          expect(paragraphs?.[12]?.textContent).toBe("More streaming output. ".repeat(35).trim());
+          expect(paragraphs?.length).toBe(1 + initialChunks * paragraphsPerChunk);
+          expect(paragraphs?.[initialChunks * paragraphsPerChunk]?.textContent).toBe(
+            streamedParagraph,
+          );
         },
         { timeout: 10_000, interval: 20 },
       );
@@ -7764,7 +7776,6 @@ describe("ChatView transcript geometry (full app)", () => {
         grow();
         await waitForLayout();
       }
-      // Eight delivered chunks exceed the reveal hook's one-second throughput.
       // Check the actual final text and settled layout, not a transient line
       // growth while smooth reveal is still draining the delivered buffer.
       const expectedText = snapshot.threads
@@ -7786,7 +7797,6 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
     } finally {
-      setSmoothRevealMaxCharsPerSecondForTests();
       await mounted.cleanup();
       restoreNativeApi();
     }
@@ -12524,6 +12534,14 @@ describe("ChatView transcript geometry (full app)", () => {
           ).toBeUndefined();
         }
         await page.getByTestId("composer-editor").fill(newerPrompt);
+        if (firstOwner === "chat") {
+          await userEvent.keyboard("{Enter}");
+          await expect.element(page.getByText("Still sending your last message")).toBeVisible();
+          expect(turnCommands()).toHaveLength(1);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            newerPrompt,
+          );
+        }
         releaseTurn();
         expect(await boardSend).toMatchObject({ kind: "dispatched" });
         await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));

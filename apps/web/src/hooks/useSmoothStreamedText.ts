@@ -24,16 +24,6 @@ const DRAIN_WINDOW_SECONDS = 0.16;
 // Hard ceiling so a single huge flush (e.g. a pasted code block) reveals fast but bounded
 // rather than snapping in all at once.
 const MAX_CHARS_PER_SECOND = 2000;
-let maxCharsPerSecond = MAX_CHARS_PER_SECOND;
-
-/**
- * Test seam: browser tests that stream tens of kilobytes raise the reveal ceiling so
- * they do not wait seconds for the gradual reveal to drain. Call with no argument to
- * restore the production ceiling.
- */
-export function setSmoothRevealMaxCharsPerSecondForTests(value?: number): void {
-  maxCharsPerSecond = value ?? MAX_CHARS_PER_SECOND;
-}
 // Low-pass factor: how aggressively the live velocity chases the target velocity each
 // frame. Smaller is smoother but laggier; ~0.15 ≈ a ~110ms time constant at 60fps.
 const VELOCITY_LERP = 0.15;
@@ -98,7 +88,7 @@ export function stepSmoothReveal(
     return { emitCount: null, done: true };
   }
 
-  const targetVelocity = Math.min(maxCharsPerSecond, backlog / DRAIN_WINDOW_SECONDS);
+  const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
   state.velocity += (targetVelocity - state.velocity) * VELOCITY_LERP;
   state.shown = Math.min(targetLength, state.shown + state.velocity * dt);
   // At high refresh rates the damped tail can approach the target without ever

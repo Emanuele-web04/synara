@@ -52,7 +52,7 @@ async function fixture(
   authority = capability,
   options: {
     platform?: "darwin" | "linux";
-    cleanup?: "incomplete";
+    cleanup?: "incomplete" | "wrong-pid" | "missing-admission";
     interruptCleanup?: "incomplete" | "wrong-pid" | "missing-admission" | "once-incomplete";
     inputMonitorState?: (() => ComputerInputMonitorState) | undefined;
     activateInputMonitor?: () => Promise<void>;
@@ -168,7 +168,7 @@ net.createServer(s=>{
       if(action) { write('release'); action.end(JSON.stringify({ok:false,error:'cancelled'})+'\\n'); action=undefined; }
       setTimeout(()=>{
         write('cleanup-ack');
-        reply({pid:process.pid,input_admission_closed:true,cleanup_complete:!browserCleanupPending&&options.cleanup!=='incomplete',pending_input:browserCleanupPending||options.cleanup==='incomplete'?1:0});
+        reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:!browserCleanupPending&&options.cleanup!=='incomplete',pending_input:browserCleanupPending||options.cleanup==='incomplete'?1:0});
       },30);
     }
     else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
@@ -242,7 +242,7 @@ net.createServer(s=>{
   s.on('error',()=>{});
 }).listen(socket);
 let retiring=false;
-function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},20)}
+function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},150)}
 process.on('SIGTERM',retire);
 process.stdin.resume(); process.stdin.on('end',retire);
 `,
@@ -262,7 +262,6 @@ process.stdin.resume(); process.stdin.on('end',retire);
       : {}),
     ...(options.frameTap ? { frameTap: options.frameTap } : {}),
     ...(options.shield ? { shield: options.shield } : {}),
-    exitGraceMs: 150,
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
     ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
     ...(options.ownPids ? { ownPids: options.ownPids } : {}),
@@ -1044,36 +1043,37 @@ describe("Cua macOS host retirement", () => {
     expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
   });
-  // wrong-pid and missing-admission acknowledgements fail the same
-  // cuaCleanupAcknowledged predicate, covered in cuaDriverProtocol.test.ts.
-  it("keeps the process alive and blocks replacement after incomplete cleanup", async () => {
-    const f = await fixture(capability, { cleanup: "incomplete" });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "check_permissions",
-    });
-    // An input-dispatched generation can hold OS state the acknowledgement
-    // cannot account for, so the driver stays alive and unreplaced.
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "press_key",
-      args: { key: "enter" },
-    });
-    await expect(f.host.stop()).rejects.toThrow("did not confirm native input cleanup");
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    const events = await f.events();
-    expect(events.map((e) => e.event)).toEqual([
-      "start",
-      "motion-100-0",
-      "key",
-      "observation-budget-100",
-      "cancel",
-      "cleanup-ack",
-    ]);
-    expect(() => process.kill(events[0].pid, 0)).not.toThrow();
-  });
+  it.each(["incomplete", "wrong-pid", "missing-admission"] as const)(
+    "keeps the process alive and blocks replacement after %s cleanup",
+    async (cleanup) => {
+      const f = await fixture(capability, { cleanup });
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "check_permissions",
+      });
+      // An input-dispatched generation can hold OS state the acknowledgement
+      // cannot account for, so the driver stays alive and unreplaced.
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter" },
+      });
+      await expect(f.host.stop()).rejects.toThrow("did not confirm native input cleanup");
+      await expect(
+        cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+      ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      const events = await f.events();
+      expect(events.map((e) => e.event)).toEqual([
+        "start",
+        "motion-100-0",
+        "key",
+        "observation-budget-100",
+        "cancel",
+        "cleanup-ack",
+      ]);
+      expect(() => process.kill(events[0].pid, 0)).not.toThrow();
+    },
+  );
   it("preserves an uncertain action effect when cleanup also fails", async () => {
     const f = await fixture(capability, {
       cleanup: "incomplete",
