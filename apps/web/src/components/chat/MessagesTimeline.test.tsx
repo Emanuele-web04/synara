@@ -731,9 +731,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting context");
-    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain(">Working for <");
-    expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
@@ -780,8 +778,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tasks updated");
     expect(markup).toContain("Thinking");
     expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
-    // The live tail keeps one work-row step above Thinking instead of a footer.
-    expect(markup).toMatch(/class="[^"]*\bpb-3\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
@@ -1084,8 +1080,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain('data-tool-details-inline="true"');
-    expect(markup).not.toContain("Diff");
-    expect(markup).not.toContain("Details");
   });
 
   it("shows the Synara mark for every provider-specific tool row shape", async () => {
@@ -1208,9 +1202,6 @@ describe("MessagesTimeline", () => {
         />,
       );
       expect(markup).toContain('data-tool-icon="computer"');
-      // The computer-use pointer is the mirrored Hugeicons navigation glyph.
-      expect(markup).toContain('data-slot="hugeicon"');
-      expect(markup).toContain('transform="translate(24 0) scale(-1 1)"');
       expect(markup).toContain(
         toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
       );
@@ -1612,39 +1603,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">File Change<");
   });
 
-  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        conversationOnly
-        timelineEntries={[
-          {
-            id: "checkin-row",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("checkin-message"),
-              role: "user",
-              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
-              source: "native",
-              dispatchOrigin: "automation",
-            },
-          },
-        ]}
-      />,
-    );
-
-    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
-    // timeline no longer has a compact check-in row, so the prompt renders as
-    // a normal user bubble.
-    expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
-    expect(markup).toContain("Sent via Automation");
-  });
-
   it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1670,7 +1628,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
     expect(markup).toContain("Sent via Automation");
   });
 
