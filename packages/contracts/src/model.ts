@@ -114,6 +114,7 @@ export const CodexModelOptions = Schema.Struct({
   // Codex runtime discovery can expose early-access effort values outside the built-in enum.
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
+  serviceTier: Schema.optional(Schema.Literal("ultrafast")),
 });
 export type CodexModelOptions = typeof CodexModelOptions.Type;
 

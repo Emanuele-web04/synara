@@ -2,7 +2,12 @@ import {
   makeMessageTextChunks,
   encodeMessageTextFallback,
 } from "../../persistence/messageTextChunks.ts";
-import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  CommandId,
+  type OrchestrationEvent,
+  type ProjectionPendingInteractionStatus,
+} from "@synara/contracts";
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
@@ -14,7 +19,10 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
-import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionAwaitingResponse,
+} from "@synara/shared/pendingInteractions";
 import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
@@ -1504,8 +1512,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "thread.session-set": {
-          const turnId = event.payload.session.activeTurnId;
-          if (event.payload.session.status !== "running" || turnId === null) {
+          const { threadId, session, pendingResumeMessageId } = event.payload;
+          if (session.status === "starting" && pendingResumeMessageId !== undefined) {
+            // Link the prepared baseline to the next provider turn without projecting a chat message.
+            yield* projectionTurnRepository.replacePendingTurnStart({
+              threadId,
+              messageId: pendingResumeMessageId,
+              sourceProposedPlanThreadId: null,
+              sourceProposedPlanId: null,
+              requestedAt: session.updatedAt,
+            });
+          }
+          const turnId = session.activeTurnId;
+          if (session.status !== "running" || turnId === null) {
             const settledState = settleTurnStateFromSession(event.payload.session, "running");
             if (settledState !== null) {
               // Close the newest still-open turn when the runtime reports that
@@ -1822,13 +1841,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const updatePendingInteractionShellCount = Effect.fn(function* (input: {
     readonly threadId: ProjectionThread["threadId"];
     readonly interactionKind: "approval" | "userInput";
-    readonly previousStatus: string | null;
-    readonly nextStatus: string;
+    readonly previousStatus: ProjectionPendingInteractionStatus | null;
+    readonly nextStatus: ProjectionPendingInteractionStatus;
     readonly updatedAt: string;
   }) {
     const delta =
-      Number(input.nextStatus === "pending" || input.nextStatus === "retryable") -
-      Number(input.previousStatus === "pending" || input.previousStatus === "retryable");
+      Number(isPendingInteractionAwaitingResponse(input.nextStatus)) -
+      Number(isPendingInteractionAwaitingResponse(input.previousStatus));
     return yield* updateThreadProjection(input.threadId, (thread) => ({
       ...thread,
       ...(input.interactionKind === "approval"

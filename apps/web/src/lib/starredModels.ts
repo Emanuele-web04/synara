@@ -23,6 +23,7 @@ export const StarredModelSchema = Schema.Struct({
   model: Schema.String,
   effort: Schema.NullOr(Schema.String),
   fastMode: Schema.NullOr(Schema.Boolean),
+  serviceTier: Schema.optional(Schema.Literal("ultrafast")),
   thinking: Schema.NullOr(Schema.Boolean),
 });
 export const StarredModelsSchema = Schema.Array(StarredModelSchema);
@@ -34,6 +35,7 @@ export interface StarredModel {
   readonly model: string;
   readonly effort: string | null;
   readonly fastMode: boolean | null;
+  readonly serviceTier?: "ultrafast" | undefined;
   readonly thinking: boolean | null;
 }
 
@@ -49,7 +51,7 @@ export function starredModelInstanceId(
 export function starredModelKey(
   entry: Pick<
     StoredStarredModel,
-    "provider" | "instanceId" | "model" | "effort" | "fastMode" | "thinking"
+    "provider" | "instanceId" | "model" | "effort" | "fastMode" | "serviceTier" | "thinking"
   >,
 ): string {
   // JSON keeps the key unambiguous: model slugs may contain any separator character.
@@ -58,7 +60,7 @@ export function starredModelKey(
     starredModelInstanceId(entry),
     entry.model,
     entry.effort ?? "",
-    entry.fastMode === null ? "" : String(entry.fastMode),
+    entry.serviceTier ?? (entry.fastMode === null ? "" : String(entry.fastMode)),
     entry.thinking === null ? "" : String(entry.thinking),
   ]);
 }

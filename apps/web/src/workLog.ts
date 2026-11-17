@@ -207,7 +207,14 @@ export interface WorkLogEntry {
   providerContextLifecycle?: ProviderContextLifecycleInfo;
   providerHandoff?: ProviderHandoffInfo;
   /** Durable terminal feedback; session readiness never clears a failed turn. */
-  turnFailure?: { cause: string; message: string; errorCode?: string };
+  turnFailure?: {
+    cause: string;
+    message: string;
+    errorCode?: string;
+    provider?: string;
+    // The provider refused the turn for quota: a pause until the limit resets, not a fault.
+    usageLimit?: boolean;
+  };
   // An answered agent question, paired with the answers the user submitted. It
   // renders as a question/answer exchange that stays visible outside the
   // collapsed turn instead of as two bare "User input" log lines.
@@ -1183,6 +1190,13 @@ function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
   );
 }
 
+// Claude reports `rate_limit`; Codex reports its quota variants by name.
+const USAGE_LIMIT_ERROR_CODES: ReadonlySet<string> = new Set([
+  "rate_limit",
+  "usageLimitExceeded",
+  "rateLimitExceeded",
+]);
+
 function deriveTurnFailureEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   translate: typeof t,
@@ -1218,6 +1232,7 @@ function deriveTurnFailureEntries(
       previous?.turnFailure?.cause ??
       "The provider reported an error.";
     const errorCode = asTrimmedString(payload?.errorCode) ?? previous?.turnFailure?.errorCode;
+    const provider = asTrimmedString(payload?.provider) ?? previous?.turnFailure?.provider;
     const overloaded =
       errorCode === "server_overloaded" || /selected model is at capacity/i.test(cause);
     const message = overloaded
@@ -1239,7 +1254,13 @@ function deriveTurnFailureEntries(
       tone: "error",
       label: translate("chat:taskInterrupted"),
       activityKind: activity.kind,
-      turnFailure: { cause, message, ...(errorCode ? { errorCode } : {}) },
+      turnFailure: {
+        cause,
+        message,
+        ...(errorCode ? { errorCode } : {}),
+        ...(provider ? { provider } : {}),
+        ...(errorCode && USAGE_LIMIT_ERROR_CODES.has(errorCode) ? { usageLimit: true } : {}),
+      },
     });
   }
   return [...failures.values()];
@@ -3503,6 +3524,25 @@ function extractToolCommand(
   const dataInput = asRecord(data?.input);
   const dataArguments = asCommandArgumentRecord(data?.arguments ?? data?.args ?? data?.params);
   const rawInput = asCommandArgumentRecord(data?.rawInput);
+  if (hasTurnScopedProviderToolCallId(payload)) {
+    // Older ACP events copied backticked read/search targets into data.command.
+    // Sparse starts may omit the kind before a typed completion arrives.
+    const kind = data?.kind;
+    const legacyTarget =
+      /^(?:read(?:ing)?|find(?:ing)?|found|search(?:ing|ed)?)\s+`([^`]+)`/iu.exec(
+        asTrimmedString(payload?.title) ?? "",
+      )?.[1];
+    const hasLegacyTitleCommand =
+      (kind === undefined || kind === "other") &&
+      legacyTarget !== undefined &&
+      asTrimmedString(data?.command) === legacyTarget.trim() &&
+      !normalizeCommandValue(rawInput?.command) &&
+      !normalizeCommandValue(rawInput?.cmd) &&
+      !asTrimmedString(rawInput?.executable);
+    if (kind === "read" || kind === "search" || hasLegacyTitleCommand) {
+      return { command: null, rawCommand: null };
+    }
+  }
   const detailCommand =
     isCommandLikeDetail(payload) && typeof payload?.detail === "string"
       ? stripTrailingExitCode(payload.detail).output
@@ -3685,10 +3725,16 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const itemInput = asRecord(item?.input);
   const dataInvocation = asRecord(data?.invocation);
   const itemInvocation = asRecord(item?.invocation);
+  // ACP adapters keep the provider-native name in rawInput (e.g. Grok's
+  // `read_file` / `bash`); they only promote Computer names to data.toolName.
+  const rawInput = asRecord(data?.rawInput);
   const candidates = [
     payload?.toolName,
     data?.toolName,
     data?.tool,
+    rawInput?._toolName,
+    rawInput?.toolName,
+    rawInput?.tool_name,
     dataInvocation?.tool,
     dataInvocation?.toolName,
     item?.toolName,

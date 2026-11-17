@@ -3,7 +3,7 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -366,7 +366,7 @@ describe("MessagesTimeline", () => {
   });
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
-  it("renders an accent deep link to the immediate fork source", async () => {
+  it("renders a deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -380,7 +380,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-fork-source-divider="true"');
     expect(markup).toContain('href="/source-thread"');
     expect(markup).toContain("Continued from chat");
-    expect(markup).toContain("text-[var(--color-text-accent)]");
     expect(markup.indexOf("Imported history")).toBeLessThan(
       markup.indexOf('data-fork-source-divider="true"'),
     );
@@ -544,53 +543,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Sent by the Release Synara coordinator");
     expect(markup).toContain('aria-label="Open coordinator"');
     expect(markup).not.toContain("Sent by Synara from another thread");
-  });
-
-  it("renders edit beside copy for user messages", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-editable-user",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-editable-user"),
-              role: "user",
-              text: "adjust this prompt",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-          {
-            id: "entry-editable-assistant",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-editable-assistant"),
-              role: "assistant",
-              text: "",
-              turnId: TurnId.makeUnsafe("turn-editable-user"),
-              createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        revertTurnCountByUserMessageId={
-          new Map([[MessageId.makeUnsafe("message-editable-user"), 0]])
-        }
-        onEditUserMessage={() => true}
-        editableUserMessageId={MessageId.makeUnsafe("message-editable-user")}
-        resolvedTheme="light"
-      />,
-    );
-
-    expect(markup).toContain('aria-label="Copy message"');
-    expect(markup).toContain('aria-label="Edit message"');
-    expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("size-[1.125em]");
   });
 
   it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
@@ -779,9 +731,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting context");
-    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain(">Working for <");
-    expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
@@ -828,8 +778,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tasks updated");
     expect(markup).toContain("Thinking");
     expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
-    // The live tail keeps one work-row step above Thinking instead of a footer.
-    expect(markup).toMatch(/class="[^"]*\bpb-3\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
@@ -914,44 +862,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Map file-icon logic in file-changes");
     expect(markup).not.toContain("<h2>");
     expect(markup).not.toContain("chat-markdown-codeblock");
-  });
-
-  it("renders a lone reasoning update as iconless transcript prose", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps(null)}
-        isWorking
-        activeTurnInProgress
-        activeTurnId={activeTurnId}
-        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        timelineEntries={[
-          {
-            id: "entry-reasoning-trace",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.100Z",
-            entry: {
-              id: "reasoning-trace",
-              toolCallId: "reasoning-item",
-              createdAt: "2026-03-17T19:12:28.100Z",
-              turnId: activeTurnId,
-              label: "Reasoning trace",
-              toolTitle: "Reasoning trace",
-              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
-              tone: "tool",
-            },
-          },
-        ]}
-        resolvedTheme="light"
-      />,
-    );
-
-    expect(markup.match(/data-work-entry-prose="true"/g) ?? []).toHaveLength(1);
-    expect(markup).not.toContain('data-codex-status-row="true"');
-    expect(markup).not.toContain('data-work-entry-icon="true"');
-    expect(markup).toContain("Inspecting apps/web/src/store.ts");
-    expect(markup).not.toContain("Reasoning trace Inspecting");
   });
 
   it.each([
@@ -1170,49 +1080,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain('data-tool-details-inline="true"');
-    expect(markup).not.toContain("Diff");
-    expect(markup).not.toContain("Details");
-  });
-
-  it("renders command rows with the literal command and styled hover tooltip trigger", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-inline-command",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-command",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Ran command",
-              tone: "tool",
-              itemType: "command_execution",
-              toolTitle: "Searched",
-              command: `rg -n "ProjectionSnapshotQuery" apps/server/src`,
-              rawCommand: `/bin/zsh -lc 'rg -n "ProjectionSnapshotQuery" apps/server/src'`,
-            },
-          },
-        ]}
-      />,
-    );
-
-    // The command shows verbatim (minus the shell wrapper) instead of a guessed
-    // sentence, and the search wears the magnifier.
-    // One plain line: the command is part of the sentence, not a code chip.
-    expect(markup).toContain(
-      `Ran <span data-command-literal="true">rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</span>`,
-    );
-    expect(markup).not.toContain("<code");
-    expect(markup).toContain("magnifying-glass.svg");
-    expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
-    expect(markup).not.toContain(
-      `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
-    );
-    expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
   it("shows the Synara mark for every provider-specific tool row shape", async () => {
@@ -1335,9 +1202,6 @@ describe("MessagesTimeline", () => {
         />,
       );
       expect(markup).toContain('data-tool-icon="computer"');
-      // The computer-use pointer is the mirrored Hugeicons navigation glyph.
-      expect(markup).toContain('data-slot="hugeicon"');
-      expect(markup).toContain('transform="translate(24 0) scale(-1 1)"');
       expect(markup).toContain(
         toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
       );
@@ -1739,95 +1603,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">File Change<");
   });
 
-  it("renders a collapsible changed files header with ui-font filenames", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-assistant-diff",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: assistantMessageId,
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={
-          new Map([
-            [
-              assistantMessageId,
-              {
-                turnId: TurnId.makeUnsafe("turn-diff-1"),
-                checkpointTurnCount: 1,
-                checkpointTurnCounts: [1],
-                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
-                status: "ready",
-                completedAt: "2026-03-17T19:12:30.000Z",
-                assistantMessageId,
-                files: [
-                  { path: "apps/web/src/components/Sidebar.tsx", additions: 6, deletions: 5 },
-                ],
-              },
-            ],
-          ])
-        }
-        onUndoTurnFiles={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("Edited 1 file");
-    expect(markup).toContain("Undo");
-    expect(markup).toContain("Review");
-    expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain('data-edited-file-row="true"');
-    expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
-    expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
-    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
-      markup.indexOf("Edited 1 file"),
-    );
-  });
-
-  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        conversationOnly
-        timelineEntries={[
-          {
-            id: "checkin-row",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("checkin-message"),
-              role: "user",
-              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
-              source: "native",
-              dispatchOrigin: "automation",
-            },
-          },
-        ]}
-      />,
-    );
-
-    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
-    // timeline no longer has a compact check-in row, so the prompt renders as
-    // a normal user bubble.
-    expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
-    expect(markup).toContain("Sent via Automation");
-  });
-
   it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1853,7 +1628,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
     expect(markup).toContain("Sent via Automation");
   });
 

@@ -89,6 +89,7 @@ import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
+import { UsageLimitPauseDivider } from "./UsageLimitPauseDivider";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
@@ -1749,7 +1750,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
         row.groupedEntries.map((entry) =>
-          entry.turnFailure ? (
+          entry.turnFailure?.usageLimit ? (
+            <div key={entry.id} data-turn-failure={entry.turnId ?? entry.id}>
+              <UsageLimitPauseDivider
+                provider={entry.turnFailure.provider}
+                createdAt={entry.createdAt}
+                cause={entry.turnFailure.cause}
+                timestampFormat={timestampFormat}
+                onContinue={
+                  entry.turnId && entry.turnId === recoverableTurnId && onContinueFailedTurn
+                    ? () => {
+                        void onContinueFailedTurn(entry.turnId!);
+                      }
+                    : undefined
+                }
+                continueDisabled={turnRecoveryDisabled ?? false}
+              />
+            </div>
+          ) : entry.turnFailure ? (
             <div key={entry.id} data-turn-failure={entry.turnId ?? entry.id}>
               <ThreadErrorBanner
                 title={t("chat:taskInterrupted")}

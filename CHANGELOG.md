@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.6.2 — 2026-11-17
+
+**Local video playback, Codex Ultrafast and more reliable worktrees.**
+
+### Added
+
+- Play and seek local MP4, M4V, WebM, MOV and OGV videos in file previews and inline in chat. Unsupported codecs offer download and retry; desktop-proxied remote hosts offer download instead of streaming.
+- Choose Codex Ultrafast when the account's model catalog advertises it. Speed choices follow the selected model and account.
+- Discover the Synara for iPhone beta from an eligible desktop launch announcement. Remove empty Remote projects from the sidebar without deleting their files; archived chats and unsent drafts prevent removal.
+
+### Changed
+
+- Worktree creation completes without waiting for unrelated Git and GitHub refreshes and uses parallel checkout unless configured otherwise. In one isolated 10,000-file repository run, creation completed in 1.21 seconds; no equivalent before measurement was made.
+- Codex startup warnings are consolidated and failed MCP startup messages identify the server where available.
+- A test-suite cleanup reduced total runner time by 18% in one same-machine comparison; this measures test infrastructure, not application speed.
+
+### Fixed
+
+- Worktree copying preserves relative symlinks, skips untracked nested repositories and waits for in-flight copies before rollback.
+- macOS capture helpers wait for capture teardown, and fallback still requests stop when their owning task ends.
+- Projectless Pi chats start in their dedicated workspace. OpenCode model discovery invalidates its cache when configuration changes.
+- Composer predictions no longer display echoed response objects as suggestions.
+
+### Verification
+
+Local release checks and their inputs are recorded in the release checkpoint. The exact-tag workflow must pass quality, server tests, native packages, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Packaged startup does not establish manual installation, upgrades or live provider behavior.
+
+## 1.6.1 — 2026-11-17
+
+**Resume interrupted work, connect agents more easily, and keep conversations moving.**
+
+### Added
+
+- Resume eligible interrupted tasks from the empty composer without adding a new chat message. An unsent message can be dispatched again; an interrupted turn continues using the existing conversation and workspace context.
+- Guided provider sign-in presents login links, codes when needed, connection status and recovery actions in onboarding and other provider entry points.
+- Continue a started chat on another account of the same provider. The target starts from the conversation context without reusing the source account's native continuation.
+
+### Changed
+
+- The usage-limit card shows reset information, usage windows and available recovery controls. Activity rows show the latest settled reply and group multiple linked pull requests.
+- Composer suggestions retry eligible temporary failures, return after clearing a draft and can be inserted with Right Arrow or Tab. Where supported, prediction routing can use a smaller model on the chat's account.
+- Accessibility and visual consistency improve across focus indicators, contrast, labels and touch targets. Tool read and search icons recognize more provider-native names.
+- Release builds parallelize the React Compiler pass. In one local macOS production-build comparison, the web build fell from 67 s to 33 s with eight workers and produced byte-identical output; hosted runner times vary. This measures build time, not app speed.
+
+### Fixed
+
+- Automatic recovery from eligible usage limits can arm in cases previously blocked by an empty Claude profile or unchanged thread metadata.
+- A dropped browser network-guard setup call no longer leaves desktop startup waiting indefinitely; the guard remains required before browser access.
+- Leaving a chat while a send is pending no longer immediately dispatches the next queued message. Skipped automation runs remain terminal during reconciliation.
+- Simulator install, launch and open-URL actions boot a shut-down simulator when needed, subject to existing device approvals and boot limits.
+- Antigravity retains a stored effort selection while model discovery is unresolved. Toasts stay clear of desktop window controls.
+
+### Verification
+
+Local release checks and their inputs are recorded in the release checkpoint. The exact-tag workflow must pass quality, server tests, native packages, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Packaged startup does not establish manual installation, upgrades or live provider behavior.
+
 ## 1.6.0 — 2026-11-15
 
 **Composer suggestions, clearer tables and a lighter desktop.**

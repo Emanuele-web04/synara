@@ -14,6 +14,9 @@ inputs:
   save-modules:
     description: Save the node_modules archive after a miss. Only one job per cache key sets this.
     default: "false"
+  web-transform-cache:
+    description: Browser lane name that owns a React Compiler transform cache; empty disables it.
+    default: ""
 
 runs:
   using: composite
@@ -88,6 +91,38 @@ runs:
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
+
+    # Browser test lanes recompile every web module with React Compiler on a
+    # cold Vite server. apps/web/scripts/transform-cache.ts keys each result by
+    # the exact module source, so an archive only ever supplies output for
+    # unchanged modules; a changed module is always recompiled. The key prefix
+    # hashes everything else that shapes the output (lockfile, Vite config,
+    # cache code), so a dependency or config change starts empty. Pull requests
+    # restore main's newest archive for their lane and save only when nothing
+    # matched; pushes to main save one entry per commit.
+    - name: Restore web transform cache
+      id: web-transform
+      if: ${{ inputs.web-transform-cache != '' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/web-transform-cache
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+
+    - name: Cache web transform results (main or first branch run)
+      if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/web-transform-cache
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+
+    - name: Enable web transform cache
+      if: ${{ inputs.web-transform-cache != '' }}
+      shell: bash
+      run: echo "SYNARA_WEB_TRANSFORM_CACHE_DIR=$RUNNER_TEMP/web-transform-cache" >> "$GITHUB_ENV"
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}

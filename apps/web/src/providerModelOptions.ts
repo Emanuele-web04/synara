@@ -416,7 +416,17 @@ export function buildNextProviderOptions(
   patch: Record<string, unknown>,
 ): ProviderOptions {
   if (provider === "codex") {
-    return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
+    const next = { ...(modelOptions as CodexModelOptions | undefined), ...patch };
+    // Every existing Fast control selects a speed explicitly, including Standard.
+    if ("fastMode" in patch) {
+      const { serviceTier: _serviceTier, ...standardOrFast } = next;
+      return standardOrFast;
+    }
+    if (next.serviceTier === "ultrafast") {
+      const { fastMode: _fastMode, ...ultrafast } = next;
+      return ultrafast;
+    }
+    return next;
   }
   if (provider === "claudeAgent") {
     return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;

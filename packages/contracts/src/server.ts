@@ -109,6 +109,10 @@ const ServerProviderStatusWire = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  // False only when the provider's CLI was not found at all. An unavailable provider
+  // without it is installed but could not be used, which is a different thing to tell
+  // the user than "not installed".
+  installed: Schema.optional(Schema.Boolean),
   availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,
@@ -157,6 +161,10 @@ const ServerProviderStatusSource = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  // False only when the provider's CLI was not found at all. An unavailable provider
+  // without it is installed but could not be used, which is a different thing to tell
+  // the user than "not installed".
+  installed: Schema.optional(Schema.Boolean),
   availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,
@@ -497,8 +505,8 @@ export const COMPOSER_PREDICTION_MAX_CHARS = 320;
 
 // Composer predictions: one predicted next user message for the thread's
 // settled latest turn. The client sends only ids; the server derives the
-// conversation, provider, and account from the read model. A stale turn, an
-// unavailable provider, or any generation failure returns `suggestion: null`.
+// conversation, provider, and account from the read model. Without a suggestion,
+// `outcome` says whether asking again for the same turn can help.
 export const ServerGenerateComposerPredictionInput = Schema.Struct({
   threadId: ThreadId.check(Schema.isMaxLength(256)),
   expectedTurnId: TurnId.check(Schema.isMaxLength(256)),
@@ -506,10 +514,26 @@ export const ServerGenerateComposerPredictionInput = Schema.Struct({
 export type ServerGenerateComposerPredictionInput =
   typeof ServerGenerateComposerPredictionInput.Type;
 
+/**
+ * `suggested`: `suggestion` holds the prediction. `none`: the model answered with no
+ * suggestion for this turn. `unavailable`: the request stopped before provider generation.
+ * `generation-unavailable`: generation may have run without yielding a usable answer.
+ * Both unavailable results can be retried, with a smaller budget after provider work.
+ */
+export const ComposerPredictionOutcome = Schema.Literals([
+  "suggested",
+  "none",
+  "unavailable",
+  "generation-unavailable",
+]);
+export type ComposerPredictionOutcome = typeof ComposerPredictionOutcome.Type;
+
 export const ServerGenerateComposerPredictionResult = Schema.Struct({
   suggestion: Schema.NullOr(
     TrimmedNonEmptyString.check(Schema.isMaxLength(COMPOSER_PREDICTION_MAX_CHARS)),
   ),
+  /** Absent on servers that predate it, which return a bare `suggestion: null` for every miss. */
+  outcome: Schema.optional(ComposerPredictionOutcome),
 });
 export type ServerGenerateComposerPredictionResult =
   typeof ServerGenerateComposerPredictionResult.Type;

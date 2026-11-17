@@ -18,7 +18,7 @@ export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-ui font-normal";
 
 export const SIDEBAR_ROW_FOCUS_CLASS_NAME =
-  "outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  "outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--color-border-focus)]";
 
 export const SIDEBAR_ROW_HOVER_CLASS_NAME =
   "hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)]";
@@ -57,11 +57,14 @@ export const SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME =
 export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
   "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:project-header-focus:pointer-events-auto md:project-header-focus:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
 
-/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-/** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
+/** Soft grey of the rail's resting glyphs. Glyphs only: as text it reads near 3:1. */
 export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
 
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
+/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"), on the full muted token. */
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground";
+
+/** Empty-state line under a sidebar section ("No projects yet"). */
+export const SIDEBAR_EMPTY_STATE_CLASS_NAME = "px-2 pt-4 text-center text-ui text-muted-foreground";
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [

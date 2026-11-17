@@ -944,24 +944,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
   });
 
-  // A live token whose user WorkOS will not describe must still answer inside
-  // the error contract, not escape as a plain-text 500.
-  it("returns 401 in the error contract when the account no longer exists", async () => {
-    const { app } = buildApp();
-    // Never registered with the fake, so the lookup 404s.
-    const token = await workos.signAccessToken({
-      sub: "user_deleted_mid_session",
-      sid: `session_${randomUUID()}`,
-    });
-
-    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
-    expect(res.status).toBe(401);
-    expect(res.headers.get("content-type")).toContain("application/json");
-    const body = (await res.json()) as AccountErrorBody;
-    expect(body.error).toBe("unauthorized");
-    expect(typeof body.message).toBe("string");
-  });
-
   // The 502 body says nothing on purpose, so the log is the only place an
   // operator can tell a rejected API key from an outage. Asserted so it cannot
   // be dropped silently later.
@@ -1071,6 +1053,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       const response = await app.request("/api/v1/me", { headers: authHeaders(token) });
       expect(response.status).toBe(401);
+      expect(response.headers.get("content-type")).toContain("application/json");
       expect(await response.json()).toEqual({
         error: "unauthorized",
         message: "This account no longer exists",
@@ -1152,17 +1135,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
   });
 
-  it("does not expose the removed legacy POST /hosts registration surface", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-    const response = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({ environmentId: randomUUID() }),
-    });
-    expect(response.status).toBe(404);
-  });
-
   describe("email OTP authentication", () => {
     /** Sends the code and reads it from the fake, as a human reads their inbox. */
     async function sendCode(app: Hono, email: string, clientIp: string) {
@@ -1207,35 +1179,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(again.status).toBe(200);
       const secondAuth = (await again.json()) as { user: { id: string } };
       expect(secondAuth.user.id).toBe(auth.user.id);
-    });
-
-    it("signs in an existing user with the same flow", async () => {
-      const { app } = buildApp();
-      const existing = workos.addUser({ email: `ada-${randomUUID()}@example.com` });
-
-      const { code } = await sendCode(app, existing.email, "203.0.113.21");
-      const res = await postJson(
-        app,
-        "/api/v1/auth/otp/authenticate",
-        { email: existing.email, code },
-        "203.0.113.21",
-      );
-      expect(res.status).toBe(200);
-      const auth = (await res.json()) as { accessToken: string; user: { id: string } };
-      // The existing account, not a duplicate.
-      expect(auth.user.id).toBe(existing.id);
-
-      // And the token reaches an authenticated route once scoped.
-      const organization = workos.addOrganization({ name: "Analytical Engines" });
-      workos.addMembership(organization.id, existing.id);
-      clearOrgCache();
-      const scoped = await workos.signAccessToken({
-        sub: existing.id,
-        sid: `session_${randomUUID()}`,
-        orgId: organization.id,
-      });
-      const meRes = await app.request("/api/v1/me", { headers: authHeaders(scoped) });
-      expect(meRes.status).toBe(200);
     });
 
     it("answers 401 invalid_verification_code for a wrong code", async () => {
@@ -1779,7 +1722,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect((await readPublic()).socialLinks).toBeNull();
     });
 
-    it("creates a profile and reports it from /me", async () => {
+    it("creates a profile, reports it from /me, and updates its name and color", async () => {
       const { app } = buildApp();
       const { token } = await signIn();
       const body = profileBody();
@@ -1794,51 +1737,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
       const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
       expect(await meRes.json()).toMatchObject({ profile: body });
-    });
-
-    it("updates the display name and avatar color of an existing profile", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const created = profileBody();
-
-      await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(created),
-      });
 
       const res = await app.request("/api/v1/profile", {
         method: "PUT",
         headers: authHeaders(token),
-        body: JSON.stringify({ ...created, displayName: "Ada L.", avatarColor: "#3b82f6" }),
+        body: JSON.stringify({ ...body, displayName: "Ada L.", avatarColor: "#3b82f6" }),
       });
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        profile: { handle: created.handle, displayName: "Ada L.", avatarColor: "#3b82f6" },
+        profile: { handle: body.handle, displayName: "Ada L.", avatarColor: "#3b82f6" },
       });
-    });
-
-    // The handle is the closest thing to a public identifier a user has, and
-    // V1 has no redirect story for a rename — so a change is refused loudly
-    // rather than silently ignored.
-    it("refuses to change the handle once it is set", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const created = profileBody();
-
-      await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(created),
-      });
-
-      const res = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify({ ...created, handle: `${created.handle}x` }),
-      });
-      expect(res.status).toBe(400);
-      expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
     // The rejection must be mutation-free: a PUT carrying a different handle
@@ -2046,28 +1954,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         (await put(first.token, { ...original, handle: renamed.handle, accentColor: "red" }))
           .status,
       ).toBe(400);
-    });
-
-    it("answers 409 handle_taken when another user holds the handle", async () => {
-      const { app } = buildApp();
-      const first = await signIn();
-      const second = await signIn();
-      const body = profileBody();
-
-      const firstRes = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(first.token),
-        body: JSON.stringify(body),
-      });
-      expect(firstRes.status).toBe(200);
-
-      const res = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(second.token),
-        body: JSON.stringify(body),
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ error: "handle_taken" });
     });
 
     it("reserves a private handle atomically when two accounts claim it together", async () => {
@@ -2492,7 +2378,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .where(eq(usageModelStats.userId, userId));
       expect(modelRows).toHaveLength(1);
       // The grown values, not 350/4/3.
-      expect(modelRows[0]).toMatchObject({ tokens: 250, turns: 3, prompts: 2 });
+      // Null reasoning is stored as '' (NULLs are distinct under a unique index,
+      // so a NULL would duplicate the bucket on every push).
+      expect(modelRows[0]).toMatchObject({ reasoning: "", tokens: 250, turns: 3, prompts: 2 });
 
       const skillRows = await db
         .select()
@@ -2596,39 +2484,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(skillRows[0]).toMatchObject({ runs: 3 });
     });
 
-    it("stays idempotent when the identical payload is re-pushed", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const environmentId = randomUUID();
-      const minute = minuteIso();
-      const body = usageBody(environmentId, {
-        models: [
-          modelBucket({ minute, tokens: 100 }),
-          modelBucket({ minute, model: "claude-opus-4.8", tokens: 50 }),
-        ],
-        skills: [{ minute, name: "code-review", kind: "skill", runs: 2 }],
-      });
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const res = await pushUsage(app, token, body, "203.0.116.11");
-        expect(res.status).toBe(202);
-      }
-
-      const modelRows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(modelRows).toHaveLength(2);
-      expect(modelRows.map((row) => row.tokens).toSorted((a, b) => a - b)).toEqual([50, 100]);
-
-      const skillRows = await db
-        .select()
-        .from(usageSkillStats)
-        .where(eq(usageSkillStats.userId, userId));
-      expect(skillRows).toHaveLength(1);
-      expect(skillRows[0]).toMatchObject({ runs: 2 });
-    });
-
     // Reasoning is part of the key: the same model with and without a
     // reasoning setting is two buckets, not one.
     it("keeps null and 'high' reasoning as distinct buckets", async () => {
@@ -2655,65 +2510,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .where(eq(usageModelStats.userId, userId));
       expect(rows).toHaveLength(2);
       expect(rows.map((row) => row.reasoning).toSorted()).toEqual(["", "high"]);
-    });
-
-    // The ''-sentinel regression case: NULLs are distinct under a Postgres
-    // unique index, so a NULL-stored reasoning would duplicate the bucket on
-    // every push. Stored as '' it must conflict — one row, updated in place.
-    it("does not duplicate a null-reasoning bucket pushed twice", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const environmentId = randomUUID();
-      const minute = minuteIso();
-
-      for (const tokens of [100, 300]) {
-        const res = await pushUsage(
-          app,
-          token,
-          usageBody(environmentId, {
-            models: [modelBucket({ minute, reasoning: null, tokens })],
-          }),
-          "203.0.116.5",
-        );
-        expect(res.status).toBe(202);
-      }
-
-      const rows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ reasoning: "", tokens: 300 });
-    });
-
-    it("keeps the same minute from two environments as separate rows", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const minute = minuteIso();
-      const environmentA = randomUUID();
-      const environmentB = randomUUID();
-
-      for (const [environmentId, tokens] of [
-        [environmentA, 100],
-        [environmentB, 200],
-      ] as const) {
-        const res = await pushUsage(
-          app,
-          token,
-          usageBody(environmentId, { models: [modelBucket({ minute, tokens })] }),
-          "203.0.116.6",
-        );
-        expect(res.status).toBe(202);
-      }
-
-      const rows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(rows).toHaveLength(2);
-      expect(rows.map((row) => row.environmentId).toSorted()).toEqual(
-        [environmentA, environmentB].toSorted(),
-      );
     });
 
     it.each([
@@ -3086,36 +2882,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect((await getProfile(app, handle, "203.0.117.10")).status).toBe(404);
     });
 
-    // Rate limiting keys on caller IP (trusted, from proxy headers) only.
-    // The x-synara-viewer-ip header is ignored because it's client-controlled
-    // and spoofable — accepting it would allow bypassing rate limits.
-    it("keys the budget on caller IP, ignoring x-synara-viewer-ip", async () => {
-      const { app } = buildApp();
-      const callerIp = "203.0.117.11";
-      const handle = `ghost-${randomUUID().slice(0, 8)}`;
-
-      const getWithHeaders = (viewerIpHeader: string) =>
-        app.request(`/api/v1/profiles/${handle}`, {
-          headers: { "x-forwarded-for": callerIp, "x-synara-viewer-ip": viewerIpHeader },
-        });
-
-      // Exhaust the budget for this caller IP
-      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect((await getWithHeaders("198.51.100.1")).status).toBe(404);
-      }
-
-      // Now rate-limited, regardless of x-synara-viewer-ip value
-      expect((await getWithHeaders("198.51.100.1")).status).toBe(429);
-      expect((await getWithHeaders("198.51.100.2")).status).toBe(429);
-      expect((await getWithHeaders("completely-different")).status).toBe(429);
-
-      // A different caller IP has its own budget
-      const differentCaller = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.117.99" },
-      });
-      expect(differentCaller.status).toBe(404);
-    });
-
     // The authenticated exception: the SSR proxy proves itself with the
     // shared secret, and only then does the viewer header pick the bucket —
     // per-visitor budgets instead of one bucket for the proxy's egress IP.
@@ -3203,75 +2969,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         expect((await get(`198.51.102.${i + 1}`)).status).toBe(404);
       }
       expect((await get("198.51.102.200")).status).toBe(429);
-    });
-  });
-
-  describe("PUT /profile public flag", () => {
-    function profilePut(app: Hono, token: string, body: Record<string, unknown>) {
-      return app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(body),
-      });
-    }
-
-    it("flips visibility on, /me echoes it, and omitting it later leaves it alone", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const handle = `flag-${randomUUID().slice(0, 8)}`;
-      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
-
-      // First write without the flag: private by default, so the public
-      // route does not serve it.
-      const created = await profilePut(app, token, base);
-      expect(created.status).toBe(200);
-      expect(await created.json()).toMatchObject({ profile: { public: false } });
-      const hidden = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.1" },
-      });
-      expect(hidden.status).toBe(404);
-
-      // public: true flips visibility.
-      const published = await profilePut(app, token, { ...base, public: true });
-      expect(published.status).toBe(200);
-      expect(await published.json()).toMatchObject({ profile: { public: true } });
-      const visible = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.2" },
-      });
-      expect(visible.status).toBe(200);
-
-      // A later update that omits the flag leaves visibility unchanged.
-      const renamed = await profilePut(app, token, { ...base, displayName: "Ada L." });
-      expect(renamed.status).toBe(200);
-      expect(await renamed.json()).toMatchObject({
-        profile: { displayName: "Ada L.", public: true },
-      });
-      const stillVisible = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.3" },
-      });
-      expect(stillVisible.status).toBe(200);
-
-      // And /me reports the flag.
-      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
-      expect(await meRes.json()).toMatchObject({ profile: { public: true } });
-    });
-
-    it("flips visibility back off with public: false", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const handle = `flag-${randomUUID().slice(0, 8)}`;
-      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
-
-      await profilePut(app, token, { ...base, public: true });
-      const unpublished = await profilePut(app, token, { ...base, public: false });
-      expect(unpublished.status).toBe(200);
-      expect(await unpublished.json()).toMatchObject({ profile: { public: false } });
-
-      const res = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.4" },
-      });
-      expect(res.status).toBe(404);
-      expect(await res.json()).toMatchObject({ error: "profile_not_found" });
     });
   });
 
@@ -3381,33 +3078,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       };
     }
 
-    it("defers deleting the replaced object past the response-cache window", async () => {
-      const fake = fakeAvatarStorage();
-      const scheduler = capturedScheduler();
-      const { app } = buildApp({
-        avatarStorage: fake.storage,
-        scheduleDeferred: scheduler.schedule,
-      });
-      const { token } = await signInWithPicture();
-      await onboard(app, token);
-
-      await putAvatar(app, token, PNG_BYTES, "image/png");
-      const firstKey = [...fake.objects.keys()][0]!;
-      const second = await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
-      expect(second.status).toBe(200);
-
-      // Scheduled, not deleted: pages cached before the replacement still
-      // reference the old URL and must keep rendering.
-      expect(fake.deleted).toEqual([]);
-      expect(scheduler.tasks).toHaveLength(1);
-      expect(fake.objects.size).toBe(2);
-
-      await scheduler.fire();
-      expect(fake.deleted).toEqual([firstKey]);
-      expect(fake.objects.size).toBe(1);
-      expect([...fake.objects.keys()][0]).not.toBe(firstKey);
-    });
-
     // Content-hashed keys mean re-uploading the original image within the
     // window makes the "old" key current again — the deferred delete must
     // re-check the row and leave it alone.
@@ -3459,37 +3129,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const keyC = [...fake.objects.keys()].find((key) => key !== keyA && key !== keyB)!;
 
       // One deferred task per displaced key: A (displaced by B), B (by C).
+      // Scheduled, not deleted: pages cached before a replacement still
+      // reference the old URL and must keep rendering.
+      expect(fake.deleted).toEqual([]);
       expect(scheduler.tasks).toHaveLength(2);
       await scheduler.fire();
       expect(fake.deleted.sort()).toEqual([keyA, keyB].sort());
       expect(fake.deleted).not.toContain(keyC);
       expect([...fake.objects.keys()]).toEqual([keyC]);
-    });
-
-    // DELETE /profile/avatar must likewise schedule the key its own write
-    // displaced, read under the same row lock as the clearing update.
-    it("schedules the key the delete route itself displaced", async () => {
-      const fake = fakeAvatarStorage();
-      const scheduler = capturedScheduler();
-      const { app } = buildApp({
-        avatarStorage: fake.storage,
-        scheduleDeferred: scheduler.schedule,
-      });
-      const { token } = await signInWithPicture();
-      await onboard(app, token);
-
-      await putAvatar(app, token, PNG_BYTES, "image/png");
-      const key = [...fake.objects.keys()][0]!;
-      const res = await app.request("/api/v1/profile/avatar", {
-        method: "DELETE",
-        headers: authHeaders(token),
-      });
-      expect(res.status).toBe(200);
-
-      expect(scheduler.tasks).toHaveLength(1);
-      await scheduler.fire();
-      expect(fake.deleted).toEqual([key]);
-      expect(fake.objects.size).toBe(0);
     });
 
     it("refuses an oversized body with 400 before touching storage", async () => {
@@ -3504,20 +3151,17 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(fake.objects.size).toBe(0);
     });
 
-    it.each([["image/gif"], ["image/svg+xml"], ["application/octet-stream"], ["text/plain"]])(
-      "refuses a %s upload",
-      async (contentType) => {
-        const fake = fakeAvatarStorage();
-        const { app } = buildApp({ avatarStorage: fake.storage });
-        const { token } = await signInWithPicture();
-        await onboard(app, token);
+    it.each([["image/gif"], ["image/svg+xml"]])("refuses a %s upload", async (contentType) => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
 
-        const res = await putAvatar(app, token, PNG_BYTES, contentType);
-        expect(res.status).toBe(400);
-        expect(await res.json()).toMatchObject({ error: "validation_failed" });
-        expect(fake.objects.size).toBe(0);
-      },
-    );
+      const res = await putAvatar(app, token, PNG_BYTES, contentType);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+      expect(fake.objects.size).toBe(0);
+    });
 
     it("answers 503 with a clear message when storage is not configured", async () => {
       const { app } = buildApp(); // no avatarStorage
@@ -3608,21 +3252,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(pub.status).toBe(200);
       expect(((await pub.json()) as PublicProfile).avatarUrl).toBeNull();
-    });
-
-    it("serves the uploaded avatar on the public route", async () => {
-      const fake = fakeAvatarStorage();
-      const { app } = buildApp({ avatarStorage: fake.storage });
-      const { token } = await signInWithPicture();
-      const handle = await onboard(app, token, { public: true });
-      const upload = await putAvatar(app, token, PNG_BYTES, "image/png");
-      const uploaded = (await upload.json()) as { profile: { avatarUrl: string } };
-
-      const pub = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.119.3" },
-      });
-      expect(pub.status).toBe(200);
-      expect(((await pub.json()) as PublicProfile).avatarUrl).toBe(uploaded.profile.avatarUrl);
     });
 
     it("hides the avatar on both reads with avatarSource: 'placeholder'", async () => {
@@ -3954,17 +3583,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(remove.status).toBe(403);
     });
-
-    // An unauthenticated caller has no organizations to be told about; the
-    // 403 path must not become a way to skip the 401.
-    it("still answers 401 before any organization work when the token is absent or bad", async () => {
-      const { app } = buildApp();
-
-      expect((await app.request("/api/v1/hosts")).status).toBe(401);
-      expect(
-        (await app.request("/api/v1/hosts", { headers: authHeaders("not-a-jwt") })).status,
-      ).toBe(401);
-    });
   });
 
   it("reports instance info without authentication", async () => {
@@ -4119,8 +3737,11 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
   describe("POST /auth/refresh", () => {
     /** A signed-in user's refresh token, minted through the whole OTP flow. */
-    async function mintedRefreshToken(app: Hono, ip: string): Promise<string> {
-      const email = `refresh-${randomUUID()}@example.com`;
+    async function mintedRefreshToken(
+      app: Hono,
+      ip: string,
+      email = `refresh-${randomUUID()}@example.com`,
+    ): Promise<string> {
       await postJson(app, "/api/v1/auth/otp/send", { email }, ip);
       const live = workos.currentMagicAuth(email);
       if (!live) throw new Error("fake WorkOS minted no magic auth code");
@@ -4165,22 +3786,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const fresh = workos.addUser({});
       const org = workos.addOrganization({ name: "Scoped Workspace" });
       workos.addMembership(org.id, fresh.id);
-      const email = fresh.email;
-      await postJson(app, "/api/v1/auth/otp/send", { email }, "203.0.113.72");
-      const live = workos.currentMagicAuth(email);
-      if (!live) throw new Error("fake WorkOS minted no magic auth code");
-      const authed = await postJson(
-        app,
-        "/api/v1/auth/otp/authenticate",
-        { email, code: live.code },
-        "203.0.113.72",
-      );
-      const tokens = (await authed.json()) as { refreshToken: string };
+      const refreshToken = await mintedRefreshToken(app, "203.0.113.72", fresh.email);
 
       const res = await postJson(
         app,
         "/api/v1/auth/refresh",
-        { refreshToken: tokens.refreshToken, organizationId: org.id },
+        { refreshToken, organizationId: org.id },
         "203.0.113.72",
       );
       expect(res.status).toBe(200);

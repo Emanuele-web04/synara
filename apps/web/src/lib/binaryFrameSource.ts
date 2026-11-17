@@ -9,6 +9,30 @@ import { makeSocketUrl } from "../wsTransport";
 
 export type FrameSourceResetReason = "closed" | "error" | "decode-failed";
 
+/**
+ * What a frame pane shows. `connecting` covers both the first socket and every
+ * reconnect after a `closed` reset; `error` waits for the pane's inputs to change.
+ */
+export type FrameStreamStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "unsupported" }
+  | { readonly kind: "connecting" }
+  | { readonly kind: "streaming" }
+  | { readonly kind: "error"; readonly message: string };
+
+/**
+ * Ceiling on the frame-socket reconnect backoff.
+ *
+ * Long enough that a server that stays down is not hammered, short enough that
+ * a restart is picked up without the user reopening the pane.
+ */
+const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
+
+/** Delay before reconnect attempt `attempt` (1-based): 500 ms doubling, capped at 5 s. */
+export function frameReconnectDelayMs(attempt: number): number {
+  return Math.min(500 * 2 ** (attempt - 1), FRAME_RECONNECT_MAX_DELAY_MS);
+}
+
 /** The narrow slice of WebSocket the frame path uses, so tests need no DOM. */
 export interface WebSocketLike {
   binaryType: string;

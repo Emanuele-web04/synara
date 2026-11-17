@@ -68,6 +68,7 @@ it.each([
               baseDir: home,
               hostIdentityPath: identityPath,
               sql,
+              initialDelayMs: 0,
             });
             try {
               yield* Effect.promise(() =>
@@ -273,6 +274,7 @@ it.each(recoveryCases)(
               baseDir: home,
               hostIdentityPath: identityPath,
               sql,
+              initialDelayMs: 0,
             });
             try {
               yield* Effect.promise(() =>
@@ -445,12 +447,16 @@ it("reads the watch list while devices connect and, after a grace window, once a
     sql: {} as SqlClient.SqlClient,
     remoteSessions: devices.remoteSessions,
   });
-  // Small steps: each read finishes real file I/O before it schedules the next.
+  // One cadence per step: each read finishes real file I/O before it schedules the next.
   const advance = async (ms: number) => {
-    for (let left = ms; left >= 0; left -= 5_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(left, 5_000));
-      await waitForIo();
-      if (left <= 5_000) break;
+    for (let left = ms; left >= 0; left -= 15_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(left, 15_000));
+      // A finished read schedules the next one: wait for that timer, not a fixed delay.
+      const until = Date.now() + 2_000;
+      while (vi.getTimerCount() === 0 && Date.now() < until)
+        await new Promise((resolve) => setImmediate(resolve));
+      await waitForIo(10);
+      if (left <= 15_000) break;
     }
   };
   try {

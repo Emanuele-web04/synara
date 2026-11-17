@@ -2,7 +2,8 @@
 // Purpose: Shared local-image loading state and error card, plus the panel
 //          preview surface used by editor file and diff views.
 // Layer: Web UI primitive
-// Exports: useLocalImagePreview, LocalImageErrorCard, LocalImagePreview
+// Exports: useLocalImagePreview, useLocalImageDownloadClick, LocalImageErrorCard,
+//          LocalImagePreview
 // Notes: Pure UI; image URL building lives in `~/lib/localImageUrls`. The chat
 //        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
 //        error card with its own inline frame/overlay rendering.
@@ -156,6 +157,7 @@ export function useLocalImageDownloadClick(input: {
   downloadName: string;
   errorTitle?: string | undefined;
   resolveDownloadUrl?: (() => Promise<string>) | undefined;
+  download?: typeof downloadUrlAsBlob | undefined;
 }) {
   const { t } = useTranslation();
 
@@ -165,7 +167,7 @@ export function useLocalImageDownloadClick(input: {
     void Promise.resolve()
       .then(async () => {
         const url = input.resolveDownloadUrl ? await input.resolveDownloadUrl() : input.downloadUrl;
-        await downloadUrlAsBlob({ url, filename: input.downloadName });
+        await (input.download ?? downloadUrlAsBlob)({ url, filename: input.downloadName });
       })
       .catch((error: unknown) => {
         toastManager.add({
@@ -178,13 +180,17 @@ export function useLocalImageDownloadClick(input: {
   };
 }
 
-// Span-only markup so the card stays valid inside markdown paragraphs.
+// Span-only markup so the card stays valid inside markdown paragraphs. The copy
+// defaults to images; other media (e.g. LocalVideoPreview) pass their own.
 export function LocalImageErrorCard(props: {
   downloadUrl: string;
   /** `downloadName` from useLocalImagePreview. */
   downloadName: string;
   className?: string | undefined;
-  downloadAriaLabel?: string;
+  title?: string | undefined;
+  subtitle?: string | undefined;
+  downloadAriaLabel?: string | undefined;
+  retryAriaLabel?: string | undefined;
   onDownloadClick?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
   onRetry?: (() => void) | undefined;
 }) {
@@ -208,9 +214,11 @@ export function LocalImageErrorCard(props: {
         <TriangleAlertIcon className="size-4" />
       </span>
       <span className="local-image-error__body">
-        <span className="local-image-error__title">{t("common:couldnTOpenThisImage")}</span>
+        <span className="local-image-error__title">
+          {props.title ?? t("common:couldnTOpenThisImage")}
+        </span>
         <span className="local-image-error__subtitle">
-          {t("common:theFileMayHaveMovedOrBeUnavailable")}
+          {props.subtitle ?? t("common:theFileMayHaveMovedOrBeUnavailable")}
         </span>
       </span>
       {props.onRetry ? (
@@ -218,7 +226,7 @@ export function LocalImageErrorCard(props: {
           <Button
             variant="outline"
             size="chip"
-            aria-label={t("common:image_retryPreview")}
+            aria-label={props.retryAriaLabel ?? t("common:image_retryPreview")}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();

@@ -94,12 +94,41 @@ export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
 const READ_VERBS = new Set(["Read", "Reading"]);
 const SEARCH_VERBS = new Set(["Searched", "Searching", "Found", "Finding"]);
 // Provider tools that only read or search, named the way Claude and ACP agents
-// report them (`Read`, `Grep`, `Glob`, `WebSearch`).
-const READ_TOOL_NAMES = new Set(["read", "readfile", "viewfile"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "glob", "websearch", "findfiles", "searchfiles"]);
+// report them (`Read`, `read_file`, `view`, `Grep`, `Glob`, `search`, `find`).
+// Keep in sync with the icon matchers in TimelineWorkEntryRow.tsx.
+const READ_TOOL_NAMES = new Set([
+  "read",
+  "reading",
+  "readfile",
+  "readfiles",
+  "readtextfile",
+  "view",
+  "viewfile",
+  "viewtextfile",
+  "hashlineread",
+]);
+const SEARCH_TOOL_NAMES = new Set([
+  "grep",
+  "glob",
+  "websearch",
+  "search",
+  "searching",
+  "searched",
+  "find",
+  "finding",
+  "found",
+  "findfiles",
+  "searchfiles",
+  "searchtool",
+  "hashlinegrep",
+]);
 
 function normalizedToolName(entry: WorkLogEntry): string {
-  return (entry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  // toolName wins; the title's first word is the fallback for ACP calls that
+  // arrive with only a `kind` and no native name ("Read /home/x").
+  const title = entry.command || entry.rawCommand ? undefined : entry.toolTitle;
+  const name = entry.toolName ?? title?.trim().split(/\s+/, 1)[0] ?? "";
+  return name.toLowerCase().replace(/[^a-z]/g, "");
 }
 
 function classifyCommandVerb(verb: string): ToolCallSummaryCategory {

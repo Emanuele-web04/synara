@@ -139,6 +139,8 @@ export interface AccountUsageReporterDeps {
   readonly debounceMs?: number;
   readonly failureBackoffMs?: number;
   readonly backfillDays?: number;
+  /** Pause between pushes of one multi-push flush; injectable so tests need not wait 2.1 s each. */
+  readonly pushPaceMs?: number;
   readonly now?: () => number;
   /**
    * One line per failure streak and, rate-limited, one per slow flush;
@@ -1015,7 +1017,9 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
           // Paced under the service's per-client push budget; a single-push
           // flush (the steady state) never waits.
           if (index > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, MULTI_PUSH_PACE_MS));
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, deps.pushPaceMs ?? MULTI_PUSH_PACE_MS),
+            );
             if (stopped) return;
           }
           await push(

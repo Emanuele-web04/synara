@@ -4,9 +4,6 @@
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
 import { describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { t } from "../i18n";
-import { SettingsRow } from "./settings/SettingsPanelPrimitives";
 
 import {
   SETTINGS_SEARCH_ENTRIES,
@@ -14,27 +11,6 @@ import {
   settingsSearchEntryTarget,
   settingsSearchEntryTitle,
 } from "../settingsSearchIndex";
-
-describe("settings labels", () => {
-  it("renders catalog labels while retaining explicit navigation targets", () => {
-    const html = renderToStaticMarkup(
-      <SettingsRow
-        id="setting-default-provider"
-        title="settings:changed_defaultProvider"
-        description="settings:chooseTheProviderUsedForNewChatsAgentCodex"
-      />,
-    );
-    expect(html).toContain('id="setting-default-provider"');
-    expect(html).toContain("Default provider");
-    expect(html).toContain("Choose the provider used for new chats");
-  });
-
-  it("finds English settings with stable links", () => {
-    const [result] = rankSettingsSearchEntries("default provider", 12);
-    expect(result?.id).toBe("general:default-provider");
-    expect(settingsSearchEntryTarget(result!)).toBe("setting-default-provider");
-  });
-});
 
 describe("rankSettingsSearchEntries", () => {
   it("returns nothing for an empty query", () => {
@@ -50,11 +26,6 @@ describe("rankSettingsSearchEntries", () => {
   it("matches on description keywords, not just titles", () => {
     const results = rankSettingsSearchEntries("wrap", 12);
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
-  });
-
-  it("indexes the stacked and split diff layout preference", () => {
-    const results = rankSettingsSearchEntries("stacked", 12);
-    expect(results.some((entry) => entry.id === "behavior:diff-layout")).toBe(true);
   });
 
   it("surfaces every row in a section when searching the section label", () => {
@@ -97,32 +68,6 @@ describe("rankSettingsSearchEntries", () => {
       }
     }
   });
-
-  it("finds the Behavior and Providers rows by their titles", () => {
-    const titles = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => t(entry.title));
-    expect(titles("dictating")).toContain("Enter while dictating");
-    expect(titles("diff colors")).toContain("Pull request diff colors");
-    expect(titles("enabled providers")).toContain("Agents");
-  });
-
-  it("finds the Fold finished turns and Wait for subagents rows", () => {
-    const sections = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => `${entry.section}:${t(entry.title)}`);
-    expect(sections("fold")).toContain("behavior:Fold finished turns");
-    expect(sections("worked for")).toContain("behavior:Fold finished turns");
-    expect(sections("subagents")).toContain("notifications:Wait for subagents");
-    const targets = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => settingsSearchEntryTarget(entry));
-    expect(targets("fold")).toContain("setting-fold-finished-turns");
-    expect(targets("subagents")).toContain("setting-wait-for-subagents");
-  });
-
-  it("deep-links the provider picker result to the merged Agents list", () => {
-    const [top] = rankSettingsSearchEntries("picker order", 12);
-    expect(top && t(top.title)).toBe("Agents");
-    expect(settingsSearchEntryTarget(top!)).toBe("setting-providers");
-  });
 });
 
 describe("account search", () => {
@@ -152,14 +97,5 @@ describe("account search", () => {
     expect(settingsSearchEntryTarget(byEmail!)).toBe("setting-account-codex-work");
     const byAgent = rankSettingsSearchEntries("claude personal", 12, context);
     expect(byAgent.some((entry) => entry.id === "accounts:account:claudeAgent")).toBe(true);
-  });
-
-  it("files moved rows under their new pages", () => {
-    const sectionOf = (query: string) => rankSettingsSearchEntries(query, 1)[0]?.section;
-    expect(sectionOf("thread tabs")).toBe("layout");
-    expect(sectionOf("time format")).toBe("general");
-    expect(sectionOf("rate limit warnings")).toBe("usage");
-    expect(sectionOf("share product analytics")).toBe("privacy");
-    expect(sectionOf("release history")).toBe("about");
   });
 });

@@ -823,8 +823,21 @@ describe("claudeUsageFetcher durable recovery identity", () => {
         JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "synthetic-other-account" } }),
         "utf8",
       );
-    if (mode === "implicit profile")
-      mkdirSync(nodePath.join(context.homeDir, ".config", "anthropic"), { recursive: true });
+    if (mode === "implicit profile") {
+      const profileHome = nodePath.join(context.homeDir, ".config", "anthropic");
+      mkdirSync(profileHome, { recursive: true });
+      writeFileSync(nodePath.join(profileHome, "profiles.json"), "{}", "utf8");
+    }
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
+  });
+
+  it("does not treat an empty Anthropic profile home as a profile", async () => {
+    const { context } = fixture();
+    const profileHome = nodePath.join(context.homeDir, ".config", "anthropic");
+    mkdirSync(profileHome, { recursive: true });
+    // Tools create the directory ahead of use; nothing inside can select credentials.
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).not.toBeNull();
+    writeFileSync(nodePath.join(profileHome, "profiles.json"), "{}", "utf8");
     expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
   });
 

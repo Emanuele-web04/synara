@@ -131,7 +131,7 @@ import {
 } from "../../codexProcessEnv.ts";
 import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
-import { resolvePiInstallation } from "../piSdkImports.ts";
+import { PiNotInstalledError, resolvePiInstallation } from "../piSdkImports.ts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -1218,6 +1218,7 @@ export const makeCheckCodexProviderStatus = (
         driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1437,6 +1438,7 @@ export const makeCheckClaudeProviderStatus = (
         driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1654,6 +1656,7 @@ export const makeCheckGrokProviderStatus = (
         driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1753,6 +1756,7 @@ export const makeCheckDroidProviderStatus = (
         driver: DROID_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1898,6 +1902,7 @@ export const makeCheckOpenCodeProviderStatus = (
         driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1984,6 +1989,7 @@ export const checkPiProviderStatus = (
         driver: PI_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(installation.failure instanceof PiNotInstalledError ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2092,6 +2098,7 @@ export const checkOmpProviderStatus = (
         driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2175,6 +2182,7 @@ export const checkAntigravityProviderStatus = (
         driver: ANTIGRAVITY_PROVIDER,
         status: "error",
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown",
         checkedAt,
         message:
@@ -2291,6 +2299,7 @@ export const makeCheckCursorProviderStatus = (
         driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2524,6 +2533,7 @@ export const makeCheckDevinProviderStatus = (
         driver: DEVIN_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:

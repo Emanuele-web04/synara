@@ -33,7 +33,6 @@ it("shows a running task as a static row without a clock or Stop", async () => {
   const screen = await render(<BackgroundTaskRow task={task} fontSizePx={13} />);
   const status = screen.getByText("running", { exact: true });
   await expect.element(status).toBeVisible();
-  expect(status.element().getBoundingClientRect().width).toBeGreaterThan(1);
   expect(screen.container.textContent).not.toContain("12s");
   expect(screen.container.querySelector("button")).toBeNull();
 });

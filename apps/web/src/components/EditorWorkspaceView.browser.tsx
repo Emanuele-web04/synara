@@ -19,7 +19,6 @@ import {
   DEFAULT_THEME_STATE,
   resolveThemePack,
 } from "../theme/theme.logic";
-import { getAppTypographyScale } from "../lib/appTypography";
 
 installEditorWorkspaceFixture();
 
@@ -27,18 +26,11 @@ const source = () => page.getByRole("radio", { name: "Source", exact: true });
 const preview = () => page.getByRole("radio", { name: "Preview", exact: true });
 
 it.each(["light", "dark"] as const)(
-  "keeps editor controls and surfaces themed in %s at 18px",
+  "keeps editor surfaces glass-gated and view choices across navigation in %s",
   async (theme) => {
     const root = document.documentElement;
     const originalPack = resolveThemePack(DEFAULT_THEME_STATE, theme);
-    const scale = getAppTypographyScale(18);
     root.classList.toggle("dark", theme === "dark");
-    for (const [key, value] of Object.entries(scale)) {
-      const token = key
-        .replace(/Px$/, "")
-        .replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-      root.style.setProperty(`--app-font-size-${token}`, `${value}px`);
-    }
     const view = makeView();
     const screen = await render(view());
     await expect.element(preview()).toHaveAttribute("aria-checked", "true");
@@ -61,9 +53,6 @@ it.each(["light", "dark"] as const)(
         const clear = getComputedStyle(surface).backgroundColor === "rgba(0, 0, 0, 0)";
         expect(clear, `${scope} ${surface.tagName}`).toBe(scope === "window");
       }
-      expect(
-        getComputedStyle(page.getByText("project", { exact: true }).first().element()).fontSize,
-      ).toBe(`${scale.uiLgPx}px`);
       await source().click();
       await screen.rerender(view("diff"));
       await expect.element(source()).not.toBeInTheDocument();

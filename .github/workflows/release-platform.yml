@@ -6,6 +6,11 @@ on:
       runner:
         required: true
         type: string
+      # The caller's matrix label. The caller job is named `Build <label>`, so
+      # this workflow's jobs are listed as `Build <label> / <job name>`.
+      label:
+        required: true
+        type: string
       platform:
         required: true
         type: string
@@ -354,8 +359,11 @@ jobs:
           if-no-files-found: error
 
       # The Intel app is cross-built here and launched by qualify_intel below.
+      # The smoke passes in under a minute and its own proof deadline is 60 s; a
+      # step that runs longer is hung and must fail here, not at the job timeout.
       - name: Smoke packaged desktop startup
         if: inputs.platform != 'mac' || inputs.arch != 'x64'
+        timeout-minutes: 10
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
@@ -422,12 +430,17 @@ jobs:
   # Rosetta 2 ran the cross-built Intel app too slowly to qualify it (startup
   # took 135s, then over 180s). Launch it on real Intel hardware instead. The
   # caller's publishers await this job through the reusable workflow's result.
+  #
+  # This job starts with the packaging job instead of after it: the Intel
+  # runner's checkout and install (about 90 s) no longer extend the release.
+  # It then waits for this attempt's packaging job to succeed before it
+  # downloads that job's artifact, so it qualifies the same bytes as before and
+  # fails when packaging fails. The timeout covers the packaging job's own.
   qualify_intel:
     name: Qualify on Intel
-    needs: build
     if: inputs.platform == 'mac' && inputs.arch == 'x64'
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    timeout-minutes: 100
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -450,13 +463,38 @@ jobs:
       - name: Install verification dependencies
         run: bun install --frozen-lockfile --ignore-scripts --filter '@synara/scripts' --filter '@synara/cli'
 
+      # The run attempt's job list carries over jobs a partial rerun did not
+      # repeat, so a rerun waits for the job that produced this attempt's app.
+      - name: Wait for this attempt's packaged Intel app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGING_JOB: Build ${{ inputs.label }} / Package and qualify
+        run: node scripts/wait-for-release-job.ts --job "$PACKAGING_JOB" --timeout-minutes 85
+
+      - name: Find the packaged Intel artifact ID
+        id: intel_package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=desktop-mac-x64" --jq '
+            select(.total_count == 1) | .artifacts[]
+            | select(.name == "desktop-mac-x64" and .expired == false) | .id
+          ')"
+          if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Expected one available desktop-mac-x64 artifact for this workflow run." >&2
+            exit 1
+          fi
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+
       - name: Download the packaged Intel app
         uses: actions/download-artifact@v8
         with:
-          name: desktop-${{ inputs.platform }}-${{ inputs.arch }}
+          artifact-ids: ${{ steps.intel_package.outputs.id }}
           path: release-publish
 
       - name: Smoke packaged desktop startup on Intel
+        timeout-minutes: 10
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
@@ -465,3 +503,19 @@ jobs:
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
             --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
+
+      # A packaging-only rerun can replace the artifact without rerunning this
+      # job. The publisher can use only the immutable ID smoked here.
+      - name: Record the qualified Intel artifact ID
+        shell: bash
+        env:
+          INTEL_ARTIFACT_ID: ${{ steps.intel_package.outputs.id }}
+        run: printf '%s\n' "$INTEL_ARTIFACT_ID" > desktop-mac-x64.id
+
+      - name: Upload Intel qualification receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: intel-qualification-receipt
+          path: desktop-mac-x64.id
+          overwrite: true
+          if-no-files-found: error

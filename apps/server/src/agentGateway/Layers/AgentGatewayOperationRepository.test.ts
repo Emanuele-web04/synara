@@ -8,7 +8,12 @@ import { expect } from "vitest";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { notifyAfterCommit } from "../../persistence/commitNotifications.ts";
-import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
+import {
+  AGENT_GATEWAY_OPERATION_TRANSITIONS,
+  AgentGatewayOperationRepository,
+  canTransitionAgentGatewayOperation,
+  type AgentGatewayOperationStatus,
+} from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayOperationRepositoryLive } from "./AgentGatewayOperationRepository.ts";
 
 const layer = it.layer(
@@ -352,6 +357,88 @@ layer("AgentGatewayOperationRepository", (it) => {
         ).length,
         1,
       );
+    }),
+  );
+
+  // Drive every repository write from every status. Guarded writes must follow the declared
+  // table; unguarded ones are pinned as unguarded, because they rely on `markDispatching`
+  // electing a single writer per operation rather than on a SQL status check.
+  it.effect("moves an operation only along the declared lifecycle transitions", () =>
+    Effect.gen(function* () {
+      const repository = yield* AgentGatewayOperationRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-07-16T01:00:00.000Z";
+      const statuses = Object.keys(
+        AGENT_GATEWAY_OPERATION_TRANSITIONS,
+      ) as AgentGatewayOperationStatus[];
+      const helpers: Record<
+        string,
+        {
+          readonly to: AgentGatewayOperationStatus;
+          readonly from: ReadonlyArray<AgentGatewayOperationStatus>;
+          readonly guarded: boolean;
+          readonly run: (operationId: string) => Effect.Effect<unknown, unknown>;
+        }
+      > = {
+        markDispatching: {
+          to: "dispatching",
+          from: ["reserved"],
+          guarded: true,
+          run: (operationId) => repository.markDispatching({ operationId, now }),
+        },
+        markCompensating: {
+          to: "compensating",
+          from: ["reserved", "dispatching", "compensating"],
+          guarded: true,
+          run: (operationId) => repository.markCompensating({ operationId, now }),
+        },
+        recordCompensationFailure: {
+          to: "compensating",
+          from: ["dispatching", "compensating"],
+          guarded: true,
+          run: (operationId) =>
+            repository.recordCompensationFailure({ operationId, errorJson: "{}", now }),
+        },
+        complete: {
+          to: "completed",
+          from: statuses,
+          guarded: false,
+          run: (operationId) => repository.complete({ operationId, resultJson: "{}", now }),
+        },
+        fail: {
+          to: "failed",
+          from: statuses,
+          guarded: false,
+          run: (operationId) => repository.fail({ operationId, errorJson: "{}", now }),
+        },
+      };
+
+      for (const [name, helper] of Object.entries(helpers)) {
+        for (const from of statuses) {
+          const operationId = `lifecycle-${name}-${from}`;
+          yield* repository.reserve({
+            ...base,
+            operationId,
+            callerTurnId: `turn-${operationId}`,
+            requestId: `request-${operationId}`,
+          });
+          yield* sql`
+            UPDATE agent_gateway_operations SET status = ${from} WHERE operation_id = ${operationId}
+          `;
+
+          yield* helper.run(operationId);
+
+          const acts = helper.from.includes(from);
+          assert.equal(
+            (yield* repository.getById(operationId))?.status,
+            acts ? helper.to : from,
+            `${name}: ${from}`,
+          );
+          if (helper.guarded && acts && from !== helper.to) {
+            assert.isTrue(canTransitionAgentGatewayOperation(from, helper.to), `${name}: ${from}`);
+          }
+        }
+      }
     }),
   );
 });

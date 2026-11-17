@@ -16,6 +16,8 @@ interface ComposerTipRowBaseProps {
   icon: ReactNode;
   message: ReactNode;
   onDismiss: () => void;
+  /** Accessible name for the dismiss button; defaults to "Dismiss tip". */
+  dismissLabel?: string;
   testId: string;
 }
 
@@ -31,6 +33,7 @@ export function ComposerTipRow({
   actionLabel,
   onAction,
   onDismiss,
+  dismissLabel,
   actionDisabled,
   testId,
 }: ComposerTipRowProps) {
@@ -56,7 +59,7 @@ export function ComposerTipRow({
             variant="ghost"
             size="icon-chip"
             className="size-5 rounded-full sm:size-5"
-            label={t("chat:dismissTip")}
+            label={dismissLabel ?? t("chat:dismissTip")}
             onClick={onDismiss}
           >
             <XIcon />

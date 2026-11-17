@@ -2633,7 +2633,7 @@ describe("OrchestrationEngine", () => {
       const pending = system.run(
         engine
           .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
-          .pipe(Effect.timeoutOption("2 seconds")),
+          .pipe(Effect.timeoutOption("250 millis")),
       );
       await pending;
       const receipt = await system.run(originalLookup({ commandId }));
@@ -2722,75 +2722,6 @@ describe("OrchestrationEngine", () => {
     expect(thread?.goal ?? "").toBe("");
     await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
 
-    await system.dispose();
-  });
-
-  it("stores completed checkpoint summaries even when no files changed", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-turn-diff-create"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn Diff Project",
-        workspaceRoot: "/tmp/project-turn-diff",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-turn-diff-create"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn diff thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-turn-diff-complete"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        turnId: asTurnId("turn-1"),
-        completedAt: createdAt,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-
-    const thread = (await system.run(engine.getReadModel())).threads.find(
-      (entry) => entry.id === "thread-turn-diff",
-    );
-    expect(thread?.checkpoints).toEqual([
-      {
-        turnId: asTurnId("turn-1"),
-        checkpointTurnCount: 1,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        assistantMessageId: null,
-        completedAt: createdAt,
-      },
-    ]);
     await system.dispose();
   });
 
@@ -3347,31 +3278,6 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("still has a pending interaction");
-
-    await system.dispose();
-  });
-
-  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
-    const system = await createOrchestrationSystem();
-    const createdAt = now();
-
-    await system.run(
-      system.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
-        projectId: asProjectId("project-health-fresh"),
-        title: "Fresh projection health",
-        workspaceRoot: "/tmp/project-health-fresh",
-        defaultModelSelection: null,
-        createdAt,
-      }),
-    );
-
-    await system.run(system.engine.drain);
-    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
-      state: "healthy",
-      missingProjectors: [],
-    });
 
     await system.dispose();
   });

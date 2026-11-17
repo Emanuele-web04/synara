@@ -32,7 +32,7 @@ import {
   type QueuedSteerGate,
 } from "../ChatView.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
-import { useChatLocalDispatch } from "./useChatLocalDispatch";
+import type { useChatLocalDispatch } from "./useChatLocalDispatch";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
 import { useComposerReferences } from "./useComposerReferences";
 import type { LateComposerSendHandlers } from "./chatSendTypes";

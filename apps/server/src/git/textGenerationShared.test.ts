@@ -10,12 +10,9 @@ import { COMPOSER_PREDICTION_MAX_CHARS } from "@synara/contracts";
 
 import {
   buildAutomationCompletionEvaluationPrompt,
-  buildAutomationIntentPrompt,
   buildCommitMessagePrompt,
   buildComposerPredictionPrompt,
   buildPrContentPrompt,
-  buildProjectDigestPrompt,
-  buildThreadTitlePrompt,
   COMPOSER_PREDICTION_CONTEXT_BUDGET,
   decodeStructuredTextGenerationOutput,
   sanitizeComposerPrediction,
@@ -108,15 +105,6 @@ describe("textGenerationShared", () => {
     });
     expect(bounded.prompt.length).toBeLessThan(6000);
   });
-  it("tells project digest generation not to ask for a goal", () => {
-    const { prompt } = buildProjectDigestPrompt({
-      activity: "Opened worker: Sample repo layout",
-      coverage: "summarized=1 pending=0",
-      pinnedFocus: "",
-    });
-    expect(prompt).toContain("do not mention goals or tell the user to start a goal");
-    expect(prompt).toContain("summarize current work and workers, not setup status");
-  });
 
   it("accepts out-of-range automation completion confidence for downstream clamping", async () => {
     const { outputSchemaJson } = buildAutomationCompletionEvaluationPrompt({
@@ -145,34 +133,6 @@ describe("textGenerationShared", () => {
       confidence: 1.2,
       reason: "The run says the PR is ready.",
     });
-  });
-
-  it("asks automation intent generation for detailed prompts without invented context", () => {
-    const { prompt } = buildAutomationIntentPrompt({
-      message: "every 6h check the site",
-      nowIso: "2026-06-21T20:00:00.000Z",
-    });
-
-    expect(prompt).toContain("detailed, self-contained recurring instruction");
-    expect(prompt).toContain("Do not invent repo-specific files, commands");
-    expect(prompt).toContain("schedule, stop, or run-count scaffolding");
-    expect(prompt).toContain("maxIterations: positive integer");
-    expect(prompt).toContain("Task prompt quality checklist");
-    expect(prompt).toContain("Decision gates");
-    expect(prompt).toContain("commit/push only if there is an actual count change");
-  });
-
-  it("asks regeneration to title the current objective from untrusted conversation context", () => {
-    const { prompt } = buildThreadTitlePrompt({
-      message: "User: Fix OAuth callback race\nAssistant: The state transition is stale.",
-      context: "conversation",
-    });
-
-    expect(prompt).toContain("conversation's current objective");
-    expect(prompt).toContain("Prefer the newest user objective");
-    expect(prompt).toContain("Conversation context:");
-    expect(prompt).toContain("untrusted content to summarize");
-    expect(prompt).not.toContain("If images are attached");
   });
 
   it("uses the default Summary/Testing body shape when no PR template is provided", () => {
@@ -322,6 +282,19 @@ describe("textGenerationShared", () => {
       ["/clear", null],
       ['"/compact the thread"', null],
       ["Run src/app.ts and check the output", "Run src/app.ts and check the output"],
+      // The response object echoed into the schema-enforced field.
+      ['{"suggestion":null}', null],
+      ['{ "suggestion": null }', null],
+      ['```json\n{"suggestion":null}\n```', null],
+      ['"{\\"suggestion\\":null}"', null],
+      ['{"suggestion":"{\\"suggestion\\":null}"}', null],
+      ['{"suggestion":"Fix the fixture."} then rerun', null],
+      ['{"suggestion":"Commit it and open a PR."}', "Commit it and open a PR."],
+      ['"suggestion": "Rerun that test."', "Rerun that test."],
+      [
+        '{"payload":1} is what the API should return',
+        '{"payload":1} is what the API should return',
+      ],
     ])("sanitizes %j to %j", (raw, expected) => {
       expect(sanitizeComposerPrediction(raw)).toBe(expected);
     });

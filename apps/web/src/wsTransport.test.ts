@@ -43,7 +43,6 @@ import {
   makeFeatureSocketUrl,
   makeNegotiateHttpUrl,
   getResnapshotRetryDelayMs,
-  getSnapshotFaultRetryDelayMs,
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
   MAX_PROJECT_FILE_WATCH_RETRY_ATTEMPTS,
@@ -311,11 +310,49 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-async function waitForSockets(count: number): Promise<void> {
-  for (let attempt = 0; attempt < 50 && sockets.length < count; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+// vi.waitFor polls on a real 50 ms interval even under fake timers, so a 500 ms
+// reconnect backoff costs real time. Under fake timers advance the clock instead.
+async function waitUntil(
+  assertion: () => void | Promise<void>,
+  { timeout = 1_000 }: { timeout?: number } = {},
+): Promise<void> {
+  if (!vi.isFakeTimers()) {
+    await vi.waitFor(assertion, { timeout });
+    return;
   }
-  expect(sockets.length).toBeGreaterThanOrEqual(count);
+  let lastError: unknown;
+  for (let elapsed = 0; elapsed <= timeout; elapsed += 25) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await vi.advanceTimersByTimeAsync(25);
+  }
+  throw lastError;
+}
+
+// Drives the fake clock until `promise` settles, then returns it for assertions.
+async function settleWithClock<T>(promise: Promise<T>): Promise<T> {
+  let done = false;
+  const tracked = promise.then(
+    () => void (done = true),
+    () => void (done = true),
+  );
+  for (let tick = 0; tick < 400 && !done; tick += 1) await vi.advanceTimersByTimeAsync(25);
+  await tracked;
+  return promise;
+}
+
+async function waitForSockets(count: number): Promise<void> {
+  await waitUntil(() => expect(sockets.length).toBeGreaterThanOrEqual(count));
+}
+
+// Reconnect backoff waits (500 ms and up) run on fake time so tests do not sleep.
+function useFakeClock(): void {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
 }
 
 beforeEach(() => {
@@ -343,6 +380,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   globalThis.WebSocket = originalWebSocket;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -364,10 +402,10 @@ it("keeps a silent open socket and RPC alive until a late response", async () =>
   bindWindowTimersToCurrentGlobals();
   const transport = new WsTransport("ws://localhost:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
     socket.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     socket.onSend = null;
     const start = socket.sent.length;
     const pending = transport.request(
@@ -398,9 +436,9 @@ it("keeps a silent open socket and RPC alive until a late response", async () =>
     );
     expect(await verdict).toBeUndefined();
     socket.close(1006, "real connection loss after recovery");
-    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    await waitUntil(() => expect(sockets).toHaveLength(2));
     sockets[1]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     await vi.advanceTimersByTimeAsync(1000);
     expect(sockets).toHaveLength(2);
   } finally {
@@ -420,13 +458,13 @@ it.each([false, true])(
     );
     const transport = new WsTransport("ws://localhost:3020");
     try {
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       if (recovery) {
         sockets[0]!.serveVoidRpc();
-        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        await waitUntil(() => expect(transport.getState()).toBe("open"));
         const recovering = (transport as unknown as WsTransportInternals).reconnect();
         void recovering.catch(() => undefined);
-        await vi.waitFor(() => expect(sockets).toHaveLength(2));
+        await waitUntil(() => expect(sockets).toHaveLength(2));
       }
       const socket = sockets[recovery ? 1 : 0]!;
       socket.open();
@@ -448,7 +486,7 @@ it.each([false, true])(
           exit: { _tag: "Success", value: null },
         }),
       );
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
     } finally {
       await transport.dispose();
       vi.useRealTimers();
@@ -465,12 +503,12 @@ it("allows a slow WebSocket upgrade without a short handshake reconnect loop", a
   );
   const transport = new WsTransport("ws://localhost:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(70_000);
     expect(sockets).toHaveLength(1);
     expect(sockets[0]!.readyState).toBe(MockWebSocket.CONNECTING);
     sockets[0]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
   } finally {
     await transport.dispose();
     vi.useRealTimers();
@@ -486,7 +524,7 @@ it("disposes a silent feature probe and stops its keepalives promptly", async ()
   );
   const transport = new WsTransport("ws://localhost:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
     socket.open();
     await vi.advanceTimersByTimeAsync(15_000);
@@ -547,12 +585,12 @@ it.each([false, true])(
     const transport = new WsTransport("ws://remote.synara.test:3020");
     const threadId = ThreadId.makeUnsafe("half-open-resume");
     try {
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       const socket = sockets[0]!;
       if (probePending) socket.open();
       else {
         socket.serveVoidRpc();
-        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        await waitUntil(() => expect(transport.getState()).toBe("open"));
         // Leave a real stream pending on the multiplexed socket. The cursor
         // represents successfully applied events, not unacknowledged input.
         socket.onSend = null;
@@ -562,7 +600,7 @@ it.each([false, true])(
       await vi.advanceTimersByTimeAsync(175_000);
       expect(sockets).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000);
-      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      await waitUntil(() => expect(sockets).toHaveLength(2));
       expect(socket.readyState).toBe(MockWebSocket.CLOSED);
       const replacement = sockets[1]!;
       replacement.onSend = (data) => {
@@ -581,9 +619,9 @@ it.each([false, true])(
           );
       };
       replacement.open();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       if (!probePending) {
-        await vi.waitFor(() =>
+        await waitUntil(() =>
           expect(
             sockets[1]!.sent
               .map((data) => JSON.parse(String(data)))
@@ -615,10 +653,10 @@ it("uses any inbound server frame as liveness evidence even when pongs are absen
   );
   const transport = new WsTransport("ws://remote.synara.test:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
     socket.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     socket.onSend = null;
     for (let interval = 0; interval < 3; interval++) {
       await vi.advanceTimersByTimeAsync(120_000);
@@ -637,7 +675,7 @@ it("uses any inbound server frame as liveness evidence even when pongs are absen
     await vi.advanceTimersByTimeAsync(175_000);
     expect(sockets).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(10_000);
-    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    await waitUntil(() => expect(sockets).toHaveLength(2));
   } finally {
     await transport.dispose();
     vi.useRealTimers();
@@ -709,7 +747,7 @@ it("bounds the feature probe even when server pongs keep arriving without its RP
   );
   const transport = new WsTransport("ws://remote.synara.test:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
     socket.onSend = (data) => {
       if (JSON.parse(String(data))._tag === "Ping")
@@ -719,10 +757,10 @@ it("bounds the feature probe even when server pongs keep arriving without its RP
     await vi.advanceTimersByTimeAsync(175000);
     expect(sockets).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(10000);
-    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    await waitUntil(() => expect(sockets).toHaveLength(2));
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
     sockets[1]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
   } finally {
     await transport.dispose();
     vi.useRealTimers();
@@ -1104,6 +1142,7 @@ describe("WsTransport", () => {
   });
 
   it("keeps recovery connecting when the detached feature probe rejects", async () => {
+    useFakeClock();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
@@ -1124,15 +1163,15 @@ describe("WsTransport", () => {
     try {
       await waitForSockets(1);
       sockets[0]!.open();
-      await vi.waitFor(() => expect(sockets[0]!.sent.length).toBeGreaterThan(0));
+      await waitUntil(() => expect(sockets[0]!.sent.length).toBeGreaterThan(0));
       sockets[0]!.close(1006, "probe connection died");
-      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitUntil(() => expect(close).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(0);
       expect(transport.getState()).toBe("connecting");
       releaseClose();
-      await vi.waitFor(() => expect(sockets.length).toBe(2));
+      await waitUntil(() => expect(sockets.length).toBe(2));
       sockets[1]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
     } finally {
       releaseClose();
       await transport.dispose();
@@ -1170,6 +1209,7 @@ describe("WsTransport", () => {
   it.each(["accepted", "rejected"] as const)(
     "settles a lost send acknowledgement after reconnect (%s) without resending the turn",
     async (status) => {
+      useFakeClock();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () =>
@@ -1223,7 +1263,7 @@ describe("WsTransport", () => {
             : expect(send).rejects.toMatchObject({
                 message: "Message was not accepted. Send again.",
               });
-        await vi.waitFor(() => expect(sockets.length).toBe(2));
+        await waitUntil(() => expect(sockets.length).toBe(2));
         const recovered = sockets[1]!;
         recovered.onSend = (data) => {
           const frame = JSON.parse(data);
@@ -1240,7 +1280,7 @@ describe("WsTransport", () => {
           );
         };
         recovered.open();
-        await verdict;
+        await settleWithClock(verdict);
         const requests = sockets
           .flatMap((socket) => socket.sent.map((data) => JSON.parse(String(data))))
           .filter((frame) => frame._tag === "Request");
@@ -1258,6 +1298,7 @@ describe("WsTransport", () => {
   );
 
   it("replaces a failed feature socket even when no streams are subscribed", async () => {
+    useFakeClock();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse(200, NEGOTIATION_RESULT)),
@@ -1272,14 +1313,14 @@ describe("WsTransport", () => {
     try {
       await waitForSockets(1);
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       sockets[0]!.close(1006, "connection lost");
-      await vi.waitFor(() => expect(transport.getState()).toBe("connecting"));
-      await vi.waitFor(() => expect(sockets.length).toBe(2));
+      await waitUntil(() => expect(transport.getState()).toBe("connecting"));
+      await waitUntil(() => expect(sockets.length).toBe(2));
       sockets[1]!.serveVoidRpc();
-      await vi.waitFor(() => expect(sockets.length).toBe(3));
+      await waitUntil(() => expect(sockets.length).toBe(3));
       sockets[2]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
     } finally {
       await transport.dispose();
     }
@@ -1297,7 +1338,7 @@ describe("WsTransport", () => {
     const unsubscribeFirst = transport.subscribeProjectFileChange(input, vi.fn());
     const unsubscribeSecond = transport.subscribeProjectFileChange(input, vi.fn());
 
-    await vi.waitFor(() => expect(internals.startProjectFileChangeStream).toHaveBeenCalledOnce());
+    await waitUntil(() => expect(internals.startProjectFileChangeStream).toHaveBeenCalledOnce());
     expect(internals.projectFileSubscriptions.size).toBe(1);
 
     unsubscribeFirst();
@@ -1748,29 +1789,6 @@ describe("WsTransport", () => {
     }
   });
 
-  it("classifies snapshot faults for the slow retry and nothing else", () => {
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    // RESNAPSHOT reaches this classifier only after its bounded fast retries
-    // are exhausted (the admission-retry path returns first): an advancing
-    // fence that has not yet closed a large gap must keep slow-retrying
-    // instead of dying while recovery is succeeding.
-    expect(
-      getSnapshotFaultRetryDelayMs(
-        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
-      ),
-    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    expect(getSnapshotFaultRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
-  });
-
   it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
     // A projector catching up through a backlog larger than the replay limit
     // advances the fence on every request without closing the gap: the server
@@ -2211,6 +2229,33 @@ describe("WsTransport", () => {
     },
   );
 
+  it("keeps a tripped recovery breaker tripped when a session is adopted late", () => {
+    const { transport, internals } = makeBareTransport();
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = { id: 1, failed: false };
+    internals.currentFeatureSession = session;
+    internals.recovery.consecutiveDefects = 1;
+    try {
+      internals.noteProtocolFailure(
+        session,
+        new RpcClientError.RpcClientError({
+          reason: new RpcClientError.RpcClientDefect({
+            message: "bad frame",
+            cause: new Error("malformed frame"),
+          }),
+        }),
+      );
+      expect(internals.recovery.phase).toBe("tripped");
+
+      (transport as unknown as { noteFeatureSessionAdopted(): void }).noteFeatureSessionAdopted();
+
+      expect(internals.recovery.phase).toBe("tripped");
+    } finally {
+      internals.disposed = true;
+      warnings.mockRestore();
+    }
+  });
+
   it("retries capacity-rejected streams in place with the server-provided delay", () => {
     expect(
       getStreamCapacityRetryDelayMs(
@@ -2258,12 +2303,12 @@ describe("WsTransport", () => {
     const reads = [0, 1, 2].map(() =>
       transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
     );
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(2));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(runPromise).toHaveBeenCalledTimes(2);
 
     pendingResults[0]!({ contents: "first" });
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(3));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(3));
     pendingResults[1]!({ contents: "second" });
     pendingResults[2]!({ contents: "third" });
     await expect(Promise.all(reads)).resolves.toEqual([
@@ -2372,7 +2417,7 @@ describe("WsTransport", () => {
     void transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, turnStart("held"), {
       timeoutMs: null,
     });
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(1));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(1));
     await expect(
       transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, turnStart("queued"), {
         timeoutMs: 20,
@@ -2407,12 +2452,12 @@ describe("WsTransport", () => {
       { timeoutMs: null, signal: controller.signal },
     );
     const next = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(2));
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ code: "WS_REQUEST_ABORTED" });
 
     pendingResults[0]!({ contents: "first" });
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(3));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(3));
     pendingResults[2]!({ contents: "next" });
     await expect(next).resolves.toEqual({ contents: "next" });
   });
@@ -2431,7 +2476,7 @@ describe("WsTransport", () => {
     void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
     void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
     const queued = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
-    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+    await waitUntil(() => expect(runPromise).toHaveBeenCalledTimes(2));
 
     await transport.dispose();
     await expect(queued).rejects.toThrow("Transport disposed");
@@ -2974,7 +3019,7 @@ describe("WsTransport", () => {
     const params = { projectId };
     const subscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, params);
 
-    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(params));
+    await waitUntil(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(params));
     await transport.unsubscribeProjectAgentEvents(projectId);
 
     for (const resolve of clientResolvers) resolve(client);
@@ -3003,9 +3048,9 @@ describe("WsTransport", () => {
     const first = { projectId };
     const second = { projectId };
     const firstSubscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, first);
-    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(first));
+    await waitUntil(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(first));
     const secondSubscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, second);
-    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(second));
+    await waitUntil(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(second));
 
     for (const resolve of clientResolvers) resolve(client);
     await firstSubscribe;
@@ -3237,16 +3282,6 @@ describe("WsTransport", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
   });
 
-  it("falls back to the legacy bootstrap socket when HTTP negotiation is unavailable", async () => {
-    const transport = new WsTransport("ws://localhost:3020");
-
-    expect(transport.getState()).toBe("connecting");
-    await waitForSockets(1);
-    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
-
-    await transport.dispose();
-  });
-
   it("detects a server identity change across a failed reconnect", () => {
     // The negotiated compatibility is cleared on every failed reconnect, so
     // the comparison must use the last identity actually reached — otherwise a
@@ -3268,7 +3303,7 @@ describe("WsTransport", () => {
 
     expect(transport.getState()).toBe("connecting");
     sockets[0]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const negotiateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
@@ -3288,6 +3323,7 @@ describe("WsTransport", () => {
   });
 
   it("starts one recovery when an unsubscribed feature socket fails before opening", async () => {
+    useFakeClock();
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
@@ -3298,9 +3334,9 @@ describe("WsTransport", () => {
     expect(transport.getState()).toBe("connecting");
 
     sockets[0]!.failBeforeOpen();
-    await vi.waitFor(() => expect(sockets.length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
+    await waitUntil(() => expect(sockets.length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
     sockets[1]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"), { timeout: 5_000 });
+    await waitUntil(() => expect(transport.getState()).toBe("open"), { timeout: 5_000 });
 
     // One clean recovery: the failed session never loops and its library retry
     // fibers are torn down with the old runtime before the replacement starts.
@@ -3327,13 +3363,6 @@ describe("WsTransport", () => {
     await expect(negotiateOverHttp("ws://localhost:3020")).rejects.toSatisfy((error) =>
       isTerminalCompatibilityFailure(error),
     );
-    // A non-426 failure (older server, transient outage) must fall back to the
-    // legacy bootstrap socket instead of failing the connect.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(404, null))),
-    );
-    await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
   });
 
   it.each([404, 503])(
@@ -3381,8 +3410,15 @@ describe("WsTransport", () => {
       ),
     );
 
-    await expect(negotiateOverHttp("ws://localhost:3020")).resolves.toBeNull();
-  }, 10_000);
+    // Fire the production deadline immediately instead of waiting 5s of real time.
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const negotiation = negotiateOverHttp("ws://localhost:3020");
+    expect(timeout).toHaveBeenCalledWith(5_000);
+    deadline.abort();
+
+    await expect(negotiation).resolves.toBeNull();
+  });
 
   it("aborts a stalled negotiate when the caller's lifetime signal fires", async () => {
     const controller = new AbortController();
@@ -3423,7 +3459,7 @@ describe("WsTransport", () => {
 
     await transport.dispose();
 
-    await vi.waitFor(() => expect(rejected).toHaveBeenCalledWith(new Error("Transport disposed")));
+    await waitUntil(() => expect(rejected).toHaveBeenCalledWith(new Error("Transport disposed")));
     expect(whenBackendReady).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
     expect(sockets).toHaveLength(0);
@@ -3501,7 +3537,7 @@ describe("WsTransport", () => {
     };
     await waitForSockets(1);
     sockets[0]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
 
@@ -3536,7 +3572,7 @@ describe("WsTransport", () => {
     };
     await waitForSockets(1);
     sockets[0]!.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     internals.latestPushByChannel.set("server.welcome", { stale: true });
     internals.sequence = 7;
 
@@ -3682,10 +3718,10 @@ it("does not poll server runtime status on an open socket that advertises it", a
   bindWindowTimersToCurrentGlobals();
   const transport = new WsTransport("ws://localhost:3020");
   try {
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    await waitUntil(() => expect(sockets).toHaveLength(1));
     const socket = sockets[0]!;
     socket.serveVoidRpc();
-    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await waitUntil(() => expect(transport.getState()).toBe("open"));
     await vi.advanceTimersByTimeAsync(30_000);
     const requestedTags = socket.sent
       .map((data) => JSON.parse(String(data)) as { _tag?: string; tag?: string })
@@ -3711,10 +3747,10 @@ describe("terminal remote recovery", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
     const transport = new WsTransport(remoteUrl);
     try {
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       expect(track).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "succeeded" }));
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       expect(track).toHaveBeenCalledWith({
         event: "remote.connection-succeeded",
         outcome: "succeeded",
@@ -3735,7 +3771,7 @@ describe("terminal remote recovery", () => {
       vi.stubGlobal("fetch", fetch);
       const transport = new WsTransport(remoteUrl);
       try {
-        await vi.waitFor(() => expect(transport.getState()).toBe("closed"));
+        await waitUntil(() => expect(transport.getState()).toBe("closed"));
         await vi.advanceTimersByTimeAsync(60_000);
         expect(fetch).toHaveBeenCalledTimes(1);
         expect(track).toHaveBeenCalledWith(
@@ -3760,9 +3796,9 @@ describe("terminal remote recovery", () => {
         fetch.mockResolvedValue(ready());
         transport.resumeRemoteConnection();
         await expect(recovery).resolves.toBe(true);
-        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        await waitUntil(() => expect(sockets).toHaveLength(1));
         sockets[0]!.serveVoidRpc();
-        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        await waitUntil(() => expect(transport.getState()).toBe("open"));
         expect(fetch).toHaveBeenCalledTimes(2);
         expect(
           sockets[0]!.sent.some((frame) => String(frame).includes(WS_METHODS.terminalClose)),
@@ -3791,7 +3827,7 @@ describe("terminal remote recovery", () => {
     vi.stubGlobal("fetch", fetch);
     const transport = new WsTransport(remoteUrl);
     try {
-      await vi.waitFor(() => expect(transport.getState()).toBe("incompatible"));
+      await waitUntil(() => expect(transport.getState()).toBe("incompatible"));
       for (let poll = 0; poll < 12; poll++) {
         transport.resumeRemoteConnection({ automatic: true });
         await vi.advanceTimersByTimeAsync(5_000);
@@ -3800,9 +3836,9 @@ describe("terminal remote recovery", () => {
       expect(transport.getState()).toBe("incompatible");
       fetch.mockResolvedValue(ready());
       transport.resumeRemoteConnection();
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await transport.dispose();
@@ -3814,7 +3850,7 @@ describe("terminal remote recovery", () => {
     const fetch = vi.fn().mockResolvedValue(unavailable("revoked"));
     vi.stubGlobal("fetch", fetch);
     const transport = new WsTransport(remoteUrl);
-    await vi.waitFor(() => expect(transport.getState()).toBe("closed"));
+    await waitUntil(() => expect(transport.getState()).toBe("closed"));
     const failure = await transport
       .request(WS_METHODS.serverGetEnvironment)
       .catch((error) => error);
@@ -3834,9 +3870,9 @@ describe("terminal remote recovery", () => {
     vi.stubGlobal("fetch", fetch);
     const transport = new WsTransport(remoteUrl);
     try {
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       let resumed = false;
       transport.onStateChange((state) => {
         if (state !== "closed" || resumed) return;
@@ -3846,9 +3882,9 @@ describe("terminal remote recovery", () => {
       });
       fetch.mockResolvedValue(unavailable("needs-sign-in"));
       sockets[0]!.close(1006, "lost connection");
-      await vi.waitFor(() => expect(sockets).toHaveLength(2), { timeout: 5_000 });
+      await waitUntil(() => expect(sockets).toHaveLength(2), { timeout: 5_000 });
       sockets[1]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       expect(resumed).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(3);
     } finally {
@@ -3858,6 +3894,7 @@ describe("terminal remote recovery", () => {
   });
 
   it("does not park a late refusal after the controller already verified recovery", async () => {
+    useFakeClock();
     let refuse!: (response: Response) => void;
     const fetch = vi
       .fn()
@@ -3868,9 +3905,9 @@ describe("terminal remote recovery", () => {
     try {
       transport.resumeRemoteConnection();
       refuse(unavailable("revoked"));
-      await vi.waitFor(() => expect(sockets).toHaveLength(1), { timeout: 5_000 });
+      await waitUntil(() => expect(sockets).toHaveLength(1), { timeout: 5_000 });
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await transport.dispose();
@@ -3885,9 +3922,9 @@ describe("terminal remote recovery", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
     const transport = new WsTransport(remoteUrl);
     try {
-      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      await waitUntil(() => expect(sockets).toHaveLength(1));
       sockets[0]!.serveVoidRpc();
-      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      await waitUntil(() => expect(transport.getState()).toBe("open"));
       sockets[0]!.onSend = null;
       let settled = false;
       const pending = transport.request(WS_METHODS.serverGetEnvironment).catch((error) => {
@@ -3929,6 +3966,7 @@ describe("terminal remote recovery", () => {
   });
 
   it("retains unknown turn delivery when terminal admission prevents acknowledgement settlement", async () => {
+    useFakeClock();
     const fetch = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         ...NEGOTIATION_RESULT,
@@ -3974,7 +4012,7 @@ describe("terminal remote recovery", () => {
       };
       socket.open();
       const send = transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command });
-      await expect(send).rejects.toMatchObject({
+      await expect(settleWithClock(send)).rejects.toMatchObject({
         _tag: "WsTransportRequestInterruptedError",
         code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
         delivery: "unknown",
@@ -4010,6 +4048,7 @@ describe("terminal remote recovery", () => {
 it.each(["accepted", "rejected", "typed-error"] as const)(
   "handles %s turn delivery when the shared RPC socket receives an error",
   async (outcome) => {
+    useFakeClock();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -4088,18 +4127,18 @@ it.each(["accepted", "rejected", "typed-error"] as const)(
         (value) => ({ value }),
         (error) => ({ error }),
       );
-      await vi.waitFor(() =>
-        expect(operations).toContain(ORCHESTRATION_WS_METHODS.dispatchCommand),
-      );
+      await waitUntil(() => expect(operations).toContain(ORCHESTRATION_WS_METHODS.dispatchCommand));
       if (outcome !== "typed-error")
-        await transport.request(WS_METHODS.accountStatus).catch(() => undefined);
+        await settleWithClock(transport.request(WS_METHODS.accountStatus).catch(() => undefined));
 
       if (outcome === "accepted") {
-        expect(await send).toEqual({ value: { sequence: 17 } });
+        expect(await settleWithClock(send)).toEqual({ value: { sequence: 17 } });
       } else if (outcome === "rejected") {
-        expect(await send).toMatchObject({ error: { message: "Original turn was not accepted" } });
+        expect(await settleWithClock(send)).toMatchObject({
+          error: { message: "Original turn was not accepted" },
+        });
       } else {
-        expect(await send).toMatchObject({
+        expect(await settleWithClock(send)).toMatchObject({
           error: { _tag: "WsRpcError", message: "Turn rejected", code: "PROVIDER_DISABLED" },
         });
       }

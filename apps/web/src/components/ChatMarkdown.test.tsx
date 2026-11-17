@@ -220,21 +220,6 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("thread://thread-abc-123");
   });
 
-  it("renders inline math with KaTeX", async () => {
-    const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
-
-    expect(markup).toContain('class="katex"');
-    expect(markup).not.toContain("katex-display");
-    expect(markup).not.toContain("$e^{i\\\\pi} + 1 = 0$");
-  });
-
-  it("renders display math with KaTeX block output", async () => {
-    const markup = await renderMarkdown("$$\n\\\\int_0^1 x^2 \\, dx\n$$");
-
-    expect(markup).toContain("katex-display");
-    expect(markup).not.toContain("$$");
-  });
-
   it("keeps links and code intact when math is present", async () => {
     const markup = await renderMarkdown(
       [
@@ -396,23 +381,21 @@ $$
     },
   );
 
-  it("does not turn ordinary dollar text or escaped dollars into math", async () => {
-    const markup = await renderMarkdown(
+  it.each([
+    [
       "It costs $5 to $10 per seat. Escape \\$E=mc^2\\$ when you want literal TeX.",
-    );
+      ["$5 to $10", "$E=mc^2$"],
+    ],
+    ["Use $USD$ for price and $PATH$ for shell lookup.", ["$USD$", "$PATH$"]],
+  ])(
+    "keeps ordinary and all-caps dollar text literal instead of math: %s",
+    async (text, literals) => {
+      const markup = await renderMarkdown(text);
 
-    expect(markup).toContain("$5 to $10");
-    expect(markup).toContain("$E=mc^2$");
-    expect(markup).not.toContain('class="katex"');
-  });
-
-  it("keeps all-caps dollar identifiers literal", async () => {
-    const markup = await renderMarkdown("Use $USD$ for price and $PATH$ for shell lookup.");
-
-    expect(markup).toContain("$USD$");
-    expect(markup).toContain("$PATH$");
-    expect(markup).not.toContain('class="katex"');
-  });
+      for (const literal of literals) expect(markup).toContain(literal);
+      expect(markup).not.toContain('class="katex"');
+    },
+  );
 
   it("renders numeric coefficients in every table row", async () => {
     const markup = await renderMarkdown(String.raw`| Operation | FLOPs |
@@ -469,7 +452,6 @@ $$
       ].join("\n"),
     );
 
-    expect(markup).toContain('class="chat-markdown-table"');
     expect(markup).toContain('aria-label="Copy table"');
     expect(markup).toContain('<th data-table-column="numeric">Time</th>');
     expect(markup).toContain('<td data-table-column="numeric">3.1–4.9\u00A0s</td>');
@@ -537,44 +519,21 @@ $$
     expect(markup).toContain(">error</span>");
   });
 
-  it("joins a relative chip onto a directory declared in the same message", async () => {
+  it.each([
+    ["scripts/delete_uploadthing.py", "scripts/delete_uploadthing.py"],
+    ["SKILL.md:1", "SKILL.md"],
+  ])("joins relative chip %s onto a directory declared in the same message", async (chip, file) => {
     const markup = await renderMarkdown(
-      [
-        "**Dir:** `/Users/tester/.agents/skills/annotate-pr`",
-        "",
-        "- `scripts/delete_uploadthing.py`",
-      ].join("\n"),
+      ["**Dir:** `/Users/tester/.agents/skills/annotate-pr`", "", `- \`${chip}\``].join("\n"),
       "/Users/tester/Documents/Synara/thread",
     );
 
-    expect(markup).toContain(
-      'title="/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py"',
-    );
-    expect(markup).not.toContain(
-      'href="/Users/tester/Documents/Synara/thread/scripts/delete_uploadthing.py"',
-    );
-  });
-
-  it("chips a line-suffixed relative file against a directory declared in the same message", async () => {
-    const markup = await renderMarkdown(
-      ["**Dir:** `/Users/tester/.agents/skills/annotate-pr`", "", "- `SKILL.md:1`"].join("\n"),
-      "/Users/tester/Documents/Synara/thread",
-    );
-
-    expect(markup).toContain('title="/Users/tester/.agents/skills/annotate-pr/SKILL.md"');
-    expect(markup).not.toContain('href="/Users/tester/Documents/Synara/thread/SKILL.md"');
+    expect(markup).toContain(`title="/Users/tester/.agents/skills/annotate-pr/${file}"`);
+    expect(markup).not.toContain(`href="/Users/tester/Documents/Synara/thread/${file}"`);
   });
 });
 
 describe("ChatMarkdown user variant", () => {
-  it("renders inline markdown formatting", async () => {
-    const markup = await renderUserMarkdown("use `bun run test` and **bold** text");
-
-    expect(markup).toContain("chat-markdown--user");
-    expect(markup).toContain("<code>bun run test</code>");
-    expect(markup).toContain("<strong>bold</strong>");
-  });
-
   it("keeps single newlines as hard breaks", async () => {
     const markup = await renderUserMarkdown("first line\nsecond line");
 

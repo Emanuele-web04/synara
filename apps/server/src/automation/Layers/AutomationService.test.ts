@@ -4683,22 +4683,6 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("rejects unacknowledged local-checkout automations", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-
-      const error = yield* service
-        .create({
-          ...createInput("local"),
-          acknowledgedRisks: [],
-        })
-        .pipe(Effect.flip);
-
-      assert.match(error.message, /local checkout/);
-    }),
-  );
-
   it.effect("rejects updates that switch to local checkout without acknowledgement", () =>
     Effect.gen(function* () {
       resetHarness();

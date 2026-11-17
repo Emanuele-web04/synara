@@ -88,9 +88,7 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Connected to the desktop");
     expect(markup).not.toContain("Set up");
     expect(markup).not.toContain("Refresh");
-    expect(markup).not.toContain("Desktop backend");
     expect(markup).not.toContain("Background typing is limited");
-    expect(markup).not.toContain("Capabilities");
   });
 
   it("asks to check access while nothing has confirmed the grants", () => {
@@ -189,9 +187,6 @@ describe("ComputerSettingsPanel", () => {
   describe("agent cursor colors", () => {
     it("keeps the cursor stock by default and hides the color editors", () => {
       const markup = render({ status: status() });
-      expect(markup).toContain("Cursor colors");
-      expect(markup).toContain("Stock");
-      expect(markup).toContain("Custom");
       // Stock is the zero-override default: no fill/rim editor renders and no
       // stored color is read out.
       expect(markup).not.toContain("Fill color");

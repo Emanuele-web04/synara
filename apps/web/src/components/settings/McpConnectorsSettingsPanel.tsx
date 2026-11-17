@@ -155,7 +155,7 @@ function ConnectorShelf(props: { title: string; children: ReactNode; cards?: boo
     <section className="space-y-1">
       <h2 className="px-3 text-ui-lg font-medium text-foreground">{props.title}</h2>
       <div
-        className={`grid grid-cols-1 sm:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
+        className={`grid grid-cols-1 lg:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
       >
         {props.children}
       </div>
@@ -171,7 +171,7 @@ function ConnectorRowText(props: { title: string; description: ReactNode }) {
       <span className="block truncate text-ui-lg font-medium leading-snug text-foreground">
         {props.title}
       </span>
-      <span className="mt-0.5 block truncate text-ui text-muted-foreground">
+      <span className="mt-0.5 block break-words text-ui text-muted-foreground">
         {props.description}
       </span>
     </span>

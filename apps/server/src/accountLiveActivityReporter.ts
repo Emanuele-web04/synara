@@ -193,6 +193,8 @@ export function createAccountLiveActivityReporter(options: {
   hostIdentityPath: string;
   sql: SqlClient.SqlClient;
   completionPreviewTrust?: CompletionPreviewTrust;
+  /** Delay before the first read; injectable so real-timer tests need not wait a second. */
+  initialDelayMs?: number;
   /** Whether a remote device is connected, and a subscription to one connecting. */
   remoteSessions?: {
     readonly open: () => boolean;
@@ -374,7 +376,7 @@ export function createAccountLiveActivityReporter(options: {
     );
     timer.unref();
   });
-  timer = setTimeout(() => void poll(), 1000);
+  timer = setTimeout(() => void poll(), options.initialDelayMs ?? 1000);
   timer.unref();
   return {
     stop() {

@@ -18,6 +18,7 @@ import {
 import { Effect, ServiceMap } from "effect";
 
 import { desktopUpdateBridgeAvailable, requestDesktopUpdate } from "./desktopUpdateBridge";
+import { isUnsettledPendingInteraction } from "./orchestration/stalePendingInteractions";
 import type { ProviderServiceShape } from "./provider/Services/ProviderService";
 
 type DesktopUpdateThreadWork = Pick<
@@ -42,8 +43,7 @@ export function hasDesktopUpdateThreadWork(thread: DesktopUpdateThreadWork): boo
       thread.latestTurn?.state === "running" ||
       thread.hasPendingApprovals === true ||
       thread.hasPendingUserInput === true ||
-      thread.pendingInteractions?.some((interaction) => interaction.status !== "confirmed") ===
-        true ||
+      thread.pendingInteractions?.some(isUnsettledPendingInteraction) === true ||
       (thread.claudeCacheReview != null && thread.claudeCacheReview.status !== "failed"))
   );
 }

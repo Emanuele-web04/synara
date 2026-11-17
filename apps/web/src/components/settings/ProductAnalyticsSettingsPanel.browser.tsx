@@ -34,7 +34,6 @@ it("persists consent and keeps the previous choice visible if saving fails", asy
   await control.click();
   await expect.element(control).toBeChecked();
   expect(setEnabled).toHaveBeenCalledWith(true);
-  await page.screenshot({ path: "./__screenshots__/product-analytics-consent.png" });
   setEnabled.mockRejectedValueOnce(new Error("Cannot persist preference"));
   await control.click();
   await expect.element(screen.getByText(/Could not save your choice/)).toBeVisible();

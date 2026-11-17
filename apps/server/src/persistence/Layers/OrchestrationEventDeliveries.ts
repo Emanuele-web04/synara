@@ -9,6 +9,7 @@ import {
   OrchestrationEventDeliveryRepository,
   ProviderBlockingDeliveryEvidence,
   providerThreadProcessedConsumerName,
+  type BlockedOrchestrationEventDeliveryState,
   type OrchestrationEventDeliveryRepositoryShape,
 } from "../Services/OrchestrationEventDeliveries.ts";
 
@@ -376,7 +377,7 @@ const makeRepository = Effect.gen(function* () {
       .withTransaction(
         Effect.gen(function* () {
           const candidates = yield* sql<{
-            readonly state: "dead" | "uncertain";
+            readonly state: BlockedOrchestrationEventDeliveryState;
           }>`
           SELECT state
           FROM orchestration_event_deliveries

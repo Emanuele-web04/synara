@@ -1,12 +1,12 @@
 import { useMemo } from "react";
-import { createInstance } from "i18next";
+import { createInstance, type i18n as I18n } from "i18next";
 import { initReactI18next, useTranslation as useReactTranslation } from "react-i18next";
 
 import { uiLocalizationResources } from "@synara/shared/uiLocalizationResources";
 import { UI_LOCALES, isUiMessageKey } from "@synara/shared/uiLocale";
 
 // The interface is English-only: every message reads the English catalogs.
-export const i18n = createInstance();
+export const i18n: I18n = createInstance();
 void i18n.use(initReactI18next).init({
   lng: "en",
   fallbackLng: "en",

@@ -58,7 +58,11 @@ import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeF
 import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
-import { isLocalImageMarkdownSrc, normalizeMarkdownImagePath } from "../lib/localImageUrls";
+import {
+  isLocalImageMarkdownSrc,
+  isLocalVideoMarkdownSrc,
+  normalizeMarkdownImagePath,
+} from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { extractTableMarkdown, rehypeTableLayout } from "../lib/markdownTableLayout";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
@@ -83,6 +87,7 @@ import {
 } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { GeneratedMarkdownVideo } from "./chat/GeneratedMarkdownVideo";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
 import type { ParsedTerminalContextEntry } from "../lib/terminalContext";
 import { formatInlineTerminalContextLabel } from "./chat/userMessageTerminalContexts";
@@ -1639,6 +1644,18 @@ const MARKDOWN_COMPONENTS: Components = {
           threadId={threadId}
           attachmentId={attachmentId}
           onImageExpand={onImageExpand}
+          isLinked={isInsideLink}
+        />
+      );
+    }
+    // Local videos play inline; remote video URLs keep the plain <img> path.
+    if (isLocalVideoMarkdownSrc(restoredSrc)) {
+      return (
+        <GeneratedMarkdownVideo
+          src={restoredSrc}
+          alt={alt}
+          cwd={cwd}
+          threadId={threadId}
           isLinked={isInsideLink}
         />
       );

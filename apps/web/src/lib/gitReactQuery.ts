@@ -962,8 +962,11 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
       });
     },
     mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
+    // The result already identifies the new worktree, and the first send links the
+    // thread to it before starting the turn. Like `awaitInvalidation: false` above,
+    // that must not wait for status/PR refreshes in every cached project and worktree.
+    onSettled: () => {
+      void invalidateGitQueries(input.queryClient).catch(() => undefined);
     },
   });
 }

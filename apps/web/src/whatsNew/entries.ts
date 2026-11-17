@@ -22,6 +22,84 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.2",
+    date: "Nov 17",
+    features: [
+      {
+        id: "local-video",
+        title: "Play local videos",
+        description:
+          "Play and seek local videos in file previews and inline in chat, with download and retry options when playback is unavailable.",
+      },
+      {
+        id: "codex-ultrafast",
+        title: "Choose Codex Ultrafast",
+        description:
+          "Choose Standard, Fast or Ultrafast for Codex models that offer those speeds on your account.",
+      },
+      {
+        id: "worktrees",
+        title: "Faster, more reliable worktrees",
+        description:
+          "Worktree creation no longer waits for unrelated Git and GitHub refreshes, and copying local changes preserves relative symlinks.",
+      },
+      {
+        id: "remote-and-iphone",
+        title: "Synara for iPhone is in beta",
+        description:
+          "Discover the iPhone beta from Synara and remove empty Remote projects without deleting their files.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable agents and capture",
+        description:
+          "Pi chats use their dedicated workspace, OpenCode refreshes changed model configuration, and macOS capture stops more reliably after work ends.",
+      },
+    ],
+  },
+  {
+    version: "1.6.1",
+    date: "Nov 17",
+    features: [
+      {
+        id: "resume-task",
+        title: "Resume an interrupted task",
+        description:
+          "Resume eligible stopped or interrupted work directly from the empty composer, without adding a new message to the conversation.",
+      },
+      {
+        id: "provider-sign-in",
+        title: "A clearer way to connect agents",
+        description:
+          "Guided provider sign-in helps you open the login link, enter a code when needed, and see when an agent needs attention.",
+      },
+      {
+        id: "account-handoff",
+        title: "Continue a chat on another account",
+        description:
+          "Hand off a started conversation to another account of the same provider while keeping the conversation in the same thread.",
+      },
+      {
+        id: "usage-limits",
+        title: "See and recover from usage limits",
+        description:
+          "A usage-limit card shows reset information and available resume controls. Automatic recovery now arms more reliably when eligible.",
+      },
+      {
+        id: "activity-and-suggestions",
+        title: "Find work and follow up more easily",
+        description:
+          "Activity shows the latest reply and groups multiple pull requests. Composer suggestions retry more reliably and can be accepted with Right Arrow as well as Tab.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable startup and queued work",
+        description:
+          "Desktop startup recovers from an unanswered browser network-guard call, queued messages keep their order when leaving a chat, and supported simulator actions can boot a stopped simulator.",
+      },
+    ],
+  },
+  {
     version: "1.6.0",
     date: "Nov 15",
     features: [

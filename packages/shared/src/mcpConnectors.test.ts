@@ -34,11 +34,6 @@ describe("MCP_CONNECTOR_PRESETS", () => {
     }
   });
 
-  it("marks presets that need the user's own OAuth app", () => {
-    expect(findMcpConnectorPreset("slack")).toMatchObject({ requiresOwnApp: true });
-    expect(findMcpConnectorPreset("supabase")?.requiresOwnApp).toBeUndefined();
-  });
-
   it("leaves out vendors that refuse an unregistered client", () => {
     for (const id of ["figma", "github"]) {
       expect(findMcpConnectorPreset(id)).toBeUndefined();

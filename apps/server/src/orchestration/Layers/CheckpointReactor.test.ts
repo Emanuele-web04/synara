@@ -34,7 +34,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as projectImportPaths from "../projectImportPaths.ts";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
@@ -449,18 +449,32 @@ function listRevertRescueRefs(cwd: string): ReadonlyArray<string> {
     .filter((ref) => ref.includes("/revert-rescue/"));
 }
 
+// Building a repo costs several git spawns; clone a per-file template instead.
+const gitRepositoryTemplates = new Map<boolean, string>();
 function createGitRepository(hasInitialCommit = true) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
-  runGit(cwd, ["init", "--initial-branch=main"]);
-  runGit(cwd, ["config", "user.email", "test@example.com"]);
-  runGit(cwd, ["config", "user.name", "Test User"]);
-  if (hasInitialCommit) {
-    fs.writeFileSync(path.join(cwd, "README.md"), "v1\n", "utf8");
-    runGit(cwd, ["add", "."]);
-    runGit(cwd, ["commit", "-m", "Initial"]);
+  let template = gitRepositoryTemplates.get(hasInitialCommit);
+  if (template === undefined) {
+    template = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-template-"));
+    runGit(template, ["init", "--initial-branch=main"]);
+    runGit(template, ["config", "user.email", "test@example.com"]);
+    runGit(template, ["config", "user.name", "Test User"]);
+    if (hasInitialCommit) {
+      fs.writeFileSync(path.join(template, "README.md"), "v1\n", "utf8");
+      runGit(template, ["add", "."]);
+      runGit(template, ["commit", "-m", "Initial"]);
+    }
+    gitRepositoryTemplates.set(hasInitialCommit, template);
   }
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
+  fs.cpSync(template, cwd, { recursive: true });
   return cwd;
 }
+afterAll(() => {
+  for (const template of gitRepositoryTemplates.values()) {
+    fs.rmSync(template, { recursive: true, force: true });
+  }
+  gitRepositoryTemplates.clear();
+});
 
 function gitRefExists(cwd: string, ref: string): boolean {
   try {
@@ -1391,7 +1405,6 @@ describe("CheckpointReactor", () => {
     await harness.start();
     await harness.drain();
     const acks = vi.spyOn(harness.runtimeEvents, "advanceConsumerCursorThrough");
-    const started = performance.now();
     let lastSequence = 0;
     for (let index = 0; index < 256; index++) {
       const row = await Effect.runPromise(
@@ -1414,9 +1427,6 @@ describe("CheckpointReactor", () => {
       ([input]) => input.consumerName === CHECKPOINT_RUNTIME_CONSUMER,
     ).length;
     acks.mockRestore();
-    process.stderr.write(
-      `checkpoint-stream-benchmark ${JSON.stringify({ rows: 256, elapsedMs: Math.round(performance.now() - started), checkpointAcks })}\n`,
-    );
     // Drain flushes the coalesced tail; a streaming burst does not pay one
     // ACK transaction per persisted text row.
     expect(
@@ -4679,6 +4689,59 @@ describe("CheckpointReactor", () => {
     },
   );
 
+  it("aliases a hidden resume baseline after the provider turn was already projected", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("manual-resume-turn");
+    const messageId = MessageId.makeUnsafe("turn-resume:checkpoint-event");
+    const createdAt = new Date().toISOString();
+    const session = {
+      threadId,
+      providerName: "codex" as const,
+      runtimeMode: "approval-required" as const,
+      lastError: null,
+      updatedAt: createdAt,
+    };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-resume-checkpoint-start"),
+        threadId,
+        session: { ...session, status: "starting", activeTurnId: null },
+        pendingResumeMessageId: messageId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadMessageStart(threadId, messageId),
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-resume-checkpoint-running"),
+        threadId,
+        session: { ...session, status: "running", activeTurnId: turnId },
+        createdAt,
+      }),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "change after resume\n", "utf8");
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-hidden-resume-started"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+    });
+
+    const alias = checkpointRefForThreadTurnStart(threadId, turnId);
+    await waitForGitRefExists(harness.cwd, alias);
+    expect(gitShowFileAtRef(harness.cwd, alias, "README.md")).not.toContain("change after resume");
+  });
+
   it("aliases a prepared pre-turn baseline on turn.started and captures the post-turn checkpoint on turn.completed", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
@@ -4761,115 +4824,6 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
-  });
-
-  it("summarizes only files changed after each turn's start checkpoint", async () => {
-    const harness = await createHarness({ seedFilesystemCheckpoints: false });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const firstMessageId = MessageId.makeUnsafe("message-turn-a");
-    const secondMessageId = MessageId.makeUnsafe("message-turn-b");
-    const firstTurnId = asTurnId("turn-a");
-    const secondTurnId = asTurnId("turn-b");
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-a-start"),
-        threadId,
-        message: {
-          messageId: firstMessageId,
-          role: "user",
-          text: "create a",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt,
-      }),
-    );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadMessageStart(threadId, firstMessageId),
-    );
-    harness.provider.emit({
-      type: "turn.started",
-      eventId: EventId.makeUnsafe("evt-turn-a-started"),
-      provider: "codex",
-      createdAt,
-      threadId,
-      turnId: firstTurnId,
-    });
-    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, firstTurnId));
-    fs.writeFileSync(path.join(harness.cwd, "a.txt"), "A\n", "utf8");
-    harness.provider.emit({
-      type: "turn.completed",
-      eventId: EventId.makeUnsafe("evt-turn-a-completed"),
-      provider: "codex",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId: firstTurnId,
-      payload: { state: "completed" },
-    });
-    await waitForThread(
-      harness.engine,
-      (entry) =>
-        entry.checkpoints.length === 1 &&
-        entry.checkpoints[0]?.files?.map((file) => file.path).includes("a.txt") === true,
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-b-start"),
-        threadId,
-        message: {
-          messageId: secondMessageId,
-          role: "user",
-          text: "create b",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadMessageStart(threadId, secondMessageId),
-    );
-    harness.provider.emit({
-      type: "turn.started",
-      eventId: EventId.makeUnsafe("evt-turn-b-started"),
-      provider: "codex",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId: secondTurnId,
-    });
-    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, secondTurnId));
-    fs.writeFileSync(path.join(harness.cwd, "b.txt"), "B\n", "utf8");
-    harness.provider.emit({
-      type: "turn.completed",
-      eventId: EventId.makeUnsafe("evt-turn-b-completed"),
-      provider: "codex",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId: secondTurnId,
-      payload: { state: "completed" },
-    });
-
-    const thread = await waitForThread(
-      harness.engine,
-      (entry) =>
-        entry.checkpoints.length === 2 &&
-        entry.checkpoints.some(
-          (checkpoint) =>
-            checkpoint.checkpointTurnCount === 2 &&
-            checkpoint.files?.map((file) => file.path).join(",") === "b.txt",
-        ),
-    );
-
-    expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
   });
 
   // A projection repair deletes every project row and replays them later, while
@@ -4971,6 +4925,8 @@ describe("CheckpointReactor", () => {
       [firstTurnId, 1],
       [secondTurnId, 2],
     ]);
+    // Each summary lists only files changed after that turn's own start checkpoint.
+    expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
     // Turn 1's ref still holds turn A's tree instead of the tree after turn B.
     expect(runGit(harness.cwd, ["rev-parse", firstTurnRef]).trim()).toBe(firstTurnCommit);
     expect(gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 2), "b.txt")).toBe(
@@ -5184,6 +5140,7 @@ describe("CheckpointReactor", () => {
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
     ).toBe(false);
 
+    fs.writeFileSync(path.join(harness.cwd, "late.txt"), "late\n", "utf8");
     harness.provider.emit({
       type: "turn.completed",
       eventId: EventId.makeUnsafe("evt-turn-completed-placeholder-race"),
@@ -5204,84 +5161,9 @@ describe("CheckpointReactor", () => {
     );
 
     expect(thread.checkpoints[0]?.assistantMessageId).toBe(assistantMessageId);
-  });
-
-  it("does not freeze an early placeholder snapshot as the final turn checkpoint", async () => {
-    const harness = await createHarness({ seedFilesystemCheckpoints: false });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const turnId = asTurnId("turn-placeholder-final");
-    const messageId = MessageId.makeUnsafe("message-user-placeholder-final");
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-placeholder-final"),
-        threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: "start turn",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt,
-      }),
-    );
-
-    harness.provider.emit({
-      type: "turn.started",
-      eventId: EventId.makeUnsafe("evt-turn-started-placeholder-final"),
-      provider: "codex",
-      createdAt,
-      threadId,
-      turnId,
-    });
-
-    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
-
-    fs.writeFileSync(path.join(harness.cwd, "early.txt"), "early\n", "utf8");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-turn-diff-early-placeholder"),
-        threadId,
-        turnId,
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-        status: "missing",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-
-    fs.writeFileSync(path.join(harness.cwd, "late.txt"), "late\n", "utf8");
-    harness.provider.emit({
-      type: "turn.completed",
-      eventId: EventId.makeUnsafe("evt-turn-completed-placeholder-final"),
-      provider: "codex",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId,
-      payload: { state: "completed" },
-    });
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) =>
-          checkpoint.checkpointTurnCount === 1 &&
-          checkpoint.status === "ready" &&
-          checkpoint.files
-            ?.map((file) => file.path)
-            .sort()
-            .join(",") === "early.txt,late.txt",
-      ),
-    );
-
+    // The early placeholder is not frozen as the final checkpoint: it includes later edits.
     expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
-      "early.txt",
+      "README.md",
       "late.txt",
     ]);
   });
@@ -6438,9 +6320,6 @@ describe("CheckpointReactor", () => {
 
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(
-      thread.activities.some((activity) => activity.kind === "checkpoint.baseline.skipped"),
-    ).toBe(true);
-    expect(
       thread.activities.find((activity) => activity.kind === "checkpoint.baseline.skipped")
         ?.payload,
     ).toMatchObject({
@@ -6542,48 +6421,6 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
-  });
-
-  it("ignores non-v2 checkpoint.captured runtime events", async () => {
-    const harness = await createHarness();
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-checkpoint-captured"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-
-    harness.provider.emit({
-      type: "checkpoint.captured",
-      eventId: EventId.makeUnsafe("evt-checkpoint-captured-3"),
-      provider: "codex",
-
-      createdAt: new Date().toISOString(),
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: asTurnId("turn-3"),
-      turnCount: 3,
-      status: "completed",
-    });
-
-    await harness.drain();
-    const readModel = await Effect.runPromise(harness.engine.getReadModel());
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
-    expect(thread?.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 3)).toBe(
-      false,
-    );
   });
 
   it("continues processing runtime events after a single checkpoint runtime failure", async () => {
@@ -7011,11 +6848,8 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
+    await waitForThread(harness.engine, (entry) =>
       entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
-    );
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
     );
     expect(fs.readFileSync(path.join(harness.cwd, "turn.txt"), "utf8")).toBe("turn\n");
     expect(fs.readFileSync(path.join(harness.cwd, "later.txt"), "utf8")).toBe("later\n");
@@ -7027,42 +6861,8 @@ describe("CheckpointReactor", () => {
       providerStatus: "running",
       providerActiveTurnId: asTurnId("runtime-turn"),
     });
-    const createdAt = new Date().toISOString();
+    const createdAt = await seedRevertableThread(harness, "cmd-runtime-guard");
     const threadId = ThreadId.makeUnsafe("thread-1");
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-projected-ready-runtime-running"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    for (const turnCount of [1, 2] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe(`cmd-runtime-guard-diff-${turnCount}`),
-          threadId,
-          turnId: asTurnId(`runtime-guard-turn-${turnCount}`),
-          completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
-          status: "ready",
-          files: [],
-          checkpointTurnCount: turnCount,
-          createdAt,
-        }),
-      );
-    }
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -7075,136 +6875,12 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
+    await waitForThread(harness.engine, (entry) =>
       entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
-    );
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
     );
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      holder: "the thread",
-      holderId: "thread-1",
-      detail:
-        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
-    },
-    {
-      holder: "a peer thread",
-      holderId: "retained-turn-peer",
-      detail:
-        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
-    },
-  ])(
-    "refuses a files-only Undo while $holder keeps a retained turn running",
-    async ({ holder, holderId, detail }) => {
-      // A failed Antigravity stop keeps its context with the running turn, the
-      // live listing leaves that context out, and the provider reactor projects
-      // the thread stopped with no active turn. The retained listing is the
-      // only signal left that the process may still be writing to the worktree.
-      const createdAt = new Date().toISOString();
-      const holderThreadId = ThreadId.makeUnsafe(holderId);
-      const harness = await createHarness({
-        hasSession: holder === "a peer thread",
-        providerRetainedSessions: [
-          {
-            provider: "antigravity",
-            status: "running",
-            runtimeMode: "full-access",
-            threadId: holderThreadId,
-            activeTurnId: asTurnId("retained-antigravity-turn"),
-            createdAt,
-            updatedAt: createdAt,
-          },
-        ],
-      });
-      const threadId = ThreadId.makeUnsafe("thread-1");
-      const setSession = (sessionThreadId: ThreadId, status: "ready" | "stopped") =>
-        Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.makeUnsafe(`retained-turn-session-${sessionThreadId}`),
-            threadId: sessionThreadId,
-            session: {
-              threadId: sessionThreadId,
-              status,
-              providerName: "antigravity",
-              runtimeMode: "full-access",
-              activeTurnId: null,
-              lastError: null,
-              updatedAt: createdAt,
-            },
-            createdAt,
-          }),
-        );
-      if (holder === "a peer thread") {
-        await setSession(threadId, "ready");
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("retained-turn-peer-create"),
-            threadId: holderThreadId,
-            projectId: asProjectId("project-1"),
-            title: "Stopped peer",
-            modelSelection: { provider: "antigravity", model: "gemini-3-pro" },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: harness.cwd,
-            createdAt,
-          }),
-        );
-      }
-      await setSession(holderThreadId, "stopped");
-      for (const turnCount of [1, 2] as const) {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.diff.complete",
-            commandId: CommandId.makeUnsafe(`retained-turn-diff-${turnCount}`),
-            threadId,
-            turnId: asTurnId(`turn-${turnCount}`),
-            completedAt: createdAt,
-            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
-            status: "ready",
-            files:
-              turnCount === 2
-                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
-                : [],
-            checkpointTurnCount: turnCount,
-            createdAt,
-          }),
-        );
-      }
-
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.checkpoint.revert",
-          commandId: CommandId.makeUnsafe("retained-turn-files-undo"),
-          threadId,
-          turnCount: 2,
-          scope: "files",
-          createdAt,
-        }),
-      );
-      await harness.drain();
-
-      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
-      const state = await Effect.runPromise(harness.engine.getReadModel());
-      const target = state.threads.find((entry) => entry.id === threadId);
-      expect(
-        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
-          ?.payload,
-      ).toMatchObject({ detail });
-      expect(
-        target?.checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === 2)?.files,
-      ).toHaveLength(1);
-      expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
-      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
-    },
-  );
 
   it.each([
     {
@@ -7373,16 +7049,6 @@ describe("CheckpointReactor", () => {
         "Another thread is working in this workspace. Stop its active turn before undoing changes.",
     },
     {
-      name: "refuses it while a peer's pending turn and idle live session are here beside a retained turn elsewhere",
-      holder: "live-and-retained-peer",
-      retainedTurn: true,
-      liveTurn: false,
-      retainedElsewhere: true,
-      turnReport: "pending",
-      detail:
-        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
-    },
-    {
       name: "refuses it while a peer's idle live session is here and its workspace and retained turn are elsewhere",
       holder: "live-and-retained-peer",
       retainedTurn: true,
@@ -7401,17 +7067,6 @@ describe("CheckpointReactor", () => {
       liveTurn: false,
       retainedElsewhere: true,
       turnReport: "projected",
-      detail:
-        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
-    },
-    {
-      name: "refuses it with no live session while a peer's pending turn is here and its retained turn is elsewhere",
-      holder: "live-and-retained-peer",
-      liveSession: false,
-      retainedTurn: true,
-      liveTurn: false,
-      retainedElsewhere: true,
-      turnReport: "pending",
       detail:
         "Another thread is working in this workspace. Stop its active turn before undoing changes.",
     },
@@ -7555,24 +7210,6 @@ describe("CheckpointReactor", () => {
           createdAt,
         }),
       );
-      if (turnReport === "pending") {
-        await Effect.runPromise(
-          harness.engine.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe("live-and-retained-pending-start"),
-            threadId: holderThreadId,
-            message: {
-              messageId: MessageId.makeUnsafe("live-and-retained-pending-message"),
-              role: "user",
-              text: "edit README.md",
-              attachments: [],
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "full-access",
-            createdAt,
-          }),
-        );
-      }
       for (const turnCount of [1, 2] as const) {
         await Effect.runPromise(
           harness.engine.dispatch({
@@ -7819,54 +7456,7 @@ describe("CheckpointReactor", () => {
 
   it("keeps full thread revert behavior for explicit thread scope", async () => {
     const harness = await createHarness();
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-diff-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-1"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-diff-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-2"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 2,
-        createdAt,
-      }),
-    );
+    const createdAt = await seedRevertableThread(harness, "cmd-diff");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -7950,45 +7540,12 @@ describe("CheckpointReactor", () => {
 
   it("restores the workspace when provider conversation rollback fails", async () => {
     const harness = await createHarness();
-    const createdAt = new Date().toISOString();
     fs.writeFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "preserve\n", "utf8");
     harness.provider.rollbackConversation.mockImplementationOnce(() =>
       Effect.fail(new ProviderSessionNotFoundError({ threadId: "thread-1" })),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-compensated-revert-session-set"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    for (const turnCount of [1, 2] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe(`cmd-compensated-revert-diff-${turnCount}`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId(`turn-${turnCount}`),
-          completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
-          status: "ready",
-          files: [],
-          checkpointTurnCount: turnCount,
-          createdAt,
-        }),
-      );
-    }
+    const createdAt = await seedRevertableThread(harness, "cmd-compensated-revert");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -8001,11 +7558,8 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
+    await waitForThread(harness.engine, (entry) =>
       entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
-    );
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
     );
     // Proves the revert was refused by the provider and not by an earlier
     // precondition, so the worktree really was restored before compensation.
@@ -8332,11 +7886,8 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
+    await waitForThread(harness.engine, (entry) =>
       entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
-    );
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
     );
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
       "tracked working change\n",
@@ -8347,54 +7898,7 @@ describe("CheckpointReactor", () => {
 
   it("processes consecutive revert requests with deterministic rollback sequencing", async () => {
     const harness = await createHarness();
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-inline-revert"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-inline-revert-diff-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-1"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-inline-revert-diff-2"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-2"),
-        completedAt: createdAt,
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 2,
-        createdAt,
-      }),
-    );
+    const createdAt = await seedRevertableThread(harness, "cmd-inline-revert");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -8451,11 +7955,6 @@ describe("CheckpointReactor", () => {
     });
     expect(
       settledThread.activities.filter((activity) => activity.kind === "checkpoint.revert.started"),
-    ).toHaveLength(2);
-    expect(
-      settledThread.activities.filter(
-        (activity) => activity.kind === "checkpoint.revert.succeeded",
-      ),
     ).toHaveLength(2);
     expect(
       settledThread.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),

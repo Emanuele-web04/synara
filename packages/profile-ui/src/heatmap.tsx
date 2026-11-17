@@ -43,6 +43,9 @@ export const CARD_HEATMAP_INTENSITY_CLASSES: readonly string[] = [
   "bg-[var(--info)]",
 ];
 
+/** Columns a short month name ("Feb") needs before the next label starts. */
+const MIN_MONTH_LABEL_COLUMNS = 4;
+
 interface ActivityHeatmapProps {
   readonly cells: ReadonlyArray<HeatmapCell>;
   readonly cellSize?: number;
@@ -157,6 +160,16 @@ export function ActivityHeatmap({
           new Date(Date.UTC(2026, monthIndex, 1)),
         )
       : null;
+  });
+
+  // A month that spans fewer columns than its label needs (the partial first month of
+  // the range) would print over the next month's label, so it goes unlabelled.
+  const labelledColumns = monthByColumn.flatMap((label, index) => (label ? [index] : []));
+  labelledColumns.forEach((column, position) => {
+    const next = labelledColumns[position + 1];
+    if (next !== undefined && next - column < MIN_MONTH_LABEL_COLUMNS) {
+      monthByColumn[column] = null;
+    }
   });
 
   const columnCount = columns.length;

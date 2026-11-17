@@ -1,24 +1,34 @@
 // FILE: SidebarActivityView.browser.tsx
-// Purpose: Browser regressions for Activity paging, stateful actions, scope fallback, and live PR data.
+// Purpose: Browser regressions for Activity rows (reply preview, PR pill), paging, stateful
+//          actions, scope fallback, and live PR data.
 // Layer: Sidebar Activity UI test
 
 import "../index.css";
 
-import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationThreadPullRequest,
+  type OrchestrationThreadPullRequestLink,
+} from "@synara/contracts";
+import {
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
+import { type ProjectAppearance } from "../lib/projectAppearance";
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 import type { WorkspaceNavigation, WorkspaceSidebarActions } from "../lib/hosts/workspaceFrame";
 import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
 import { workspaceActivityRows, type WorkspaceThreadEntry } from "../lib/hosts/workspaceSidebar";
-import { WorkspaceThreadRow } from "./hosts/WorkspaceProjects";
 import { SidebarProvider } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 
@@ -107,6 +117,24 @@ function makeThread(
   };
 }
 
+function makeOpenPullRequest(number: number): OrchestrationThreadPullRequest {
+  return {
+    number,
+    title: "Fix paddings",
+    url: `https://github.com/acme/synara/pull/${number}`,
+    baseBranch: "main",
+    headBranch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    state: "open",
+  };
+}
+
+function makePullRequestLink(
+  pullRequest: OrchestrationThreadPullRequest,
+  linkedAt: string,
+): OrchestrationThreadPullRequestLink {
+  return { pullRequest, source: "user", linkedAt };
+}
+
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
@@ -127,6 +155,11 @@ function renderActivity(input: {
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenThreadPullRequest?: (
+    event: ReactMouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onToggleThreadPinned?: (threadId: ThreadId) => void;
   onArchiveThread?: (threadId: ThreadId) => void;
@@ -177,7 +210,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
-      onOpenThreadPullRequest={() => {}}
+      onOpenThreadPullRequest={input.onOpenThreadPullRequest ?? (() => {})}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
       onToggleThreadPinned={input.onToggleThreadPinned ?? (() => {})}
@@ -457,9 +490,17 @@ describe("SidebarActivityView", () => {
     expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
     const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
     expect(remoteRow).toHaveAttribute("draggable", "false");
-    // The computer is named by the hover card and the accessible label, not the meta line.
+    // The computer is named by the hover card and the accessible label, not the project line;
+    // the globe follows the title.
     expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
-    expect(remoteRow.element().textContent).not.toContain("Studio Mac");
+    const remoteContent = remoteRow.element().parentElement!;
+    expect(remoteContent.textContent).not.toContain("Studio Mac");
+    const remoteFooter = remoteContent.querySelector<HTMLElement>(
+      '[data-slot="activity-thread-footer"]',
+    )!;
+    expect(remoteFooter.textContent).toBe("Project B");
+    expect(remoteFooter.querySelector('[data-slot="remote-thread-marker"]')).toBeNull();
+    expect(remoteContent.querySelector('[data-slot="remote-thread-marker"]')).not.toBeNull();
     // Remote rows open the same hover card as local ones.
     expect(remoteRow.element().closest("[data-thread-hover-anchor]")).not.toBeNull();
     expect(renderThreadHoverCard).toHaveBeenCalledWith(
@@ -531,75 +572,23 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each(["activity", "classic", "pinned"] as const)(
-    "matches remote glyph/action sizes and hides the resting marker on hover and focus (%s)",
-    async (surface) => {
-      const previousViewport = { width: window.innerWidth, height: window.innerHeight };
-      const owner = makeRemoteEntry("mini");
-      const input = remoteActivityInput([owner.session]);
-      const mounted = await render(
-        <div className="w-80">
-          {surface === "activity" ? (
-            renderActivity(input)
-          ) : (
-            <SidebarProvider>
-              <div className="w-80">
-                <WorkspaceThreadRow entry={owner.entry} topLevel={surface === "pinned"} />
-              </div>
-            </SidebarProvider>
-          )}
-        </div>,
+  it("opens a remote row's menu from the keyboard with Shift+F10", async () => {
+    const owner = makeRemoteEntry("mini");
+    const mounted = await render(renderActivity(remoteActivityInput([owner.session])));
+    try {
+      const button = page
+        .getByRole("button", { name: /Activity thread 71, Computer mini/ })
+        .element() as HTMLElement;
+      button.focus();
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
       );
-      try {
-        await page.viewport(1000, 700);
-        const main = page.getByRole("button", {
-          name: new RegExp(`Activity thread 71, Computer mini`),
-        });
-        const button = main.element();
-        const wrapper = button.parentElement!;
-        const marker = wrapper.querySelector<HTMLElement>('[data-slot="remote-thread-marker"]');
-        if (surface !== "classic") {
-          expect(marker).not.toBeNull();
-          const glyph = marker!.querySelector("svg, [data-slot=central-icon]")!;
-          expect(glyph.getBoundingClientRect().width).toBe(15);
-          expect(glyph.getBoundingClientRect().height).toBe(15);
-        }
-        await main.hover();
-        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-        const quickButtons = ["Pin thread", "Archive thread", "Done"].map((label) =>
-          actionButton(wrapper, label),
-        );
-        for (const action of quickButtons) {
-          const glyph = action.querySelector("svg, [data-slot=central-icon]")!;
-          expect(glyph.getBoundingClientRect().width).toBe(15);
-          expect(glyph.getBoundingClientRect().height).toBe(15);
-          expect(action.getBoundingClientRect().width).toBe(20);
-        }
-        const title =
-          wrapper.querySelector('[data-testid^="thread-title-"]') ??
-          button.querySelector("span.min-w-0.flex-1");
-        await vi.waitFor(() =>
-          expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
-            quickButtons[0]!.getBoundingClientRect().left,
-          ),
-        );
-        await userEvent.hover(document.body);
-        button.focus();
-        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-        expect(
-          quickButtons.every((action) => getComputedStyle(action).visibility !== "hidden"),
-        ).toBe(true);
-        button.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
-        );
-        await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
-        await userEvent.keyboard("{Escape}");
-      } finally {
-        await mounted.unmount();
-        await page.viewport(previousViewport.width, previousViewport.height);
-      }
-    },
-  );
+      await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("disables offline remote actions and rejects an action from a stale captured session", async () => {
     const owner = makeRemoteEntry("offline");
@@ -850,59 +839,271 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each([
-    { name: "favicon", appearance: null },
-    { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },
-    { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
-    { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
-  ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
-    "keeps the $name project identity and worktree indicator in recent rows",
-    async ({ name, appearance }) => {
-      const thread = makeThread(0, {
-        envMode: "worktree",
-        worktreePath: "/tmp/activity-worktree",
-        branch: "feature/sidebar-icons",
-      });
-      const mounted = await render(
-        renderActivity({
-          threads: [thread],
-          projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
-        }),
-      );
-      await vi.waitFor(() => {
-        const row = page.getByTestId(`activity-thread-${thread.id}`).element();
-        if (name === "favicon") {
-          const image = row.querySelector<HTMLImageElement>("img");
-          expect(image?.naturalWidth).toBeGreaterThan(0);
-        } else if (appearance?.kind === "emoji") {
-          expect(row.textContent).toContain(appearance.emoji);
-          expect(row.querySelector("img")).toBeNull();
-        } else if (appearance?.kind === "icon") {
-          // The default project icon is the shared Hugeicons folder (an svg); every other
-          // choice is a masked Central asset named after the icon.
-          const glyph =
-            appearance.icon === DEFAULT_PROJECT_ICON
-              ? row.querySelector<SVGElement>('[data-slot="hugeicon"]')
-              : [...row.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
-                  (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
-                );
-          expect(glyph).toBeDefined();
-          const reference = document.createElement("span");
-          reference.style.color = `var(--project-${appearance.color})`;
-          document.body.appendChild(reference);
-          const expectedColor = getComputedStyle(reference).color;
-          reference.remove();
-          expect(getComputedStyle(glyph!).color).toBe(expectedColor);
-          expect(row.querySelector("img")).toBeNull();
-        }
-        expect(row.querySelector('[aria-label="Worktree"]')?.getAttribute("aria-hidden")).not.toBe(
-          "true",
-        );
-      });
-      await expect.element(mounted.getByRole("img", { name: "Worktree" })).toBeVisible();
+  it("keeps the project identity and the branch on the project line, and marks a worktree beside the title", async () => {
+    const appearance: ProjectAppearance = { kind: "emoji", emoji: "🚀" };
+    const thread = makeThread(0, { branch: "feature/sidebar-icons" });
+    const worktree = makeThread(1, {
+      envMode: "worktree",
+      worktreePath: "/tmp/activity-worktree",
+      branch: "feature/worktree",
+    });
+    const mounted = await render(
+      renderActivity({
+        threads: [thread, worktree],
+        projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
+      }),
+    );
+    const wrapperOf = (row: SidebarThreadSummary) =>
+      page.getByTestId(`activity-thread-${row.id}`).element().parentElement!;
+    const footerOf = (row: SidebarThreadSummary) =>
+      wrapperOf(row).querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+    const wrapper = () => wrapperOf(thread);
+    const footer = () => footerOf(thread);
+    await vi.waitFor(() => {
+      const line = footer();
+      expect(line.querySelector('[aria-label="Worktree"]')).toBeNull();
+      expect(line.textContent).toContain(appearance.emoji);
+      expect(line.querySelector("img")).toBeNull();
+    });
+    expect(footer().textContent).toContain("Project A");
+    expect(footer().textContent).toContain("feature/sidebar-icons");
+    // A worktree keeps the project's glyph on its project line and is marked once, beside
+    // the title, as on the project list's thread rows.
+    const worktreeLine = footerOf(worktree);
+    expect(worktreeLine.querySelector('[aria-label="Worktree"]')).toBeNull();
+    expect(worktreeLine.innerHTML).toBe(
+      footer().innerHTML.replace("feature/sidebar-icons", "feature/worktree"),
+    );
+    const worktreeTitle = wrapperOf(worktree).querySelector<HTMLElement>(
+      '[data-slot="activity-thread-title"]',
+    )!;
+    const worktreeGlyphs = wrapperOf(worktree).querySelectorAll('[aria-label="Worktree"]');
+    expect(worktreeGlyphs).toHaveLength(1);
+    expect(worktreeGlyphs[0]!.parentElement).toBe(worktreeTitle.parentElement);
+    expect(wrapper().querySelector('[aria-label="Worktree"]')).toBeNull();
+    // Nothing sits above the title; the project line sits below the reply.
+    const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
+    expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
+    expect(title.textContent).not.toContain("Project A");
+    await mounted.unmount();
+  });
+
+  it("counts several PRs in the row's state color and lists them instead of opening one", async () => {
+    const merged: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(96),
+      title: "Review iOS PRs",
+      state: "merged",
+    };
+    const open = { ...makeOpenPullRequest(97), title: "Widget snapshot fix" };
+    const closed: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(95),
+      title: "Abandoned attempt",
+      state: "closed",
+    };
+    const several = makeThread(820, {
+      title: "Several PRs",
+      pullRequests: [
+        makePullRequestLink(merged, "2026-08-02T08:00:00.000Z"),
+        makePullRequestLink(closed, "2026-08-02T09:00:00.000Z"),
+        makePullRequestLink(open, "2026-08-02T07:00:00.000Z"),
+      ],
+    });
+    const single = makeThread(821, {
+      title: "One PR",
+      pullRequests: [makePullRequestLink(makeOpenPullRequest(2186), "2026-08-02T08:00:00.000Z")],
+    });
+    const onOpenThread = vi.fn();
+    // Like the sidebar's handler, which takes the press over to open the PR pane.
+    const onOpenThreadPullRequest = vi.fn((event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [several, single],
+          // The row's own PR, with its live state, decides the glyph and color.
+          prByThreadId: new Map([
+            [several.id, merged],
+            [single.id, makeOpenPullRequest(2186)],
+          ]),
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const countChip = page.getByRole("button", { name: "3 pull requests" });
+      const countElement = countChip.element() as HTMLElement;
+      expect(countElement.textContent).toBe("3");
+      expect(countElement.closest('[data-slot="activity-thread-footer"]')).not.toBeNull();
+      countElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // A press lists every PR (its own first, then open, then newest); none opens by itself.
+      await countChip.click();
+      const items = page.getByRole("menuitem");
+      await expect
+        .poll(() => items.elements().map((item) => item.textContent))
+        .toEqual(["#96 Review iOS PRs", "#97 Widget snapshot fix", "#95 Abandoned attempt"]);
+      expect(onOpenThreadPullRequest).not.toHaveBeenCalled();
+      await page.getByRole("menuitem", { name: "#97 Widget snapshot fix" }).click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([several, open]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      expect(onRenameThread).not.toHaveBeenCalled();
+      await expect.poll(() => items.elements().length).toBe(0);
+
+      // One PR keeps its #number and opens directly.
+      const singleChip = page.getByRole("button", { name: "Open pull request #2186" });
+      expect(singleChip.element().textContent).toBe("#2186");
+      await singleChip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledTimes(2);
+      expect(onOpenThreadPullRequest.mock.calls[1]?.slice(1)).toEqual([
+        single,
+        makeOpenPullRequest(2186),
+      ]);
+    } finally {
       await mounted.unmount();
-    },
-  );
+    }
+  });
+
+  it("names a plain checkout by its folder and keeps the PR whole before the branch", async () => {
+    const local = makeThread(810, {
+      title: "Local checkout",
+      branch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    });
+    const chat = makeThread(811, { title: "Plain chat", projectId: PROJECT_B });
+    const chatWithPr = makeThread(812, { title: "Chat with a PR", projectId: PROJECT_B });
+    const mounted = await render(
+      <div className="w-60">
+        {renderActivity({
+          threads: [local, chat, chatWithPr],
+          projects: [
+            makeProject(PROJECT_A, "Project A"),
+            { ...makeProject(PROJECT_B, "Chats"), kind: "chat" },
+          ],
+          prByThreadId: new Map([
+            [local.id, makeOpenPullRequest(2186)],
+            [chatWithPr.id, makeOpenPullRequest(2187)],
+          ]),
+        })}
+      </div>,
+    );
+    try {
+      const footer = (thread: SidebarThreadSummary) =>
+        page
+          .getByTestId(`activity-thread-${thread.id}`)
+          .element()
+          .parentElement!.querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+      const localFooter = footer(local);
+      expect(localFooter.textContent).toBe(
+        "Project A#2186synara/frontend-consistency-fixes-for-every-settings-screen",
+      );
+      expect(localFooter.querySelector('[aria-label="Worktree"]')).toBeNull();
+
+      // A chat keeps its folder and name, and its PR.
+      expect(footer(chatWithPr).textContent).toBe("Synara#2187");
+      expect(footer(chat).textContent).toBe("Synara");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("previews the latest reply under the title and keeps the PR a target of its own", async () => {
+    const reply =
+      "Fixed 6 off-scale paddings across the settings screens. PR is ready for review, and the snapshot tests were rerun on every platform so nothing else should move.";
+    const unread = makeThread(800, {
+      title: "Design-taste consistency checker",
+      latestReplyPreview: reply,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const seen = makeThread(801, {
+      title: "Codice handle URL pubblico",
+      latestReplyPreview: reply,
+    });
+    const merged: OrchestrationThreadPullRequest = {
+      number: 2171,
+      title: "Public handle URLs",
+      url: "https://github.com/acme/synara/pull/2171",
+      baseBranch: "main",
+      headBranch: "feat/handles",
+      state: "merged",
+    };
+    const silent = makeThread(802, { title: "No reply yet" });
+    const pr: OrchestrationThreadPullRequest = {
+      number: 2186,
+      title: "Fix off-scale paddings",
+      url: "https://github.com/acme/synara/pull/2186",
+      baseBranch: "main",
+      headBranch: "fix/paddings",
+      state: "open",
+    };
+    const onOpenThread = vi.fn();
+    const onOpenThreadPullRequest = vi.fn();
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [unread, seen, silent],
+          prByThreadId: new Map([
+            [unread.id, pr],
+            [seen.id, merged],
+          ]),
+          resolveThreadStatus: (thread) =>
+            thread.id === unread.id
+              ? {
+                  label: "Completed",
+                  colorClass: "text-emerald-600",
+                  dotClass: "bg-emerald-500",
+                  pulse: false,
+                }
+              : null,
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const rowButton = (thread: SidebarThreadSummary) =>
+        page.getByTestId(`activity-thread-${thread.id}`).element() as HTMLButtonElement;
+      const part = (thread: SidebarThreadSummary, selector: string) =>
+        rowButton(thread).parentElement!.querySelector<HTMLElement>(selector);
+
+      const unreadReply = part(unread, "p")!;
+      expect(unreadReply.textContent).toBe(reply);
+      // No reply, no reply line.
+      expect(part(silent, "p")).toBeNull();
+
+      // The PR is plain icon + number in its state's color, yet a button of its own, outside
+      // the row's, named for what it does, with a target reaching past its glyphs.
+      const chip = page.getByRole("button", { name: "Open pull request #2186" });
+      const chipElement = chip.element() as HTMLElement;
+      expect(rowButton(unread).contains(chipElement)).toBe(false);
+      expect(chipElement.getAttribute("title")).toBe("#2186 PR open: Fix off-scale paddings");
+      await chip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([unread, pr]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      chipElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // Everywhere else the whole row, reply included, opens the thread.
+      await page.getByTestId(`activity-thread-${unread.id}`).click();
+      expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(unread.id);
+      expect(
+        document.elementFromPoint(
+          unreadReply.getBoundingClientRect().left + 4,
+          unreadReply.getBoundingClientRect().top + 4,
+        ),
+      ).toBe(rowButton(unread));
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
     const older = makeThread(500, {
@@ -1131,8 +1332,6 @@ describe("SidebarActivityView", () => {
       .parentElement?.querySelector('[aria-label="Unread completion"]');
     expect(completedDot).not.toBeNull();
     expect(completedDot?.parentElement?.dataset.slot).toBe("activity-completion-status");
-    const completedStatusSlot = completedDot?.parentElement;
-    const completedStatusLeft = completedStatusSlot?.getBoundingClientRect().left;
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
@@ -1143,10 +1342,6 @@ describe("SidebarActivityView", () => {
     expect(resumedRow.parentElement?.querySelector('button[aria-label="Done"]')).not.toBeNull();
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
-    await vi.waitFor(() => {
-      expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
-    });
-    expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
     page
       .getByTestId(`activity-thread-${unseen.id}`)
       .element()

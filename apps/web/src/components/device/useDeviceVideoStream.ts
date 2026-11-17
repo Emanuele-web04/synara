@@ -13,31 +13,19 @@ import {
   stepDeviceFrameGate,
   type DeviceFrameGateState,
 } from "../DevicePanel.logic";
+import { frameReconnectDelayMs, type FrameStreamStatus } from "~/lib/binaryFrameSource";
 import {
   createDeviceFrameSource,
   type DeviceFrameSource,
   type DeviceFrameSourceResetReason,
 } from "~/lib/deviceFrameSource";
 
-/**
- * Ceiling on the frame-socket reconnect backoff.
- *
- * Long enough that a server that stays down is not hammered, short enough that
- * a restart is picked up without the user reopening the pane.
- */
-const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
-
 export interface DeviceVideoDimensions {
   readonly width: number;
   readonly height: number;
 }
 
-export type DeviceVideoStatus =
-  | { readonly kind: "idle" }
-  | { readonly kind: "unsupported" }
-  | { readonly kind: "connecting" }
-  | { readonly kind: "streaming" }
-  | { readonly kind: "error"; readonly message: string };
+export type DeviceVideoStatus = FrameStreamStatus;
 
 function hexByte(value: number): string {
   return value.toString(16).padStart(2, "0");
@@ -314,7 +302,7 @@ export function useDeviceVideoStream(input: {
         // reconnect it and the pane spins forever. Open a fresh one, backing
         // off so a server that is down does not become a reconnect loop.
         reconnectAttempts += 1;
-        const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), FRAME_RECONNECT_MAX_DELAY_MS);
+        const delay = frameReconnectDelayMs(reconnectAttempts);
         reconnectTimer = setTimeout(() => {
           if (disposed || !isCurrent()) return;
           source?.close();

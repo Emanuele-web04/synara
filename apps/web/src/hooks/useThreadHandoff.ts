@@ -17,7 +17,6 @@ import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
-  canContinueThreadHandoff,
   canCreateThreadHandoff,
   ProviderHandoffBackgroundTasksError,
   type ProviderHandoffOutcome,
@@ -145,11 +144,6 @@ export function useThreadHandoff() {
     // Set only from an explicit user choice: ends the source's background tasks.
     options?: { readonly stopBackgroundTasks?: boolean },
   ): Promise<void> => {
-    if (
-      !canContinueThreadHandoff({ sourceProvider: thread.modelSelection.provider, targetProvider })
-    ) {
-      throw new Error(t("common:handOffToANewThreadToSwitchBetween"));
-    }
     const prepared = await prepareThreadHandoff(thread, targetProvider, targetProviderInstanceId);
     const modelSelection = explicitModelSelection ?? prepared.modelSelection;
     const commandId = newCommandId();

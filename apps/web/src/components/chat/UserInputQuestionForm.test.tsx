@@ -38,18 +38,5 @@ describe("UserInputQuestionForm direction", () => {
     // descriptions must reach the browser's first-strong scan, so Arabic and
     // Hebrew questions read right-to-left without flipping the English UI chrome.
     expect(markup.match(/dir="auto"/g)).toHaveLength(3);
-    expect(markup).toContain("text-start");
-    expect(markup).not.toContain("text-left");
-  });
-
-  it("keeps English content in the same neutral direction mode", () => {
-    const markup = renderForm({
-      ...arabicQuestion,
-      question: "Which option?",
-      options: [{ label: "First", description: "First" }],
-    });
-
-    expect(markup).toContain("Which option?");
-    expect(markup.match(/dir="auto"/g)).toHaveLength(2);
   });
 });

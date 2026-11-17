@@ -49,6 +49,15 @@ export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
+// electron-builder signs every file it classifies as binary, one `codesign`
+// call at a time, each with its own request to Apple's timestamp server. The
+// walk follows Electron Framework's `Versions/Current` and top-level symlinks,
+// so the 223 Chromium `.pak` data files alone accounted for 669 of about 724
+// calls. A `.pak` is a resource, not code: the signature of the enclosing
+// framework seals its hash, so its own signature added nothing that
+// `codesign --verify --deep --strict`, Gatekeeper or notarization check.
+// Every Mach-O file, helper app and framework is still signed.
+export const MAC_SIGN_IGNORE_PATTERNS = ["\\.pak$"] as const;
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
@@ -148,6 +157,7 @@ export function createDesktopPlatformBuildConfig(
         : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      signIgnore: [...MAC_SIGN_IGNORE_PATTERNS],
       binaries: [
         MAC_APPSNAP_HELPER_BUNDLE_PATH,
         MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,

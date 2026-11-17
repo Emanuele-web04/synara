@@ -47,13 +47,17 @@ import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
-import { RemoteConnectionsAnnouncement } from "../components/hosts/RemoteConnectionsAnnouncement";
+import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { NewThreadDefaultsSyncCoordinator } from "../components/NewThreadDefaultsSyncCoordinator";
 import { settingsChangedBeyondNewThreadDefaults } from "@synara/shared/serverSettings";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import {
+  isSessionOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+} from "../session-logic";
 import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
 import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 import { FeedbackDialog } from "../components/FeedbackDialog";
@@ -405,7 +409,7 @@ function RootRouteView() {
               </SafariAccessOnboarding>
               <GlobalOnboardingDialog />
               <ProjectImportAnnouncementDialog />
-              <RemoteConnectionsAnnouncement />
+              <ConnectionLaunchAnnouncements />
             </>
           )}
           <GlobalProjectImportDialog />
@@ -1175,8 +1179,7 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
 function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnRunning(thread?.session?.orchestrationStatus, thread?.latestTurn?.state) ||
     hasPendingTurnDispatch(threadId)
   );
 }
@@ -1252,9 +1255,10 @@ function isPendingInteractionDetailMissing(threadId: ThreadId): boolean {
 function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "starting" ||
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnStartingOrRunning(
+      thread?.session?.orchestrationStatus,
+      thread?.latestTurn?.state,
+    ) ||
     thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
       true ||
     isPendingInteractionDetailMissing(threadId) ||

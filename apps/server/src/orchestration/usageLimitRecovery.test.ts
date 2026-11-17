@@ -464,6 +464,56 @@ describe("usage-limit recovery command ownership", () => {
     expect(continuations(result.events)).toHaveLength(0);
   });
 
+  it.each([
+    [
+      "worktree branch rename restating its path",
+      {
+        type: "thread.meta.update",
+        branch: "synara/renamed-branch",
+        worktreePath: "/tmp/usage-limit-recovery-worktree",
+      },
+    ],
+    [
+      "send restating the current model",
+      { type: "thread.meta.update", modelSelection: { provider: "codex", model: "gpt-5-codex" } },
+    ],
+    ["unchanged goal", { type: "thread.meta.update", goal: "Ship the release" }],
+    ["unpaused goal staying unpaused", { type: "thread.meta.update", goalPaused: false }],
+  ] as const)("%s keeps the wait and its frozen source", async (_label, patch) => {
+    const result = await apply(
+      readModel({
+        usageLimitRecovery: recovery(),
+        worktreePath: "/tmp/usage-limit-recovery-worktree",
+        goal: "Ship the release",
+      }),
+      {
+        ...patch,
+        commandId: CommandId.makeUnsafe("housekeeping-echo"),
+        threadId: THREAD_ID,
+      } as OrchestrationCommand,
+    );
+    expect(result.thread.usageLimitRecovery).toMatchObject({ id: "limit-episode" });
+    expect(result.thread.usageLimitRecoverySource).toMatchObject({ turnId: TURN_ID });
+    expect(result.thread.usageLimitRecoveryCancelledTurnId ?? null).toBeNull();
+  });
+
+  it("a moved worktree still invalidates the wait", async () => {
+    const result = await apply(
+      readModel({
+        usageLimitRecovery: recovery(),
+        worktreePath: "/tmp/usage-limit-recovery-worktree",
+      }),
+      {
+        type: "thread.meta.update",
+        worktreePath: "/tmp/usage-limit-recovery-elsewhere",
+        commandId: CommandId.makeUnsafe("moved-worktree"),
+        threadId: THREAD_ID,
+      } as OrchestrationCommand,
+    );
+    expect(result.thread.usageLimitRecovery).toBeNull();
+    expect(result.thread.usageLimitRecoverySource).toBeNull();
+  });
+
   it("admits one due continuation and retains its episode without replaying the failed prompt", async () => {
     const initial = readModel({ usageLimitRecovery: recovery() });
     await expect(decide(initial, resume())).rejects.toThrow("not ready");

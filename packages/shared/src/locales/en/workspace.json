@@ -560,6 +560,8 @@
   "pasteAnOpenCodeSessionId": "Paste an OpenCode session id",
   "projectsAvailableToImport": "Projects available to import",
   "removeProject": "Remove project \"{{value0}}\"?",
+  "removeRemoteProject": "Remove project",
+  "remoteProjectRemovalKeepsFiles": "This removes the project from Synara. Its folder and files stay on disk.",
   "toast_threadNoLongerExists": "The thread no longer exists.",
   "desktopUpdate_unexpectedError": "An unexpected error occurred.",
   "coordinatedWorkAcrossRepos": "Coordinated work across repos",
@@ -1047,5 +1049,8 @@
   "childThreadsWorking_one": "{{count}} running",
   "childThreadsWorking_other": "{{count}} running",
   "childThreadsDoneCount_one": "+{{count}} done",
-  "childThreadsDoneCount_other": "+{{count}} done"
+  "childThreadsDoneCount_other": "+{{count}} done",
+  "introducingSynaraForIphone": "Introducing Synara for iPhone",
+  "iosBetaAnnouncementDescription": "Follow and steer your agents from your phone whenever your computer is awake. Now in beta.",
+  "joinTheBeta": "Join the beta"
 }

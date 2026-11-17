@@ -41,7 +41,9 @@ const me = (): AccountMe => ({
     themeAccent: { light: "#0169cc", dark: "#0169cc" },
   },
 });
-const settleDebounce = () => new Promise((resolve) => setTimeout(resolve, 700));
+// The hook debounces theme writes by 500 ms on setTimeout; advance a faked clock past it instead
+// of sleeping. Polling and rendering keep their real timers.
+const settleDebounce = () => vi.advanceTimersByTimeAsync(700);
 
 function Probe() {
   account = useAccount();
@@ -60,6 +62,7 @@ async function mount() {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   policy.enabled = true;
   server = { state: "signed-in", me: me() };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,6 +75,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   client.clear();
   vi.resetAllMocks();
 });
@@ -96,6 +100,7 @@ describe("profile theme sync", () => {
       theme.updateThemePack("dark", { accent: "#445566" });
     });
     expect(transport.updateProfile).not.toHaveBeenCalled();
+    await settleDebounce();
     await expect.poll(() => transport.updateProfile.mock.calls.length).toBe(1);
     expect(transport.updateProfile).toHaveBeenCalledWith({
       handle: "ada",
@@ -165,6 +170,7 @@ describe("profile theme sync", () => {
     expect(transport.updateProfile).toHaveBeenCalledTimes(1);
     finish();
     await saving;
+    await settleDebounce();
     await expect.poll(() => transport.updateProfile.mock.calls.length).toBe(2);
     expect(transport.updateProfile.mock.lastCall?.[0]).toMatchObject({
       displayName: "New name",
@@ -183,6 +189,7 @@ describe("profile theme sync", () => {
         profile: { ...me().profile!, themeAccent: undefined },
       });
     flushSync(() => theme.updateThemePack("dark", { accent: "#445566" }));
+    await settleDebounce();
     await expect.poll(() => transport.updateProfile.mock.calls.length).toBe(1);
     await settleDebounce();
     expect(transport.updateProfile).toHaveBeenCalledTimes(1);

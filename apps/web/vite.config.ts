@@ -3,17 +3,26 @@
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import tailwindcss from "@tailwindcss/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import babel from "@rolldown/plugin-babel";
+import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import {
+  threadWorkerFactory,
+  transformWorkerCount,
+  withParallelTransform,
+} from "./scripts/parallel-transform";
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
+import { createReactCompilerPlugin } from "./scripts/react-compiler-plugin.mjs";
+import { withTransformCache } from "./scripts/transform-cache";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -55,6 +64,28 @@ function centralIconPrunePlugin(): Plugin {
       },
     },
   };
+}
+
+// React Compiler output is a pure function of the module, the lockfile, the
+// Babel environment and this file, so test lanes may reuse it between runs
+// (.github/CI.md). Only Vitest opts in: a production build never reads or
+// writes this cache.
+const transformCacheDirectory =
+  process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
+
+function transformCacheSalt(): string {
+  const hash = createHash("sha256");
+  hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
+  for (const file of [
+    "../../bun.lock",
+    "vite.config.ts",
+    "scripts/react-compiler-plugin.mjs",
+    "scripts/transform-cache.ts",
+  ]) {
+    hash.update(readFileSync(path.resolve(import.meta.dirname, file)));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 const gzip = promisify(zlib.gzip);
@@ -144,26 +175,42 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
-    babel({
-      // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
-      // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
-      // whereas the previous version of the plugin parsed all files with a .ts extension.
-      // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
-      parserOpts: { plugins: ["typescript", "jsx"] },
-      presets: [reactCompilerPreset()],
-    }).then((plugin) => ({
-      ...plugin,
-      // Large chat modules make the compiler expensive on cold loads and every
-      // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
-      // Keep production builds and browser tests compiled, with an opt-in for
-      // debugging compiler-specific behavior in the development app.
-      apply: ((_config, { command, mode }) =>
-        command === "build" ||
-        mode === "test" ||
-        /^(1|true)$/i.test(
-          process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
-        )) satisfies Plugin["apply"],
-    })),
+    // React Compiler is a single-threaded Babel pass and nearly all of a
+    // production build's time (.github/CI.md). Worker threads run the same
+    // plugin's own hook, so the output is unchanged; the cache, when a test
+    // lane enables it, sits in front and only compiles what it misses.
+    createReactCompilerPlugin().then((plugin) => {
+      const workers = transformWorkerCount();
+      const compiler =
+        workers > 0
+          ? withParallelTransform(plugin, {
+              workers,
+              createWorker: threadWorkerFactory(
+                pathToFileURL(
+                  path.resolve(import.meta.dirname, "scripts/parallel-transform.worker.mjs"),
+                ),
+              ),
+            })
+          : plugin;
+      return {
+        ...(transformCacheDirectory
+          ? withTransformCache(compiler, {
+              directory: path.resolve(import.meta.dirname, transformCacheDirectory),
+              salt: transformCacheSalt(),
+            })
+          : compiler),
+        // Large chat modules make the compiler expensive on cold loads and every
+        // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
+        // Keep production builds and browser tests compiled, with an opt-in for
+        // debugging compiler-specific behavior in the development app.
+        apply: ((_config, { command, mode }) =>
+          command === "build" ||
+          mode === "test" ||
+          /^(1|true)$/i.test(
+            process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
+          )) satisfies Plugin["apply"],
+      };
+    }),
     tailwindcss(),
     centralIconPrunePlugin(),
     precompressPlugin(),

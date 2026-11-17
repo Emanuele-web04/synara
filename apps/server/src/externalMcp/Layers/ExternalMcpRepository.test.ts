@@ -6,7 +6,17 @@ import { expect } from "vitest";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { hashExternalMcpSecret } from "./ExternalMcpService.ts";
-import { ExternalMcpRepository } from "../Services/ExternalMcpRepository.ts";
+import {
+  AGENT_GATEWAY_OPERATION_TRANSITIONS,
+  canTransitionAgentGatewayOperation,
+  type AgentGatewayOperationStatus,
+} from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
+import {
+  EXTERNAL_MCP_TASK_TRANSITIONS,
+  ExternalMcpRepository,
+  canTransitionExternalMcpTask,
+  type ExternalMcpTaskStatus,
+} from "../Services/ExternalMcpRepository.ts";
 import { ExternalMcpRepositoryLive, makeExternalMcpRepository } from "./ExternalMcpRepository.ts";
 
 const layer = it.layer(ExternalMcpRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)));
@@ -893,6 +903,159 @@ layer("ExternalMcpRepository", (it) => {
         WHERE integration_id = 'integration-bounded-rate'
       `;
       expect(rejected[0]?.rejectedCount).toBe(98);
+    }),
+  );
+
+  // Drive every operation/task write from every status. Guarded writes must follow the
+  // declared tables; unguarded ones are pinned as unguarded, because they rely on
+  // `markOperationDispatching` electing a single writer rather than on a SQL check.
+  it.effect("moves operations and tasks only along the declared lifecycle transitions", () =>
+    Effect.gen(function* () {
+      const repository = yield* ExternalMcpRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-07-20T00:05:00.000Z";
+      const statuses = Object.keys(
+        AGENT_GATEWAY_OPERATION_TRANSITIONS,
+      ) as AgentGatewayOperationStatus[];
+      const taskStatuses = Object.keys(EXTERNAL_MCP_TASK_TRANSITIONS) as ExternalMcpTaskStatus[];
+      const seed = (suffix: string, status: AgentGatewayOperationStatus) =>
+        Effect.gen(function* () {
+          yield* createIntegration(repository, suffix);
+          const operationId = `operation-${suffix}`;
+          yield* repository.reserveOperation({
+            operationId,
+            integrationId: `integration-${suffix}`,
+            requestId: `request-${suffix}`,
+            fingerprint: "plan",
+            requestedCount: 1,
+            planJson: "[]",
+            now,
+          });
+          yield* sql`
+            UPDATE external_mcp_operations SET status = ${status}
+            WHERE operation_id = ${operationId}
+          `;
+          return operationId;
+        });
+      const helpers: Record<
+        string,
+        {
+          readonly to: AgentGatewayOperationStatus;
+          readonly from: ReadonlyArray<AgentGatewayOperationStatus>;
+          readonly guarded: boolean;
+          readonly run: (operationId: string) => Effect.Effect<unknown, unknown>;
+        }
+      > = {
+        markOperationDispatching: {
+          to: "dispatching",
+          from: ["reserved"],
+          guarded: true,
+          run: (operationId) => repository.markOperationDispatching({ operationId, now }),
+        },
+        completeOperation: {
+          to: "completed",
+          from: ["dispatching"],
+          guarded: true,
+          run: (operationId) =>
+            repository
+              .completeOperation({ operationId, resultJson: "{}", now })
+              .pipe(Effect.result),
+        },
+        markOperationCompensating: {
+          to: "compensating",
+          from: statuses,
+          guarded: false,
+          run: (operationId) => repository.markOperationCompensating({ operationId, now }),
+        },
+        recordOperationCompensationFailure: {
+          to: "compensating",
+          from: statuses,
+          guarded: false,
+          run: (operationId) =>
+            repository.recordOperationCompensationFailure({ operationId, errorJson: "{}", now }),
+        },
+        failOperation: {
+          to: "failed",
+          from: statuses,
+          guarded: false,
+          run: (operationId) => repository.failOperation({ operationId, errorJson: "{}", now }),
+        },
+      };
+
+      for (const [name, helper] of Object.entries(helpers)) {
+        for (const from of statuses) {
+          const operationId = yield* seed(`lifecycle-${name}-${from}`, from);
+
+          yield* helper.run(operationId);
+
+          const acts = helper.from.includes(from);
+          assert.equal(
+            (yield* repository.getOperationById(operationId))?.status,
+            acts ? helper.to : from,
+            `${name}: ${from}`,
+          );
+          if (helper.guarded && acts && from !== helper.to) {
+            assert.isTrue(canTransitionAgentGatewayOperation(from, helper.to), `${name}: ${from}`);
+          }
+        }
+      }
+
+      // Task writes: markTaskStatus is unguarded; failOperationAndTask fails live tasks only.
+      const taskHelpers: Record<
+        string,
+        {
+          readonly to: ExternalMcpTaskStatus;
+          readonly from: ReadonlyArray<ExternalMcpTaskStatus>;
+          readonly guarded: boolean;
+          readonly run: (operationId: string) => Effect.Effect<unknown, unknown>;
+        }
+      > = {
+        markTaskCreated: {
+          to: "created",
+          from: taskStatuses,
+          guarded: false,
+          run: (operationId) => repository.markTaskStatus({ operationId, status: "created", now }),
+        },
+        failOperationAndTask: {
+          to: "failed",
+          from: ["planned", "created"],
+          guarded: true,
+          run: (operationId) =>
+            repository.failOperationAndTask({ operationId, errorJson: "{}", now }),
+        },
+      };
+      for (const [name, helper] of Object.entries(taskHelpers)) {
+        for (const from of taskStatuses) {
+          const suffix = `task-lifecycle-${name}-${from}`;
+          const operationId = yield* seed(suffix, "dispatching");
+          yield* repository.registerTask({
+            integrationId: `integration-${suffix}`,
+            operationId,
+            requestId: `request-${suffix}`,
+            threadId: `thread-${suffix}`,
+            projectId: `project-${suffix}`,
+            now,
+          });
+          yield* sql`
+            UPDATE external_mcp_tasks SET status = ${from} WHERE operation_id = ${operationId}
+          `;
+
+          yield* helper.run(operationId);
+
+          const acts = helper.from.includes(from);
+          assert.equal(
+            (yield* repository.getTask({
+              integrationId: `integration-${suffix}`,
+              threadId: `thread-${suffix}`,
+            }))?.status,
+            acts ? helper.to : from,
+            `${name}: ${from}`,
+          );
+          if (helper.guarded && acts && from !== helper.to) {
+            assert.isTrue(canTransitionExternalMcpTask(from, helper.to), `${name}: ${from}`);
+          }
+        }
+      }
     }),
   );
 });
