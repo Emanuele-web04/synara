@@ -206,6 +206,8 @@ async function withAuthEffectServer(
     if (!address || typeof address !== "object") throw new Error("Expected server address");
     await run(`http://127.0.0.1:${address.port}`);
   } finally {
+    // Close waits for fetch's keep-alive sockets (~4 s) otherwise.
+    (nodeServer as http.Server | null)?.closeAllConnections();
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }

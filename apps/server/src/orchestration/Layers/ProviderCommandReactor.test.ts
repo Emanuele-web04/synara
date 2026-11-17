@@ -341,7 +341,7 @@ async function waitFor(
     if (Date.now() >= deadline) {
       throw new Error("Timed out waiting for expectation.");
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 1));
     return poll();
   };
 

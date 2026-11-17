@@ -637,7 +637,7 @@ describe("migration backups", () => {
 
     await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await backupPaths(dbPath)).toEqual([backupPath]);
-    expect(await fs.readFile(backupPath)).toEqual(originalBackup);
+    expect(Buffer.compare(await fs.readFile(backupPath), originalBackup)).toBe(0);
     const database = new DatabaseSync(dbPath, { readOnly: true });
     try {
       expect(database.prepare("SELECT value FROM upgrade_probe").get()).toMatchObject({
@@ -671,8 +671,8 @@ describe("migration backups", () => {
       await expect(startDatabase(dbPath)).rejects.toThrow("Update Synara before resuming");
 
       expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
-      expect(await fs.readFile(dbPath)).toEqual(originalDatabase);
-      expect(await fs.readFile(backupPath)).toEqual(originalBackup);
+      expect(Buffer.compare(await fs.readFile(dbPath), originalDatabase)).toBe(0);
+      expect(Buffer.compare(await fs.readFile(backupPath), originalBackup)).toBe(0);
       await expect(fs.stat(migrationBackupProvenancePath(dbPath))).rejects.toMatchObject({
         code: "ENOENT",
       });
