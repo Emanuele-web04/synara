@@ -297,99 +297,71 @@ describe("computeStableMessagesTimelineRows", () => {
     },
   );
 
-  it("replaces work rows when later tool metadata adds visible details", () => {
-    const firstRows: MessagesTimelineRow[] = [
+  const runningLiveActivity = {
+    state: "running_tool" as const,
+    label: "Bash",
+    startedAt: "2026-05-09T10:00:00.000Z",
+    lastActivityAt: "2026-05-09T10:00:01.000Z",
+    detail: "Running",
+    progress: 0.5,
+    elapsedSeconds: 1,
+  };
+  it.each([
+    [
+      "later tool metadata adds visible details",
+      { label: "Read", tone: "tool", itemType: "dynamic_tool_call", toolTitle: "Read" },
       {
-        kind: "work",
-        id: "work-group-1",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "activity-read",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Read",
-            tone: "tool",
-            itemType: "dynamic_tool_call",
-            toolTitle: "Read",
-          },
-        ],
+        detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
+        changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
       },
-    ];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
+    ],
+    [
+      "live activity settles without a final tool event",
       {
-        kind: "work",
-        id: "work-group-1",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "activity-read",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Read",
-            tone: "tool",
-            itemType: "dynamic_tool_call",
-            toolTitle: "Read",
-            detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
-            changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
-          },
-        ],
+        label: "Bash",
+        tone: "tool",
+        itemType: "command_execution",
+        liveActivity: runningLiveActivity,
       },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
-  });
-
-  it("replaces work rows when live activity settles without a final tool event", () => {
-    const firstRow: WorkTimelineRow = {
+      {
+        liveActivity: {
+          state: "completed",
+          label: "Bash completed",
+          startedAt: "2026-05-09T10:00:00.000Z",
+          lastActivityAt: "2026-05-09T10:00:05.000Z",
+          detail: "Done",
+          progress: 1,
+          elapsedSeconds: 5,
+        },
+      },
+    ],
+    [
+      "the activity kind changes",
+      { label: "Needs input", tone: "info" },
+      { activityKind: "user-input.requested" },
+    ],
+    [
+      "automation card fields are added",
+      { label: "Created automation", tone: "info" },
+      { automation: { id: "automation-7", name: "Watch Synara PR 231", cadenceLabel: "Every 5m" } },
+    ],
+  ] as const)("replaces work rows when %s", (_case, base, patch) => {
+    const firstRow = {
       kind: "work",
-      id: "work-group-live-activity",
+      id: "work-group-1",
       createdAt: "2026-05-09T10:00:00.000Z",
-      groupedEntries: [
-        {
-          id: "activity-command",
-          createdAt: "2026-05-09T10:00:00.000Z",
-          label: "Bash",
-          tone: "tool",
-          itemType: "command_execution",
-          liveActivity: {
-            state: "running_tool",
-            label: "Bash",
-            startedAt: "2026-05-09T10:00:00.000Z",
-            lastActivityAt: "2026-05-09T10:00:01.000Z",
-            detail: "Running",
-            progress: 0.5,
-            elapsedSeconds: 1,
-          },
-        },
-      ],
-    };
+      groupedEntries: [{ id: "activity-1", createdAt: "2026-05-09T10:00:00.000Z", ...base }],
+    } as WorkTimelineRow;
     const first = computeStableMessagesTimelineRows([firstRow], emptyStableRows());
-    const settledRow: WorkTimelineRow = {
+    const enrichedRow = {
       ...firstRow,
-      groupedEntries: [
-        {
-          ...firstRow.groupedEntries[0]!,
-          liveActivity: {
-            state: "completed",
-            label: "Bash completed",
-            startedAt: "2026-05-09T10:00:00.000Z",
-            lastActivityAt: "2026-05-09T10:00:05.000Z",
-            detail: "Done",
-            progress: 1,
-            elapsedSeconds: 5,
-          },
-        },
-      ],
-    };
+      groupedEntries: [{ ...firstRow.groupedEntries[0]!, ...patch }],
+    } as WorkTimelineRow;
 
-    const second = computeStableMessagesTimelineRows([settledRow], first);
+    const second = computeStableMessagesTimelineRows([enrichedRow], first);
 
     expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(settledRow);
+    expect(second.result[0]).toBe(enrichedRow);
   });
 
   it("reuses worktree-setup rows until a step status or open state changes", () => {
@@ -414,86 +386,6 @@ describe("computeStableMessagesTimelineRows", () => {
     const openChanged = computeStableMessagesTimelineRows([makeRow("done", false)], statusChanged);
     expect(openChanged).not.toBe(statusChanged);
     expect(openChanged.result[0]).not.toBe(statusChanged.result[0]);
-  });
-
-  it("replaces work rows when the activity kind changes", () => {
-    const firstRow: WorkTimelineRow = {
-      kind: "work",
-      id: "work-group-user-input",
-      createdAt: "2026-05-09T10:00:00.000Z",
-      groupedEntries: [
-        {
-          id: "activity-user-input",
-          createdAt: "2026-05-09T10:00:00.000Z",
-          label: "Needs input",
-          tone: "info",
-        },
-      ],
-    };
-    const firstRows: MessagesTimelineRow[] = [firstRow];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
-      {
-        ...firstRow,
-        groupedEntries: [
-          {
-            ...firstRow.groupedEntries[0]!,
-            activityKind: "user-input.requested",
-          },
-        ],
-      },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
-  });
-
-  it("replaces work rows when automation card fields are added", () => {
-    const firstRows: MessagesTimelineRow[] = [
-      {
-        kind: "work",
-        id: "work-group-automation",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "automation-created",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Created automation",
-            tone: "info",
-          },
-        ],
-      },
-    ];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
-      {
-        kind: "work",
-        id: "work-group-automation",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "automation-created",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Created automation",
-            tone: "info",
-            automation: {
-              id: "automation-7",
-              name: "Watch Synara PR 231",
-              cadenceLabel: "Every 5m",
-            },
-          },
-        ],
-      },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
   it("replaces assistant rows when inline tool metadata becomes richer", () => {
@@ -782,34 +674,24 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
 });
 
 describe("resolveAssistantMessageCopyState", () => {
-  it("shows copy only for non-empty settled assistant text", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "Hello",
-        showCopyButton: true,
-        streaming: false,
-      }),
-    ).toEqual({ text: "Hello", visible: true });
-  });
-
-  it("hides copy while the active assistant response is still streaming", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "Hello",
-        showCopyButton: true,
-        streaming: true,
-      }),
-    ).toEqual({ text: "Hello", visible: false });
-  });
-
-  it("hides copy for empty responses", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "   ",
-        showCopyButton: true,
-        streaming: false,
-      }),
-    ).toEqual({ text: null, visible: false });
+  it.each([
+    [
+      "shows copy for non-empty settled assistant text",
+      "Hello",
+      false,
+      { text: "Hello", visible: true },
+    ],
+    [
+      "hides copy while the active assistant response is still streaming",
+      "Hello",
+      true,
+      { text: "Hello", visible: false },
+    ],
+    ["hides copy for empty responses", "   ", false, { text: null, visible: false }],
+  ])("%s", (_case, text, streaming, expected) => {
+    expect(resolveAssistantMessageCopyState({ text, showCopyButton: true, streaming })).toEqual(
+      expected,
+    );
   });
 });
 
@@ -1114,7 +996,7 @@ describe("deriveMessagesTimelineRows", () => {
     }),
   ];
 
-  it("folds each response woken by a background task on its own and names the task in its header", () => {
+  it("folds each settled woken response on its own, names the task in its header, and ends the reply once", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: wokenResponseEntries({ lastStreaming: false }),
@@ -1144,6 +1026,19 @@ describe("deriveMessagesTimelineRows", () => {
     // A woken response's clock starts when the subagent finished, not when the
     // previous reply did.
     expect(messageRow(rows, "report-1")?.durationStart).toBe("2026-01-01T00:01:00Z");
+
+    // A reply the background tasks carried on ends only once, on its last answer.
+    expect(messageRow(rows, "launched")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-2")?.assistantResponseContinues).toBeUndefined();
+    // Each response still owns its terminal answer (turn header, changed files).
+    expect(messageRow(rows, "launched")?.showAssistantCopyButton).toBe(true);
+    expect(messageRow(rows, "report-2")?.showAssistantCopyButton).toBe(true);
+    // Copy takes the whole reply from its last answer.
+    expect(messageRow(rows, "report-2")?.assistantReplyCopyText).toBe(
+      "Launched 2 subagents.\n\nReport 1\n\nReport 2",
+    );
+    expect(messageRow(rows, "launched")?.assistantReplyCopyText).toBeUndefined();
   });
 
   it.each(["task", "monitor"])(
@@ -1204,32 +1099,6 @@ describe("deriveMessagesTimelineRows", () => {
       "work:check-1",
     ]);
     expect(messageRow(rows, "report-2")?.collapsedTurnItems).toBeUndefined();
-  });
-
-  it("ends a reply that background tasks carried on only once, on its last answer", () => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
-    });
-
-    expect(messageRow(rows, "launched")?.assistantResponseContinues).toBe(true);
-    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBe(true);
-    expect(messageRow(rows, "report-2")?.assistantResponseContinues).toBeUndefined();
-    // Each response still owns its terminal answer (turn header, changed files).
-    expect(messageRow(rows, "launched")?.showAssistantCopyButton).toBe(true);
-    expect(messageRow(rows, "report-2")?.showAssistantCopyButton).toBe(true);
-  });
-
-  it("copies the whole reply from its last answer", () => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
-    });
-
-    expect(messageRow(rows, "report-2")?.assistantReplyCopyText).toBe(
-      "Launched 2 subagents.\n\nReport 1\n\nReport 2",
-    );
-    expect(messageRow(rows, "launched")?.assistantReplyCopyText).toBeUndefined();
   });
 
   it("keeps the previous footer until the woken response writes an answer", () => {
