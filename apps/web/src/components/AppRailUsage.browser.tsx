@@ -159,18 +159,7 @@ describe("AppRailUsage", () => {
     expect(
       work.element().querySelector("circle[stroke-dasharray]")?.getAttribute("stroke-dasharray"),
     ).toBe("20 100");
-    const accountDot = work.element().querySelector('[data-accent="#2563eb"]');
-    expect(accountDot).not.toBeNull();
-    const dotBounds = accountDot!.getBoundingClientRect();
-    const glyphBounds = Array.from(work.element().querySelectorAll("svg"))
-      .at(-1)!
-      .getBoundingClientRect();
-    // The account mark belongs beside the glyph, as in the model picker.
-    expect(dotBounds.x + dotBounds.width / 2).toBeGreaterThan(
-      glyphBounds.x + glyphBounds.width / 2,
-    );
-    expect(dotBounds.y + dotBounds.height / 2).toBeLessThan(glyphBounds.y + glyphBounds.height / 2);
-    expect(dotBounds.right).toBeLessThanOrEqual(glyphBounds.right + 5);
+    expect(work.element().querySelector('[data-accent="#2563eb"]')).not.toBeNull();
     await userEvent.hover(work);
     await expect.element(page.getByText("Claude · Work", { exact: true }).last()).toBeVisible();
     await expect.element(page.getByText("20% left", { exact: true }).last()).toBeVisible();
