@@ -8,7 +8,7 @@
 //        only owns the chat-specific preview grant and Retry behaviour.
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import { buildLocalImageUrl, normalizeMarkdownImagePath } from "~/lib/localImageUrls";
 import { projectLocalPreviewGrantQueryOptions } from "~/lib/projectReactQuery";
@@ -45,9 +45,8 @@ function GeneratedMarkdownVideoContent(
   const { src, cwd } = props;
   const queryClient = useQueryClient();
   // Files outside the workspace and temp roots need a short-lived preview
-  // grant. Request one only after the ungranted URL fails, and renew it at the
-  // point of use: a long video can outlive the grant before a later seek.
-  const needsGrant = useRef(false);
+  // grant. Playback requests one only after the ungranted URL fails, and renews
+  // it at the point of use: a long video can outlive the grant before a later seek.
   const resolveGrantedUrl = async (download: boolean) => {
     const grant = await queryClient.fetchQuery(
       projectLocalPreviewGrantQueryOptions({
@@ -76,14 +75,12 @@ function GeneratedMarkdownVideoContent(
       cacheKey={props.cacheKey}
       label={props.alt}
       isLinked={props.isLinked}
-      resolveRecoveryUrl={() => {
-        needsGrant.current = true;
-        return resolveGrantedUrl(false);
-      }}
+      resolveRecoveryUrl={() => resolveGrantedUrl(false)}
+      // A download cannot rely on a playback failure to learn that the file
+      // needs a grant: hosts that cannot stream never load the video at all.
+      // Ask for a grant up front and keep the plain URL when none is issued.
       resolveDownloadUrl={() =>
-        needsGrant.current
-          ? resolveGrantedUrl(true)
-          : Promise.resolve(buildLocalImageUrl({ src, cwd, download: true }))
+        resolveGrantedUrl(true).catch(() => buildLocalImageUrl({ src, cwd, download: true }))
       }
       onRetry={props.onRetry}
     />

@@ -340,6 +340,32 @@ it("recovers a markdown video outside the workspace through a preview grant", as
   }
 });
 
+it("downloads a markdown video outside the workspace on desktop-frame hosts with a grant", async () => {
+  configureDesktopResourceFixture();
+  const path = "/Users/tester/Desktop/simulator-recording.webm";
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <ChatMarkdown text={`![Simulator](${path})`} cwd="/workspace" />
+    </QueryClientProvider>,
+  );
+  try {
+    await expect
+      .element(screen.getByText("Inline playback isn’t available for this host"))
+      .toBeVisible();
+    expect(requests).toHaveLength(0);
+
+    await screen.getByRole("link", { name: "Download video" }).click();
+    await vi.waitFor(() => expect(downloadUrlAsBlob).toHaveBeenCalledOnce());
+    await vi.mocked(downloadUrlAsBlob).mock.results[0]!.value;
+    expect(createLocalFilePreviewGrant).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.searchParams.get("download")).toBe("1");
+    expect(requests[0]!.searchParams.get("grant")).toMatch(/^grant-\d+$/);
+  } finally {
+    await screen.unmount();
+  }
+});
+
 it("shows a retryable error card for a missing markdown video", async () => {
   createLocalFilePreviewGrant.mockRejectedValueOnce(new Error("Preview file not found."));
   const screen = await render(

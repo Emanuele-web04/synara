@@ -215,6 +215,9 @@ export function LocalVideoPreview(props: LocalVideoPreviewProps) {
   const status = unsupportedHost ? "error" : load.status;
   const showControls = !(inline && props.isLinked);
   const video = (
+    // This previews an arbitrary local file chosen by the user or an agent, so
+    // there is no caption track to offer; the rule targets authored media.
+    // oxlint-disable-next-line jsx-a11y/media-has-caption
     <video
       src={unsupportedHost ? undefined : load.url}
       controls={showControls}
