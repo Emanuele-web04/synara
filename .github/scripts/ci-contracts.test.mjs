@@ -6,6 +6,8 @@ import { test } from "node:test";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = read("../workflows/ci.yml");
+const requireFromScripts = createRequire(new URL("../../scripts/package.json", import.meta.url));
+const { jobs } = requireFromScripts("yaml").parse(workflow);
 const setup = read("../actions/setup-workspace/action.yml");
 const gate = workflow.match(
   /- name: Aggregate lane results[\s\S]*?        run: \|\n([\s\S]*?)(?=\n  [a-z_]+:|$)/,
@@ -310,8 +312,6 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const serverConfig = read("../../apps/server/vitest.config.ts");
   assert.ok(serverConfig.includes("maxWorkers: availableParallelism()"));
   assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
-  const requireFromScripts = createRequire(new URL("../../scripts/package.json", import.meta.url));
-  const { jobs } = requireFromScripts("yaml").parse(workflow);
   const browserMatrix = jobs.browser.strategy.matrix.include;
   const components = browserMatrix.filter(({ project }) => project === "components");
   assert.deepEqual(components.map(({ shard }) => shard).sort(), ["1/3", "2/3", "3/3"]);
@@ -334,4 +334,22 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
   assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
   assert.ok(!browser.includes("playwright install --with-deps chromium"));
+});
+
+test("only the Electron lifecycle smoke overlaps the desktop build", () => {
+  const steps = jobs.build.steps;
+  const sandbox = steps.findIndex((step) => step.run?.includes("chrome-sandbox"));
+  const build = steps.findIndex((step) => step.run === "bun run build:desktop");
+  const lifecycle = steps.findIndex((step) => step.run?.includes("smoke:browser-lifecycle"));
+  const focus = steps.findIndex((step) =>
+    step.run?.includes("preserves composer keyboard ownership"),
+  );
+  const preload = steps.findIndex((step) => step.run?.includes("dist-electron/preload.js"));
+
+  const buildStep = steps[build];
+  assert.ok(buildStep?.id && buildStep.background === true);
+  const wait = steps.findIndex((step) => step.wait === buildStep.id);
+  assert.ok(sandbox >= 0 && sandbox < build && build < lifecycle && lifecycle < wait);
+  assert.ok(wait < focus && wait < preload);
+  assert.ok(!steps[lifecycle].background && !steps[focus].background);
 });

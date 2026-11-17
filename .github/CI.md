@@ -240,6 +240,21 @@ caches, the four cases took 12.25 s before and 2.26 s after. The complete
 `chat-workflows` job took 116.05 s before and 106.01 s after with identical
 results for all 149 assigned cases.
 
+### Desktop lifecycle smoke during the build
+
+The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it
+while the desktop pipeline builds, then waits for a successful build before
+running the analytics build, Electron navigation focus smoke, and preload
+check. Both Electron smokes run in sequence.
+
+On the Mac mini with cold build outputs and Turbo cache, the build and
+lifecycle smoke took 39.09 s and 21.56 s serially. The same build and lifecycle
+checks finished in 36.61 s together, and the generated preload passed its CI
+check. The separate navigation smoke timed out while acquiring initial macOS
+window focus in both the serial run and an isolated reproduction. The overlap
+timing covers the build and lifecycle only. Full Linux Xvfb verification is
+pending.
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall
