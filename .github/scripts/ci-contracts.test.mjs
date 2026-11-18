@@ -533,15 +533,20 @@ test("measured critical-path distribution stays three-way and skips redundant ap
       ["chat-workflows", "1/1", "1/1"],
     ],
   );
-  const browserPair = jobs.browser.steps.find((step) => step.parallel)?.parallel;
+  const browserGroup = jobs.browser.steps.find((step) => step.parallel)?.parallel;
+  assert.ok(browserGroup);
   assert.deepEqual(
-    browserPair?.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
-    ["a", "b"],
+    browserGroup.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
+    ["a", "b", "c"],
   );
   assert.deepEqual(
-    browserPair?.map((step) => step.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED),
-    ["true", "true"],
+    browserGroup.map((step) => step.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED),
+    ["true", "true", "true"],
   );
+  assert.equal(browserGroup[2].if, "matrix.project == 'chat-workflows'");
+  for (const key of ["VITEST_BROWSER_API_PORT", "VITEST_BROWSER_CACHE_DIR"]) {
+    assert.equal(new Set(browserGroup.map((step) => step.env[key])).size, browserGroup.length);
+  }
   const browserSteps = jobs.browser.steps;
   const checkoutIndex = browserSteps.findIndex((step) => step.name === "Checkout");
   const cacheIndex = browserSteps.findIndex((step) => step.id === "chromium-cache");

@@ -22,11 +22,11 @@ async function collectPartitions(config: string) {
   }
 }
 
-// Resolve the same configuration as each of the two GitHub browser steps.
+// Resolve the same configuration as each GitHub browser step.
 async function collectChatSlices() {
   const slices: Awaited<ReturnType<typeof collectPartitions>> = [];
   try {
-    for (const slice of ["a", "b"]) {
+    for (const slice of ["a", "b", "c"]) {
       vi.stubEnv("VITEST_BROWSER_CHAT_SLICE", slice);
       slices.push(...(await collectPartitions("vitest.browser.ci.config.ts")));
     }
@@ -108,6 +108,8 @@ describe("browser CI partitions", () => {
             `${geometry} provider handoff destination hands the thread off before sending`,
             "chat-projects",
           ],
+          [`${geometry} opens the composer model picker`, "chat-workflows"],
+          [`${geometry} keeps the active chat explicitly unread`, "chat-workflows"],
           ["a newly added case", "chat-workflows"],
         ] as const) {
           // Expected membership must not come from the config being checked.

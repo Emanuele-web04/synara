@@ -351,6 +351,13 @@ launches. One matched A/B on the Mac mini used fresh Vite and compiler caches
 and passed the same 131 cases in both variants. Imports fell from 26.9 s to
 23.4 s per process and lane wall time fell from 76.36 s to 74.05 s.
 
+The workflows lane runs three Chromium processes on its existing runner.
+Each gets two compiler workers, its own API port and Vite cache, and a
+complementary test-name filter. On the Mac mini, the pair took 74.05 s cold
+and 48.12 s warm. Three processes took 66.59 s cold and 38.89 s warm.
+Both warm comparisons started with the same compiler cache and empty Vite
+caches. All 131 cases passed exactly once. The hosted impact remains unmeasured.
+
 ### Desktop lifecycle smoke during the build
 
 The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it
