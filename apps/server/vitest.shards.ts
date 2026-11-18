@@ -1,5 +1,4 @@
-import { relative, sep } from "node:path";
-import { BaseSequencer, type TestSpecification } from "vitest/node";
+import { createPinnedShardSequencer } from "../../vitest.shards";
 
 /**
  * CI runs the server suite as three serial `--shard=N/3` lanes. Vitest's native
@@ -16,19 +15,4 @@ export const PINNED_SERVER_SHARDS: Readonly<Record<number, Readonly<Record<strin
   },
 };
 
-export class PinnedShardSequencer extends BaseSequencer {
-  override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const { config } = this.ctx;
-    const { index, count } = config.shard!;
-    const pins = PINNED_SERVER_SHARDS[count] ?? {};
-    const pinnedShard = (file: TestSpecification) =>
-      pins[relative(config.root, file.moduleId).split(sep).join("/")];
-    // Native slices partition the full list; removing every pinned file from
-    // them and adding back only this shard's pins keeps that a partition.
-    const native = await super.shard(files);
-    return [
-      ...native.filter((file) => pinnedShard(file) === undefined),
-      ...files.filter((file) => pinnedShard(file) === index),
-    ];
-  }
-}
+export const PinnedShardSequencer = createPinnedShardSequencer(PINNED_SERVER_SHARDS);

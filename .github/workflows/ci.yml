@@ -184,7 +184,7 @@ jobs:
 
   # ChatView is one large file, so split it by complementary test-name groups.
   # Projects and workflows each use two name groups on the same runner, while
-  # the component jobs each run two native Vitest file shards.
+  # the component jobs each run two Vitest file shards.
   # Each browser process still executes files serially.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})

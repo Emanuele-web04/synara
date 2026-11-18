@@ -205,7 +205,7 @@ is acceptable.
 
 ### Component test processes on the same runner
 
-The three component jobs now run two native Vitest shards each, pairing
+The three component jobs run two Vitest shards each, pairing
 `1/6` with `2/6`, `3/6` with `4/6`, and `5/6` with `6/6`. Each Chromium
 process still runs its files serially with a separate loopback port and Vite
 cache directory. The pair uses the job's existing compiler cache, which writes
@@ -224,6 +224,17 @@ passed the gate in 318 s including queue. Its no-queue critical path was 308 s,
 and it used 40.77 runner-minutes. All six browser compiler caches restored. The
 three component jobs completed in 171 s, 180 s, and 205 s. The
 `chat-workflows` job took 294 s and was the longest job on the critical path.
+
+Across three hosted attempts with the paired layout, the median per-file test
+times summed to 34.6 s in `5/6` and 90.6 s in `6/6`. The new placement puts
+`EventRouter.browser.tsx` on `5/6` and moves three shorter files to `6/6`.
+The other component files keep their native placement. The Vitest partition
+contract verifies that each file has exactly one owner.
+
+On the Mac mini, the pair took 89.55 s with native placement and 68.17 s with
+the four moves. Both runs used fresh Vite caches and copies of the same warmed
+compiler cache. All 440 cases across 84 files matched by full name, outcome and
+multiplicity. Hosted timing for the new placement is pending.
 
 ### Chat workflow fixture setup
 
