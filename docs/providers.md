@@ -317,14 +317,22 @@ agent is an account: it gets its own tab in the model picker, its own models,
 environment variables, and sign-in state, and a terminal command of its own
 (`acp-<slug>` for an account named `acp_<slug>`).
 
-Register an agent in **Settings → Accounts → ACP → Add account** with its
-**Agent command** (the executable that starts its ACP server, for example `omp`
-or `gemini`) and **Arguments** (the flags that put it in ACP mode, for example
-`acp` or `--experimental-acp`). The working directory and the model list it
-offers live under **Advanced** in the account's editor. Registering the first
-agent turns the ACP provider on; its shared toggle in Providers still hides
-every ACP account from pickers while each account keeps working on its own
-enabled switch.
+The easiest way to register one is the **Agent** picker in
+**Settings → Accounts → ACP → Add account**: it lists the curated
+[ACP registry](https://agentclientprotocol.com/registry) — the same index other
+ACP clients use — and fills in the launch settings on its own. Agents shipped
+as `npx`/`uvx` packages launch through the package runner; agents shipped as
+binaries are downloaded into `~/.synara/acp-agents/<id>/<version>/`, verified
+against the registry's checksum, and launched from there. **Custom agent**
+covers anything outside the registry.
+
+For a custom agent, fill in **Agent command** (the executable that starts its
+ACP server, for example `omp` or `gemini`) and **Arguments** (the flags that
+put it in ACP mode, for example `acp` or `--experimental-acp`). The working
+directory and the model list it offers live under **Advanced** in the
+account's editor. Registering the first agent turns the ACP provider on; its
+shared toggle in Providers still hides every ACP account from pickers while
+each account keeps working on its own enabled switch.
 
 ## Models and effort options
 

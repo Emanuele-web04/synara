@@ -385,3 +385,51 @@ export const ProviderListAgentsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListAgentsResult = typeof ProviderListAgentsResult.Type;
+
+// ---- ACP agent registry ----
+// The curated registry at agentclientprotocol.com is how other ACP clients
+// (Zed, JetBrains) offer one-click agent installs; Synara resolves the same
+// entries into instance launch configs.
+
+export const AcpRegistryAgentLaunchKind = Schema.Literals(["npx", "uvx", "binary"]);
+export type AcpRegistryAgentLaunchKind = typeof AcpRegistryAgentLaunchKind.Type;
+
+export const AcpRegistryAgentDescriptor = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  repository: Schema.optional(TrimmedNonEmptyString),
+  icon: Schema.optional(TrimmedNonEmptyString),
+  launch: Schema.Struct({
+    kind: AcpRegistryAgentLaunchKind,
+    /** False when the registry ships no artifact for the current platform. */
+    installable: Schema.Boolean,
+    // `npx`/`uvx` launch immediately, so their command and argv arrive with the
+    // listing; `binary` agents need `provider.installAcpRegistryAgent` first.
+    command: Schema.optional(TrimmedNonEmptyString),
+    args: Schema.optional(Schema.Array(Schema.String)),
+  }),
+});
+export type AcpRegistryAgentDescriptor = typeof AcpRegistryAgentDescriptor.Type;
+
+export const ProviderListAcpRegistryAgentsResult = Schema.Struct({
+  agents: Schema.Array(AcpRegistryAgentDescriptor),
+  cached: Schema.optional(Schema.Boolean),
+  error: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderListAcpRegistryAgentsResult = typeof ProviderListAcpRegistryAgentsResult.Type;
+
+export const ProviderInstallAcpRegistryAgentInput = Schema.Struct({
+  agentId: TrimmedNonEmptyString,
+});
+export type ProviderInstallAcpRegistryAgentInput = typeof ProviderInstallAcpRegistryAgentInput.Type;
+
+export const ProviderInstallAcpRegistryAgentResult = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  args: Schema.Array(Schema.String),
+  /** Only for binary installs: the managed directory the agent was unpacked into. */
+  installDir: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderInstallAcpRegistryAgentResult =
+  typeof ProviderInstallAcpRegistryAgentResult.Type;

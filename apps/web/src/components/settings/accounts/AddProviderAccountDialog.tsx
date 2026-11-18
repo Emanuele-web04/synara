@@ -4,13 +4,15 @@
 // Layer: Settings UI components
 // Depends on: dialog primitives, settings select control, account presentation helpers.
 
-import type { ProviderKind } from "@synara/contracts";
-import { type FormEvent, useId, useState } from "react";
+import type { AcpRegistryAgentDescriptor, ProviderKind } from "@synara/contracts";
+import { type FormEvent, useEffect, useId, useState } from "react";
 
 import {
   deriveProviderAccountId,
   validateProviderAccountId,
 } from "~/lib/providerInstancePresentation";
+import { acpArgsToText } from "~/lib/acpAgentConfigText";
+import { ensureNativeApi } from "~/nativeApi";
 
 import { ProviderIcon } from "../../ProviderIcon";
 import { Button } from "../../ui/button";
@@ -39,6 +41,10 @@ export type AddProviderAccountConfigField = {
   /** The account cannot be added while this field is empty. */
   readonly required?: boolean;
 };
+
+// The ACP add flow offers the curated agent registry next to a manual command,
+// like the "Install from Registry" pickers other ACP clients expose.
+const ACP_CUSTOM_AGENT = "__custom__";
 
 export type AddProviderAccountInput = {
   readonly provider: ProviderKind;
@@ -69,6 +75,11 @@ export function AddProviderAccountDialog(props: {
   const [accentColor, setAccentColor] = useState<string | undefined>(undefined);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [registryAgents, setRegistryAgents] =
+    useState<ReadonlyArray<AcpRegistryAgentDescriptor> | null>(null);
+  const [registrySelection, setRegistrySelection] = useState<string>(ACP_CUSTOM_AGENT);
+  const [installingAgentId, setInstallingAgentId] = useState<string | null>(null);
+  const [registryError, setRegistryError] = useState<string | null>(null);
 
   // Start from a blank form every time the dialog opens.
   const [wasOpen, setWasOpen] = useState(props.open);
@@ -81,8 +92,63 @@ export function AddProviderAccountDialog(props: {
       setAccentColor(undefined);
       setConfig({});
       setSubmitAttempted(false);
+      setRegistryAgents(null);
+      setRegistrySelection(ACP_CUSTOM_AGENT);
+      setInstallingAgentId(null);
+      setRegistryError(null);
     }
   }
+
+  useEffect(() => {
+    if (!props.open || provider !== "acp" || registryAgents !== null) return;
+    let cancelled = false;
+    ensureNativeApi()
+      .provider.listAcpRegistryAgents()
+      .then(
+        (result) => {
+          if (!cancelled) setRegistryAgents(result.agents);
+        },
+        (error) => {
+          if (!cancelled) {
+            setRegistryAgents([]);
+            setRegistryError(error instanceof Error ? error.message : String(error));
+          }
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [props.open, provider, registryAgents]);
+
+  const selectRegistryAgent = async (agent: AcpRegistryAgentDescriptor) => {
+    setRegistrySelection(agent.id);
+    setRegistryError(null);
+    setLabel(agent.name);
+    setIdOverride(`acp_${agent.id}`);
+    if (agent.launch.kind !== "binary") {
+      setConfig((current) => ({
+        ...current,
+        command: agent.launch.command ?? "",
+        args: acpArgsToText(agent.launch.args ?? []),
+      }));
+      return;
+    }
+    setInstallingAgentId(agent.id);
+    try {
+      const installed = await ensureNativeApi().provider.installAcpRegistryAgent({
+        agentId: agent.id,
+      });
+      setConfig((current) => ({
+        ...current,
+        command: installed.command,
+        args: acpArgsToText(installed.args),
+      }));
+    } catch (error) {
+      setRegistryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInstallingAgentId(null);
+    }
+  };
 
   const providerLabel =
     props.providers.find((option) => option.provider === provider)?.label ?? provider;
@@ -190,6 +256,64 @@ export function AddProviderAccountDialog(props: {
                   : t("settings:routingKeyUsedByThreadsAndSessionsLettersDigits")}
               </span>
             </label>
+            {provider === "acp" ? (
+              <div className="space-y-1">
+                <span className={dialogFieldLabelClassName}>{t("settings:acpRegistryAgent")}</span>
+                <SettingsSelectControl
+                  value={registrySelection}
+                  onValueChange={(next) => {
+                    if (next === ACP_CUSTOM_AGENT) {
+                      setRegistrySelection(ACP_CUSTOM_AGENT);
+                      setRegistryError(null);
+                      return;
+                    }
+                    const agent = registryAgents?.find((entry) => entry.id === next);
+                    if (agent) void selectRegistryAgent(agent);
+                  }}
+                  ariaLabel={t("settings:acpRegistryAgent")}
+                  triggerClassName="w-full"
+                  valueContent={
+                    <span className="flex items-center gap-2">
+                      <span className="truncate">
+                        {registrySelection === ACP_CUSTOM_AGENT
+                          ? t("settings:acpRegistryCustomAgent")
+                          : (registryAgents?.find((agent) => agent.id === registrySelection)
+                              ?.name ?? registrySelection)}
+                      </span>
+                    </span>
+                  }
+                >
+                  <SelectItem hideIndicator value={ACP_CUSTOM_AGENT}>
+                    {t("settings:acpRegistryCustomAgent")}
+                  </SelectItem>
+                  {registryAgents?.map((agent) => (
+                    <SelectItem
+                      hideIndicator
+                      key={agent.id}
+                      value={agent.id}
+                      disabled={!agent.launch.installable}
+                    >
+                      <span className="flex items-center gap-2">
+                        {agent.icon ? (
+                          <img src={agent.icon} alt="" className="size-4 shrink-0" />
+                        ) : null}
+                        <span className="truncate">{agent.name}</span>
+                        <span className="truncate text-muted-foreground">{agent.version}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SettingsSelectControl>
+                <span className="block text-ui-sm text-muted-foreground">
+                  {installingAgentId !== null
+                    ? t("settings:acpRegistryInstalling")
+                    : registryError !== null
+                      ? registryError
+                      : registryAgents === null
+                        ? t("settings:acpRegistryLoading")
+                        : t("settings:acpRegistryHint")}
+                </span>
+              </div>
+            ) : null}
             <div className="space-y-1">
               <span className={dialogFieldLabelClassName}>{t("settings:accentColor")}</span>
               <ProviderAccentColorControl

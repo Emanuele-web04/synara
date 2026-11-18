@@ -226,6 +226,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
+import { installAcpRegistryAgent, listAcpRegistryAgents } from "./provider/acp/AcpRegistry";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
@@ -3129,6 +3130,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        [WS_METHODS.providerListAcpRegistryAgents]: () =>
+          rpcEffect(
+            Effect.tryPromise(() => listAcpRegistryAgents()),
+            "Failed to list ACP registry agents",
+          ),
+        [WS_METHODS.providerInstallAcpRegistryAgent]: (input: { agentId: string }) =>
+          rpcEffect(
+            Effect.tryPromise(() => installAcpRegistryAgent(input.agentId, config.baseDir)),
+            "Failed to install the ACP agent",
+          ),
         ...accountRpcHandlers,
         ...hostsRpcHandlers,
         [WS_METHODS.automationList]: (input) =>

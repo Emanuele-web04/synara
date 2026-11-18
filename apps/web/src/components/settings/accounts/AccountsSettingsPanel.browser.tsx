@@ -29,6 +29,10 @@ const harness = vi.hoisted(() => ({
       onEvent: vi.fn(),
     },
     shell: { openExternal: vi.fn(async () => {}) },
+    provider: {
+      listAcpRegistryAgents: vi.fn(async () => ({ agents: [] })),
+      installAcpRegistryAgent: vi.fn(async () => ({ command: "", args: [] })),
+    },
   },
 }));
 

@@ -412,6 +412,9 @@ import type {
   ProviderGetComposerCapabilitiesInput,
   ProviderListAgentsInput,
   ProviderListAgentsResult,
+  ProviderListAcpRegistryAgentsResult,
+  ProviderInstallAcpRegistryAgentInput,
+  ProviderInstallAcpRegistryAgentResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsInput,
@@ -1502,6 +1505,10 @@ export interface NativeApi {
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
+    listAcpRegistryAgents: () => Promise<ProviderListAcpRegistryAgentsResult>;
+    installAcpRegistryAgent: (
+      input: ProviderInstallAcpRegistryAgentInput,
+    ) => Promise<ProviderInstallAcpRegistryAgentResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
