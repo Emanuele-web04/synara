@@ -312,12 +312,18 @@ With those four pins, components 3/3 was the slowest component job in both
 hosted runs that restored their caches, and components 2/3 was the fastest.
 In [run 44368935032](https://github.com/Emanuele-web04/synara/actions/runs/44368935032)
 the halves took 121 s (`1/6`), 128 s, 129 s, 141 s, 173 s and 171 s (`6/6`).
-Eight more pins move six short files from `5/6` to `3/6` and two from `6/6`
-to `4/6`. In that run they took about 27 s of the `5/6` half and 13 s of the
-`6/6` half. On the Mac mini with the main-merged file set, a warm compiler
-cache and the three pairs run like CI, the slowest half fell from 66.8 s to
-61.2 s. The range narrowed from 55.1–66.8 s to 54.8–61.2 s, and all 1,426
-cases kept their outcomes. Hosted timing for the new placement is pending.
+A trial pinned six short files from `5/6` to `3/6` and two from `6/6` to `4/6`.
+On the Mac mini with the main-merged file set, a warm compiler cache and the
+three pairs run like CI, the slowest half fell from 66.8 s to 61.2 s, and all
+1,426 cases kept their outcomes. Hosted, it overshot. In runs
+[44383201899](https://github.com/Emanuele-web04/synara/actions/runs/44383201899)
+and [44384792991](https://github.com/Emanuele-web04/synara/actions/runs/44384792991),
+`3/6` and `4/6` took 142–147 s while `5/6` and `6/6` took 108–115 s.
+Components 2/3 became the slowest component job at 178–179 s, and components
+3/3 took 143–148 s. In those runs the moved files took 21 s on `3/6` and 11 s
+on `4/6`. The current placement keeps three of them on `3/6`, about 9 s, and
+returns the other five to their native shards. Hosted timing for it is
+pending.
 
 The keybindings warning case shares EventRouter's real route and WebSocket
 fixture. The former standalone file mounted the app twice. In two cold hosted
@@ -503,7 +509,9 @@ in Core. ChatView now has its own `ChatView.compiler.test.ts`. Both guard
 files register their cases through `src/test/hotPathCompiler.ts`, and Core
 runs them with two workers. On the Mac mini the guard took 32.6 s with two
 workers, against 37.8 s for the single file and 44.7 s for both files on one
-worker. ChatView's own compile sets the floor. Hosted timing is pending.
+worker. ChatView's own compile sets the floor. Hosted, the guard took 123 s
+and 95 s with two workers in runs 44383201899 and 44384792991, and Core took
+170 s and 146 s.
 
 ## November 2026 critical-path rebalance
 
