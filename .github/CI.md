@@ -330,8 +330,18 @@ All 503 files and all 6,279 case names, results and multiplicities matched
 across the four runs. The Ubuntu trial then exposed a timezone failure in
 `inbox.logic.test.ts`. The test changes `process.env.TZ` to exercise the Rome
 daylight-saving transitions. A Mac mini replay launched in UTC reproduced
-the failure in threads. All 17 cases passed in forks. Web Unit uses Vitest's
-default fork pool. [Hosted Web Unit trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109/job/134811090010)
+the failure in threads. All 17 cases passed in forks.
+[Hosted Web Unit trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109/job/134811090010)
+
+The CI config now runs that file in a fork and the rest of the Web Unit
+suite in isolated threads. The worker limit is shared across both projects.
+With three total workers and the compiler-first schedule, matched Mac mini
+comparisons through Turbo measured 53.76 → 49.92 s for seed `1795008673311`
+and 60.20 → 54.83 s for seed `7301` (mixed pool first). Both comparisons
+matched all 6,279 case outcomes and multiplicities across 503 files.
+An initial attempt at seed `7301` also matched coverage, but the fork arm
+ran during a host load spike, so its timing was excluded. The mixed pool
+has local measurements only.
 
 ### Web Unit compiler scheduling
 
