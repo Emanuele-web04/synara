@@ -127,7 +127,8 @@ export const PROVIDER_AUTHENTICATION = {
   acp: {
     flow: "interactive",
     args: [],
-    instructions: "Complete any startup prompts in the agent CLI to authenticate it for ACP use.",
+    instructions:
+      "Sign in inside the agent's own CLI, opened here without its ACP arguments. Your credentials stay with the agent; Synara never sees them.",
   },
 } as const satisfies Record<
   ProviderKind,

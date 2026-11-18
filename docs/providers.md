@@ -739,22 +739,31 @@ The login runs in an empty directory on the Synara server machine, rather than i
 Browser/remote clients still need to complete the provider's browser or device authorization on the
 appropriate machine. Synara never submits browser credentials or accepts consent prompts for you.
 
-| Provider      | Entry point                     | Human steps                                                 |
-| ------------- | ------------------------------- | ----------------------------------------------------------- |
-| Codex         | `codex login`                   | Browser/account authorization                               |
-| Claude        | `claude auth login`             | Login method, browser/Apple/organization authorization      |
-| Cursor        | `cursor-agent login`            | Cursor browser authorization                                |
-| Devin         | `devin auth login`              | Devin/Windsurf/enterprise login selection and authorization |
-| Antigravity   | `agy`                           | Startup sign-in and any system credential-store consent     |
-| Grok          | `grok login`                    | Browser or displayed authorization steps                    |
-| Factory Droid | `droid`                         | Startup prompts and browser/device pairing                  |
-| OpenCode      | `opencode auth login`           | Model provider selection and OAuth or API-key onboarding    |
-| Pi            | `pi`, then **Sign-in options**  | Startup prompts followed by model provider selection        |
-| Oh My Pi      | `omp`, then **Sign-in options** | Startup prompts followed by OAuth/key selection             |
+| Provider      | Entry point                     | Human steps                                                  |
+| ------------- | ------------------------------- | ------------------------------------------------------------ |
+| Codex         | `codex login`                   | Browser/account authorization                                |
+| Claude        | `claude auth login`             | Login method, browser/Apple/organization authorization       |
+| Cursor        | `cursor-agent login`            | Cursor browser authorization                                 |
+| Devin         | `devin auth login`              | Devin/Windsurf/enterprise login selection and authorization  |
+| Antigravity   | `agy`                           | Startup sign-in and any system credential-store consent      |
+| Grok          | `grok login`                    | Browser or displayed authorization steps                     |
+| Factory Droid | `droid`                         | Startup prompts and browser/device pairing                   |
+| OpenCode      | `opencode auth login`           | Model provider selection and OAuth or API-key onboarding     |
+| Pi            | `pi`, then **Sign-in options**  | Startup prompts followed by model provider selection         |
+| Oh My Pi      | `omp`, then **Sign-in options** | Startup prompts followed by OAuth/key selection              |
+| ACP agents    | The agent's own interactive CLI | The agent's native sign-in (`/login`, browser, or key setup) |
 
 Pi-family **Sign-in options** sends the native `/login` TUI command after you have completed startup
 prompts. It is never passed as a model prompt. OpenCode accounts configured for an external server
 must authenticate on that server; Synara reports this instead of changing a local account.
+
+For ACP agents, **Sign in** launches the configured command without its ACP-mode arguments (for
+example `npx @google/gemini-cli --acp` becomes `npx @google/gemini-cli`), so the agent's normal
+interactive CLI — and its native login — starts instead of the protocol server. Authentication
+happens entirely inside the agent's own CLI and credential store: Synara hosts the terminal and
+then rechecks status, but never sees or handles the credential itself. The in-band ACP
+`authenticate` method is only used during session startup when the agent advertises auth methods
+(and `authMethodId` selects among them).
 
 For local OpenCode sign-in, Synara checks `auth login --help` and adds `--standalone` when supported.
 The private login server uses the selected account's home and XDG directories without connecting
