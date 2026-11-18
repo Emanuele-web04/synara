@@ -4620,9 +4620,9 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       try {
         await page
-        .getByRole("button", { name: "Switch to activity view", exact: true })
-        .first()
-        .click();
+          .getByRole("button", { name: "Switch to activity view", exact: true })
+          .first()
+          .click();
         await expect.element(page.getByRole("button", { name: "Activity options" })).toBeVisible();
         await page
           .getByRole("navigation", { name: "Primary" })

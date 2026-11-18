@@ -5925,12 +5925,7 @@ export default function Sidebar() {
             ),
           )
         : visibleWorkspaceThreadKeys,
-    [
-      localEnvironmentId,
-      renderedChatEntries,
-      showChatsPanel,
-      visibleWorkspaceThreadKeys,
-    ],
+    [localEnvironmentId, renderedChatEntries, showChatsPanel, visibleWorkspaceThreadKeys],
   );
   const activeWorkspaceThreadKey =
     pathname === "/remote"
