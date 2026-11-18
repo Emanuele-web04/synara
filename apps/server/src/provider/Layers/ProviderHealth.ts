@@ -76,6 +76,8 @@ import {
   DEFAULT_CURSOR_AGENT_BINARY,
   resolveCursorAgentBinaryPath,
 } from "../acp/CursorAcpCommand";
+import { isAcpAuthRequiredError } from "../acp/AcpSessionRuntime";
+import { makeGenericAcpRuntime } from "../acp/GenericAcpSupport";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import { resolveOmpCliBinaryPath } from "../acp/OmpAcpSupport";
@@ -2158,12 +2160,37 @@ export const checkOmpProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
-/** Liveness probe for a configured ACP agent instance: `<command> --version`. */
+/**
+ * Bound for the ACP session probe (initialize + session/new through the real
+ * runtime). Generous enough for cold-starting agents; a longer handshake is a
+ * real usability problem worth surfacing.
+ */
+const ACP_SESSION_PROBE_TOTAL_TIMEOUT_MS = 45_000;
+
+/**
+ * Auth-flavored failure phrases not covered by the protocol-level
+ * -32000/auth-required pairing (e.g. "requires authentication but advertises
+ * no auth methods").
+ */
+const ACP_PROBE_AUTH_FAILURE_PATTERN =
+  /\b(?:requires? authentication|requires? auth|unauthenticated|not authenticated|login required|authentication failed|sign[- ]?in)\b/i;
+
+/**
+ * Liveness probe for a configured ACP agent instance: `<command> --version`,
+ * then a real `initialize` + `session/new` through the generic ACP runtime so
+ * agents that start but break on session setup (missing bundled modules,
+ * crashed tool children) report the actual error instead of "ready".
+ */
 export const checkAcpProviderStatus = (
   command?: string,
   environment?: Readonly<Record<string, string>>,
   instanceId?: ProviderInstanceId,
   paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+  options?: {
+    readonly args?: ReadonlyArray<string> | undefined;
+    readonly authMethodId?: string | undefined;
+    readonly cwd?: string | undefined;
+  },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -2235,16 +2262,74 @@ export const checkAcpProviderStatus = (
     }
     const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    // Session probe: launch the agent exactly like a real session (same argv,
+    // environment, and instance isolation) and run initialize + session/new.
+    // An auth-shaped failure means the agent works but needs sign-in; anything
+    // else means the advertised agent is broken before the first turn.
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const sessionProbe = yield* Effect.scoped(
+      makeGenericAcpRuntime({
+        agentSettings: {
+          command: executable,
+          ...(options?.args !== undefined ? { args: options.args } : {}),
+          ...(environment !== undefined ? { environment } : {}),
+          ...(instanceId !== undefined ? { instanceId } : {}),
+          ...(options?.authMethodId?.trim() ? { authMethodId: options.authMethodId } : {}),
+          ...(paths?.homeDir !== undefined ? { homeDir: paths.homeDir } : {}),
+          ...(paths?.isolationRootDir !== undefined
+            ? { isolationRootDir: paths.isolationRootDir }
+            : {}),
+        },
+        childProcessSpawner: spawner,
+        cwd: options?.cwd ?? paths?.homeDir ?? process.cwd(),
+        clientInfo: { name: "synara-acp-health-probe", version: "0.0.0" },
+        startupTimeouts: { totalMs: ACP_SESSION_PROBE_TOTAL_TIMEOUT_MS },
+      }).pipe(Effect.flatMap((runtime) => runtime.start())),
+    ).pipe(Effect.result);
+
+    if (Result.isSuccess(sessionProbe)) {
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "ready" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: `ACP agent '${executable}' is installed and accepted a session. Authenticate it in its own CLI as needed.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    const probeFailure = sessionProbe.failure;
+    if (
+      isAcpAuthRequiredError(probeFailure) ||
+      ACP_PROBE_AUTH_FAILURE_PATTERN.test(probeFailure.message)
+    ) {
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "ready" as const,
+        available: true,
+        authStatus: "unauthenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: `ACP agent '${executable}' is installed but requires sign-in. ${probeFailure.message}`,
+      } satisfies ServerProviderStatus;
+    }
+
     return {
       provider: ACP_PROVIDER,
       instanceId: instanceId ?? ACP_PROVIDER,
       driver: ACP_PROVIDER,
-      status: "ready" as const,
-      available: true,
+      status: "error" as const,
+      available: false,
       authStatus: "unknown" as const,
       version: parsedVersion,
       checkedAt,
-      message: `ACP agent '${executable}' is installed. Authenticate it in its own CLI as needed.`,
+      message: `ACP agent '${executable}' launched but failed to create a session: ${probeFailure.message}`,
     } satisfies ServerProviderStatus;
   });
 
@@ -3587,6 +3672,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 acpOptions?.environment,
                 instance.instanceId,
                 { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+                {
+                  args: acpOptions?.args,
+                  authMethodId: acpOptions?.authMethodId,
+                  cwd: acpOptions?.cwd,
+                },
               ),
             );
           }
