@@ -308,18 +308,18 @@ function tests(name) {
   if (suites.includes("longchat")) {
     const longchat = data.longchat;
     for (const [name] of LONGCHAT_PLAN.threads) {
-      add(`L1/open-first-${name}`, longchat, (r) => r.threads[name].cold.bottomMs, "ms");
-      add(`L2/switch-back-${name}`, longchat, (r) => r.threads[name].warm.bottomMs, "ms");
-      add(`L3/scroll-frame-p95-${name}`, longchat, (r) => r.threads[name].scroll.frameP95Ms, "ms");
+      add(`LC1/open-first-${name}`, longchat, (r) => r.threads[name].cold.bottomMs, "ms");
+      add(`LC2/switch-back-${name}`, longchat, (r) => r.threads[name].warm.bottomMs, "ms");
+      add(`LC3/scroll-frame-p95-${name}`, longchat, (r) => r.threads[name].scroll.frameP95Ms, "ms");
       add(
-        `L3/scroll-gaps-${name}`,
+        `LC3/scroll-gaps-${name}`,
         longchat,
         (r) => r.threads[name].scroll.framesOver33ms,
         "frames over 33 ms",
       );
-      add(`L4/fling-frame-p95-${name}`, longchat, (r) => r.threads[name].fling.frameP95Ms, "ms");
+      add(`LC4/fling-frame-p95-${name}`, longchat, (r) => r.threads[name].fling.frameP95Ms, "ms");
       add(
-        `L4/fling-gaps-${name}`,
+        `LC4/fling-gaps-${name}`,
         longchat,
         (r) => r.threads[name].fling.framesOver33ms,
         "frames over 33 ms",

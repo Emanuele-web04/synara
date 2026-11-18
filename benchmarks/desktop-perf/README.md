@@ -91,6 +91,8 @@ migration, create a second set with a build of that schema
 | `A7/*`, `L1/*`                            | Three new threads streaming a 900-word answer from real Claude Sonnet sessions at once: memory and CPU of the whole process tree.       |
 | `A8/*`                                    | 60 keys typed 100 ms apart in the composer while those sessions stream: keydown until the frame after the input event.                  |
 | `A10/mb-per-thread`                       | Memory change of the whole tree per thread once the three turns have finished and their sessions are still alive.                       |
+| `LC1/*`, `LC2/*`                          | Opt-in `longchat` suite: first open and switch back of each realistic long thread (pointerdown until the transcript is at the end).     |
+| `LC3/*`, `LC4/*`                          | Same suite: 90 wheel ticks and a 40×1200 px fling per long thread; frames over 33 ms and the 95th percentile frame time on the GPU.     |
 
 The `A*` keys follow the numbering of the third-party benchmark this work started from;
 its test definitions are not documented, so the match is by name and unit only.
@@ -185,6 +187,9 @@ window must stay in front):
 node benchmarks/desktop-perf/prepare.mjs --ref main --name main --templates --template-set longchat --realistic
 node benchmarks/desktop-perf/run.mjs --build main --suites longchat --template-set longchat
 ```
+
+Its keys use the `LC` prefix (`LC1/open-first-*` … `LC4/fling-gaps-*`); `L1/*` belongs to
+the load suite.
 
 `apps/web/perf/longChatDerivations.perf.test.ts` times the per-event derivation chain on
 the captured snapshot frames (`SYNARA_PERF=1`) and fails on a tenfold regression.
