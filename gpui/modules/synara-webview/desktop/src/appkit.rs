@@ -1069,7 +1069,7 @@ fn rand_u32() -> u32 {
             std::io::Read::read_exact(&mut file, &mut bytes)?;
             Ok(u32::from_le_bytes(bytes))
         })
-        .unwrap_or_else(|| {
+        .unwrap_or_else(|_| {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
@@ -1380,7 +1380,7 @@ fn update_install(view: id) -> String {
             "#!/bin/sh\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.2; done\nmv {bundle_q} {prev_q}\nif ditto {src_q} {bundle_q}; then rm -rf {prev_q} && open {bundle_q}; else rm -rf {bundle_q}; mv {prev_q} {bundle_q}; fi\n"
         );
         let script_path = update_tmp_path(&format!("synara-update-swap-{pid}.sh"));
-        if std::fs::write(script_path, script).is_err() {
+        if std::fs::write(&script_path, script).is_err() {
             update_patch(
                 view,
                 serde_json::json!({"status":"error","message":"swap script failed","errorContext":"install","canRetry":true}),
@@ -1388,7 +1388,7 @@ fn update_install(view: id) -> String {
             return;
         }
         let _ = std::process::Command::new("/usr/bin/nohup")
-            .args(["/bin/sh", script_path])
+            .args(["/bin/sh", &script_path])
             .spawn();
         std::thread::sleep(std::time::Duration::from_millis(500));
         std::process::exit(0);
