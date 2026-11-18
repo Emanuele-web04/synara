@@ -3580,10 +3580,16 @@ const makeWsRpcHandlersLayer = () =>
             withBots((bots) => bots.update(input)),
             "Failed to update the bot",
           ),
+        // A bot is a Hub: removing it deletes that Hub, which only the owner session may do
+        // (as `projectAgentDeleteGroup`).
         [WS_METHODS.botsRemove]: (input) =>
-          rpcEffect(
-            withBots((bots) => bots.remove(input)),
-            "Failed to remove the bot",
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                withBots((bots) => bots.remove(input)),
+                "Failed to remove the bot",
+              ),
+            ),
           ),
         [WS_METHODS.botsUpdateSettings]: (input) =>
           rpcEffect(

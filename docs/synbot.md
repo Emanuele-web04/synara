@@ -33,7 +33,8 @@ The SynBot page takes HoloBot's layout inside Synara's window:
 - **Sidebar panel.** SynBot (with its star) and pinned bots as tiles, then **My bots**: one row
   per bot with its last message and time, amber while it waits on you, blue while it works.
   Right-click a bot for **Open**, **Edit**, **Pin**/**Unpin**, **Stop** (while it works or waits)
-  and **Remove** (asks first); the desktop app shows its native menu. **New bot** and **Stop
+  and **Remove** (asks first; owner sessions only, since it deletes the bot's Hub); the desktop
+  app shows its native menu. **New bot** and **Stop
   all** sit at the bottom.
 - **Thread.** The selected bot's chat as a messaging thread: your words on the right (in the
   bot's color in a bot's chat), the bot's replies on the left, a date over each new stretch, and
