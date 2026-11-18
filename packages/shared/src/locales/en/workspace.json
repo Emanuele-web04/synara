@@ -1065,5 +1065,9 @@
   "childThreadsDoneCount_other": "+{{count}} done",
   "introducingSynaraForIphone": "Introducing Synara for iPhone",
   "iosBetaAnnouncementDescription": "Follow and steer your agents from your phone whenever your computer is awake. Now in beta.",
-  "joinTheBeta": "Join the beta"
+  "joinTheBeta": "Join the beta",
+  "sectionNeedsAttention": "{{value0}} — needs attention",
+  "sidebarThreadLists": "Thread lists",
+  "restoreThreadNamed": "Restore {{value0}}",
+  "restoreThread": "Restore thread"
 }

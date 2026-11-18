@@ -36,6 +36,12 @@ decoration pauses while its chat is hidden.
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  The Home panel keeps **Projects** and **Chats** as pinned navigation rows above the scrolling
+  list, with Search and Activity beside the title. The rows use the same icons and selection
+  treatment as the sidebar, without a sliding segmented control. Select either list without scrolling past other sessions; the choice survives reloads.
+  A dot marks unread completions or pending actions in that list, including rows beyond its preview.
+  Selecting a list does not mark its threads read. Numbered thread shortcuts follow its visible rows.
+  Turning off **Chats** under **Sidebar sections** hides the navigation rows and returns to Projects.
   The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
   answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
   place while you work through them, and read rows stay until **Clear read from Priority** in

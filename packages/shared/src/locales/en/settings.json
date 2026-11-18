@@ -829,7 +829,7 @@
   "followTheProviderSPromptsOpeningTheBrowserDoes": "Follow the provider's prompts. Opening the browser does not confirm authentication.",
   "showAnInAppToastWhenAChatOr": "Show an in-app toast when a chat or managed terminal agent finishes or needs input.",
   "showTheGitHubRepositoryLinkInTheChatEnvironment": "Show the GitHub repository link in the chat Environment panel. git changes worktree",
-  "showTheStandaloneChatsListInTheSidebarFooter": "Show the standalone Chats list in the sidebar footer (chats not tied to a project).",
+  "showTheStandaloneChatsListInTheSidebarFooter": "Show Chats in the sidebar for conversations not tied to a project.",
   "useYourInstructionsForChangeDescriptionsAndChangeRequests": "Use your instructions for change descriptions and change requests in every project.",
   "connectCodexClaudeOrAnotherLocalMCPAgentTo": "Connect Codex, Claude, or another local MCP agent to create and follow Synara tasks.",
   "letsSynaraCaptureWindowsAndTheDesktopSoThe": "Lets Synara capture windows and the desktop so the agent can see what it is driving.",

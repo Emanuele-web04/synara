@@ -20,6 +20,7 @@ import {
   SIDEBAR_ROW_RADIUS_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "~/sidebarRowStyles";
+import { useTranslation } from "~/i18n";
 import type { SidebarThreadSummary } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
 import { resolveSidebarThreadListPaging } from "./Sidebar.logic";
@@ -48,6 +49,7 @@ function SidebarArchivedThreadRow({
   projectLabel: string | null;
   onRestore: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const archivedLabel = thread.archivedAt ? formatRelativeTime(thread.archivedAt) : null;
 
@@ -93,8 +95,8 @@ function SidebarArchivedThreadRow({
       <SidebarRowHoverActions threadId={thread.id}>
         <SidebarIconButton
           icon={Undo2Icon}
-          label={`Restore ${thread.title}`}
-          title="Restore thread"
+          label={t("workspace:restoreThreadNamed", { value0: thread.title })}
+          title={t("workspace:restoreThread")}
           size="md"
           iconClassName={SIDEBAR_TRAILING_ICON_CLASS}
           className="hover:text-foreground/89 text-muted-foreground/42"
@@ -123,6 +125,7 @@ export function SidebarArchivedThreadsSection({
   onToggle: () => void;
   onRestore: (threadId: ThreadId) => void;
 }) {
+  const { t: tr } = useTranslation();
   const [extraPages, setExtraPages] = useState(0);
   const paging = resolveSidebarThreadListPaging({
     totalCount: threads.length,
@@ -138,7 +141,11 @@ export function SidebarArchivedThreadsSection({
   if (threads.length === 0) return null;
 
   return (
-    <SidebarCollapsibleSection label="Archived" open={open} onToggle={onToggle}>
+    <SidebarCollapsibleSection
+      label={tr("workspace:archived_archivedRelative")}
+      open={open}
+      onToggle={onToggle}
+    >
       {visibleThreads.map((thread) => (
         <SidebarArchivedThreadRow
           key={thread.id}

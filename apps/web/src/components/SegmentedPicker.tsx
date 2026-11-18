@@ -14,6 +14,7 @@ import { cn } from "~/lib/utils";
 export interface SegmentedPickerOption<T extends string> {
   readonly value: T;
   readonly label: string;
+  readonly ariaLabel?: string;
   readonly icon?: ReactNode;
   readonly disabled?: boolean;
   readonly title?: string;
@@ -34,7 +35,7 @@ export function SegmentedPicker<T extends string>({
   variant: variantProp,
   className,
 }: {
-  value: T;
+  value: T | null;
   options: ReadonlyArray<SegmentedPickerOption<T>>;
   onValueChange: (value: T) => void;
   ariaLabel: string;
@@ -81,6 +82,7 @@ export function SegmentedPicker<T extends string>({
             type="button"
             role="radio"
             aria-checked={active}
+            aria-label={option.ariaLabel}
             disabled={disabled || option.disabled}
             title={option.title}
             className={cn(
