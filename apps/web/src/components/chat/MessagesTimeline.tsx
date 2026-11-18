@@ -155,7 +155,6 @@ import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
 import { TurnHeaderLine } from "./TurnHeaderLine";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
-import { useCodeHighlightPrewarm } from "./useCodeHighlightPrewarm";
 import { useTimelineRowOverlapGuard } from "./useTimelineRowOverlapGuard";
 import { useTimelineRowHeightHints } from "./useTimelineRowHeightHints";
 import {
@@ -920,15 +919,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
-  const getTimelineScrollElement = useCallback(() => {
-    const node: unknown = resolvedListRef.current?.getScrollableNode?.();
-    return node instanceof HTMLElement ? node : null;
-  }, [resolvedListRef]);
-  useCodeHighlightPrewarm({
-    rows,
-    enabled: !isWorking && !activeTurnInProgress,
-    getScrollElement: getTimelineScrollElement,
-  });
   const canRenderForkSourceDivider = forkSource !== null && onOpenThread !== undefined;
   const forkSourceDivider = useMemo(
     () =>
