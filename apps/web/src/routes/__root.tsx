@@ -88,6 +88,11 @@ import {
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { registerThreadDetailSyncRetry, retryThreadDetailSync } from "../threadDetailSyncRetry";
 import {
+  hydrateThreadDetailFromCache,
+  trackThreadDetailCache,
+  untrackThreadDetailCache,
+} from "../threadDetailCache";
+import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
   useComposerDraftStore,
@@ -1684,6 +1689,7 @@ function EventRouter() {
         threadCatchupBackoffById.delete(threadId);
         lastLiveThreadEventAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
+        untrackThreadDetailCache(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
       // same tick, so the refreshed snapshot may already have landed. Retention
@@ -1699,6 +1705,10 @@ function EventRouter() {
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
         subscribedThreadIds.add(threadId);
+        // Paint the last-seen tail from IndexedDB while the live snapshot is
+        // still in flight; the by-id merge reconciles any stale rows.
+        void hydrateThreadDetailFromCache(threadId);
+        trackThreadDetailCache(threadId);
       }
       await Promise.all(
         additions.map((threadId) =>
