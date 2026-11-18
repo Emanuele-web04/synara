@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 
-import { useTheme } from "../../hooks/useTheme";
+import { useResolvedTheme } from "../../hooks/useTheme";
 import {
   codeHighlightJobsForMarkdown,
   createCodeHighlightPrewarmer,
@@ -62,7 +62,7 @@ export function useCodeHighlightPrewarm(input: {
   getScrollElement: () => HTMLElement | null;
 }) {
   const { rows, enabled, getScrollElement } = input;
-  const { resolvedTheme } = useTheme();
+  const resolvedTheme = useResolvedTheme();
   const themeName = resolveDiffThemeName(resolvedTheme);
   const lastScrollAtRef = useRef(0);
 

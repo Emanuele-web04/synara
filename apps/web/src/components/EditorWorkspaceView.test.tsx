@@ -42,6 +42,7 @@ function makeEditorBaseProps(): ComponentProps<typeof EditorWorkspaceView> {
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "dark" }),
+  useResolvedTheme: () => "dark",
 }));
 
 vi.mock("~/hooks/useDesktopTopBarGutter", () => ({

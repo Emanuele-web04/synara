@@ -17,6 +17,7 @@ vi.mock("../lib/fileReferenceContextMenu", () => ({
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
+  useResolvedTheme: () => "light",
 }));
 
 import ChatMarkdown from "./ChatMarkdown";

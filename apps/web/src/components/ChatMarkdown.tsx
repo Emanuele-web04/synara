@@ -72,7 +72,7 @@ import {
   resolveGitHubItemClickOpener,
   showLinkContextMenu,
 } from "../lib/linkContextMenu";
-import { useTheme } from "../hooks/useTheme";
+import { useResolvedTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useStableValue } from "../hooks/useStableValue";
@@ -1395,7 +1395,7 @@ interface MarkdownRenderContextValue {
   onImageExpand: ChatMarkdownProps["onImageExpand"];
   onOpenThread: ChatMarkdownProps["onOpenThread"];
   onTaskToggle: ChatMarkdownProps["onTaskToggle"];
-  resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
+  resolvedTheme: ReturnType<typeof useResolvedTheme>;
   terminalContexts: ChatMarkdownProps["terminalContexts"];
 }
 
@@ -1847,7 +1847,7 @@ function ChatMarkdown({
   const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
-  const { resolvedTheme } = useTheme();
+  const resolvedTheme = useResolvedTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
   // Resolve only this assistant message's immutable images, without rescanning streamed text.
