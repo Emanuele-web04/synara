@@ -8046,13 +8046,17 @@ export default function Sidebar() {
   ) : null;
 
   const sidebarHeaderActions = (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="ml-auto flex shrink-0 items-center gap-1.5">
       <SidebarIconButton
         icon={SearchIcon}
-        label="Search"
+        label={t("workspace:primaryActions_search")}
         glyph="leading"
         size="header"
-        tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
+        tooltip={
+          searchShortcutLabel
+            ? t("workspace:search", { value0: searchShortcutLabel })
+            : t("workspace:primaryActions_search")
+        }
         tooltipSide="bottom"
         onClick={() => {
           setSearchPaletteOpen(true);
@@ -8520,45 +8524,6 @@ export default function Sidebar() {
               />
             ) : (
               <>
-                <div
-                  // The panel has no header above it, so the title row gets breathing room from
-                  // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
-                  // edge as its first letter is from the side.
-                  className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
-                >
-                  <SidebarSurfacePicker
-                    views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
-                    activeView={isOnGroups ? "groups" : "threads"}
-                    onSelectView={handleSidebarViewChange}
-                    onPrewarmView={prewarmSidebarViewTarget}
-                  />
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <SidebarIconButton
-                      icon={SearchIcon}
-                      label={t("workspace:primaryActions_search")}
-                      glyph="leading"
-                      size="header"
-                      tooltip={
-                        searchShortcutLabel
-                          ? t("workspace:search", { value0: searchShortcutLabel })
-                          : t("workspace:primaryActions_search")
-                      }
-                      tooltipSide="bottom"
-                      onClick={() => {
-                        setSearchPaletteOpen(true);
-                      }}
-                    />
-                    {!isOnGroups ? (
-                      <SidebarActivityBellButton
-                        active={activityViewEnabled}
-                        showUnreadDot={hasUnreadActivity}
-                        shortcutLabel={activityShortcutLabel}
-                        onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
-                      />
-                    ) : null}
-                    {betaBadge}
-                  </div>
-                </div>
                 {/* The keyed content remounts with a short enter animation while the picker
                 stays mounted so its thumb can glide between Projects and Groups. */}
                 <div key={sidebarSurfaceKey} className="sidebar-surface-enter">
