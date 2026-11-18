@@ -322,8 +322,15 @@ and [44384792991](https://github.com/Emanuele-web04/synara/actions/runs/44384792
 Components 2/3 became the slowest component job at 178–179 s, and components
 3/3 took 143–148 s. In those runs the moved files took 21 s on `3/6` and 11 s
 on `4/6`. The current placement keeps three of them on `3/6`, about 9 s, and
-returns the other five to their native shards. Hosted timing for it is
-pending.
+returns the other five to their native shards. In
+[run 44389626369](https://github.com/Emanuele-web04/synara/actions/runs/44389626369)
+the halves took 121 s (`1/6`), 129 s, 113 s, 118 s, 121 s and 126 s (`6/6`),
+and the three component jobs took 154 s, 161 s and 165 s. The required gate
+passed 184 s after the run was created and used 32.4 runner-minutes. Every
+job finished in 123–165 s. This is one sample. The two earlier runs of the
+branch passed the gate in 240 s and 219 s. In the 240 s run, every file in
+components 1/3 ran 35–40% slower than in other runs, with an unchanged file
+set.
 
 The keybindings warning case shares EventRouter's real route and WebSocket
 fixture. The former standalone file mounted the app twice. In two cold hosted
