@@ -24,6 +24,7 @@
   "include": [
     "src",
     "perf",
+    "scripts/compiler-cache-key.ts",
     "scripts/production-assets*.ts",
     "scripts/transform-cache*.ts",
     "scripts/parallel-transform*.ts",

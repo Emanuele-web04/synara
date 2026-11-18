@@ -605,17 +605,28 @@ for `components 3/3` (343 s total).
 
 `apps/web/scripts/transform-cache.ts` stores each compiled module on disk. An
 entry is keyed by the exact module source, its id, the Vite environment, the
-module type and a salt that hashes the toolchain manifests, Vite config,
-compiler and worker implementations, cache code, and Babel environment.
+module type and a salt that hashes the dependency graph, Node version, Vite
+config, compiler and worker implementations, cache code, patches, and Babel
+environment.
 A changed module is recompiled. Dependency or config changes use fresh
 entries, and malformed entries are recomputed. Vitest enables the test
 cache through `SYNARA_WEB_TRANSFORM_CACHE_DIR`. React Compiler runs in
 the client environment, so the node unit lanes have nothing to reuse.
 
-Each stable browser lane owns one archive. Pull requests restore main's newest
-archive for the same lockfile and config and save only when nothing matched;
-pushes to `main` save one entry per commit. A release bumps the lockfile, so the
-first run afterwards is cold.
+Each stable browser lane owns one archive. Pull requests restore the newest
+matching archive and save on a miss. Pushes to `main` save one entry per commit.
+The archive and per-module salt use the same fingerprint. For Bun lockfile v3,
+the fingerprint omits only each workspace's declared release version. It
+retains all dependency resolutions, catalogs, overrides and integrity strings.
+Unrecognized lockfile syntax is hashed byte for byte. The first run under the
+new archive keys seeds fresh caches.
+
+Replaying the 1.5.4 to 1.6.2 metadata bump on the Mac mini kept the fingerprint
+stable. The bumped Web production build took 35.10 s with an empty compiler
+cache and 9.95 s with the previous release's cache. Its 3,194 output files
+were byte-identical, including 1,722 compressed sidecars. A single ChatView
+browser case took 35.31 s when seeding its cache and 7.27 s after the bump with
+that archive reused. Hosted timing for the new keys remains unmeasured.
 
 Local measurements (macOS, one ChatView test, `chat-follow` project):
 

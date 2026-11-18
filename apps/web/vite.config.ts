@@ -4,7 +4,6 @@
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +14,7 @@ import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import { compilerCacheFingerprint } from "./scripts/compiler-cache-key";
 import {
   threadWorkerFactory,
   transformWorkerCount,
@@ -71,30 +71,19 @@ const testTransformCacheDirectory =
   process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
 
 function transformCacheSalt(productionBuild: boolean): string {
-  const hash = createHash("sha256");
+  const hash = createHash("sha256")
+    .update(compilerCacheFingerprint(path.resolve(import.meta.dirname, "../..")))
+    .update("\0");
   hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
   if (productionBuild) {
     hash.update(
       JSON.stringify([
         "desktop-production",
-        process.versions.node,
         buildSourcemap,
         process.env.BROWSERSLIST,
         process.env.BROWSERSLIST_ENV,
       ]),
     );
-  }
-  for (const file of [
-    "../../package.json",
-    "../../bun.lock",
-    "vite.config.ts",
-    "scripts/react-compiler-plugin.mjs",
-    "scripts/transform-cache.ts",
-    "scripts/parallel-transform.ts",
-    "scripts/parallel-transform.worker.mjs",
-  ]) {
-    hash.update(readFileSync(path.resolve(import.meta.dirname, file)));
-    hash.update("\0");
   }
   return hash.digest("hex");
 }

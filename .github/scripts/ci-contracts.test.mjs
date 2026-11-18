@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+
+import { compilerCacheFingerprint } from "../../apps/web/scripts/compiler-cache-key.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = read("../workflows/ci.yml");
@@ -242,6 +246,42 @@ test("caches restore in every consumer and save from one owner per key", () => {
     "Cache Electron runtime",
   ]);
 });
+test("compiler cache survives workspace release bumps and invalidates dependency and patch changes", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "synara-compiler-key-"));
+  try {
+    mkdirSync(join(scratch, "apps/web"), { recursive: true });
+    for (const file of ["package.json", "apps/web/vite.config.ts", "apps/web/scripts", "patches"]) {
+      cpSync(new URL(`../../${file}`, import.meta.url), join(scratch, file), { recursive: true });
+    }
+    const lockfile = `{
+      "lockfileVersion": 3,
+      "workspaces": {
+        "apps/web": {
+          "name": "@synara/web",
+          "version": "1.5.4",
+          "dependencies": { "version": "^2.0.0", },
+        },
+      },
+      "packages": { "version": ["version@2.0.0", "fixture,]", {}, "sha512-fixture",], },
+    }`;
+    const fingerprint = (contents) => {
+      writeFileSync(join(scratch, "bun.lock"), contents);
+      return compilerCacheFingerprint(scratch);
+    };
+    const baseline = fingerprint(lockfile);
+    assert.equal(fingerprint(lockfile.replace("1.5.4", "1.6.2")), baseline);
+    assert.notEqual(fingerprint(lockfile.replace("^2.0.0", "^2.1.0")), baseline);
+    assert.notEqual(fingerprint(lockfile.replace("version@2.0.0", "version@2.1.0")), baseline);
+    assert.notEqual(fingerprint(lockfile.replace("fixture,]", "fixture]")), baseline);
+    const unknown = lockfile.replace('"lockfileVersion": 3', '"lockfileVersion": 4');
+    assert.notEqual(fingerprint(unknown), fingerprint(unknown.replace("1.5.4", "1.6.2")));
+    writeFileSync(join(scratch, "patches/compiler.patch"), "fixture patch");
+    assert.notEqual(fingerprint(lockfile), baseline);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 test("browser tests and Desktop CI use separate compiler cache namespaces", () => {
   const steps = Object.fromEntries(
     setup
@@ -251,7 +291,12 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   );
   const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const prefix =
-    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-";
+    "${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-";
+  const fingerprint = steps["Fingerprint web compiler inputs"];
+  assert.ok(fingerprint.includes("id: web-transform-key"));
+  assert.ok(fingerprint.includes("if: inputs.web-transform-cache != ''"));
+  assert.ok(fingerprint.includes("node apps/web/scripts/compiler-cache-key.ts"));
+  assert.ok(setup.indexOf(fingerprint) < setup.indexOf(steps["Restore web transform cache"]));
   const restore = steps["Restore web transform cache"];
   const save = steps["Cache web transform results (main or first branch run)"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
@@ -267,18 +312,9 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(step.includes(`restore-keys: |\n          ${prefix}\n`));
     assert.ok(step.includes("path: ${{ runner.temp }}/web-transform-cache"));
   }
-  // The salt in vite.config.ts must cover every file the archive key hashes.
+  // The Vite salt and the archive key begin with the same input fingerprint.
   const viteConfig = read("../../apps/web/vite.config.ts");
-  for (const file of [
-    "../../package.json",
-    "../../bun.lock",
-    "vite.config.ts",
-    "scripts/react-compiler-plugin.mjs",
-    "scripts/transform-cache.ts",
-    "scripts/parallel-transform.ts",
-    "scripts/parallel-transform.worker.mjs",
-  ])
-    assert.ok(viteConfig.includes(`"${file}"`), file);
+  assert.ok(viteConfig.includes(".update(compilerCacheFingerprint("));
   // Workers must compile with the plugin definition the main thread uses.
   const worker = read("../../apps/web/scripts/parallel-transform.worker.mjs");
   assert.ok(worker.includes('from "./react-compiler-plugin.mjs"'));

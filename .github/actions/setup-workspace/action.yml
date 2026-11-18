@@ -46,6 +46,14 @@ runs:
       with:
         node-version-file: package.json
 
+    - name: Fingerprint web compiler inputs
+      id: web-transform-key
+      if: inputs.web-transform-cache != ''
+      shell: bash
+      run: |
+        fingerprint="$(node apps/web/scripts/compiler-cache-key.ts)"
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
     # Web and server dependency trees have their own exact keys. Static and
     # runtime scopes install directly, as do Windows jobs with Bun's isolated links.
     # One job per key sets save-modules to seed the archive after a miss.
@@ -94,8 +102,8 @@ runs:
     # apps/web/scripts/transform-cache.ts keys each result by
     # the exact module source, so an archive only ever supplies output for
     # unchanged modules; a changed module is always recompiled. The key prefix
-    # hashes everything else that shapes the output (lockfile, Vite config,
-    # cache code), so a dependency or config change starts empty. Pull requests
+    # hashes the dependency graph, toolchain, config and patches. Workspace
+    # release-version metadata does not change the graph. Pull requests
     # restore main's newest archive for their lane and save only when nothing
     # matched; pushes to main save one entry per commit.
     - name: Restore web transform cache
@@ -104,18 +112,18 @@ runs:
       uses: actions/cache/restore@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
 
     - name: Cache web transform results (main or first branch run)
       if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
 
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}
