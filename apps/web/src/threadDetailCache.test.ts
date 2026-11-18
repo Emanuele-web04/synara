@@ -4,6 +4,7 @@ import { useStore } from "./store";
 import { initialState } from "./storeState";
 import {
   buildCachedThreadDetailEntry,
+  hydrateThreadDetailFromCache,
   mergeCachedThreadDetailIntoState,
   resetThreadDetailCacheForTests,
   THREAD_DETAIL_CACHE_MAX_ACTIVITIES,
@@ -142,5 +143,15 @@ describe("trackThreadDetailCache", () => {
       trackThreadDetailCache(THREAD_ID);
       untrackThreadDetailCache(THREAD_ID);
     }).not.toThrow();
+  });
+
+  it("hydrates a reopened thread from the same-session mirror", async () => {
+    trackThreadDetailCache(THREAD_ID);
+    useStore.setState(stateWithDetail([makeMessage("m-1"), makeMessage("m-2")]));
+    untrackThreadDetailCache(THREAD_ID);
+    useStore.setState(useStore.getInitialState(), true);
+
+    await expect(hydrateThreadDetailFromCache(THREAD_ID)).resolves.toBe(true);
+    expect(useStore.getState().messageIdsByThreadId?.[THREAD_ID]).toEqual(["m-1", "m-2"]);
   });
 });

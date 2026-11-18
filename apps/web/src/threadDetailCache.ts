@@ -17,6 +17,7 @@ export const THREAD_DETAIL_CACHE_DB_NAME = "synara-thread-detail";
 export const THREAD_DETAIL_CACHE_MAX_MESSAGES = 150;
 export const THREAD_DETAIL_CACHE_MAX_ACTIVITIES = 300;
 export const THREAD_DETAIL_CACHE_MAX_THREADS = 60;
+const MEMORY_MIRROR_MAX_THREADS = 20;
 const PERSIST_DEBOUNCE_MS = 800;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -26,6 +27,26 @@ interface CachedThreadDetailEntry {
   readonly messages: ChatMessage[];
   readonly activities: Thread["activities"];
   readonly updatedAt: number;
+}
+
+// Same-session mirror of the last slices persisted per thread. Reading the
+// mirror is synchronous, so a reopened thread paints without waiting on the
+// IndexedDB round-trip that sits between mount and the async hydrate.
+const memoryMirrorByThreadId = new Map<
+  ThreadId,
+  Pick<CachedThreadDetailEntry, "messages" | "activities">
+>();
+
+function writeMemoryMirror(
+  threadId: ThreadId,
+  slices: Pick<CachedThreadDetailEntry, "messages" | "activities">,
+): void {
+  memoryMirrorByThreadId.delete(threadId);
+  memoryMirrorByThreadId.set(threadId, slices);
+  if (memoryMirrorByThreadId.size > MEMORY_MIRROR_MAX_THREADS) {
+    const oldest = memoryMirrorByThreadId.keys().next().value;
+    if (oldest !== undefined) memoryMirrorByThreadId.delete(oldest);
+  }
 }
 
 let databasePromise: Promise<IDBDatabase | null> | null = null;
@@ -81,6 +102,7 @@ async function readCachedThreadDetail(threadId: ThreadId): Promise<CachedThreadD
 }
 
 async function deleteCachedThreadDetail(threadId: ThreadId): Promise<void> {
+  memoryMirrorByThreadId.delete(threadId);
   const database = await openCacheDatabase();
   if (!database) return;
   try {
@@ -183,16 +205,35 @@ export function mergeCachedThreadDetailIntoState(
  * Paints the cached tail before the first detail snapshot lands. No-op when the
  * thread already holds detail (live events beat the cache read) or is tombstoned.
  */
+const hydrateInFlightThreadIds = new Set<ThreadId>();
+
 export async function hydrateThreadDetailFromCache(threadId: ThreadId): Promise<boolean> {
-  const entry = await readCachedThreadDetail(threadId);
-  if (!entry || (entry.messages.length === 0 && entry.activities.length === 0)) return false;
-  let applied = false;
-  useStore.setState((state) => {
-    const next = mergeCachedThreadDetailIntoState(state, threadId, entry);
-    applied = next !== state;
-    return next;
-  });
-  return applied;
+  const mirrored = memoryMirrorByThreadId.get(threadId);
+  if (mirrored !== undefined && (mirrored.messages.length > 0 || mirrored.activities.length > 0)) {
+    let applied = false;
+    useStore.setState((state) => {
+      const next = mergeCachedThreadDetailIntoState(state, threadId, mirrored);
+      applied = next !== state;
+      return next;
+    });
+    return applied;
+  }
+  if (hydrateInFlightThreadIds.has(threadId)) return false;
+  hydrateInFlightThreadIds.add(threadId);
+  try {
+    const entry = await readCachedThreadDetail(threadId);
+    if (!entry || (entry.messages.length === 0 && entry.activities.length === 0)) return false;
+    let applied = false;
+    useStore.setState((state) => {
+      const next = mergeCachedThreadDetailIntoState(state, threadId, entry);
+      applied = next !== state;
+      return next;
+    });
+    if (applied) writeMemoryMirror(threadId, entry);
+    return applied;
+  } finally {
+    hydrateInFlightThreadIds.delete(threadId);
+  }
 }
 
 /** Slices a thread's store records down to the cacheable tail. Exported for tests. */
@@ -227,6 +268,7 @@ async function persistThreadDetailNow(threadId: ThreadId): Promise<void> {
   }
   const slices = buildCachedThreadDetailEntry(state, threadId);
   if (!slices) return;
+  writeMemoryMirror(threadId, slices);
   await writeCachedThreadDetail({
     key: readCacheKey(threadId),
     threadId,
@@ -327,6 +369,8 @@ export function flushPendingThreadDetailPersists(): void {
 /** Test hook: restores the module's tracking state between files. */
 export function resetThreadDetailCacheForTests(): void {
   trackedThreadIds.clear();
+  memoryMirrorByThreadId.clear();
+  hydrateInFlightThreadIds.clear();
   lastSeenSlicesByThreadId.clear();
   for (const timer of pendingPersistTimers.values()) clearTimeout(timer);
   pendingPersistTimers.clear();

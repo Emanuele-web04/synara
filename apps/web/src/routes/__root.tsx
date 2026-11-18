@@ -1670,6 +1670,14 @@ function EventRouter() {
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
       const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
 
+      // Paint the last-seen tail from IndexedDB while the live snapshot is
+      // still in flight; the by-id merge reconciles any stale rows. Hydrate
+      // before the lease releases below: awaiting an unsubscribe round-trip
+      // first would leave the freshly opened transcript blank that whole time.
+      for (const threadId of additions) {
+        void hydrateThreadDetailFromCache(threadId);
+      }
+
       // Release dropped leases before subscribing additions: the server enforces a
       // per-client thread-stream budget, and subscribing while a stale lease still
       // holds its slot gets the new thread's stream rejected at admission.
@@ -1705,9 +1713,6 @@ function EventRouter() {
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
         subscribedThreadIds.add(threadId);
-        // Paint the last-seen tail from IndexedDB while the live snapshot is
-        // still in flight; the by-id merge reconciles any stale rows.
-        void hydrateThreadDetailFromCache(threadId);
         trackThreadDetailCache(threadId);
       }
       await Promise.all(
@@ -1756,6 +1761,14 @@ function EventRouter() {
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = [...threadIds];
+      // Paint the last-seen tail from cache at request time, not inside the
+      // serialized op: this runs in the layout effect that fires the reconcile,
+      // so a cache hit lands before the browser paints the empty transcript.
+      for (const threadId of nextThreadIds) {
+        if (!subscribedThreadIds.has(threadId)) {
+          void hydrateThreadDetailFromCache(threadId);
+        }
+      }
       return enqueueThreadSubscriptionOperation(() => reconcileThreadSubscriptions(nextThreadIds));
     };
 
