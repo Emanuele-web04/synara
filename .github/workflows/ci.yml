@@ -38,6 +38,8 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
+        # PRs use the changed-files API and the filter is defined inline below.
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@v6
 
       - name: Filter docs-only changes

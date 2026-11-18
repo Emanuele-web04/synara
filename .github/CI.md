@@ -6,6 +6,13 @@ changes run typechecking, five unit partitions, six stable browser partitions,
 desktop build, native Windows regression and migration lineage. Docs-only
 detection and nightly geometry ownership are unchanged.
 
+The PR change detector sends its inline filter to `dorny/paths-filter`,
+which reads changed files from the GitHub API. Pushes retain a Git checkout
+for commit comparisons. Across 12 archived hosted runs, the PR checkout step
+took 4–10 s with a median of 7.5 s. A local replay of the action verified
+docs-only changes, code changes, renames, API failure, and push detection.
+[Filter implementation](https://github.com/dorny/paths-filter/blob/0e4a8c6effa4802afeda77dc8d303f8176d7dfad/src/main.ts#L69)
+
 After workspace setup and CI contract validation, `static-fast` uses GitHub
 Actions' native `parallel` group for identity, Windows boundary, formatting,
 lint and release smoke. These checks read the installed workspace; release

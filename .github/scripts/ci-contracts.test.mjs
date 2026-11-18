@@ -51,6 +51,17 @@ test("planning failures, invalid output and static failures fail closed", () => 
   }
   for (const value of ["", "undefined", "TRUE"]) assert.notEqual(runGate({ CODE: value }), 0);
 });
+test("PR change detection uses inline rules and retains Git checkout for pushes", () => {
+  const { steps, permissions } = jobs.changes;
+  const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  const filter = steps.find((step) => step.id === "filter");
+  assert.equal(checkout?.if, "github.event_name != 'pull_request'");
+  assert.equal(permissions["pull-requests"], "read");
+  assert.equal(filter?.if, undefined);
+  const rules = filter?.with?.filters;
+  assert.equal(typeof rules, "string");
+  assert.ok(Array.isArray(requireFromScripts("yaml").parse(rules)?.code));
+});
 test("docs-only cannot hide a failing or unexpectedly executed heavy lane", () => {
   const docs = { CODE: "false", ...Object.fromEntries(lanes.map((lane) => [lane, "skipped"])) };
   for (const lane of lanes)
