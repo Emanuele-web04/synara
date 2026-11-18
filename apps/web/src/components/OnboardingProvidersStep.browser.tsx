@@ -85,7 +85,7 @@ it("does not report agents as not installed while the first probe is running", a
 
   await expect.element(page.getByText("Connected", { exact: true })).toBeVisible();
   await expect
-    .element(page.getByText("1 connected · 0 need sign-in · 9 not installed"))
+    .element(page.getByText("1 connected · 0 need sign-in · 10 not installed"))
     .toBeVisible();
 });
 
@@ -107,7 +107,7 @@ it("leaves missing agents unknown after a timeout and recovers on retry", async 
   await page.getByRole("button", { name: "Re-detect" }).click();
   await expect.element(page.getByText("Connected", { exact: true })).toBeVisible();
   await expect
-    .element(page.getByText("1 connected · 0 need sign-in · 9 not installed"))
+    .element(page.getByText("1 connected · 0 need sign-in · 10 not installed"))
     .toBeVisible();
 });
 
@@ -125,8 +125,8 @@ it("keeps the default agent connected while re-enabling it alongside a custom in
   });
   await renderStep();
 
-  const connected = page.getByText("1 connected · 0 need sign-in · 9 not installed");
-  const disabled = page.getByText("0 connected · 0 need sign-in · 9 not installed");
+  const connected = page.getByText("1 connected · 0 need sign-in · 10 not installed");
+  const disabled = page.getByText("0 connected · 0 need sign-in · 10 not installed");
   const codexSwitch = page.getByRole("switch", { name: "Codex", exact: true });
   await expect.element(connected).toBeVisible();
   await codexSwitch.click();
@@ -179,7 +179,7 @@ it("switches on only the agents installed on this machine", async () => {
   await renderStep();
 
   await expect
-    .element(page.getByText("1 connected · 1 need sign-in · 8 not installed"))
+    .element(page.getByText("1 connected · 1 need sign-in · 9 not installed"))
     .toBeVisible();
   await expect.element(page.getByRole("switch", { name: "Codex", exact: true })).toBeChecked();
   // Installed but signed out: on, with sign-in offered in place.

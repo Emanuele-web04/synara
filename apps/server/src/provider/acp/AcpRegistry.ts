@@ -4,20 +4,22 @@
 //   agents launch directly, binary agents download and unpack into a managed
 //   directory under the Synara base dir.
 // Layer: Provider registry
-// Depends on: node child_process/fs for downloads and archive extraction.
+// Depends on: node fs for downloads, processRuntime for archive extraction.
 //
 // The registry is the same index other ACP clients (Zed, JetBrains IDEs) use,
 // so "any ACP agent" keeps working without a Synara-side integration.
 
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import nodePath from "node:path";
-import { promisify } from "node:util";
 
 import { resolveExecutable } from "@synara/shared/executable";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = (command: string, args: string[]): Promise<void> =>
+  new Promise((resolve, reject) => {
+    execProcessFile(command, args, {}, (error) => (error ? reject(error) : resolve()));
+  });
 
 export const ACP_REGISTRY_URL =
   "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -323,7 +325,8 @@ async function downloadArchive(url: string): Promise<Buffer> {
 async function extractArchive(archivePath: string, destDir: string): Promise<void> {
   // bsdtar (macOS, Windows 10+, many Linux distros) unpacks zip too; GNU tar on
   // Linux cannot, so .zip falls back to `unzip` there.
-  if (archivePath.endsWith(".zip") && process.platform === "linux") {
+  const hostPlatform = process.platform;
+  if (archivePath.endsWith(".zip") && hostPlatform === "linux") {
     await execFileAsync("unzip", ["-o", "-q", archivePath, "-d", destDir]);
     return;
   }
@@ -384,7 +387,8 @@ async function installBinaryAgent(
       await mkdir(unpacked, { recursive: true });
       await extractArchive(archivePath, unpacked);
       const stagedCommand = nodePath.join(unpacked, relCmd);
-      if (process.platform !== "win32") {
+      const hostPlatform = process.platform;
+      if (hostPlatform !== "win32") {
         await chmod(stagedCommand, 0o755);
       }
       await stat(stagedCommand); // fail loudly when the archive layout differs
