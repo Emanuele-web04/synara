@@ -126,6 +126,7 @@ import {
   updateWorkspaceSession,
 } from "../lib/hosts/workspaceSessions";
 import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "./hosts/RemoteConnectionsAnnouncement";
+import { IOS_BETA_ANNOUNCEMENT_STORAGE_KEY } from "./hosts/IosBetaAnnouncement";
 import { WorkspacePanels } from "./hosts/WorkspacePanels";
 
 vi.mock("../lib/hosts/executionContext", { spy: true });
@@ -4492,6 +4493,9 @@ describe("ChatView transcript geometry (full app)", () => {
       REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
       JSON.stringify({ acknowledged: true }),
     );
+    // The iOS-beta launch sheet shares the remote-connections availability gate and
+    // would otherwise mount over the page mid-test once the account query settles.
+    localStorage.setItem(IOS_BETA_ANNOUNCEMENT_STORAGE_KEY, JSON.stringify({ acknowledged: true }));
     const destinationSpaceId = SpaceId.makeUnsafe("remote-destination");
     const hostId = "remote-project-owner";
     const projectId = ProjectId.makeUnsafe("remote-created-project");
@@ -14218,6 +14222,14 @@ describe("ChatView transcript geometry (full app)", () => {
   it.each(["shortcut", "palette", "native terminal"] as const)(
     "keeps the selected remote owner for the outer %s action",
     async (action) => {
+      // Suppress both connection launch sheets; they share the remote-connections
+      // availability gate and would mount over the page mid-test.
+      for (const key of [
+        REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
+        IOS_BETA_ANNOUNCEMENT_STORAGE_KEY,
+      ]) {
+        localStorage.setItem(key, JSON.stringify({ acknowledged: true }));
+      }
       const controller = {
         environmentId: "controller-test",
         label: "This computer",
@@ -14344,6 +14356,14 @@ describe("ChatView transcript geometry (full app)", () => {
   );
 
   it("keeps remote settings off the local computer after a disconnect", async () => {
+    // Suppress both connection launch sheets; they share the remote-connections
+    // availability gate and would mount over the page mid-test.
+    for (const key of [
+      REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
+      IOS_BETA_ANNOUNCEMENT_STORAGE_KEY,
+    ]) {
+      localStorage.setItem(key, JSON.stringify({ acknowledged: true }));
+    }
     const controller = {
       environmentId: "controller-test",
       label: "This computer",

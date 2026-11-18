@@ -2816,11 +2816,23 @@ describe("Antigravity background task helpers (#752)", () => {
         yield* io.waitUntil(() => io.taskEvents.length >= 3);
         yield* Effect.sleep("30 millis");
         expect(io.counts.teardowns).toBe(0);
-        expect(io.taskEvents).toEqual([
-          { type: "task.started", taskId: agyTaskId },
-          { type: "task.started", taskId: "task-other" },
-          { type: "task.completed", taskId: agyTaskId },
-        ]);
+        // Hook and transcript channels run concurrently, so their events interleave in
+        // either order; only each task's own started-before-completed order is guaranteed.
+        expect(io.taskEvents).toEqual(
+          expect.arrayContaining([
+            { type: "task.started", taskId: agyTaskId },
+            { type: "task.started", taskId: "task-other" },
+            { type: "task.completed", taskId: agyTaskId },
+          ]),
+        );
+        expect(io.taskEvents).toHaveLength(3);
+        const agyStartedIndex = io.taskEvents.findIndex(
+          (event) => event.type === "task.started" && event.taskId === agyTaskId,
+        );
+        const agyCompletedIndex = io.taskEvents.findIndex(
+          (event) => event.type === "task.completed" && event.taskId === agyTaskId,
+        );
+        expect(agyCompletedIndex).toBeGreaterThan(agyStartedIndex);
         io.transcript(agyCompletionStep(1001, "task-other"), agyText(1002, "Done."));
         io.hooks('stop\t{"stepIdx":1002}');
         yield* io.waitUntil(() => io.counts.teardowns === 1);
