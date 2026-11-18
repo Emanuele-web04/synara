@@ -1592,6 +1592,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         >
           <ChatMarkdown
             text={item.message.text}
+            tone="subtle"
             cwd={markdownCwd}
             threadId={threadId}
             imageAttachments={item.message.attachments}
@@ -1975,6 +1976,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <InlineVisualEmbedContext.Provider value={resolveInlineVisualEmbed(row.message.id)}>
                 <ChatMarkdown
                   text={segmentText}
+                  tone="subtle"
                   cwd={markdownCwd}
                   threadId={threadId}
                   imageAttachments={row.message.attachments}

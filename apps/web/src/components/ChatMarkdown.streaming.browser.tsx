@@ -21,19 +21,27 @@ import { splitStreamingMarkdownBlocks } from "./chat/streamingMarkdownBlocks";
 const fenced = "```javascript\nconst answer = 42;\n```\n\nExplanation.";
 
 describe("ChatMarkdown streaming identity", () => {
-  it("keeps the code block and soft wrap while prose streams after it", async () => {
-    const screen = await render(<ChatMarkdown text={fenced} cwd={undefined} isStreaming />);
-    await screen.getByRole("button", { name: "Enable soft wrap" }).click();
-    const block = document.querySelector(".chat-markdown-codeblock");
-    expect(block?.getAttribute("data-wrap")).toBe("true");
+  it.each([false, true])(
+    "keeps the code block and chosen soft wrap while prose streams after it (wrap=%s)",
+    async (wrap) => {
+      const screen = await render(<ChatMarkdown text={fenced} cwd={undefined} isStreaming />);
+      const block = document.querySelector(".chat-markdown-codeblock");
+      expect(block?.getAttribute("data-wrap")).toBe("true");
+      await screen.getByRole("button", { name: "Disable soft wrap", exact: true }).click();
+      expect(block?.getAttribute("data-wrap")).toBe("false");
+      if (wrap) {
+        await screen.getByRole("button", { name: "Enable soft wrap", exact: true }).click();
+      }
+      expect(block?.getAttribute("data-wrap")).toBe(String(wrap));
 
-    await screen.rerender(
-      <ChatMarkdown text={fenced + " More detail."} cwd={undefined} isStreaming />,
-    );
-    expect(document.querySelector(".chat-markdown-codeblock")).toBe(block);
-    expect(block?.getAttribute("data-wrap")).toBe("true");
-    await screen.unmount();
-  });
+      await screen.rerender(
+        <ChatMarkdown text={fenced + " More detail."} cwd={undefined} isStreaming />,
+      );
+      expect(document.querySelector(".chat-markdown-codeblock")).toBe(block);
+      expect(block?.getAttribute("data-wrap")).toBe(String(wrap));
+      await screen.unmount();
+    },
+  );
 
   it("shows the complete growing code when the stream finishes", async () => {
     const screen = await render(

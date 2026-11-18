@@ -192,6 +192,8 @@ interface ChatMarkdownProps {
    * (skills, mentions, agents, bare links) render as the shared chips.
    */
   variant?: "assistant" | "user";
+  /** Visual tone for supporting transcript/work prose; does not change assistant/user parsing. */
+  tone?: "default" | "subtle" | "process";
   /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
   /**
@@ -1099,7 +1101,7 @@ function MarkdownCodeBlock({
   const { t } = useTranslation();
 
   const [copied, setCopied] = useState(false);
-  const [wrap, setWrap] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = () => {
     void copyTextToClipboard(code)
@@ -1784,6 +1786,7 @@ function ChatMarkdown({
   onTaskToggle,
   knownAbsoluteFilePaths: knownAbsoluteFilePathsProp,
   variant: variantProp,
+  tone: toneProp,
   mentionReferences,
   terminalContexts,
   onOpenThread,
@@ -1795,6 +1798,7 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const tone = toneProp ?? "default";
   const directionMode = directionModeProp ?? "off";
   const usesAutomaticBlockDirection = directionMode === "auto-blocks";
   const parseHtml = parseHtmlProp ?? false;
@@ -1940,7 +1944,7 @@ function ChatMarkdown({
   return (
     <div
       ref={rootRef}
-      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}${tone === "subtle" ? "chat-markdown--subtle " : tone === "process" ? "chat-markdown--process " : ""}w-full min-w-0 ${className} text-foreground`}
       {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
       style={style}
     >

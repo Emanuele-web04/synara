@@ -1,0 +1,4165 @@
+@import "tailwindcss";
+/* profile-ui renders with Tailwind classes but lives outside this app's
+   auto-detected content — without this, its responsive/variant classes
+   (lg:grid-cols-5, …) are never generated and layouts silently degrade. */
+@source "../../../packages/profile-ui/src";
+
+@custom-variant dark (&:is(.dark, .dark *));
+/* Named-group `:has()` variants. Tailwind's `group-has-*` compiles to
+   `:is(:where(.group):has(…) *)`; Chrome answers any DOM insertion under that rule
+   with a whole-document style recalc, so every transcript row mounted while scrolling
+   restyled the full app. Anchoring the same condition as `:where(group):has(…) &`
+   matches the same elements with the same specificity and keeps invalidation local. */
+@custom-variant project-header-focus (:where(.group\/project-header):has(:focus-visible) &);
+@custom-variant menu-item-has-action (:where(.group\/menu-item):has([data-sidebar="menu-action"]) &);
+
+@theme inline {
+  --animate-skeleton: skeleton 2s -1s infinite linear;
+  /* Status spinners and shimmer labels share 50ms steps (20 fps), aligned by
+     animationTimelineSync. Matching both cadence and phase lets their redraws
+     share frames instead of repeatedly recompositing the translucent sidebar
+     and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
+  --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
+  /* Same 50ms step, half the speed: background work that keeps going without you. */
+  --animate-spin-stepped-slow: spin-stepped 2.6s steps(52, end) infinite;
+  --font-sans: var(--font-ui-family);
+  /* Font sizes that follow the size chosen in Settings (useAppTypography). */
+  --text-ui: var(--app-font-size-ui);
+  --text-ui-lg: var(--app-font-size-ui-lg);
+  /* A page's lede and headline figures: one step above ui-lg, still scaled by Settings. */
+  --text-ui-xl: calc(var(--app-font-size-ui-lg) * 1.3);
+  --text-ui-sm: var(--app-font-size-ui-sm);
+  --text-ui-xs: var(--app-font-size-ui-xs);
+  --text-ui-2xs: var(--app-font-size-ui-2xs);
+  --text-ui-meta: var(--app-font-size-ui-meta);
+  --text-ui-timestamp: var(--app-font-size-ui-timestamp);
+  --text-chat: var(--app-font-size-chat);
+  --text-chat-code: var(--app-font-size-chat-code);
+  --text-chat-meta: var(--app-font-size-chat-meta);
+  --text-chat-tiny: var(--app-font-size-chat-tiny);
+  /* Inline visual labels and headline figures, scaled from the chat size like the reply. */
+  --text-chat-sm: calc(var(--app-font-size-chat) * 0.86);
+  --text-chat-display: calc(var(--app-font-size-chat) * 1.6);
+  --font-display: var(--font-display-family);
+  --font-mono: var(--font-mono-family);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-status-success: var(--status-success);
+  --color-status-failure: var(--status-failure);
+  --color-status-open: var(--status-open);
+  --color-status-merged: var(--status-merged);
+  --color-status-neutral: var(--status-neutral);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-claude: var(--claude);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  @keyframes skeleton {
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes spin-stepped {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/30;
+  }
+  body {
+    @apply text-foreground relative;
+    /* `--app-window-background` is the single translucent coat when the whole window is
+       glass (see theme.logic); otherwise it matches the shell background. */
+    background: var(--app-window-background, var(--app-shell-background, transparent));
+  }
+  :root {
+    /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
+       hairlines (chat/dock/diff headers) AND the right-side pane splits
+       (diff/browser/dock). All resolve through here so those divider directions read
+       as the same line. The straight sidebar↔route seam is intentionally NOT one of
+       these — it stays at full --color-border (see --seam-line) so the outer content
+       edge remains distinct.
+       (Chat headers previously used the lighter --color-border-light and looked off.)
+       Held at a fraction of --color-border so these internal dividers sit slightly MORE
+       transparent than card/input borders — color-mix toward transparent scales the
+       border's alpha (same proven form as the seam-hover tint below) and stays
+       theme-aware because --color-border already differs per theme. */
+    --app-surface-divider: color-mix(in srgb, var(--color-border) 60%, transparent);
+  }
+}
+
+@layer components {
+  /* Inline visual blocks: the same data tokens agent HTML pages get (inlineVisual.ts), so a
+     native chart and a page chart read alike. Series 2-6 are set inline per appearance. */
+  .inline-visual-blocks {
+    --chart-accent: var(--info);
+    --series-1: var(--chart-accent);
+    --chart-muted: color-mix(in srgb, var(--foreground) 18%, var(--background));
+    --chart-grid: color-mix(in srgb, var(--foreground) 8%, transparent);
+    --rule: color-mix(in srgb, var(--foreground) 11%, transparent);
+    --surface: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  }
+
+  .sidebar-icon-button {
+    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+    background: transparent;
+  }
+
+  .sidebar-icon-button:hover {
+    background: var(--color-background-button-secondary-hover);
+  }
+
+  /* Small circular icon badges that sit directly on the sidebar surface inside
+     thread rows — the meta-chip stack, the handoff provider avatar, the terminal
+     count badge. They take the SAME material as the sidebar (translucent or
+     opaque, whatever the shell currently is) so they read as part of it instead
+     of an opaque blob, plus a 1px ring so stacked/overlapping icons stay
+     visually separated. Ring + shadow are one box-shadow so they don't affect
+     layout. */
+  .sidebar-icon-chip {
+    background: var(--app-sidebar-chip-surface, var(--app-sidebar-surface, var(--card)));
+    box-shadow:
+      0 0 0 1px var(--sidebar-border),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* Route content surface (chat column, route wrappers, dock body). Opaque, unless the
+     whole window is translucent: then it goes clear and the body's single glass coat shows
+     through, so nested route surfaces never stack the fill. */
+  .app-content-surface {
+    background: var(--app-content-surface, var(--color-background-surface));
+  }
+
+  /* ─── Content seam (sidebar ↔ route divider) ──────────────────────────────────
+     Chat, settings, kanban, automations, and the other route surfaces share one
+     square content edge. The visible seam belongs to the content surface; the
+     SidebarRail remains only the resize hit-area so a second line is never drawn. */
+
+  /* Seam token, side-agnostic so the value lives in ONE place. The route separates from
+     the sidebar with a flat 1px divider only — no depth shadow is cast onto the sidebar.
+       • --seam-line : color of the straight vertical divider. The rail layout draws the
+                       seam with the block's hairline instead; its hover state sits next to
+                       that rule (`.chat-content-card::after`, below). */
+  .chat-content-card {
+    /* The outer seam reads stronger than --color-border (and NOT the more-transparent
+       --app-surface-divider used by the internal hairlines/splits): the route's outer
+       edge against the sidebar should read as solid. Do not re-unify these. */
+    --seam-line: --alpha(var(--color-black) / 5%);
+  }
+
+  .dark .chat-content-card {
+    --seam-line: --alpha(var(--color-white) / 5%);
+  }
+
+  [data-sidebar-side="left"] .chat-content-card {
+    border-radius: 0;
+  }
+
+  .chat-content-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: 0;
+    /* Fade the seam divider with the slide (collapsed rule sets opacity:0) — `display`
+       can't transition, so opacity is what keeps this in step with the animation. */
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  /* A single inset stroke produces the straight content edge without adding
+     layout width or painting top/bottom borders. */
+  [data-sidebar-side="left"] .chat-content-card::before {
+    box-shadow: inset 0.5px 0 0 var(--seam-line);
+  }
+
+  /* Sidebar collapsed (offcanvas): drop the divider because the content fills the
+     window edge-to-edge. Use the direct-child combinator so the nested right dock
+     cannot drive the main content seam. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card::before {
+    opacity: 0;
+  }
+
+  /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
+     in dark and a soft grey in light, the thread panel sits a step toward the surface, and
+     the route body is the surface itself. Panel, route body, and right dock form one inset
+     block under the top band: a hairline border, rounded corners, and a
+     small shell gap to the window's right and bottom edges. Route headers keep rendering
+     their titles and actions, now on the shell band above the block. */
+  [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 97%, black);
+    --app-rail-panel-background: var(--color-background-surface);
+    --app-rail-shell-background: color-mix(
+      in srgb,
+      var(--app-rail-shell-tone) var(--app-rail-shell-opacity, 100%),
+      transparent
+    );
+    /* Real CSS borders at 0.5px (one device pixel on Retina): per-side inset shadows would
+       overlap on the rounded corners and draw them thicker than the straight edges. */
+    --app-rail-inset-border-width: 0.5px;
+    --app-rail-inset-border: color-mix(in srgb, black 10%, transparent);
+    --app-rail-inset-border-hover: color-mix(in srgb, black 20%, transparent);
+    --app-rail-inset-radius: calc(var(--radius) * 1.3);
+    --app-rail-inset-gap: 3px;
+  }
+
+  .dark [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
+    --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
+    --app-rail-inset-border: color-mix(in srgb, white 9%, transparent);
+    --app-rail-inset-border-hover: color-mix(in srgb, white 18%, transparent);
+  }
+
+  /* The panel is the block's left end: border on its outer three sides only. */
+  .app-rail-panel {
+    margin-bottom: var(--app-rail-inset-gap);
+    background: var(--app-rail-panel-background);
+    border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+    border-right-width: 0;
+    border-radius: var(--app-rail-inset-radius) 0 0 var(--app-rail-inset-radius);
+  }
+
+  /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
+  [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-rail-panel-background);
+  }
+
+  /* Whole-window glass: the rail layout's panel and chips share the body's coat instead of
+     painting their own tones over it. */
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
+    --app-rail-panel-background: transparent;
+    /* The card the active tab normally matches is clear, so the tab takes the raised tint
+       the composer and the docked panels use, and reads lighter than the coat. */
+    --app-rail-tab-active-surface: var(--app-glass-raised-surface);
+  }
+
+  /* Dark: the raised tint is darker than the coat, so the tab keeps a light ink tint. */
+  :root.dark[data-window-translucency="window"] [data-sidebar-layout="rail"] {
+    --app-rail-tab-active-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
+  }
+
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-sidebar-chip-surface);
+  }
+
+  /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
+     Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
+     same color as the vertical seam via --app-surface-divider. Painted as a 1px
+     background gradient, NOT a CSS border or a positioned pseudo-element: a border would
+     paint across the seam edge, and an absolutely-positioned line would force the header
+     to become a containing block (header toolbars rely on their own stacking/portals).
+     A gradient is layout-neutral and does not affect the header's layout. */
+  .chat-surface-divider {
+    background-image: linear-gradient(var(--app-surface-divider), var(--app-surface-divider));
+    background-repeat: no-repeat;
+    background-position: left bottom;
+    background-size: 100% 1px;
+  }
+
+  /* Settings uses a route-level surface so the frosted window material is not
+     hidden by nested scroll containers. */
+  .app-settings-surface {
+    background: var(--app-settings-surface, var(--color-background-surface));
+    -webkit-backdrop-filter: var(--app-settings-backdrop-filter, none);
+    backdrop-filter: var(--app-settings-backdrop-filter, none);
+  }
+
+  /* Animate terminal run state in CSS so many open terminals don't schedule JS timers. */
+  .terminal-running-indicator__dot {
+    animation: terminal-running-indicator-pulse 640ms ease-in-out infinite;
+    opacity: 0.24;
+    transform: scale(0.7);
+    will-change: opacity, transform;
+  }
+}
+
+@keyframes terminal-running-indicator-pulse {
+  0%,
+  100% {
+    opacity: 0.24;
+    transform: scale(0.7);
+  }
+
+  35% {
+    opacity: 0.92;
+    transform: scale(1);
+  }
+}
+
+/* Fast opacity-only entry for chat pane swaps. Avoid vertical motion because the
+   empty landing can re-render in place when switching Home -> project. */
+@keyframes chat-pane-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-pane-enter {
+  animation: chat-pane-enter 140ms ease-out;
+  /* Keeps the pane's stacking context without a standing `will-change: opacity`: that made
+     the pane a backdrop root, so the composer's blur sampled an empty layer instead of the
+     surface behind the pane and rendered as a dark slab on a glass window. */
+  isolation: isolate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-enter {
+    animation: none;
+  }
+}
+
+/* Rail activation follows the same brief ease-out timing as sidebar disclosures. */
+@keyframes app-rail-icon-enter {
+  0% {
+    transform: scale(0.92);
+  }
+
+  55% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.app-rail-icon-enter {
+  animation: app-rail-icon-enter 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-rail-icon-enter {
+    animation: none;
+  }
+}
+
+/* The composer model trigger swaps to a fixed placeholder while its menu is open; this
+   plays on the model label when it comes back. */
+@keyframes composer-trigger-label-enter {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+.composer-trigger-label-enter {
+  animation: composer-trigger-label-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-trigger-label-enter {
+    animation: none;
+  }
+}
+
+/* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects).
+   Keyed remounts play this on the incoming surface so the switch reads
+   as a movement instead of a hard cut. Enter-only by design: no exit or height
+   animation, so it cannot feed back into list animation or scroll behavior. */
+@keyframes sidebar-surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sidebar-surface-enter {
+  /* Fill `backwards`, not `both`, and no `will-change`: a retained transform or standing
+     hint keeps the sidebar list on its own layer, which Chromium does not re-rasterize
+     after a display-scale change, so its text stays blurry until restart. */
+  animation: sidebar-surface-enter 160ms ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-surface-enter {
+    animation: none;
+  }
+}
+
+/* Decorative scene motion: dialog hero bands, the first-run agent ring, and the app
+   tour previews. Slow transform/opacity loops that read as alive, never as loading.
+   Every class rests on the element's own style under reduced motion, so one-shot
+   entrances fill `backwards` and loops that reveal something keep it visible at rest;
+   travelling packets and halos rest hidden. */
+@keyframes scene-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.scene-float {
+  animation: scene-float 6s ease-in-out infinite;
+}
+
+/* A dot travelling along a link: set --scene-travel-x / --scene-travel-y on the element. */
+@keyframes scene-packet {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+
+  15% {
+    opacity: 1;
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+
+  82%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+}
+
+.scene-packet {
+  opacity: 0;
+  animation: scene-packet 2.8s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+/* A soft ring that swells and fades around something live. */
+@keyframes scene-halo {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.94);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+}
+
+.scene-halo {
+  opacity: 0;
+  animation: scene-halo 2.8s ease-out infinite;
+}
+
+/* One-shot rise into place; stagger with animation-delay. */
+@keyframes scene-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+}
+
+.scene-rise {
+  animation: scene-rise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.scene-fade-in {
+  animation: scene-fade-in 700ms ease-out backwards;
+}
+
+/* Strokes drawn from their start: give the path or line pathLength="1". */
+@keyframes scene-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+.scene-draw {
+  stroke-dasharray: 1;
+  animation: scene-draw 800ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scene-spin-slow {
+  animation: scene-spin 90s linear infinite;
+}
+
+/* Three items stacked in one slot take turns; delay each by a third of the cycle. */
+@keyframes scene-cycle {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  6%,
+  30% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  36%,
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.scene-cycle {
+  opacity: 0;
+  animation: scene-cycle 4.8s ease-in-out infinite;
+}
+
+/* A toggle switching on once: the knob slides in, the track takes its colour. */
+@keyframes scene-switch-knob {
+  from {
+    transform: translateX(calc(-1 * var(--scene-switch-travel, 9px)));
+  }
+}
+
+@keyframes scene-switch-track {
+  from {
+    background-color: color-mix(in srgb, var(--foreground) 18%, transparent);
+  }
+}
+
+.scene-switch-knob {
+  animation: scene-switch-knob 360ms cubic-bezier(0.2, 0.8, 0.2, 1) 900ms backwards;
+}
+
+.scene-switch-track {
+  animation: scene-switch-track 360ms ease-out 900ms backwards;
+}
+
+/* A key pressed at the start of each AppSnap loop. */
+@keyframes scene-keypress {
+  0%,
+  14%,
+  100% {
+    transform: translateY(0);
+  }
+
+  4%,
+  10% {
+    transform: translateY(2px);
+  }
+}
+
+.scene-keypress {
+  animation: scene-keypress 4.2s ease-in-out infinite;
+}
+
+/* The snap frame, then its "added" chip: appear, hold, fade, on the keypress loop. */
+@keyframes scene-snap-frame {
+  0%,
+  12% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+
+  22%,
+  74% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@keyframes scene-snap-chip {
+  0%,
+  32% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+
+  42%,
+  74% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.scene-snap-frame {
+  animation: scene-snap-frame 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.scene-snap-chip {
+  animation: scene-snap-chip 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+/* A status that settles: something running flips to done on a slow loop. */
+@keyframes scene-settle-out {
+  0%,
+  46% {
+    opacity: 1;
+  }
+
+  54%,
+  92% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes scene-settle-in {
+  0%,
+  46% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  54%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.scene-settle-out {
+  animation: scene-settle-out 5s ease-in-out infinite;
+}
+
+.scene-settle-in {
+  opacity: 0;
+  animation: scene-settle-in 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-float,
+  .scene-packet,
+  .scene-halo,
+  .scene-rise,
+  .scene-fade-in,
+  .scene-draw,
+  .scene-spin-slow,
+  .scene-cycle,
+  .scene-switch-knob,
+  .scene-switch-track,
+  .scene-keypress,
+  .scene-snap-frame,
+  .scene-snap-chip,
+  .scene-settle-out,
+  .scene-settle-in {
+    animation: none;
+  }
+
+  /* Reduced motion keeps the first of a cycling slot. */
+  .scene-cycle:first-child {
+    opacity: 1;
+  }
+}
+
+/* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
+   so the transcript can stay lightweight while the row appears less abruptly. */
+@keyframes chat-message-send-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-message-send-enter {
+  animation: chat-message-send-enter 180ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-send-enter {
+    animation: none;
+  }
+}
+
+/* Suppress all transitions during theme changes */
+.no-transitions,
+.no-transitions *,
+.no-transitions *::before,
+.no-transitions *::after {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+}
+
+/* Theme settings contrast slider thumb (range input) */
+.theme-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.theme-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+.theme-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 32%, transparent);
+}
+.theme-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 32%, transparent);
+}
+
+.theme-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+.theme-slider:hover::-moz-range-thumb {
+  transform: scale(1.08);
+}
+
+/* Theme settings color picker: keep react-colorful aligned with the compact popover. */
+.theme-color-picker .react-colorful {
+  width: 100%;
+  height: 180px;
+}
+
+.theme-color-picker .react-colorful__saturation {
+  border-radius: 7px 7px 4px 4px;
+}
+
+.theme-color-picker .react-colorful__hue {
+  height: 18px;
+  margin-top: 10px;
+  border-radius: 999px;
+}
+
+.theme-color-picker .react-colorful__pointer {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(255, 255, 255, 0.42);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  /* Depth of the fade where scrolling content meets an edge (transcript, sidebar
+     panel, ScrollArea `scrollFade`). */
+  --scroll-edge-fade-size: 1.5rem;
+  --radius-user-message: 1rem;
+  --font-ui-family: var(
+    --theme-font-ui-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif
+  );
+  /* Display/wordmark face: Cal Sans ships as a single semibold-looking cut, so
+     consumers should pair it with a normal font-weight. */
+  --font-display-family: "Cal Sans", var(--font-ui-family);
+  --font-mono-family: var(
+    --theme-font-code-family,
+    "JetBrains Mono Variable",
+    "JetBrains Mono",
+    "SF Mono",
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    Menlo,
+    monospace
+  );
+  --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
+  --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
+  --app-shell-background: transparent;
+  /* Width of the rail layout's fixed icon column (see AppRail): 36px buttons with 7.5px
+     either side. */
+  --app-rail-width: calc(3.25rem - 1px);
+  /* Short vertical hairline marking a boundary inside a top bar: the rail header divider
+     and the dividers between surface tabs share it so they read as the same mark. */
+  --app-chrome-divider-height: 1.25rem;
+  --app-chrome-divider-color: var(--color-border);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
+  --background: #fcfcfc;
+  --foreground: var(--color-neutral-800);
+  --card: var(--color-white);
+  --card-foreground: var(--color-neutral-800);
+  --popover: var(--color-white);
+  --popover-foreground: var(--color-neutral-800);
+  --primary: var(--color-neutral-900);
+  --primary-foreground: var(--color-white);
+  --secondary: --alpha(var(--color-black) / 3%);
+  --secondary-foreground: var(--color-neutral-800);
+  --muted: --alpha(var(--color-black) / 4%);
+  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
+  --accent: --alpha(var(--color-black) / 4%);
+  --accent-foreground: var(--color-neutral-800);
+  /* `--destructive/success/warning-foreground` are ON-FILL contrast ink: they only ever go on
+     top of a solid `bg-<role>` fill. The runtime theme resolves all three to the surface color
+     (near-white in light), so painting copy with them over a tint or a plain surface renders it
+     invisible — the values below are just the unthemed fallback and must not be read as
+     "the readable role text color". For text on a tint, use the role token (`text-destructive`,
+     `text-warning`) and let the tint/border carry the signal, as `ui/alert.tsx` does. */
+  --destructive: var(--color-red-500);
+  --border: --alpha(var(--color-black) / 5%);
+  --input: --alpha(var(--color-black) / 6%);
+  --ring: var(--color-neutral-400);
+  --destructive-foreground: var(--color-red-700);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --info: var(--color-text-accent, var(--color-blue-500));
+  --info-foreground: var(--color-text-accent, #526fff);
+  --success: var(--color-emerald-500);
+  --success-foreground: var(--color-emerald-700);
+  /* Status tints — the one source of color for status indicators (PR state glyphs, check
+     glyphs, the checks ring). Each is the plain role color in light and a step toward white
+     in dark, where the near-black surface makes the role weight read as a heavy block. Mix
+     from the role tokens only, never from `--success-foreground`/`--destructive-foreground`:
+     those are the on-fill contrast ink (white under the runtime theme), not a lighter shade.
+     `--color-decoration-added` is injected by the runtime theme, hence the fallback. */
+  --status-success: var(--success);
+  --status-failure: var(--destructive);
+  --status-open: var(--color-decoration-added, var(--success));
+  --status-merged: var(--color-indigo-500);
+  --status-neutral: var(--color-zinc-500);
+  /* Project palette (Edit project → Icons). Same recipe as the status tints: the plain
+     color in light, a step toward white in dark. */
+  --project-red: var(--color-red-500);
+  --project-orange: var(--color-orange-500);
+  --project-yellow: var(--color-yellow-500);
+  --project-green: var(--color-green-500);
+  --project-blue: var(--color-blue-500);
+  --project-purple: var(--color-violet-500);
+  --project-pink: var(--color-pink-500);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--secondary);
+  --sidebar-accent-active: var(--secondary);
+  --sidebar-selected: var(--secondary);
+  --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --color-background-button-secondary-hover: var(--secondary);
+  --color-background-elevated-secondary: var(--secondary);
+  --warning: var(--color-amber-500);
+  --warning-foreground: var(--color-amber-700);
+  --claude: #d97757;
+  /* Beta brand: vivid Xcode-blue tile, black Synara mark, white BETA pill.
+     The update pill uses the gradient with white text; the Beta badge
+     uses the white pill with blue ink, mirroring the pill baked into
+     the desktop icon. Stable uses only the pill tokens, on its Beta card. */
+  --beta-gradient: linear-gradient(135deg, #63b3ff 0%, #2e7ff2 55%, #0f5cd6 100%);
+  --beta-accent: #2e7ff2;
+  --beta-pill: #ffffff;
+  --beta-pill-ink: #2e7ff2;
+
+  @variant dark {
+    color-scheme: dark;
+    --background: #0e0e0e;
+    --foreground: var(--color-neutral-100);
+    --card: color-mix(in srgb, var(--background) 99%, var(--color-white));
+    --card-foreground: var(--color-neutral-100);
+    --popover: color-mix(in srgb, var(--background) 99%, var(--color-white));
+    --popover-foreground: var(--color-neutral-100);
+    --primary: var(--color-neutral-100);
+    --primary-foreground: var(--color-neutral-900);
+    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary-foreground: var(--color-neutral-100);
+    --muted: --alpha(var(--color-white) / 4%);
+    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
+    --accent: --alpha(var(--color-white) / 4%);
+    --accent-foreground: var(--color-neutral-100);
+    --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --border: --alpha(var(--color-white) / 4%);
+    --input: --alpha(var(--color-white) / 5%);
+    --ring: var(--color-neutral-500);
+    --destructive-foreground: var(--color-red-400);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --info: var(--color-text-accent, var(--color-blue-500));
+    --info-foreground: var(--color-text-accent, #6073cc);
+    --success: var(--color-emerald-500);
+    --success-foreground: var(--color-emerald-400);
+    --status-success: color-mix(in srgb, var(--success) 72%, var(--color-white));
+    --status-failure: color-mix(in srgb, var(--destructive) 72%, var(--color-white));
+    --status-open: color-mix(
+      in srgb,
+      var(--color-decoration-added, var(--success)) 72%,
+      var(--color-white)
+    );
+    --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
+    --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
+    --project-red: color-mix(in srgb, var(--color-red-500) 72%, var(--color-white));
+    --project-orange: color-mix(in srgb, var(--color-orange-500) 72%, var(--color-white));
+    --project-yellow: color-mix(in srgb, var(--color-yellow-400) 80%, var(--color-white));
+    --project-green: color-mix(in srgb, var(--color-green-500) 72%, var(--color-white));
+    --project-blue: color-mix(in srgb, var(--color-blue-500) 72%, var(--color-white));
+    --project-purple: color-mix(in srgb, var(--color-violet-500) 72%, var(--color-white));
+    --project-pink: color-mix(in srgb, var(--color-pink-500) 72%, var(--color-white));
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--secondary);
+    --sidebar-accent-active: var(--secondary);
+    --sidebar-selected: var(--secondary);
+    --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--ring);
+    /* Deepened toward black before thinning: a dense charcoal glass that still lets
+       the desktop bleed through rather than a thin dark tint. */
+    --app-sidebar-surface: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--card) 80%, var(--color-black)) 72%,
+      transparent
+    );
+    --color-background-button-secondary-hover: var(--secondary);
+    --color-background-elevated-secondary: var(--secondary);
+    --warning: var(--color-amber-500);
+    --warning-foreground: var(--color-amber-400);
+  }
+}
+
+body {
+  font-family: var(--font-ui-family);
+  /* Neutral tracking: let the system UI font (SF Pro on macOS via the
+     -apple-system fallback) use its own optical metrics instead of a squeezed
+     web-style negative tracking, so text reads native rather than "designed". */
+  letter-spacing: normal;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
+.font-system-ui {
+  font-family: var(--font-ui-family);
+  letter-spacing: normal;
+}
+
+/* Keep transcript-only code surfaces on the chat-specific coding font stack. */
+.font-chat-code {
+  font-family: var(--font-chat-code-family);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-y: hidden;
+  overflow-x: hidden;
+  overflow-x: clip;
+  overscroll-behavior-y: none;
+}
+
+/* Preserve inset variant rounding (inherits from the main element) */
+[data-slot="sidebar"][data-variant="inset"]
+  ~ [data-slot="sidebar-inset"]
+  > [data-slot="sidebar-inset-surface"] {
+  border-radius: inherit;
+}
+
+pre,
+code,
+textarea,
+input {
+  font-family: var(--font-mono-family);
+}
+
+/* Window drag region (frameless titlebar) */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.drag-region button,
+.drag-region input,
+.drag-region textarea,
+.drag-region select,
+.drag-region a {
+  -webkit-app-region: no-drag;
+}
+
+/* Chromium does not clip native app regions to scrolling ancestors. Exclude the
+   visible content-tab viewport once, instead of letting offscreen chips and their
+   buttons subtract rectangles from neighboring window chrome. The strip fits its
+   content up to the available width, leaving unused header space draggable. */
+.surface-content-tabs {
+  -webkit-app-region: no-drag;
+}
+
+.surface-content-tabs [data-surface-tab],
+.surface-content-tabs [data-surface-tab] button {
+  -webkit-app-region: initial;
+}
+
+/* Scrollbar styling.
+   The 2px transparent border + `background-clip: padding-box` insets the thumb so
+   it floats with a small gap from the track edges instead of hugging them. Use
+   `background-color` (never the `background` shorthand) on the thumb so the clip
+   value is preserved across the hover/dark overrides. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.1);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.18);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.turn-chip-strip {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-x: contain;
+}
+
+.turn-chip-strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* Terminal drawer scrollbar parity with chat: inset the slider so it floats with
+   a small gap from the edge instead of hugging it. */
+.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical {
+  width: 10px !important;
+}
+
+.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px;
+}
+
+.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  width: 6px !important;
+  left: 2px !important;
+}
+
+/* Reasoning select -- clickable label surface */
+label:has(> select#reasoning-effort) {
+  position: relative;
+}
+label:has(> select#reasoning-effort) select {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+/* The working row keeps the shared shimmer-group timeline while using the
+   Synara mark as its status icon. Size it from the row's chat font token. */
+.synara-working-loader {
+  display: inline-flex;
+  inline-size: 1.08em;
+  block-size: 1.08em;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.synara-working-loader__mark {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  color: currentColor;
+}
+
+/* Chat markdown rendering */
+.chat-markdown {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 94%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 98%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 76%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 56%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 40%, transparent);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--chat-text-primary);
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+.chat-markdown strong,
+.chat-markdown b {
+  color: var(--chat-text-strong);
+  font-weight: 600;
+  font-synthesis: none;
+}
+
+.chat-markdown--subtle {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 74%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 86%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 62%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 48%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 34%, transparent);
+}
+
+.chat-markdown--process {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 52%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 68%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 44%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 34%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 26%, transparent);
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p,
+.chat-markdown ul,
+.chat-markdown ol,
+.chat-markdown blockquote,
+.chat-markdown pre,
+.chat-markdown .chat-markdown-table {
+  margin: 0.65rem 0;
+}
+
+.chat-markdown ul {
+  padding-left: 1.25rem;
+  list-style-type: disc;
+}
+
+.chat-markdown ol {
+  padding-left: 1.25rem;
+  list-style-type: decimal;
+}
+
+.chat-markdown ul ul {
+  list-style-type: circle;
+}
+
+.chat-markdown ul ul ul {
+  list-style-type: square;
+}
+
+.chat-markdown ol ol {
+  list-style-type: lower-alpha;
+}
+
+.chat-markdown ol ol ol {
+  list-style-type: lower-roman;
+}
+
+.chat-markdown li + li {
+  margin-top: 0.38rem;
+}
+
+/* GFM task lists: drop the bullet and paint the checkbox into the list gutter
+   where the bullet would have been (GitHub-style). */
+.chat-markdown li.task-list-item {
+  list-style: none;
+}
+
+.chat-markdown .chat-markdown-task-checkbox {
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.4em 0.1em -1.4em;
+  vertical-align: middle;
+  accent-color: var(--primary);
+}
+
+.chat-markdown .chat-markdown-task-checkbox:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Transcript markdown opts into native bidi ownership per prose block. Keep
+   list gutters on both inline edges so mixed-direction items cannot push a
+   checkbox or marker outside the message bubble. */
+.chat-markdown[data-direction-mode="auto-blocks"] ul,
+.chat-markdown[data-direction-mode="auto-blocks"] ol {
+  padding-inline: 1.25rem;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-markdown-task-checkbox {
+  margin-inline-start: -1.4em;
+  margin-inline-end: 0.4em;
+}
+
+.chat-markdown-technical-isolate {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .katex {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.chat-markdown h1 + h2,
+.chat-markdown h2 + h3,
+.chat-markdown h3 + h4,
+.chat-markdown h4 + h5,
+.chat-markdown h5 + h6 {
+  margin-top: 0.5em;
+}
+
+.chat-markdown a {
+  color: var(--color-token-text-link-foreground);
+  text-decoration: none;
+}
+
+.chat-markdown a:hover,
+.chat-markdown a:focus-visible {
+  color: var(--color-token-text-link-active-foreground);
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
+}
+
+/* Find hits: yellow for every match, orange for the active one — dark text on
+   both so highlights stay readable over prose and syntax-colored code. */
+.chat-markdown .chat-find-match {
+  border-radius: 0.45em;
+  padding: 0.06em 0.2em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  background-color: color-mix(in srgb, var(--color-amber-400) 55%, transparent);
+  color: var(--color-stone-900);
+}
+
+.chat-markdown .chat-find-match-active {
+  background-color: color-mix(in srgb, var(--color-orange-500) 68%, transparent);
+  color: var(--color-stone-950);
+}
+
+.chat-markdown .chat-find-match-continues-before {
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.chat-markdown .chat-find-match-continues-after {
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Find highlights can span several text fragments in either writing
+   direction. Reset the physical continuation edges above, then use logical
+   edges for transcript blocks so RTL matches keep their rounded ends. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match {
+  padding-inline: 0.2em;
+  border-radius: 0.45em;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-before {
+  padding-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-find-match-continues-after {
+  padding-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.chat-markdown hr {
+  margin: 1.2rem 0 1.1rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+}
+
+.chat-markdown blockquote {
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
+  padding: 0.8rem 0.95rem;
+  color: var(--chat-text-secondary);
+}
+
+/* GitHub `> [!NOTE]` alerts (tagged by remarkGithubAlerts). */
+.chat-markdown blockquote[data-github-alert] {
+  --github-alert-color: var(--info);
+  border-inline-start-width: 3px;
+  border-inline-start-color: var(--github-alert-color);
+  color: var(--foreground);
+}
+.chat-markdown blockquote[data-github-alert="tip"] {
+  --github-alert-color: var(--success);
+}
+.chat-markdown blockquote[data-github-alert="important"] {
+  --github-alert-color: var(--status-merged);
+}
+.chat-markdown blockquote[data-github-alert="warning"] {
+  --github-alert-color: var(--warning);
+}
+.chat-markdown blockquote[data-github-alert="caution"] {
+  --github-alert-color: var(--destructive);
+}
+.chat-markdown .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  color: var(--github-alert-color);
+  font-weight: 500;
+}
+
+.chat-markdown :not(pre) > code {
+  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  border-radius: 0.38rem;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  box-shadow: none;
+  padding: 0.03rem 0.28rem 0.06rem;
+  color: color-mix(in srgb, var(--chat-text-strong) 90%, var(--chat-text-secondary));
+  font-size: var(--app-font-size-chat-code);
+  font-family: var(--font-chat-code-family);
+  font-weight: 500;
+  white-space: break-spaces;
+}
+
+/* User-bubble markdown (sent messages). The bubble tint IS the code surface
+   color, so code needs its own contrast step against the bubble, and block
+   margins tighten to read well inside the compact bubble padding. */
+.chat-markdown--user p,
+.chat-markdown--user ul,
+.chat-markdown--user ol,
+.chat-markdown--user blockquote,
+.chat-markdown--user pre,
+.chat-markdown--user .chat-markdown-table {
+  margin: 0.45rem 0;
+}
+
+.chat-markdown--user :not(pre) > code {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.chat-markdown--user pre,
+.chat-markdown--user .chat-markdown-codeblock {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.chat-markdown--user .chat-markdown-codeblock pre {
+  background: transparent;
+}
+
+.chat-markdown .katex,
+.chat-markdown .katex * {
+  color: inherit;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.chat-markdown .katex {
+  max-width: 100%;
+  font-size: 1em;
+  text-indent: 0;
+}
+
+.chat-markdown .katex-display {
+  max-width: 100%;
+  margin: 0.85rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.1rem 0 0.35rem;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown .katex-display > .katex {
+  display: inline-block;
+  min-width: max-content;
+  padding: 0 0.05rem;
+}
+
+.chat-markdown pre {
+  max-width: 100%;
+  overflow-x: hidden;
+  border: 1px solid color-mix(in srgb, var(--foreground) 14%, var(--border));
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--app-chat-code-surface) 94%, var(--background));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 7%, transparent);
+  padding: 0.72rem 0.82rem;
+  font-family: var(--font-chat-code-family);
+  white-space: pre-wrap;
+}
+
+.chat-markdown pre code {
+  border: none;
+  background: transparent;
+  padding: 0;
+  line-height: 1.5;
+  font-size: var(--app-font-size-chat-code);
+  font-family: inherit;
+  overflow-wrap: anywhere;
+  white-space: inherit;
+  word-break: break-word;
+}
+
+.chat-markdown .chat-markdown-codeblock {
+  margin: 0.95rem 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--foreground) 14%, var(--border));
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--app-chat-code-surface) 94%, var(--background));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 7%, transparent),
+    0 10px 28px -26px color-mix(in srgb, black 70%, transparent);
+}
+
+.chat-markdown .chat-markdown-codeblock__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  padding: 0.18rem 0.42rem 0.18rem 0.65rem;
+}
+
+.chat-markdown .chat-markdown-codeblock__lang {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-chat-code-family);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--chat-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.chat-markdown .chat-markdown-codeblock__file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+  color: var(--chat-text-muted);
+}
+
+.chat-markdown .chat-markdown-codeblock__file-name {
+  flex-shrink: 0;
+  font-family: var(--font-chat-code-family);
+  font-weight: 500;
+  color: var(--chat-text-strong);
+  white-space: nowrap;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-dir {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-chat-code-family);
+  color: var(--chat-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-lines {
+  flex-shrink: 0;
+  padding-left: 0.125rem;
+  font-family: var(--font-chat-code-family);
+  font-variant-numeric: tabular-nums;
+  color: var(--chat-text-faint);
+}
+
+.chat-markdown .chat-markdown-codeblock__actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.chat-markdown .chat-markdown-codeblock__action {
+  color: var(--chat-text-muted);
+}
+
+.chat-markdown .chat-markdown-codeblock__action:hover,
+.chat-markdown .chat-markdown-codeblock__action[data-active="true"] {
+  color: var(--chat-text-strong);
+}
+
+.chat-markdown .chat-markdown-codeblock__body pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.chat-markdown .chat-markdown-codeblock[data-wrap="false"] .chat-markdown-codeblock__body pre {
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chat-markdown .chat-markdown-codeblock[data-wrap="false"] .chat-markdown-codeblock__body code {
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+.chat-markdown .chat-markdown-codeblock[data-wrap="true"] .chat-markdown-codeblock__body pre {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+}
+
+.chat-markdown .chat-markdown-codeblock[data-wrap="true"] .chat-markdown-codeblock__body code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-markdown .chat-markdown-shiki .shiki {
+  background: transparent !important;
+  font-family: var(--font-chat-code-family) !important;
+}
+
+.chat-markdown .chat-markdown-shiki .shiki * {
+  font-family: inherit !important;
+}
+
+.editor-file-viewer__plain,
+.editor-file-viewer__highlight .shiki {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  padding: var(--editor-file-padding, 1rem);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: var(--editor-file-line-height, 1.65);
+  tab-size: 2;
+}
+
+.editor-file-viewer::-webkit-scrollbar-corner {
+  background: var(--app-code-viewer-surface, var(--color-background-surface));
+}
+
+.editor-file-viewer__plain {
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+}
+
+.editor-file-viewer__highlight {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
+}
+
+.editor-file-viewer__highlight .shiki code,
+.editor-file-viewer__highlight .shiki * {
+  font-family: inherit !important;
+}
+
+.editor-file-editor {
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  padding: 1rem 1rem 1rem 0.75rem;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.editor-file-editor:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
+/* Inline editor shell for the dock explorer: a plain textarea paired with a
+   line-number gutter column. The textarea keeps its own scroll container and
+   the gutter's inner column follows its scrollTop without a second clamped
+   scroll range (a horizontal scrollbar shortens only the textarea viewport).
+   Type metrics must stay identical to .editor-file-editor to keep rows aligned. */
+.editor-file-editor-wrap {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-file-editor__gutter {
+  flex: none;
+  overflow: hidden;
+  width: calc(4ch + 1.75rem);
+  padding: 1rem 0.5rem 1rem 1rem;
+  text-align: right;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.editor-file-editor__gutter-line {
+  display: block;
+  white-space: pre;
+}
+
+.editor-file-editor-wrap[hidden] {
+  display: none;
+}
+
+/* Line-number gutter for the read-only file preview. Rendered via CSS counters
+   on the per-line spans (Shiki and the plain fallback both emit .line), so the
+   numbers stay out of text selection, clipboard copies, and the selection
+   line-range math used by "Reference lines in chat". */
+.editor-file-viewer__plain code,
+.editor-file-viewer__highlight .shiki code {
+  counter-reset: editor-file-line;
+}
+
+/* The line itself owns the gutter inset; the number is painted into that inset
+   out of the text flow (absolute) so it never becomes part of a text selection.
+   The previous in-flow `position: sticky` inline-block sat at the start of each
+   line's inline box, which made the browser snap a single-character drag to the
+   whole line. */
+.editor-file-viewer__plain .line,
+.editor-file-viewer__highlight .shiki .line {
+  position: relative;
+  padding-left: 6.25ch;
+}
+
+.editor-file-viewer__plain .line::before,
+.editor-file-viewer__highlight .shiki .line::before {
+  counter-increment: editor-file-line;
+  content: counter(editor-file-line);
+  position: absolute;
+  left: 0;
+  width: 4ch;
+  text-align: right;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Inline file-comment affordances (hover "+" gutter button, selected-line
+   highlight band, anchored comment box) are positioned as absolute children of
+   the scroll container, so it must establish the positioning context. They live
+   in content space and therefore scroll with the lines. */
+.editor-file-viewer {
+  position: relative;
+  --editor-file-padding: 1rem;
+  --editor-file-line-height: 1.65;
+}
+
+.editor-file-viewer__change-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+}
+
+.editor-file-viewer__change-gutter[data-subtle="true"] {
+  opacity: 0.6;
+}
+
+.editor-file-viewer__change-bar {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 3px;
+  border-radius: 1px;
+  background: var(--success);
+}
+
+.editor-file-viewer__change-bar[data-change="modified"] {
+  background: var(--info);
+}
+
+.editor-file-viewer__change-notch {
+  position: absolute;
+  left: calc(var(--editor-file-padding) + 4.6ch);
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 5px solid var(--destructive);
+}
+
+/* Hover affordance painted over the line-number gutter: an opaque surface strip
+   (so it masks the number) holding a "+" chip, so the row reads as offering a
+   comment instead of showing its number. Width tracks the 4ch number column. */
+.editor-file-viewer__comment-add {
+  position: absolute;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  width: 4ch;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
+  cursor: pointer;
+}
+
+.editor-file-viewer__comment-add-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.3125rem;
+  background: var(--color-background-button-secondary);
+  color: color-mix(in srgb, var(--color-text-foreground) 70%, transparent);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.editor-file-viewer__comment-add:hover .editor-file-viewer__comment-add-glyph {
+  background: var(--color-text-accent);
+  color: var(--color-white, #fff);
+}
+
+/* Blue band over the line a comment box is open against (covers gutter + text);
+   translucent + non-interactive so the code stays readable and selectable. */
+.editor-file-viewer__comment-line-highlight {
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-text-accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 0 var(--color-text-accent);
+}
+
+.editor-file-viewer__comment-box {
+  position: absolute;
+  z-index: 3;
+  margin-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  border-radius: 0.875rem;
+  background: var(--color-background-elevated-primary-opaque);
+  /* The box lives inside the file viewer, which sets the monospace code font on
+     its content; reset to the normal UI font so the comment chrome reads as app
+     UI, not code. Cascades to the header, textarea, and buttons. */
+  font-family: var(--font-ui-family);
+  box-shadow:
+    0 12px 34px -16px color-mix(in srgb, var(--color-black, #000) 30%, transparent),
+    0 1px 4px -2px color-mix(in srgb, var(--color-black, #000) 16%, transparent);
+}
+
+/* Rounded chip holding the Synara mark in the box header, echoing the source
+   file's row gutter badge so the comment reads as "from Synara". */
+.editor-file-viewer__comment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.4375rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
+}
+
+/* Borderless request field: it blends into the card so the box reads as one
+   surface (matching Codex's local-comment editor) rather than an input-in-a-box. */
+.editor-file-viewer__comment-input {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  /* Override the global `textarea { font-family: mono }` reset — this field is
+     UI chrome, not code, so it must use the normal UI font. */
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui-lg, 13px);
+  line-height: 1.5;
+  color: var(--color-text-foreground);
+  outline: none;
+  resize: none;
+}
+
+.editor-file-viewer__comment-input::placeholder {
+  color: color-mix(in srgb, var(--color-text-foreground) 40%, transparent);
+}
+
+.editor-file-viewer--markdown-preview {
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 96%, var(--card))
+  );
+}
+
+.editor-markdown-preview {
+  min-height: 100%;
+  padding: 1rem;
+}
+
+.editor-markdown-preview__body {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+}
+
+.editor-markdown-preview__body > :first-child {
+  margin-top: 0;
+}
+
+/* Document typography for full-file markdown previews (dock file pane and
+   editor center pane share this wrapper). Scoped here so the chat transcript
+   keeps its compact message styling; Tailwind's preflight otherwise leaves
+   headings indistinguishable from body text. */
+.editor-markdown-preview .chat-markdown h1,
+.editor-markdown-preview .chat-markdown h2,
+.editor-markdown-preview .chat-markdown h3,
+.editor-markdown-preview .chat-markdown h4,
+.editor-markdown-preview .chat-markdown h5,
+.editor-markdown-preview .chat-markdown h6 {
+  margin: 1.5em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.editor-markdown-preview .chat-markdown h1 {
+  font-size: 1.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-markdown-preview .chat-markdown h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-markdown-preview .chat-markdown h3 {
+  font-size: 1.2em;
+}
+
+.editor-markdown-preview .chat-markdown h4 {
+  font-size: 1.05em;
+}
+
+.editor-markdown-preview .chat-markdown h5 {
+  font-size: 0.95em;
+}
+
+.editor-markdown-preview .chat-markdown h6 {
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+}
+
+/* Documents breathe more than chat replies. */
+.editor-markdown-preview .chat-markdown p,
+.editor-markdown-preview .chat-markdown ul,
+.editor-markdown-preview .chat-markdown ol,
+.editor-markdown-preview .chat-markdown blockquote,
+.editor-markdown-preview .chat-markdown pre,
+.editor-markdown-preview .chat-markdown .chat-markdown-table {
+  margin: 0.85rem 0;
+}
+
+.editor-markdown-preview .chat-markdown ul,
+.editor-markdown-preview .chat-markdown ol {
+  padding-left: 1.5rem;
+}
+
+.editor-markdown-preview .chat-markdown li + li {
+  margin-top: 0.35rem;
+}
+
+/* Local image preview used by editor file and diff views. */
+.local-image-preview {
+  position: relative;
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background:
+    linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
+    linear-gradient(
+      -45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
+    color-mix(in srgb, var(--background) 96%, var(--foreground));
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.local-image-preview__img {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 0.35rem;
+  box-shadow: 0 1px 16px -10px color-mix(in srgb, var(--foreground) 45%, transparent);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.local-image-preview[data-status="loading"] .local-image-preview__img {
+  opacity: 0;
+}
+
+.local-image-preview__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+/* Shared frosted pill chrome for the preview's hover download button and the
+   error card's download action. */
+.local-image-preview__download,
+.local-image-error__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  color: var(--foreground);
+  text-decoration: none;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.local-image-preview__download:hover,
+.local-image-preview__download:focus-visible,
+.local-image-error__action:hover,
+.local-image-error__action:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 45%, var(--foreground));
+  background: color-mix(in srgb, var(--background) 72%, var(--foreground));
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.local-image-preview__download {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  opacity: 0;
+}
+
+.local-image-preview[data-status="ready"]:hover .local-image-preview__download,
+.local-image-preview[data-status="ready"]:focus-within .local-image-preview__download {
+  opacity: 1;
+}
+
+/* Shared error card used by chat markdown images and editor/diff previews. */
+.local-image-error {
+  display: inline-flex;
+  align-items: center;
+  /* Beats layout utilities (e.g. min-h-full) forwarded from preview callers,
+     so the card stays compact instead of stretching to the panel height. */
+  min-height: 0;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+/* Sits in chat prose: keep paragraph rhythm and match the image card width. */
+.local-image-error--prose {
+  margin: 0.55rem 0;
+  max-width: min(255px, 100%);
+}
+
+.local-image-error__icon {
+  display: inline-flex;
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--destructive) 18%, transparent);
+  color: var(--destructive);
+}
+
+.local-image-error__body {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.local-image-error__title {
+  font-size: var(--app-font-size-ui, 13px);
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.local-image-error__subtitle {
+  font-size: var(--app-font-size-ui-sm, 12px);
+  color: var(--muted-foreground);
+}
+
+/* Pill chrome shared with .local-image-preview__download above. */
+.local-image-error__action {
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  padding: 0.32rem 0.55rem;
+  font-size: var(--app-font-size-ui-sm, 12px);
+  font-weight: 500;
+}
+
+/* In-app PDF viewer (pdf.js canvas + text/link layers). The scroll area centers
+   a stack of page sheets over a muted backdrop, matching the rest of the chrome. */
+.pdf-viewer-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: var(--app-user-message-background);
+}
+
+.pdf-viewer-page {
+  position: relative;
+  flex: 0 0 auto;
+  /* Auto inline margins center the sheet but collapse to 0 once it is wider than
+     the viewport, so zoomed-in pages stay fully scroll-reachable on the left. */
+  margin-inline: auto;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--border), var(--foreground) 10%);
+  overflow: hidden;
+}
+
+.pdf-viewer-page__canvas {
+  display: block;
+}
+
+/* pdf.js text layer: transparent, selectable runs positioned over the canvas. */
+.pdf-viewer-page__text-layer {
+  --scale-factor: 1;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  line-height: 1;
+  overflow: clip;
+}
+
+.pdf-viewer-page__text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.pdf-viewer-page__text-layer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.pdf-viewer-page__text-layer ::selection {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.pdf-viewer-page__text-layer .endOfContent {
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+  display: block;
+}
+
+.pdf-viewer-page__text-layer.selecting .endOfContent {
+  top: 0;
+}
+
+/* Clickable links (external URLs + internal page jumps) drawn over the canvas. */
+.pdf-viewer-page__link-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.pdf-viewer-page__link {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pdf-viewer-page__link:hover,
+.pdf-viewer-page__link:focus-visible {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  outline: none;
+}
+
+/* Per-page render failure marker: a single broken page should report itself
+   rather than blend into the white sheet. */
+.pdf-viewer-page__error {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  color: var(--destructive);
+  font-size: var(--app-font-size-ui, 13px);
+}
+
+.pdf-viewer-page__error-detail {
+  max-width: 90%;
+  color: var(--muted-foreground);
+  font-size: var(--app-font-size-ui-sm, 12px);
+  word-break: break-word;
+}
+
+/* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
+.chat-generated-image {
+  position: relative;
+  display: inline-block;
+  margin: 0.55rem 0;
+  width: fit-content;
+  max-width: min(255px, 100%);
+  vertical-align: top;
+  isolation: isolate;
+}
+
+.chat-generated-image__frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: zoom-in;
+  outline: none;
+  transition:
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.chat-generated-image__frame:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.chat-generated-image__frame:hover {
+  box-shadow: 0 1px 18px -8px color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-generated-image[data-status="loading"] .chat-generated-image__frame {
+  min-height: 78px;
+}
+
+.chat-generated-image__img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 235px;
+  object-fit: contain;
+  background: transparent;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.chat-generated-image[data-status="loading"] .chat-generated-image__img {
+  opacity: 0;
+}
+
+.chat-generated-image__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--muted) 80%, transparent) 0%,
+    color-mix(in srgb, var(--muted) 50%, transparent) 50%,
+    color-mix(in srgb, var(--muted) 80%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: chat-generated-image-shimmer 1.6s ease-in-out infinite;
+  color: var(--muted-foreground);
+}
+
+/* Local video played inline from markdown ![alt](clip.mp4). Width and the 16:9
+   box are fixed before metadata loads so the transcript row never changes
+   height when the video arrives (end-follow); the video letterboxes inside. */
+.chat-generated-image.chat-generated-video {
+  width: min(420px, 100%);
+  max-width: 100%;
+}
+
+.chat-generated-video__frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.chat-generated-video__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.chat-generated-video[data-status="loading"] .chat-generated-video__video {
+  opacity: 0;
+}
+
+@keyframes chat-generated-image-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* scroll-fade utility — vendored verbatim from shadcn 4.12.0
+   (dist/tailwind.css `@utility scroll-fade`). Same rationale as the shimmer
+   block below — importing the full `shadcn` stylesheet would clash with this
+   project's custom theme, so the self-contained scroll-fade block lives here.
+   The transcript's `scroll-edge-fade` (below) builds on these primitives.
+   Scroll-aware through `animation-timeline: scroll()`; the `@property`
+   initial-values keep it fade-free when the container is not scrollable, and a
+   static-fade `@supports` fallback covers browsers without scroll timelines.
+   Provides `scroll-fade`, `scroll-fade-y`, `scroll-fade-x`, the directional
+   `scroll-fade-{t,b,l,r,s,e}`, size modifiers `scroll-fade-*` /
+   `scroll-fade-{t,b,s,e}-*`, and `scroll-fade-none`.
+   Docs: https://ui.shadcn.com/docs/utils/scroll-fade */
+@property --scroll-fade-t {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-t {
+    from {
+      --scroll-fade-t: 0px;
+    }
+    to {
+      --scroll-fade-t: var(
+        --_scroll-fade-size-t,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+  }
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(
+        --_scroll-fade-size-b,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
+  }
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(
+        --_scroll-fade-size-s,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+  }
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(
+        --_scroll-fade-size-e,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-y {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-t {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-t 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-l {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-s 1ms ease-in-out;
+    animation-timeline: scroll(self x);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+  }
+}
+
+@utility scroll-fade-r {
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self x);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-s {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-s 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+  }
+}
+
+@utility scroll-fade-e {
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(
+      to left,
+      #000 0,
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-* {
+  --scroll-fade-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-t-* {
+  --scroll-fade-t-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-t-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-b-* {
+  --scroll-fade-b-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-b-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-s-* {
+  --scroll-fade-s-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-s-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-e-* {
+  --scroll-fade-e-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-e-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-none {
+  --scroll-fade-mask: none;
+}
+
+/* Scroll edge fade for app chrome scroll areas (the chat transcript), built on the
+   vendored scroll-fade primitives above. Content dissolves to transparent over
+   `--scroll-edge-fade-size` at the top edge and at the bottom edge — or, when
+   `--scroll-edge-fade-inset-b` is set, at that distance above the bottom edge (the
+   floating composer's top) — so the frosted window material shows through instead
+   of a hard cut. Each edge only fades while content is scrolled past it.
+
+   Top: reuses the vendored `--scroll-fade-t` reveal. Bottom: a 0→1 progress slides
+   the whole fade band down past the viewport as the scroll reaches its end, instead
+   of shrinking it in place, so an inset edge never collapses into a hard step over
+   content still passing under the composer. `--scroll-edge-fade-layer` intersects an
+   extra mask (the composer's footer dissolve) with the edges. It is paint-only (no
+   layout or scroll feedback), so it cannot disturb auto-follow or list measurement.
+   ScrollArea's `scrollFade` reads the same `--scroll-edge-fade-size` token. */
+@property --scroll-edge-fade-b-progress {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes scroll-edge-fade-reveal-b {
+  from {
+    --scroll-edge-fade-b-progress: 1;
+  }
+  to {
+    --scroll-edge-fade-b-progress: 0;
+  }
+}
+
+@utility scroll-edge-fade {
+  --_scroll-fade-size-t: var(--scroll-edge-fade-size);
+  --_scroll-edge-fade-b-start: calc(
+    100% - (var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-size)) *
+      var(--scroll-edge-fade-b-progress, 0)
+  );
+  --scroll-edge-fade-edges: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 var(--_scroll-edge-fade-b-start),
+    transparent calc(var(--_scroll-edge-fade-b-start) + var(--scroll-edge-fade-size))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-edge-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-b-progress: 1;
+  }
+}
+
+/* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
+   family — which reveal/hide the fade based on scroll position and therefore
+   need a scrollable container — this is a plain overflow:hidden clip whose
+   trailing edge softly dissolves to transparent instead of showing an ellipsis.
+   It only bites into text that actually overflows: the target must be a
+   stretched box (e.g. flex-1) so short, left-aligned text ends before the faded
+   edge. Fade width is tunable via `--truncate-fade-size` (or the
+   `truncate-fade-*` value utility); RTL flips the fade to the inline start. */
+@utility truncate-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  --_truncate-fade-size: var(--truncate-fade-size, 1.5rem);
+  --_truncate-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--_truncate-fade-size)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --_truncate-fade-mask: linear-gradient(
+      to left,
+      #000 0,
+      #000 calc(100% - var(--_truncate-fade-size)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--_truncate-fade-mask);
+  mask-image: var(--_truncate-fade-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+@utility truncate-fade-* {
+  --truncate-fade-size: calc(var(--spacing) * --value(integer));
+  --truncate-fade-size: --value([length], [percentage]);
+}
+
+/* Match the transcript's animated right inset before revealing its message rail. */
+@property --message-trail-content-inset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* Text shimmer utility — vendored verbatim from shadcn 4.12.0
+   (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
+   imported because it would clash with this project's custom theme, so the
+   self-contained shimmer block lives here instead. Applied on typing and
+   worktree-preparation indicators. Provides `shimmer`,
+   `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
+   `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
+   One deliberate deviation: the animation is duty-cycled via `--shimmer-timing`
+   (see the note inside `@utility shimmer`).
+   Docs: https://ui.shadcn.com/docs/utils/shimmer */
+@property --shimmer-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 20deg;
+}
+@property --shimmer-image {
+  syntax: "*";
+  inherits: false;
+}
+@property --shimmer-text-fill {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes tw-shimmer {
+    from {
+      background-position: 100% 0;
+      mask-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+      mask-position: 0 0;
+    }
+  }
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(--shimmer-color, oklch(from currentColor l c h / calc(alpha* 0.2)));
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  /* Animating a clipped text background repaints the label and its overlapping
+     composer blur. The default 2000ms / 40 steps shares the spinner's 50ms cadence;
+     status labels also use animationTimelineSync so those steps land together.
+     Custom durations/timings can opt out of that shared cadence. */
+  animation: tw-shimmer var(--shimmer-duration, 2s) var(--shimmer-timing, steps(40, end)) infinite;
+
+  @variant dark {
+    --_highlight: var(
+      --shimmer-color,
+      oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4))
+    );
+  }
+
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    animation-direction: reverse;
+  }
+}
+
+/* Mask the whole indicator so SVG strokes shimmer together with its text. */
+@utility shimmer-group {
+  @apply shimmer;
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  mask-image: linear-gradient(
+    calc(90deg + var(--shimmer-angle)),
+    #000 calc(50% - var(--_spread)),
+    rgb(0 0 0 / 0.2) 50%,
+    #000 calc(50% + var(--_spread))
+  );
+  mask-repeat: no-repeat;
+  mask-size: calc(200% + var(--_spread) * 2) 100%;
+  mask-position: 0 0;
+}
+
+@utility shimmer-once {
+  animation-iteration-count: 1;
+}
+
+@utility shimmer-reverse {
+  animation-direction: reverse;
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility shimmer-color-* {
+  --shimmer-color: --value(--color, [color]);
+  --shimmer-color: color-mix(
+    in oklch,
+    --value(--color, [color]) calc(--modifier(integer) * 1%),
+    transparent
+  );
+}
+
+@utility shimmer-duration-* {
+  --shimmer-duration: calc(--value(integer) * 1ms);
+}
+
+@utility shimmer-spread-* {
+  --shimmer-spread: calc(var(--spacing) * --value(integer));
+  --shimmer-spread: --value([length], [percentage]);
+}
+
+@utility shimmer-angle-* {
+  --shimmer-angle: calc(--value(integer) * 1deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .shimmer-group {
+    animation: none;
+    mask-image: none;
+  }
+}
+
+.chat-generated-image__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0.75rem;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #000 22%, transparent) 0%,
+    transparent 35%,
+    transparent 65%,
+    color-mix(in srgb, #000 28%, transparent) 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.chat-generated-image[data-status="ready"]:hover .chat-generated-image__overlay,
+.chat-generated-image[data-status="ready"]:focus-within .chat-generated-image__overlay {
+  opacity: 1;
+}
+
+/* Shared pill styling for the Expand and Download actions on hover */
+.chat-generated-image__overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  text-decoration: none;
+  user-select: none;
+}
+
+/* Download pill — placed in the top-right corner with the same padding as the bottom overlay */
+.chat-generated-image__overlay-pill--download {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.chat-generated-image[data-status="ready"]:hover .chat-generated-image__overlay-pill--download,
+.chat-generated-image[data-status="ready"]:focus-within
+  .chat-generated-image__overlay-pill--download {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chat-generated-image__overlay-pill--download:hover,
+.chat-generated-image__overlay-pill--download:focus-visible {
+  background: color-mix(in srgb, #000 72%, transparent);
+  color: #fff;
+  text-decoration: none;
+}
+
+.chat-generated-image__overlay-pill--download:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Markdown tables: hairline rows, no grid. lib/markdownTableLayout.ts marks each column:
+   numbers and short values keep their natural width, text columns wrap in what is left, and
+   the table scrolls sideways only when the short columns alone are wider than the chat. */
+.chat-markdown .chat-markdown-table__actions {
+  display: flex;
+  justify-content: flex-end;
+  height: 1.5rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-markdown .chat-markdown-table:hover .chat-markdown-table__actions,
+.chat-markdown .chat-markdown-table:focus-within .chat-markdown-table__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-markdown .chat-markdown-table__actions {
+    opacity: 1;
+  }
+}
+
+.chat-markdown .chat-markdown-table__action {
+  color: var(--muted-foreground);
+}
+
+.chat-markdown .chat-markdown-table__action:hover {
+  color: var(--foreground);
+}
+
+.chat-markdown .chat-markdown-table__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  padding: 0.45rem 0;
+  padding-inline-start: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  text-align: start;
+  vertical-align: top;
+  /* Break between words; only a text column may also break inside one (below). */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.chat-markdown :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+
+.chat-markdown th {
+  padding-top: 0;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 20%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--text-chat-sm);
+  font-weight: 500;
+  vertical-align: bottom;
+}
+
+.chat-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Text columns give up width first; the floor stops them collapsing to a letter per line. */
+.chat-markdown td[data-table-column="text"] {
+  min-width: 6em;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown td:is([data-table-column="numeric"], [data-table-column="short"]),
+.chat-markdown
+  th:is([data-table-column="numeric"], [data-table-column="short"]):not(
+    [data-table-header="wrap"]
+  ) {
+  white-space: nowrap;
+}
+
+.chat-markdown :is(th, td)[data-table-column="numeric"] {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-markdown td[data-table-cell="empty"] {
+  color: var(--muted-foreground);
+}
+
+/* A visual placed in a reply sits inside that reply's markdown. Its components style
+   themselves, so the prose rules above step back for them (not for its own prose blocks). */
+.chat-markdown
+  .inline-visual-blocks
+  :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, table, th, td, dl, dt, dd, blockquote):not(
+    .inline-visual-markdown *
+  ) {
+  all: revert-layer;
+}
+
+/* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */
+diffs-container {
+  --diffs-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-chat-code-family);
+}
+
+/* Diffs theme bridge (match diff surfaces to app palette) */
+.diff-panel-viewport {
+  /* Keep raw patch fallback and any unthemed diff chrome on the coding font stack. */
+  font-family: var(--font-chat-code-family);
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 94%, var(--card))
+  );
+}
+
+.diff-render-file {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  overflow: clip;
+  background: var(--app-code-viewer-surface, var(--background));
+}
+
+.diff-render-file [data-diffs-header],
+.diff-render-file [data-diff-file-header],
+.diff-render-file [data-file-info] {
+  cursor: pointer;
+}
+
+.diff-render-file__image-preview {
+  min-height: 150px;
+  border-top: 1px solid var(--border);
+}
+
+/* Composer surface follows Codex's renderer token path: light uses
+   bg-token-input-background/90 + backdrop blur; dark Electron uses the opaque
+   dropdown/control token derived from the active chrome theme. */
+:root {
+  --composer-surface: color-mix(in oklab, var(--color-background-control) 90%, transparent);
+  /* Same hue as before, darkened until it reads 4.5:1 on the light composer surface. */
+  --runtime-full-access-accent: #c24904;
+}
+
+.dark {
+  --composer-surface: var(--color-token-dropdown-background);
+  --runtime-full-access-accent: #fe8549;
+}
+
+/* Raised-chrome outline — the single border shared by every surface that floats over
+   the transcript as a solid card: the composer input shell and its attached banners,
+   the stacked rail above it, the docked Environment panel, and kanban cards. These all
+   drew the same color before this token existed (the light recipe below; plain
+   `--border` in dark), so they live on one knob and cannot drift apart again.
+
+   `--surface-border-strength` thins that base color toward transparent. Lower it to
+   make the whole raised-chrome outline recede; 100% restores the full-weight border.
+   Floating menus, pickers, and popovers deliberately stay on plain `border-border` —
+   they are transient overlays, not part of this raised-card family. */
+:root {
+  --surface-border-strength: 55%;
+  --surface-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%)
+      var(--surface-border-strength),
+    transparent
+  );
+  /* Light keeps rail and input identical; only dark splits them (see below). */
+  --composer-stacked-border: var(--surface-border);
+}
+
+.dark {
+  --surface-border: color-mix(in srgb, var(--border) var(--surface-border-strength), transparent);
+  /* The stacked rail reads as a translucent continuation of the input shell, so it
+     runs at half the heavy token — matching the live-changes strip. */
+  --composer-stacked-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-border-heavy) 50%, transparent) var(--surface-border-strength),
+    transparent
+  );
+}
+
+/* Split view: the focused pane is marked by its composer outline alone, tinted toward
+   the accent. Scoped to the composer slot so the pane's other raised chrome keeps the
+   neutral border. */
+[data-split-pane-focused="true"] [data-chat-composer-slot] {
+  --surface-border: color-mix(in srgb, var(--info) 50%, transparent);
+}
+
+/* Composer shell/surface corner geometry — single source of truth so radius
+   tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
+:root {
+  --composer-radius: 1.2rem;
+}
+
+.chat-composer-shell,
+.chat-composer-surface,
+.chat-composer-stacked-top,
+.chat-composer-surface-banner {
+  border-radius: var(--composer-radius);
+}
+
+/* Single-row composer (started threads, one-line draft): a true pill. Squircle smoothing at a
+   full radius pulls the ends toward a box, so this layout keeps round corners. */
+.chat-composer-shell[data-composer-layout="row"],
+.chat-composer-shell[data-composer-layout="row"] .chat-composer-surface {
+  --composer-radius: 9999px;
+  corner-shape: round;
+}
+
+/* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
+   Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
+:root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
+  padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+}
+
+/* Rail layout route body (unlayered: it overrides the card's background and height
+   utilities and the seam rules). The card element still spans the header band, so it turns
+   transparent and draws the body from pseudo-elements: ::before is the surface behind the
+   route's content, ::after the hairline above it. Margins leave the right and bottom shell
+   gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
+   paints there (fixed overlays are unaffected). The block's top corners sit under the band,
+   inside the card, so the route wrappers that hold a top bar go transparent (below) and the
+   rounded ::before shows through. The block has no shadow: its edge is the 1px border. */
+[data-sidebar-layout="rail"] {
+  /* Route body corners: square only where the panel joins it. */
+  --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
+  /* The card's own corners: its top edge is the band, so only the bottom ones round. */
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
+}
+
+/* Embedded content shares the controller's single window coat. */
+:root[data-workspace-frame="true"] body,
+:root[data-workspace-frame="true"] [data-sidebar-layout="rail"] {
+  background: transparent;
+}
+
+/* Panel collapsed: the route body is the whole block, so its left corners round too. They
+   wait for the panel to slide most of the way out, so no notch opens beside it meanwhile;
+   opening squares them at once. */
+[data-sidebar-layout="rail"]:is(
+  [data-shell-sidebar-state="collapsed"],
+  :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+) {
+  --app-rail-block-radii: var(--app-rail-inset-radius);
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
+  --app-rail-corner-delay: 180ms;
+}
+
+[data-sidebar-layout="rail"] .chat-content-card {
+  margin-right: var(--app-rail-inset-gap);
+  margin-bottom: var(--app-rail-inset-gap);
+  background: transparent;
+  border-radius: var(--app-rail-card-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card.h-dvh {
+  height: calc(100dvh - var(--app-rail-inset-gap));
+}
+
+/* Full-route wrappers (the ones holding the route's top bar, including the dock's surface)
+   repaint the surface as a plain rectangle over the block's rounded top corners; the card
+   body already paints that surface, so they go transparent. */
+[data-sidebar-layout="rail"]
+  .chat-content-card
+  :is(.app-content-surface, .app-settings-surface):has(.app-top-bar) {
+  background: transparent;
+}
+
+/* A maximized right dock covers the chat column, so it keeps an opaque body even when the
+   whole window is glass; otherwise the transcript would show through it. Unlayered and
+   placed after the rail rule above so it also wins over that transparent override. */
+:root[data-window-translucency="window"]
+  [data-dock-maximized]
+  [data-slot="sidebar-inner"].app-content-surface {
+  background: var(--color-background-surface);
+}
+
+/* Code, diff, and file viewers paint their own fill (`--synara-code-surface` in
+   diffRendering.ts). On whole-window glass they go clear like the surface around them in the
+   dock and the editor workspace, so the pane reads as one sheet of glass instead of an opaque
+   slab; only what content scrolls under (sticky diff headers, the gutter once a row scrolls
+   sideways) keeps the composer's dense tint. A maximized dock and the mobile sheet are opaque,
+   so their viewers keep their own fill. */
+:root[data-window-translucency="window"]
+  :is(
+    [data-slot="sidebar-container"]:not([data-dock-maximized]) [data-right-dock-content],
+    [data-editor-workspace]
+  ) {
+  --app-code-viewer-surface: transparent;
+  --app-code-viewer-sticky-surface: color-mix(in srgb, var(--popover) 96%, transparent);
+  --app-code-viewer-gutter-animation: synara-code-gutter-backing;
+  --app-code-viewer-addition-row: color-mix(in srgb, var(--success) 10%, transparent);
+  --app-code-viewer-deletion-row: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+
+/* Terminals follow the window's glass: xterm resolves its background from this token
+   (terminalRuntimeAppearance.ts) and turns transparent, so the body's coat shows through. Set
+   on the root because the color is resolved once for every terminal, wherever it is mounted;
+   over an opaque parent (maximized dock) the clear terminal simply shows that surface. */
+:root[data-window-translucency="window"] {
+  --app-terminal-surface: transparent;
+}
+
+/* xterm's stylesheet backs the viewport with black, normally hidden under the theme fill. */
+:root[data-window-translucency="window"] .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
+/* The dock's bottom-right corner is the block's corner. */
+[data-sidebar-layout="rail"] [data-slot="sidebar"][data-side="right"] [data-slot="sidebar-inner"] {
+  overflow: hidden;
+  border-bottom-right-radius: var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before,
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  content: "";
+  position: absolute;
+  inset: var(--app-top-strip-height) 0 0 0;
+  pointer-events: none;
+  opacity: 1;
+  border-radius: var(--app-rail-block-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before {
+  z-index: -1;
+  background: var(--app-content-surface, var(--color-background-surface));
+  box-shadow: none;
+}
+
+/* The block's hairline border; with the panel open its left edge is the seam with the panel,
+   which draws no right border of its own. */
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  z-index: 30;
+  border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+}
+
+/* Hovering the content-seam resize rail strengthens the seam slightly. Only while the panel is
+   open: collapsed, that rail is a toggle, not a resize handle. */
+[data-sidebar-layout="rail"]:has([data-placement="content-seam"]:hover):not(
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
+  .chat-content-card::after {
+  border-left-color: var(--app-rail-inset-border-hover);
+}
+
+/* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
+   border stays until the slide ends, so the shrinking panel keeps its edges. */
+[data-sidebar-layout="rail"]:is(
+    [data-shell-sidebar-state="collapsed"],
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
+  .app-rail-panel {
+  border-width: 0;
+  transition: border-width 0s linear 300ms;
+}
+
+/* Short divider on the shell band above the seam, detached from the band's edges, marking
+   where the route header starts next to the panel. Hidden with the panel. */
+[data-sidebar-layout="rail"] .app-rail-header-divider {
+  position: absolute;
+  top: calc((var(--app-top-strip-height) - var(--app-chrome-divider-height)) / 2);
+  left: 0;
+  z-index: 30;
+  width: 1px;
+  height: var(--app-chrome-divider-height);
+  pointer-events: none;
+  background: var(--app-chrome-divider-color);
+  transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The same hairline between adjacent tabs of a SurfaceTabStrip with `dividers`, centered in
+   the strip's 4px (gap-1) gutter. It steps aside next to the active or hovered tab, whose
+   own fill already sets it apart, like browser tab strips. */
+.surface-tab-dividers > [data-surface-tab] + [data-surface-tab]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(-0.125rem - 0.5px);
+  width: 1px;
+  height: var(--app-chrome-divider-height);
+  translate: 0 -50%;
+  pointer-events: none;
+  background: var(--app-chrome-divider-color);
+  transition: opacity 150ms ease-out;
+}
+
+.surface-tab-dividers > [data-surface-tab]:is([data-surface-tab-active], :hover)::before,
+.surface-tab-dividers
+  > [data-surface-tab]:is([data-surface-tab-active], :hover)
+  + [data-surface-tab]::before {
+  opacity: 0;
+}
+
+[data-sidebar-layout="rail"]:is(
+    [data-shell-sidebar-state="collapsed"],
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
+  .app-rail-header-divider {
+  opacity: 0;
+}
+
+/* Settings floats its top bar over the scrolling page; on the opaque band the page must
+   start below it instead. */
+[data-sidebar-layout="rail"] [data-slot="sidebar-inset-surface"].app-settings-surface {
+  padding-top: var(--app-top-strip-height);
+}
+
+/* Route top bars sit on the shell band; the block's top border replaces their hairline.
+   The shell root already paints the band, so they stay clear: a second coat of the
+   translucent shell tone would read nearly opaque next to the rail. */
+[data-sidebar-layout="rail"] .app-top-bar {
+  background-color: transparent;
+  background-image: none;
+  /* The traffic-light gutter (below) arrives with the panel's collapse; ease it on the
+     panel's own curve so the header's content glides instead of stepping. */
+  transition: padding-left 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Reduced motion keeps the header, reserved controls, and block edges on the same
+   immediate toggle; a delayed gutter would leave the snapped dock off its anchor. */
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-layout="rail"] .app-top-bar,
+  [data-sidebar-layout="rail"] .chat-content-card,
+  [data-sidebar-layout="rail"] .chat-content-card::before,
+  [data-sidebar-layout="rail"] .chat-content-card::after,
+  [data-sidebar-layout="rail"] .app-rail-panel,
+  [data-sidebar-layout="rail"]:is(
+      [data-shell-sidebar-state="collapsed"],
+      :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+    )
+    .app-rail-panel {
+    transition: none;
+  }
+}
+
+/* Right dock: its fixed container keeps the block's gap, and its surface is the card body
+   drawn above, so the dock header sits on the shell band like the route header. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"]
+  > [data-slot="sidebar-container"] {
+  right: var(--app-rail-inset-gap);
+  bottom: var(--app-rail-inset-gap);
+  height: auto;
+}
+
+/* Collapsed, the dock slides its own width off-screen; the gap above would leave its
+   left border and a sliver of content peeking at the window edge, so it slides the gap too. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"][data-collapsible="offcanvas"]
+  > [data-slot="sidebar-container"] {
+  translate: calc(100% + var(--app-rail-inset-gap)) 0;
+}
+
+/* Headers right of a collapsed panel clear the traffic lights from the rail's edge, not
+   the window's (the strip over rail + panel keeps the full inset). */
+:root[data-runtime="electron"]
+  [data-sidebar-layout="rail"]
+  .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
+  padding-left: calc(
+    var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width)
+  ) !important;
+}
+
+/* Continuous ("squircle") corners, opt-in with the `squircle` class (composer, user
+   bubbles, palettes, open-thread tabs). The element's own border-radius stays the geometry
+   and the fallback: Electron smooths it natively, browsers that support corner-shape switch
+   to it, and everything else keeps plain rounded corners. Electron smoothing must not
+   stack with browser corner-shape. */
+@utility squircle {
+  :root[data-runtime="electron"] & {
+    -electron-corner-smoothing: system-ui;
+  }
+  @supports (corner-shape: squircle) {
+    :root:not([data-runtime="electron"]) & {
+      corner-shape: squircle;
+    }
+  }
+}
+
+/* Pull request description/comment prose: long-form reading, roomier than chat bubbles.
+   Composes with .chat-markdown (which zeroes first/last child margins). */
+.pull-request-prose {
+  line-height: 1.7;
+}
+.chat-markdown img[data-expandable-image] {
+  cursor: zoom-in;
+}
+/* Images sharing a paragraph with prose get their own line (remarkImageRows). */
+.chat-markdown .chat-markdown-image-row {
+  display: block;
+}
+.pull-request-prose p,
+.pull-request-prose ul,
+.pull-request-prose ol,
+.pull-request-prose blockquote,
+.pull-request-prose pre,
+.pull-request-prose table {
+  margin: 0.8rem 0;
+}
+.pull-request-prose li + li {
+  margin-top: 0.4rem;
+}
+.pull-request-prose h1,
+.pull-request-prose h2,
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  margin: 1.4rem 0 0.5rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.pull-request-prose h1 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.3);
+}
+.pull-request-prose h2 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.16);
+}
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  font-size: var(--app-font-size-ui-lg, 13px);
+}
+
+.chat-composer-surface-banner,
+.chat-composer-stacked-top {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: calc(var(--composer-radius) - 1px);
+  border-top-right-radius: calc(var(--composer-radius) - 1px);
+}
+
+/* Composer glass — the same material as the floating menus/pickers
+   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
+
+   The blur lives on a `::before` at `z-index: -1` rather than on the element itself,
+   exactly like the popup primitive: `backdrop-filter` on the element would make it a
+   containing block and clip the composer's anchored pickers (which rely on
+   `overflow-visible`). Painted behind the element's own translucent fill, the layer
+   frosts the transcript scrolling underneath (see composerOverlay.ts).
+
+   Fill comes from the SAME token the floating menus use (`--popover`, via
+   `--app-composer-picker-surface`), not from `--composer-surface`. In dark mode
+   `--composer-surface` resolves to `--color-background-control-opaque`, which sits
+   within a couple of RGB steps of the chat background — thinning a color to 72% of
+   the color already behind it is a no-op, so the composer read as a flat slab even
+   with the blur running. `--popover` is the elevated token the handoff menu and the
+   pickers are built from, so the composer now lifts off the transcript exactly the
+   way they do.
+
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. A
+   whole-window glass shell replaces this material entirely; see `.app-glass-raised`. */
+:root {
+  --composer-glass-opacity: 55%;
+  --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
+  --composer-glass-filter: blur(40px) saturate(150%);
+  /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
+     `--composer-glass-opacity` knob is the only thing thinning it. */
+  --composer-glass-surface: var(--popover);
+}
+
+/* Sidebar-only glass still uses a translucent native macOS window behind the opaque
+   chat column. Avoid adding a second backdrop layer when its composer mounts: use
+   dense fills to keep the transcript from reading through without a CSS blur.
+   Whole-window glass keeps its shared raised tint and overlay cutouts below. */
+:root[data-window-transparent="true"][data-window-material="translucent"][data-window-translucency="sidebar"] {
+  --composer-glass-filter: none;
+  --composer-glass-opacity: 92%;
+  --composer-glass-stacked-opacity: 80%;
+}
+
+.chat-composer-surface,
+.chat-composer-stacked-top {
+  position: relative;
+}
+
+.chat-composer-surface::before,
+.chat-composer-stacked-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  -webkit-backdrop-filter: var(--composer-glass-filter);
+  backdrop-filter: var(--composer-glass-filter);
+}
+
+/* Stacked rail above the composer input: the elevated glass surface at its
+   dedicated opacity, so the rail reads as a lighter continuation of the input. */
+.chat-composer-stacked-top {
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-stacked-opacity),
+    transparent
+  );
+}
+
+.chat-composer-surface {
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-opacity),
+    transparent
+  );
+}
+
+/* Raised panels docked over the transcript (Environment, Library, Project). Opaque, so the
+   transcript never bleeds through; a whole-window glass shell swaps the fill below. */
+.chat-raised-panel-surface {
+  background: var(--popover);
+}
+
+/* ─── Raised chrome on a whole-window glass shell ─────────────────────────────────
+   The window's fill is the body's translucent coat, and the desktop behind it is blurred
+   natively. Raised surfaces therefore take one denser tint (`--app-glass-raised-surface`,
+   theme.logic) and NO backdrop-filter: Chromium paints the filtered backdrop over the
+   backdrop it sampled, so a blur here lays a second copy of the coat under the surface
+   and the surface reads as a solid slab (measured: a 30% coat came out at 59%).
+
+   `.app-glass-raised` opts in any other surface that paints an opaque fill of its own:
+   cards and filled controls. Unlayered, so it wins over the
+   surface's Tailwind fill only while the attribute is set. */
+:root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
+:root[data-window-translucency="window"]
+  :is([data-chat-composer-slot], [data-glass-cutout])
+  .chat-composer-surface {
+  background: var(--app-glass-raised-surface);
+}
+
+/* Composer surfaces are dense by default on a glass shell: one can float over anything, and
+   with no blur the raised tint would leave that content readable through it. A composer
+   takes the tint above only where nothing shows behind it: the chat composer's own slot
+   (`data-chat-composer-slot`, where the transcript dissolves at its top edge, see
+   `.scroll-edge-fade` below) and a slot whose content is cut out from under it
+   (`data-glass-cutout`, see glassOverlayCutout.ts). */
+:root[data-window-translucency="window"] .chat-composer-surface {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-composer-stacked-top)::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The stacked rail stays the lighter continuation of the input. */
+:root[data-window-translucency="window"] .chat-composer-stacked-top {
+  background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+/* Interactive raised surfaces (cards, selects) lift one more step on hover. */
+:root[data-window-translucency="window"] .app-glass-raised:is(button, [role="button"]):hover {
+  background:
+    linear-gradient(var(--app-glass-raised-surface), var(--app-glass-raised-surface)),
+    var(--app-glass-raised-surface);
+}
+
+/* ─── Floating overlays ───────────────────────────────────────────────────────────
+   Menus, pickers, popovers, tooltips, and toasts share the composer's material
+   (`--app-overlay-surface`, theme.logic). What keeps the content behind them from
+   reading through depends on the window:
+     • Opaque window: the backdrop blur on the surface frosts it.
+     • Translucent window: a blur cannot do that. Over a see-through region Chromium
+       composites the blurred copy over the sharp original, so text stays readable.
+       glassOverlayCutout.ts cuts the page out from under each overlay instead, leaving
+       only the window's coat and the natively blurred desktop behind it, and the blur
+       is dropped (it would only lay a second copy of the coat under the fill). The
+       same cutout serves raised surfaces floating inside the page (a floating side
+       panel, the PR composer), which is why they share the docked surfaces' tint.
+   `--app-overlay-backing` is that coat where the body does not paint one. */
+:is(.app-popup-surface, .composer-picker-menu-surface) {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* An overlay sitting on another portaled layer (a select or tooltip inside a dialog) has
+   nothing cut out from under it: that layer is not the page. The thin fill would leave the
+   layer's text readable through it, so it goes near-opaque there (`data-glass-backed`,
+   glassOverlayCutout.ts). The same holds for an overlay rendered inside the page instead of
+   portaled (the message trail's turn preview): the cutout cannot remove the page from under
+   something that is part of it. Hover cards also use this backing: opening one must not
+   re-clip and re-composite the entire app every time the pointer crosses a sidebar row. */
+:root[data-window-material="translucent"]
+  :is(.app-popup-surface, .composer-picker-menu-surface):is(
+    [data-glass-backed],
+    [data-slot="tooltip-popup"],
+    [data-slot="preview-card-popup"]
+  ),
+:root[data-window-material="translucent"]
+  #root
+  :is(.app-popup-surface, .composer-picker-menu-surface) {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+:root[data-window-material="translucent"] .app-popup-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* A composer portaled next to the app root (the selection composer) is cut out like any
+   other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The composer no longer frosts what scrolls beneath it, so the transcript dissolves over a
+   tuck-sized band (`--scroll-edge-fade-tuck`, composerOverlay.ts) that ends at the composer's
+   top edge instead of running under it: the sheer stacked panels (subagents, tasks, queue)
+   put their header text right at that edge. The resting tail stops above the band.
+   `--scroll-edge-fade-inset-b` is the composer's top edge; without it the gradient ends past
+   the viewport and masks nothing. */
+:root[data-window-translucency="window"] .scroll-edge-fade {
+  --scroll-edge-fade-glass: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px) - var(--scroll-edge-fade-tuck, 0px)),
+    transparent calc(100% - var(--scroll-edge-fade-inset-b, 0px))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
+}
+
+/* Frosted translucent shell shared by floating menus & pickers (dropdown menus,
+   selects, popovers, comboboxes) and composer pickers. Background + blur are
+   theme-aware via the tokens set in theme.logic (control-opaque @70% + blur). */
+.composer-picker-menu-surface {
+  background: var(
+    --app-composer-picker-surface,
+    color-mix(in oklab, var(--popover) 70%, transparent)
+  );
+  -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+}
+
+/* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
+.composer-picker-menu--normal {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 1.625rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.0625rem;
+  --picker-option-gap: 0.5rem;
+  --picker-option-icon-size: 1.125rem;
+  --picker-section-py: 0.375rem;
+  --picker-separator-my: 0.25rem;
+  --picker-separator-mx: 0.5rem;
+  --picker-sub-chevron-ms: auto;
+  --picker-sub-chevron-size: 1rem;
+  --picker-sub-chevron-opacity: 0.8;
+}
+
+.composer-picker-menu--small {
+  --picker-menu-body-p: 0.1875rem;
+  --picker-option-min-h: 1.5rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.0625rem;
+  --picker-option-gap: 0.4375rem;
+  --picker-option-icon-size: 0.75rem;
+  --picker-section-py: 0.3125rem;
+  --picker-separator-my: 0.1875rem;
+  --picker-separator-mx: 0.4375rem;
+  --picker-sub-chevron-ms: auto;
+  --picker-sub-chevron-size: 0.75rem;
+  --picker-sub-chevron-opacity: 0.8;
+}
+
+/* Fixed width — only the composer model/effort/provider pickers opt in. */
+.composer-picker-menu-fixed.composer-picker-menu--normal {
+  width: 14.5rem;
+  min-width: 14.5rem;
+  max-width: min(14.5rem, 92vw);
+}
+
+.composer-picker-menu-fixed.composer-picker-menu--small {
+  width: 11.25rem;
+  min-width: 11.25rem;
+  max-width: min(11.25rem, 92vw);
+}
+
+/* Size-aware option rows inside composer picker shells. */
+.composer-picker-menu--small [data-slot="menu-item"],
+.composer-picker-menu--small [data-slot="menu-radio-item"],
+.composer-picker-menu--small [data-slot="menu-checkbox-item"],
+.composer-picker-menu--small [data-slot="menu-sub-trigger"],
+.composer-picker-menu--small [data-slot="select-item"],
+.composer-picker-menu-wide--small [data-slot="menu-item"],
+.composer-picker-menu-wide--small [data-slot="menu-radio-item"],
+.composer-picker-menu-wide--small [data-slot="menu-checkbox-item"],
+.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"],
+.composer-picker-menu-wide--small [data-slot="select-item"],
+.composer-picker-menu--normal [data-slot="menu-item"],
+.composer-picker-menu--normal [data-slot="menu-radio-item"],
+.composer-picker-menu--normal [data-slot="menu-checkbox-item"],
+.composer-picker-menu--normal [data-slot="menu-sub-trigger"],
+.composer-picker-menu--normal [data-slot="select-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-radio-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-checkbox-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"],
+.composer-picker-menu-wide--normal [data-slot="select-item"] {
+  min-height: var(--picker-option-min-h);
+  padding-inline: var(--picker-option-px);
+  padding-block: var(--picker-option-py);
+  gap: var(--picker-option-gap);
+}
+
+.composer-picker-menu--small [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--small
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu-wide--small [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--small
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--normal
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu-wide--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--normal
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type {
+  width: var(--picker-option-icon-size);
+  height: var(--picker-option-icon-size);
+}
+
+.composer-picker-menu--small [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu--normal [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"] > svg:last-of-type {
+  margin-inline-start: var(--picker-sub-chevron-ms);
+  width: var(--picker-sub-chevron-size);
+  height: var(--picker-sub-chevron-size);
+  opacity: var(--picker-sub-chevron-opacity);
+}
+
+.composer-picker-menu--small [data-slot="menu-label"],
+.composer-picker-menu-wide--small [data-slot="menu-label"],
+.composer-picker-menu--normal [data-slot="menu-label"],
+.composer-picker-menu-wide--normal [data-slot="menu-label"] {
+  padding-block: var(--picker-section-py);
+}
+
+.composer-picker-menu--small [data-slot="menu-separator"],
+.composer-picker-menu-wide--small [data-slot="menu-separator"],
+.composer-picker-menu--normal [data-slot="menu-separator"],
+.composer-picker-menu-wide--normal [data-slot="menu-separator"] {
+  margin-block: var(--picker-separator-my);
+  margin-inline: var(--picker-separator-mx);
+}
+
+.composer-picker-menu--small [data-slot="menu-popup-body"],
+.composer-picker-menu-wide--small [data-slot="menu-popup-body"],
+.composer-picker-menu--normal [data-slot="menu-popup-body"],
+.composer-picker-menu-wide--normal [data-slot="menu-popup-body"] {
+  padding: var(--picker-menu-body-p);
+}
+
+/* Permission mode picker: wider, calmer rows matching the native approval menu. */
+.runtime-mode-menu {
+  width: min(26rem, 92vw);
+  min-width: min(26rem, 92vw);
+  --picker-menu-body-p: 0.375rem;
+  --picker-option-min-h: 2.75rem;
+  --picker-option-px: 0.625rem;
+  --picker-option-py: 0.3125rem;
+}
+
+/* Sidebar Synara/Studio surface switcher: tight shell inset, airy option rows.
+   Composer picker tokens otherwise pin option py to ~1px and win over Tailwind. */
+.sidebar-surface-picker-menu {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 0;
+  --picker-option-px: 0.75rem;
+  --picker-option-py: 0.5625rem;
+}
+
+.runtime-mode-menu-item {
+  align-items: stretch;
+}
+
+/* Thin scrollbar for long model-provider lists inside picker submenus. */
+.composer-picker-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 13%, transparent) transparent;
+}
+
+.composer-picker-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.composer-picker-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--foreground) 12%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.composer-picker-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+
+@keyframes ultrathink-rainbow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@keyframes ultrathink-chroma-shift {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.2);
+  }
+  100% {
+    filter: hue-rotate(360deg) saturate(1.2);
+  }
+}
+
+.ultrathink-frame {
+  /* The composer shell no longer reserves a 1px border; the rainbow frame needs
+     padding so the surface sits inset and the gradient shows around the edge. */
+  padding: 1px;
+  --ultrathink-spectrum: linear-gradient(
+    120deg,
+    #ff6b6b 0%,
+    #f59e0b 18%,
+    #22c55e 36%,
+    #14b8a6 54%,
+    #3b82f6 72%,
+    #ec4899 90%,
+    #ff6b6b 100%
+  );
+  background-image: var(--ultrathink-spectrum);
+  background-size: 220% 220%;
+  animation: ultrathink-rainbow 10s linear infinite;
+}
+
+.ultrathink-chroma {
+  animation: ultrathink-chroma-shift 10s linear infinite;
+}
+
+.ultrathink-pill {
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    var(--ultrathink-spectrum) border-box;
+  background-size:
+    100% 100%,
+    220% 220%;
+  background-position:
+    0 0,
+    0% 50%;
+  animation: ultrathink-rainbow 10s linear infinite;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--card) 82%, transparent);
+}
+
+.ultrathink-word {
+  display: inline-block;
+  color: transparent;
+  background-image: var(--ultrathink-spectrum);
+  background-size: 220% 220%;
+  background-position: 0% 50%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: ultrathink-rainbow 10s linear infinite;
+}
+
+/* Expanded document panes retain a readable line length while using more space. */
+[data-dock-maximized="true"] .editor-markdown-preview__body {
+  max-width: 1120px;
+}

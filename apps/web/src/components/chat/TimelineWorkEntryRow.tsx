@@ -105,7 +105,7 @@ import {
 import { deriveToolFailureSummary } from "../../lib/toolCallDetails";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../../lib/disclosureMotion";
-import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { t, useTranslation } from "~/i18n";
 
 // Rest tone is the shared quiet-label gray (same one the composer pickers use for
@@ -869,10 +869,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           threadId={threadId}
           directionMode="auto-blocks"
           isStreaming={false}
-          style={{
-            ...getChatTranscriptTextStyle(textFontSizePx),
-            ...(mutedProse ? { color: MUTED_LABEL_TEXT_COLOR } : {}),
-          }}
+          tone={mutedProse ? "process" : undefined}
+          style={getChatTranscriptTextStyle(textFontSizePx)}
           onImageExpand={onImageExpand}
         />
       </div>
