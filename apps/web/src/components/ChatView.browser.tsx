@@ -2857,7 +2857,9 @@ describe("ChatView transcript geometry (full app)", () => {
       viewport.scrollTop = viewport.scrollHeight;
       await waitForLayout();
       expect(chats.element().getBoundingClientRect().top).toBeCloseTo(beforeTop, 0);
-      await expect.element(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: "Search", exact: true }).first())
+        .toBeVisible();
       await chats.click();
       await expect.element(chats).toHaveAttribute("aria-checked", "true");
       await expect
@@ -2936,7 +2938,10 @@ describe("ChatView transcript geometry (full app)", () => {
         },
       }));
       await expect.element(chats).toHaveAttribute("aria-label", "Chats");
-      await page.getByRole("button", { name: "Switch to activity view", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Switch to activity view", exact: true })
+        .first()
+        .click();
       const projects = page.getByRole("radio", { name: "Projects", exact: true });
       await expect.element(projects).toHaveAttribute("aria-checked", "false");
       await expect.element(chats).toHaveAttribute("aria-checked", "false");
@@ -4614,7 +4619,10 @@ describe("ChatView transcript geometry (full app)", () => {
         }),
       });
       try {
-        await page.getByRole("button", { name: "Switch to activity view", exact: true }).click();
+        await page
+        .getByRole("button", { name: "Switch to activity view", exact: true })
+        .first()
+        .click();
         await expect.element(page.getByRole("button", { name: "Activity options" })).toBeVisible();
         await page
           .getByRole("navigation", { name: "Primary" })

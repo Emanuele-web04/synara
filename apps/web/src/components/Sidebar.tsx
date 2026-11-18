@@ -5876,13 +5876,14 @@ export default function Sidebar() {
       }
     }
     for (const threadId of classicSnoozedVisibleThreadIds) add(threadId, null);
-    if (chatsSectionVisible && chatSectionExpanded) {
+    if (chatsSectionVisible && (chatSectionExpanded || showChatsPanel)) {
       for (const entry of renderedChatEntries)
         add(entry.row.thread.id, entry.row.workspaceEntry.session);
     }
     return rows;
   }, [
     localEnvironmentId,
+    showChatsPanel,
     classicSnoozedVisibleThreadIds,
     isOnSettings,
     showRailAutomationsPanel,
@@ -5911,6 +5912,25 @@ export default function Sidebar() {
   const visibleWorkspaceThreadKeys = useMemo(
     () => [...visibleWorkspaceThreads.keys()],
     [visibleWorkspaceThreads],
+  );
+  // Digit shortcuts jump through visible rows: the Chats section hides project threads.
+  const visibleJumpThreadKeys = useMemo(
+    () =>
+      showChatsPanel
+        ? renderedChatEntries.map((entry) =>
+            workspaceThreadKey(
+              entry.row.workspaceEntry.session?.host.executionScope.environmentId ??
+                localEnvironmentId,
+              entry.row.thread.id,
+            ),
+          )
+        : visibleWorkspaceThreadKeys,
+    [
+      localEnvironmentId,
+      renderedChatEntries,
+      showChatsPanel,
+      visibleWorkspaceThreadKeys,
+    ],
   );
   const activeWorkspaceThreadKey =
     pathname === "/remote"
@@ -5971,7 +5991,7 @@ export default function Sidebar() {
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
-    for (const [visibleThreadIndex, threadId] of visibleWorkspaceThreadKeys.entries()) {
+    for (const [visibleThreadIndex, threadId] of visibleJumpThreadKeys.entries()) {
       const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
       if (!jumpCommand) {
         break;
@@ -5980,7 +6000,7 @@ export default function Sidebar() {
     }
 
     return mapping;
-  }, [visibleWorkspaceThreadKeys]);
+  }, [visibleJumpThreadKeys]);
   const threadJumpThreadIds = useMemo(
     () => [...threadJumpCommandByThreadId.keys()],
     [threadJumpCommandByThreadId],
