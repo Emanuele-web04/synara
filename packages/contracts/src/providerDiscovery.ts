@@ -433,3 +433,14 @@ export const ProviderInstallAcpRegistryAgentResult = Schema.Struct({
 });
 export type ProviderInstallAcpRegistryAgentResult =
   typeof ProviderInstallAcpRegistryAgentResult.Type;
+
+export const ProviderResolveExecutableInput = Schema.Struct({
+  command: Schema.String,
+});
+export type ProviderResolveExecutableInput = typeof ProviderResolveExecutableInput.Type;
+
+export const ProviderResolveExecutableResult = Schema.Struct({
+  /** The executable a launch would run, or null when the command does not resolve. */
+  resolvedPath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProviderResolveExecutableResult = typeof ProviderResolveExecutableResult.Type;

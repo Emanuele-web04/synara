@@ -907,6 +907,7 @@ export function createWsNativeApi(): NativeApi {
       listAcpRegistryAgents: () => executionRequest(WS_METHODS.providerListAcpRegistryAgents),
       installAcpRegistryAgent: (input) =>
         executionRequest(WS_METHODS.providerInstallAcpRegistryAgent, input),
+      resolveExecutable: (input) => executionRequest(WS_METHODS.providerResolveExecutable, input),
     },
     orchestration: {
       getSnapshot: () => executionRequest(ORCHESTRATION_WS_METHODS.getSnapshot),

@@ -146,6 +146,7 @@ import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuer
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
+import { resolveExecutable } from "@synara/shared/executable";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
@@ -3139,6 +3140,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.tryPromise(() => installAcpRegistryAgent(input.agentId, config.baseDir)),
             "Failed to install the ACP agent",
+          ),
+        [WS_METHODS.providerResolveExecutable]: (input: { command: string }) =>
+          rpcEffect(
+            Effect.sync(() => ({ resolvedPath: resolveExecutable(input.command) })),
+            "Failed to resolve the executable",
           ),
         ...accountRpcHandlers,
         ...hostsRpcHandlers,

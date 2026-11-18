@@ -415,6 +415,8 @@ import type {
   ProviderListAcpRegistryAgentsResult,
   ProviderInstallAcpRegistryAgentInput,
   ProviderInstallAcpRegistryAgentResult,
+  ProviderResolveExecutableInput,
+  ProviderResolveExecutableResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsInput,
@@ -1509,6 +1511,9 @@ export interface NativeApi {
     installAcpRegistryAgent: (
       input: ProviderInstallAcpRegistryAgentInput,
     ) => Promise<ProviderInstallAcpRegistryAgentResult>;
+    resolveExecutable: (
+      input: ProviderResolveExecutableInput,
+    ) => Promise<ProviderResolveExecutableResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

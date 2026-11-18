@@ -14,6 +14,7 @@ import {
 import { acpArgsToText } from "~/lib/acpAgentConfigText";
 import { ensureNativeApi } from "~/nativeApi";
 
+import { CircleCheckIcon, TriangleAlertIcon } from "~/lib/icons";
 import { ProviderIcon } from "../../ProviderIcon";
 import { Button } from "../../ui/button";
 import {
@@ -80,6 +81,13 @@ export function AddProviderAccountDialog(props: {
   const [registrySelection, setRegistrySelection] = useState<string>(ACP_CUSTOM_AGENT);
   const [installingAgentId, setInstallingAgentId] = useState<string | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  // Live PATH check for the custom agent's launch command.
+  const [commandResolution, setCommandResolution] = useState<
+    | { readonly kind: "idle" }
+    | { readonly kind: "checking" }
+    | { readonly kind: "found"; readonly path: string }
+    | { readonly kind: "missing" }
+  >({ kind: "idle" });
 
   // Start from a blank form every time the dialog opens.
   const [wasOpen, setWasOpen] = useState(props.open);
@@ -96,6 +104,7 @@ export function AddProviderAccountDialog(props: {
       setRegistrySelection(ACP_CUSTOM_AGENT);
       setInstallingAgentId(null);
       setRegistryError(null);
+      setCommandResolution({ kind: "idle" });
     }
   }
 
@@ -119,6 +128,37 @@ export function AddProviderAccountDialog(props: {
       cancelled = true;
     };
   }, [props.open, provider, registryAgents]);
+
+  const launchCommand = (config.command ?? "").trim();
+  useEffect(() => {
+    if (provider !== "acp" || !props.open || launchCommand.length === 0) {
+      setCommandResolution({ kind: "idle" });
+      return;
+    }
+    setCommandResolution({ kind: "checking" });
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      ensureNativeApi()
+        .provider.resolveExecutable({ command: launchCommand })
+        .then(
+          (result) => {
+            if (cancelled) return;
+            setCommandResolution(
+              result.resolvedPath
+                ? { kind: "found", path: result.resolvedPath }
+                : { kind: "missing" },
+            );
+          },
+          () => {
+            if (!cancelled) setCommandResolution({ kind: "missing" });
+          },
+        );
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [props.open, provider, launchCommand]);
 
   const selectRegistryAgent = async (agent: AcpRegistryAgentDescriptor) => {
     setRegistrySelection(agent.id);
@@ -155,6 +195,12 @@ export function AddProviderAccountDialog(props: {
   const instanceId = idOverride ?? deriveProviderAccountId(provider, label);
   const idError = validateProviderAccountId(instanceId, props.existingIds);
   const configFields = props.configFieldsFor(provider);
+  const acpCommandField =
+    provider === "acp" ? configFields.find((field) => field.key === "command") : undefined;
+  const acpArgsField =
+    provider === "acp" ? configFields.find((field) => field.key === "args") : undefined;
+  const acpCommandInvalid =
+    submitAttempted && acpCommandField?.required === true && launchCommand.length === 0;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -217,45 +263,6 @@ export function AddProviderAccountDialog(props: {
                 ))}
               </SettingsSelectControl>
             </div>
-            <label className="block space-y-1">
-              <span className={dialogFieldLabelClassName}>
-                {t("chat:pinned_renamePlaceholder")}
-              </span>
-              <Input
-                size="sm"
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder={t("settings:eGWork")}
-                spellCheck={false}
-                autoFocus
-              />
-              <span className="block text-ui-sm text-muted-foreground">
-                {t("settings:shownInTheAccountListAndTheModelPicker")}
-              </span>
-            </label>
-            <label className="block space-y-1">
-              <span className={dialogFieldLabelClassName}>{t("settings:accountID")}</span>
-              <Input
-                size="sm"
-                className="font-mono"
-                value={instanceId}
-                onChange={(event) => setIdOverride(event.target.value)}
-                placeholder={deriveProviderAccountId(provider, "work")}
-                spellCheck={false}
-                aria-invalid={submitAttempted && idError !== null}
-              />
-              <span
-                className={
-                  submitAttempted && idError !== null
-                    ? "block text-ui-sm text-destructive"
-                    : "block text-ui-sm text-muted-foreground"
-                }
-              >
-                {submitAttempted && idError !== null
-                  ? idError
-                  : t("settings:routingKeyUsedByThreadsAndSessionsLettersDigits")}
-              </span>
-            </label>
             {provider === "acp" ? (
               <div className="space-y-1">
                 <span className={dialogFieldLabelClassName}>{t("settings:acpRegistryAgent")}</span>
@@ -314,6 +321,45 @@ export function AddProviderAccountDialog(props: {
                 </span>
               </div>
             ) : null}
+            <label className="block space-y-1">
+              <span className={dialogFieldLabelClassName}>
+                {t("chat:pinned_renamePlaceholder")}
+              </span>
+              <Input
+                size="sm"
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+                placeholder={t("settings:eGWork")}
+                spellCheck={false}
+                autoFocus
+              />
+              <span className="block text-ui-sm text-muted-foreground">
+                {t("settings:shownInTheAccountListAndTheModelPicker")}
+              </span>
+            </label>
+            <label className="block space-y-1">
+              <span className={dialogFieldLabelClassName}>{t("settings:accountID")}</span>
+              <Input
+                size="sm"
+                className="font-mono"
+                value={instanceId}
+                onChange={(event) => setIdOverride(event.target.value)}
+                placeholder={deriveProviderAccountId(provider, "work")}
+                spellCheck={false}
+                aria-invalid={submitAttempted && idError !== null}
+              />
+              <span
+                className={
+                  submitAttempted && idError !== null
+                    ? "block text-ui-sm text-destructive"
+                    : "block text-ui-sm text-muted-foreground"
+                }
+              >
+                {submitAttempted && idError !== null
+                  ? idError
+                  : t("settings:routingKeyUsedByThreadsAndSessionsLettersDigits")}
+              </span>
+            </label>
             <div className="space-y-1">
               <span className={dialogFieldLabelClassName}>{t("settings:accentColor")}</span>
               <ProviderAccentColorControl
@@ -325,34 +371,109 @@ export function AddProviderAccountDialog(props: {
                 {t("settings:optionalShowsAsADotOnTheAccountS")}
               </span>
             </div>
-            {configFields.map((field) => {
-              const fieldEmpty = (config[field.key] ?? "").trim().length === 0;
-              const fieldInvalid = submitAttempted && field.required === true && fieldEmpty;
-              return (
-                <label key={`${provider}:${field.key}`} className="block space-y-1">
-                  <span className={dialogFieldLabelClassName}>{field.label}</span>
+            {provider === "acp" ? (
+              <div className="space-y-3">
+                <label className="block space-y-1">
+                  <span className={dialogFieldLabelClassName}>{acpCommandField?.label}</span>
                   <Input
                     size="sm"
-                    value={config[field.key] ?? ""}
+                    className="font-mono"
+                    value={config.command ?? ""}
                     onChange={(event) =>
-                      setConfig((current) => ({ ...current, [field.key]: event.target.value }))
+                      setConfig((current) => ({ ...current, command: event.target.value }))
                     }
-                    placeholder={field.placeholder}
+                    placeholder={acpCommandField?.placeholder}
                     spellCheck={false}
-                    aria-invalid={fieldInvalid}
+                    aria-invalid={acpCommandInvalid}
                   />
-                  {fieldInvalid ? (
+                  {acpCommandInvalid ? (
                     <span className="block text-ui-sm text-destructive">
-                      {t("settings:fieldRequired", { field: field.label })}
+                      {t("settings:fieldRequired", {
+                        field: acpCommandField?.label ?? "",
+                      })}
                     </span>
-                  ) : field.description ? (
+                  ) : commandResolution.kind === "checking" ? (
                     <span className="block text-ui-sm text-muted-foreground">
-                      {field.description}
+                      {t("settings:acpCommandChecking")}
                     </span>
-                  ) : null}
+                  ) : commandResolution.kind === "found" ? (
+                    <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
+                      <CircleCheckIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">
+                        {t("settings:acpCommandResolved", { path: commandResolution.path })}
+                      </span>
+                    </span>
+                  ) : commandResolution.kind === "missing" ? (
+                    <span className="flex items-center gap-1.5 text-ui-sm text-warning">
+                      <TriangleAlertIcon className="size-3.5 shrink-0" />
+                      {t("settings:acpCommandNotFound")}
+                    </span>
+                  ) : (
+                    <span className="block text-ui-sm text-muted-foreground">
+                      {acpCommandField?.description}
+                    </span>
+                  )}
                 </label>
-              );
-            })}
+                <label className="block space-y-1">
+                  <span className={dialogFieldLabelClassName}>{acpArgsField?.label}</span>
+                  <Input
+                    size="sm"
+                    className="font-mono"
+                    value={config.args ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) => ({ ...current, args: event.target.value }))
+                    }
+                    placeholder={acpArgsField?.placeholder}
+                    spellCheck={false}
+                  />
+                  <span className="block text-ui-sm text-muted-foreground">
+                    {acpArgsField?.description}
+                  </span>
+                </label>
+                {launchCommand.length > 0 ? (
+                  <div className="space-y-1">
+                    <span className={dialogFieldLabelClassName}>
+                      {t("settings:acpLaunchPreview")}
+                    </span>
+                    <code className="block truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 font-mono text-ui-sm">
+                      {launchCommand}
+                      {(config.args ?? "").trim().length > 0
+                        ? ` ${(config.args ?? "").trim()}`
+                        : ""}
+                    </code>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              configFields.map((field) => {
+                const fieldEmpty = (config[field.key] ?? "").trim().length === 0;
+                const fieldInvalid = submitAttempted && field.required === true && fieldEmpty;
+                return (
+                  <label key={`${provider}:${field.key}`} className="block space-y-1">
+                    <span className={dialogFieldLabelClassName}>{field.label}</span>
+                    <Input
+                      size="sm"
+                      value={config[field.key] ?? ""}
+                      onChange={(event) =>
+                        setConfig((current) => ({ ...current, [field.key]: event.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      spellCheck={false}
+                      aria-invalid={fieldInvalid}
+                    />
+                    {fieldInvalid ? (
+                      <span className="block text-ui-sm text-destructive">
+                        {t("settings:fieldRequired", { field: field.label })}
+                      </span>
+                    ) : field.description ? (
+                      <span className="block text-ui-sm text-muted-foreground">
+                        {field.description}
+                      </span>
+                    ) : null}
+                  </label>
+                );
+              })
+            )}
           </form>
         </DialogPanel>
         <DialogFooter>
