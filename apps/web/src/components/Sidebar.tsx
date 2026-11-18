@@ -318,6 +318,7 @@ import {
   SidebarActivityView,
   SidebarSnoozedThreadsSection,
 } from "./SidebarActivityView";
+import { SidebarArchivedThreadsSection } from "./SidebarArchivedThreadsSection";
 import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import {
@@ -483,6 +484,7 @@ import {
   shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
+  selectSidebarArchivedThreads,
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
@@ -1754,6 +1756,9 @@ export default function Sidebar() {
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
     () => readSidebarUiState().chatSectionExpanded,
   );
+  const [archivedSectionExpanded, setArchivedSectionExpanded] = useState(
+    () => readSidebarUiState().archivedSectionExpanded,
+  );
   const [chatThreadListExtraPages, setChatThreadListExtraPages] = useState(
     () => readSidebarUiState().chatThreadListExtraPages,
   );
@@ -1796,6 +1801,7 @@ export default function Sidebar() {
     () =>
       subscribeSidebarUiState((state) => {
         setChatSectionExpanded(state.chatSectionExpanded);
+        setArchivedSectionExpanded(state.archivedSectionExpanded);
         setChatThreadListExtraPages(state.chatThreadListExtraPages);
         setThreadListExtraPagesByProjectCwd(
           new Map(Object.entries(state.projectThreadListExtraPagesByCwd)),
@@ -2133,6 +2139,7 @@ export default function Sidebar() {
     archiveThread,
     archiveThreadWithUndo,
     confirmAndArchiveThread,
+    restoreArchivedThread,
     archiveAllThreadsInProject,
     deleteProjectThreads,
   } = useSidebarThreadActions({
@@ -2184,6 +2191,34 @@ export default function Sidebar() {
     ],
   );
   const draftThreadIdSet = useThreadIdsWithPendingDraft();
+  // Archived chats are filtered out of every live list, so the sidebar keeps its own
+  // shelf of them. Restoring is the only action; the undo toast's "View archived" lands
+  // in Settings, which stays the place that can also delete them permanently.
+  const archivedSidebarThreads = useMemo(
+    () =>
+      selectSidebarArchivedThreads(
+        filterSidebarThreadsBySpace({
+          threads: displaySidebarThreads.filter((thread) =>
+            // Sidechats and subagents never stand on their own: a subagent archives
+            // with its parent, and a sidechat lives in its host's dock.
+            isSidebarThreadVisible(thread, { hideAutomationRunThreads, includeSnoozed: true }),
+          ),
+          projectById,
+          spaceId: activeSpaceId,
+          paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+        }),
+      ),
+    [
+      activeSpaceId,
+      chatWorkspaceRoot,
+      displaySidebarThreads,
+      groupsWorkspaceRoot,
+      hideAutomationRunThreads,
+      homeDir,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
   const {
     projectRunsByProjectId,
     projectRunServerByProjectId,
@@ -4220,6 +4255,7 @@ export default function Sidebar() {
       setLastThreadRoute(nextLastThreadRoute);
       persistSidebarUiState({
         chatSectionExpanded,
+        archivedSectionExpanded,
         chatThreadListExtraPages,
         projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
         dismissedThreadStatusKeyByThreadId,
@@ -4233,6 +4269,7 @@ export default function Sidebar() {
       activityScope,
       activityGroupMode,
       activityViewEnabled,
+      archivedSectionExpanded,
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
@@ -5613,6 +5650,7 @@ export default function Sidebar() {
   useEffect(() => {
     persistSidebarUiState({
       chatSectionExpanded,
+      archivedSectionExpanded,
       chatThreadListExtraPages,
       projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
       dismissedThreadStatusKeyByThreadId,
@@ -5625,6 +5663,7 @@ export default function Sidebar() {
     activityScope,
     activityGroupMode,
     activityViewEnabled,
+    archivedSectionExpanded,
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
@@ -8648,6 +8687,24 @@ export default function Sidebar() {
                   threads={snoozedSidebarThreads}
                   renderThreadRow={renderSnoozedThreadRow}
                   onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
+                />
+              </SidebarGroup>
+            ) : null}
+            {!isOnSettings &&
+            !isOnGroups &&
+            !activityViewEnabled &&
+            !showRailSpacesPanel &&
+            !showRailAutomationsPanel &&
+            archivedSidebarThreads.length > 0 ? (
+              <SidebarGroup className="px-1.5 pt-1 pb-2">
+                <SidebarArchivedThreadsSection
+                  threads={archivedSidebarThreads}
+                  resolveProjectLabel={(projectId) =>
+                    resolveThreadProjectLabel(projectById.get(projectId))
+                  }
+                  open={archivedSectionExpanded}
+                  onToggle={() => setArchivedSectionExpanded((current) => !current)}
+                  onRestore={(threadId) => void restoreArchivedThread(threadId)}
                 />
               </SidebarGroup>
             ) : null}

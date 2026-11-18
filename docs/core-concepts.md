@@ -55,6 +55,9 @@ decoration pauses while its chat is hidden.
   filed in any Space count. If none remains, New thread reopens an unsent draft.
   Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
+  Archived chats stay out of the project and Chats lists and reappear in the sidebar's **Archived**
+  section, newest archive first, where each row restores its chat. **Settings → Archived threads**
+  keeps the full list and is the only place that can delete archived threads permanently.
   Connected-computer rows expose **Pin**, **Archive**, and **Done/Undo** on hover or keyboard focus,
   including in Priority. The controls replace the remote badge while visible and always act on
   that chat’s owning computer; disconnected rows cannot make changes.
