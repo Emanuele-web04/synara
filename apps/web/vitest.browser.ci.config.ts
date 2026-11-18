@@ -17,8 +17,7 @@ const tabNavigationPattern =
   "(?:pending editor chat tab switch|horizontal tabs|Cmd/Ctrl\\+W yields to the editor surface)";
 const projectPattern = `(?:project|worktree|Space|approval|preserves three answers|queued|queue|sidebar|handoff|${tabNavigationPattern})`;
 const projectSlicePattern = `(?:worktree|queue|queued|handoff|${tabNavigationPattern})`;
-const workflowComposerPattern = "(?:[Cc]omposer|[Pp]icker)";
-const workflowDraftPattern = "(?:[Dd]raft|\\bkeeps\\b)";
+const workflowSlicePattern = "(?:[Cc]omposer|[Dd]raft|[Pp]icker|[Ss]hortcut|[Ee]ditor)";
 const chatSlice = process.env.VITEST_BROWSER_CHAT_SLICE;
 
 // Balance the two Chromium processes on components 3/3. All other files use
@@ -32,15 +31,14 @@ const componentSequencer = createPinnedShardSequencer({
   },
 });
 
-// Match the named groups in order. The last group takes everything else.
-function sliceCondition(first: string, second?: string): string {
+// Each paired runner uses complementary filters after the original project
+// filter. New cases stay covered even if they match neither slice's keywords.
+function sliceCondition(pattern: string): string {
   switch (chatSlice) {
     case "a":
-      return `(?=.*${first})`;
+      return `(?=.*${pattern})`;
     case "b":
-      return second ? `(?!.*${first})(?=.*${second})` : `(?!.*${first})`;
-    case "c":
-      return second ? `(?!.*${first})(?!.*${second})` : "(?!)";
+      return `(?!.*${pattern})`;
     case undefined:
     case "":
       return "";
@@ -84,21 +82,11 @@ export default defineConfig({
       },
       {
         extends: true,
-        // Start the shared app route transforms while Chromium starts.
-        server: {
-          warmup: {
-            clientFiles: [
-              "./src/components/ChatView.tsx",
-              "./src/routes/_chat.tsx",
-              "./src/routes/_chat.$threadId.tsx",
-            ],
-          },
-        },
         test: {
           name: "chat-workflows",
           include: [chatViewFile],
           testNamePattern: new RegExp(
-            `${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})${sliceCondition(workflowComposerPattern, workflowDraftPattern)}`,
+            `${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})${sliceCondition(workflowSlicePattern)}`,
           ),
         },
       },
