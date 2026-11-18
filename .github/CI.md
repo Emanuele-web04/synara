@@ -298,6 +298,13 @@ multiplicity. The rebalanced hosted job passed in 169 s. Its preceding
 sample took 211 s. Both restored the browser caches.
 [Rebalanced hosted job](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
 
+The keybindings warning case shares EventRouter's real route and WebSocket
+fixture. The former standalone file mounted the app twice. In two cold hosted
+runs that file took 81–83 s, with 1–3 s in the test body. On the Mac mini
+with fresh compiler and Vite caches, the first component pair went from
+96.18 s to 73.03 s. All 534 remaining cases matched, and EventRouter passed
+its original 44 cases plus the moved warning case.
+
 ### Chat workflow fixture setup
 
 The draft history test fills its long input in one action and uses real keys for
