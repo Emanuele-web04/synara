@@ -273,13 +273,12 @@ Serial browser execution remains enabled inside each runner. One extra shard buy
 lower feedback latency; the full-CI measurement decides whether its added compute
 is acceptable.
 
-### Component test processes on the same runner
+### Component browser execution within each runner
 
-The three component jobs run two Vitest shards each, pairing
+The first layout ran two Vitest shards per job, pairing
 `1/6` with `2/6`, `3/6` with `4/6`, and `5/6` with `6/6`. Each Chromium
-process still runs its files serially with a separate loopback port and Vite
-cache directory. The pair uses the job's existing compiler cache, which writes
-complete entries with atomic rename. Any failed process fails the job.
+process ran its files serially with a separate loopback port and Vite
+cache directory. The pair shared the job's compiler cache.
 
 On the Mac mini at `5d41b9585` with Bun 1.4.4 and Node 24.21.0, a single
 `components 3/3` invocation took 129.14 s and concurrent `5/6` and `6/6`
@@ -296,10 +295,9 @@ three component jobs completed in 171 s, 180 s, and 205 s. The
 `chat-workflows` job took 294 s and was the longest job on the critical path.
 
 Across three hosted attempts with the paired layout, the median per-file test
-times summed to 34.6 s in `5/6` and 90.6 s in `6/6`. The new placement puts
-`EventRouter.browser.tsx` on `5/6` and moves three shorter files to `6/6`.
-The other component files keep their native placement. The Vitest partition
-contract verifies that each file has exactly one owner.
+times summed to 34.6 s in `5/6` and 90.6 s in `6/6`. A rebalance put
+`EventRouter.browser.tsx` on `5/6` and moved three shorter files to `6/6`.
+Other component files kept their native placement.
 
 On the Mac mini, the pair took 89.55 s with native placement and 68.17 s with
 the four moves. Both runs used fresh Vite caches and copies of the same warmed
@@ -307,6 +305,19 @@ compiler cache. All 440 cases across 84 files matched by full name, outcome and
 multiplicity. The rebalanced hosted job passed in 169 s. Its preceding
 sample took 211 s. Both restored the browser caches.
 [Rebalanced hosted job](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
+
+The component jobs now use Vitest's three native file shards. Within each
+job three workers draw from one file queue and share one Vite server.
+Playwright creates a browser context per worker, and Vitest isolates each
+file in its own frame. The ChatView name groups continue to use two separate
+processes. The partition contract verifies exactly one owner for each
+component file and checks that isolation is enabled.
+
+A cold Mac mini comparison ran the 84 files from the previous `5/6` and
+`6/6` pair. Two separate Vitest processes took 99.83 s. A shared server with
+two browser contexts took 85.65 s, and three contexts took 70.69 s. All
+three runs passed the same 441 cases. Hosted timing and stability with
+three contexts remain to be measured.
 
 The keybindings warning case shares EventRouter's real route and WebSocket
 fixture. The former standalone file mounted the app twice. In two cold hosted
