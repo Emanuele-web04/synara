@@ -345,9 +345,9 @@ has local measurements only.
 
 ### Web Unit compiler scheduling
 
-The Web Unit lane starts the 49-case chat compiler guard in its first worker
-wave. The same worker pool runs all files, and the other files and individual
-cases still use Vitest's seeded shuffle. The full Mac mini suite under seed
+The first scheduling change started the 49-case chat compiler guard in Web
+Unit's first worker wave. The other files and individual cases still used
+Vitest's seeded shuffle. The full Mac mini suite under seed
 `1795006867144` took 64.41 s with its original schedule and 54.85 s with the
 guard first. The guard started at 37.21 s and 0.14 s, respectively. Both
 runs matched all 6,279 case outcomes and multiplicities across 503 files.
@@ -360,6 +360,22 @@ the new schedule and reported the guard near the middle. Both jobs passed all
 samples establish the earlier completion order but no hosted wall-time saving.
 [First hosted run](https://github.com/Emanuele-web04/synara/actions/runs/44309338095),
 [Hosted scheduling check](https://github.com/Emanuele-web04/synara/actions/runs/44314113710)
+
+The compiler guard now runs alongside the existing Core tests on their
+runner, which already installs the Web dependencies. Web Unit selects the
+other two Vitest projects. The compiler command fails when its file is
+missing, and the required aggregate gate still checks the whole Unit matrix.
+
+Two local comparisons on the Mac mini included the app source at main
+`5975b5238` and used three Web Unit workers. Moving the compiler guard
+reduced the Web Unit command median from 53.64 s to 40.84 s. The combined
+test inventory matched all 6,279 cases by name, outcome and multiplicity.
+In the first Core comparison, the runner commands took 74.12 s before
+and 71.45 s with the compiler guard. Summed Web and Core command time
+fell from 127.76 s to 112.44 s in that comparison. Reversing the Core run
+order measured 71.91 s before and 70.79 s with the guard. Placing the compiler
+guard alongside warm typechecking instead added about 14 seconds to
+the summed time. Hosted timing remains unverified for the new layout.
 
 ## November 2026 critical-path rebalance
 

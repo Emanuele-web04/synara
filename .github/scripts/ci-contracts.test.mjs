@@ -177,7 +177,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
       {
         pkg: "web",
         filters: "--filter=@synara/web",
-        "test-args": "--config=vitest.unit.ci.config.ts",
+        "test-args": "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time",
         scope: "web",
         "save-modules": "true",
       },
@@ -345,6 +345,14 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
 });
 
 test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
+  const unitSteps = jobs.unit.steps.find((step) => step.parallel)?.parallel;
+  assert.ok(unitSteps);
+  assert.ok(unitSteps.some(({ run }) => run.startsWith("bunx turbo run test ")));
+  const compiler = unitSteps.find(({ name }) => name === "Verify chat hot-path compiler");
+  // Web Unit selects the two other projects. A missing compiler file must
+  // therefore fail the Core lane instead of silently passing the required gate.
+  assert.equal(compiler?.if, "matrix.pkg == 'core'");
+  assert.ok(compiler.run.includes("--project=web-compiler --no-passWithNoTests --maxWorkers=1"));
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
   // Pinned placement only moves whole files between shards; each shard runs
