@@ -193,7 +193,7 @@ interface ChatMarkdownProps {
    */
   variant?: "assistant" | "user";
   /** Visual tone for supporting transcript/work prose; does not change assistant/user parsing. */
-  tone?: "default" | "subtle" | "process";
+  tone?: "default" | "subtle" | "process" | undefined;
   /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
   /**
