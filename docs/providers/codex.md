@@ -77,8 +77,12 @@ and subscription untouched. A failed MCP startup notification supplies the serve
 name and state for the existing runtime-warning history. The anonymous `rmcp`
 worker error remains visible too; its body alone does not identify a server.
 Identical subscription worker errors are collapsed within a startup attempt;
-a later retry or ready update allows them to be reported again. Other transport,
-authorization, and configuration failures remain visible.
+a later retry or ready update allows them to be reported again.
+
+OAuth reauthentication notices at startup for servers in the user's Codex config
+stay in diagnostics. Synara filters them from Work Performed and the chat timeline,
+including saved history. Synara-managed server warnings, failed MCP tool calls,
+and other transport, authorization, and configuration failures remain visible.
 
 For a canceled or missing SuperX subscription, review that service's subscription
 or disable/remove its server in the effective Codex configuration if it is no
