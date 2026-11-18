@@ -4,7 +4,6 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 // Entry keys are a package name, optionally under a parent path for nested
 // resolutions: "playwright-core", "betterwright/playwright-core", "@scope/pkg".
@@ -25,7 +24,7 @@ export function lockfilePackageFingerprint(contents, names) {
   return createHash("sha256").update(entries.join("\n")).digest("hex").slice(0, 32);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (import.meta.main) {
   const contents = readFileSync("bun.lock", "utf8");
   process.stdout.write(`${lockfilePackageFingerprint(contents, process.argv.slice(2))}\n`);
 }

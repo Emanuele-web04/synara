@@ -504,6 +504,36 @@ test("the Electron runtime cache keys on its own lockfile resolution", () => {
   );
   assert.throws(() => lockfilePackageFingerprint(lockfile, ["missing"]), /no entry for missing/);
 });
+test("fingerprint steps fail instead of writing an empty cache key", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "synara-empty-fingerprint-"));
+  try {
+    const bin = join(scratch, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    for (const name of [
+      "Fingerprint dependency inputs",
+      "Fingerprint web compiler inputs",
+      "Fingerprint Electron runtime",
+    ]) {
+      const run = setup.match(
+        new RegExp(
+          `- name: ${name}[\\s\\S]*?      run: \\|\\n([\\s\\S]*?)(?=\\n\\n|\\n    - name:)`,
+        ),
+      )?.[1];
+      assert.ok(run, name);
+      const output = join(scratch, `${name}.out`);
+      const result = spawnSync("bash", ["-e", "-c", run.replace(/^        /gm, "")], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: output },
+      });
+      assert.notEqual(result.status, 0, name);
+      assert.match(result.stdout, /::error::The .* fingerprint is empty\./, name);
+      assert.throws(() => readFileSync(output), name);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 test("a restored compiler cache drops claims and staging files from interrupted processes", () => {
   const enable = setup.match(
     /- name: Enable web transform cache[\s\S]*?      run: \|\n([\s\S]*?)(?=\n\n|\n    - name:)/,

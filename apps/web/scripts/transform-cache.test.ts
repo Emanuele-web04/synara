@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -85,6 +86,67 @@ describe("withTransformCache", () => {
     expect(first.calls).toEqual(["/src/a.tsx"]);
     expect(second.calls).toEqual(["/src/a.tsx"]);
     expect(await entries(first.root)).toEqual([]);
+  });
+
+  // Find the entry path for a module, then leave a claim on it as another
+  // process would, with no published entry.
+  async function claimedModule(owner?: { pid: number; host: string }) {
+    const seed = await fixture();
+    await seed.run("const a = 1");
+    const [entry] = await entries(seed.root);
+    const entryPath = path.join(seed.root, entry!);
+    await fs.rm(entryPath);
+    const claimPath = `${entryPath}.lock`;
+    await fs.mkdir(claimPath);
+    if (owner) await fs.writeFile(path.join(claimPath, "owner"), JSON.stringify(owner));
+    return { root: seed.root, entryPath, claimPath };
+  }
+
+  it("takes over a claim whose process has exited", async () => {
+    const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+    const { root, claimPath } = await claimedModule({ pid: exited, host: hostname() });
+    const caller = await fixture("salt-a", root, true);
+
+    expect(await caller.run("const a = 1")).toEqual({
+      code: "compiled(const a = 1)",
+      map: { mappings: 11 },
+    });
+    expect(caller.calls).toEqual(["/src/a.tsx"]);
+    expect(await entries(root)).toHaveLength(1);
+    await expect(fs.access(claimPath)).rejects.toThrow();
+  });
+
+  it("takes over a claim recorded on another host", async () => {
+    const { root } = await claimedModule({ pid: process.pid, host: `${hostname()}-other` });
+    const caller = await fixture("salt-a", root, true);
+
+    await caller.run("const a = 1");
+    expect(caller.calls).toEqual(["/src/a.tsx"]);
+  });
+
+  it("takes over a claim that never recorded an owner", async () => {
+    const { root } = await claimedModule();
+    const caller = await fixture("salt-a", root, true);
+
+    await caller.run("const a = 1");
+    expect(caller.calls).toEqual(["/src/a.tsx"]);
+  }, 10_000);
+
+  it("waits for a live owner and reuses its published entry", async () => {
+    const { root, entryPath, claimPath } = await claimedModule({
+      pid: process.pid,
+      host: hostname(),
+    });
+    const caller = await fixture("salt-a", root, true);
+    const published = { code: "compiled by owner", map: null };
+    const waiting = caller.run("const a = 1");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(caller.calls).toEqual([]);
+    await fs.writeFile(entryPath, JSON.stringify(published));
+    await fs.rm(claimPath, { recursive: true });
+
+    expect(await waiting).toEqual(published);
+    expect(caller.calls).toEqual([]);
   });
 
   it("keys entries by salt, module id, environment and module type", async () => {

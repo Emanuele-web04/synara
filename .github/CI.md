@@ -377,12 +377,19 @@ On the Mac mini, the complete cold `chat-workflows` pair took 90.54 s before and
 common compiler cache entries were byte-identical. The hosted impact remains
 unmeasured.
 
+Each claim directory holds an `owner` file with the process ID and host of
+the process compiling the entry. A waiter keeps waiting while that process is
+alive and takes the claim over at once when it has exited, belongs to another
+host, or never recorded an owner within 2 s. A 5-minute cap bounds anything
+else. The first version gave up after 30 s and compiled again. Cold ChatView
+compiles took 95–148 s in the hosted compiler guard. With a 35 s fixture
+transform, the waiter finished at 65.1 s and the transform ran twice. With
+owner checks it finished at 35.1 s and ran once.
+
 A process that exits during a compile leaves its `.lock` claim directory, and
-a failed write can leave a `.tmp` staging file. If a later save archived the
-claim, every run restoring that archive would wait 30 s for the module before
-compiling it independently. The setup action deletes both kinds of leftovers
-from a restored archive before any test process starts. The CI contract test
-runs that exact shell against a fixture cache.
+a failed write can leave a `.tmp` staging file. The setup action deletes both
+kinds of leftovers from a restored archive before any test process starts. The
+CI contract test runs that exact shell against a fixture cache.
 
 The follow lane now runs the streaming-follow matrix in one process and its
 other cases in the second. Pane and detached-reading cases join the second

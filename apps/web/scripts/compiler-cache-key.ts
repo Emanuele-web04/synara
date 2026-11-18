@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { normalizeBunLockfile } from "../../../scripts/bun-lockfile.ts";
 
@@ -38,6 +38,6 @@ export function compilerCacheFingerprint(root = repository) {
   return hash.digest("hex");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   process.stdout.write(`${compilerCacheFingerprint()}\n`);
 }

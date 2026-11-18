@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { normalizeBunLockfile } from "./bun-lockfile.ts";
 
@@ -45,6 +45,6 @@ export function workspaceInstallFingerprint(root = repository): string {
   return hash.digest("hex");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   process.stdout.write(`${workspaceInstallFingerprint()}\n`);
 }

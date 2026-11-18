@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -37,37 +38,93 @@ async function readEntry(entryPath: string): Promise<CachedTransform | undefined
   }
 }
 
-// Only paired browser processes coordinate. A failed writer, unavailable
-// directory or expired wait falls back to an independent transform.
+// A claim directory holds an `owner` file naming the process that compiles the
+// entry. Large modules can take minutes to compile on a loaded runner, so a
+// waiter keeps waiting while that process lives. The cap only bounds a claim
+// whose owner cannot be checked.
+const CLAIM_OWNER_FILE = "owner";
+const CLAIM_POLL_MS = 40;
+const OWNERLESS_CLAIM_GRACE_MS = 2_000;
+const CLAIM_WAIT_CAP_MS = 5 * 60_000;
+
+type ClaimWait = "released" | "abandoned" | "expired";
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to another user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function claimOwnerIsAlive(claimPath: string): Promise<boolean | undefined> {
+  try {
+    const owner: unknown = JSON.parse(
+      await fs.promises.readFile(path.join(claimPath, CLAIM_OWNER_FILE), "utf8"),
+    );
+    const { pid, host } = owner as { pid?: unknown; host?: unknown };
+    if (typeof pid !== "number" || host !== os.hostname()) return false;
+    return processIsAlive(pid);
+  } catch {
+    // Not written yet, or the claim was just released.
+    return undefined;
+  }
+}
+
+async function waitForClaim(claimPath: string): Promise<ClaimWait> {
+  const start = performance.now();
+  while (performance.now() - start < CLAIM_WAIT_CAP_MS) {
+    const alive = await claimOwnerIsAlive(claimPath);
+    const exists = await fs.promises.access(claimPath).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) return "released";
+    if (alive === false) return "abandoned";
+    // The owner writes its file right after creating the claim. A claim that
+    // stays without one lost its process in between.
+    if (alive === undefined && performance.now() - start > OWNERLESS_CLAIM_GRACE_MS) {
+      return "abandoned";
+    }
+    await delay(CLAIM_POLL_MS);
+  }
+  return "expired";
+}
+
+// Only paired browser processes coordinate. A failed writer or unavailable
+// directory falls back to an independent transform, and a claim whose owner
+// is gone is taken over.
 async function compileWithClaim(entryPath: string, compile: () => Promise<unknown>) {
   const claimPath = `${entryPath}.lock`;
-  try {
-    await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
-    await fs.promises.mkdir(claimPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      const deadline = performance.now() + 30_000;
-      while (performance.now() < deadline) {
-        if (
-          !(await fs.promises.access(claimPath).then(
-            () => true,
-            () => false,
-          ))
-        )
-          break;
-        await delay(40);
-      }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
+      await fs.promises.mkdir(claimPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return compile();
+      const wait = await waitForClaim(claimPath);
       const shared = await readEntry(entryPath);
       if (shared) return shared;
+      if (wait !== "abandoned") return compile();
+      await fs.promises.rm(claimPath, { recursive: true, force: true }).catch(() => undefined);
+      continue;
     }
-    return compile();
+    try {
+      await fs.promises
+        .writeFile(
+          path.join(claimPath, CLAIM_OWNER_FILE),
+          JSON.stringify({ pid: process.pid, host: os.hostname() }),
+        )
+        .catch(() => undefined);
+      // The other process may have published an entry before we took the claim.
+      return (await readEntry(entryPath)) ?? (await compile());
+    } finally {
+      await fs.promises.rm(claimPath, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
-  try {
-    // The other process may have published an entry before we took the claim.
-    return (await readEntry(entryPath)) ?? (await compile());
-  } finally {
-    await fs.promises.rmdir(claimPath).catch(() => undefined);
-  }
+  return compile();
 }
 
 function environmentName(context: unknown): string {
