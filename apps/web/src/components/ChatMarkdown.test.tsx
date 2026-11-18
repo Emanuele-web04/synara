@@ -609,11 +609,17 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
 it("shares a settled parse only between renders with the same parse inputs", async () => {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
   const text = "Shared parse: see [[My note]] and **bold**.";
-  const first = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/vault" />);
-  const again = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/vault" />);
-  const otherRoot = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/other" />);
+  const first = renderWithQueryClient(
+    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" />,
+  );
+  const again = renderWithQueryClient(
+    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" />,
+  );
+  const otherRoot = renderWithQueryClient(
+    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/other" />,
+  );
   const user = renderWithQueryClient(
-    <ChatMarkdown text={text} wikiLinkRoot="/vault" variant="user" />,
+    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" variant="user" />,
   );
 
   expect(again).toBe(first);
