@@ -17,7 +17,7 @@ const code = gate
   .split("\n")
   .map((line) => line.replace(/^          /, ""))
   .join("\n");
-const lanes = ["TYPECHECK", "UNIT", "BROWSER", "BUILD", "WINDOWS_PROCESS", "MIGRATION_LINEAGE"];
+const lanes = ["TYPECHECK", "UNIT", "BROWSER", "BUILD", "WINDOWS_PROCESS"];
 const runGate = (overrides = {}) =>
   spawnSync("bash", ["-e", "-c", code], {
     encoding: "utf8",
@@ -68,36 +68,50 @@ test("docs-only cannot hide a failing or unexpectedly executed heavy lane", () =
     for (const status of ["success", "failure", "cancelled", ""])
       assert.notEqual(runGate({ ...docs, [lane]: status }), 0);
 });
-test("required check, independent static lane and full-history lineage stay intact", () => {
+test("required check and independent static lane stay intact", () => {
   assert.ok(workflow.includes("name: Format, Lint, Typecheck, Test, Browser Test, Build"));
   const staticJob = workflow.split("  static-fast:\n")[1].split("  static-typecheck:\n")[0];
   assert.ok(!staticJob.includes("needs:"));
   assert.ok(staticJob.includes("node scripts/release-smoke.ts"));
   assert.ok(!workflow.includes("  release_smoke:"));
-  assert.ok(workflow.includes("fetch-depth: 0"));
-  assert.ok(workflow.includes("git tag --list 'v[0-9]*'"));
   assert.ok(!workflow.includes("continue-on-error"));
 });
+test("the required Typecheck lane also fails on missing release tags or broken migration lineage", () => {
+  const typecheck = jobs["static-typecheck"];
+  const gate = jobs.quality;
+  const checks = typecheck.steps.find((step) => step.parallel)?.parallel;
+  assert.ok(checks);
+  assert.ok(gate.needs.includes("static-typecheck"));
+  assert.equal(gate.steps[0].env.TYPECHECK, "${{ needs.static-typecheck.result }}");
+  assert.ok(!jobs.migration_lineage);
+  const lineage = checks.find((step) => step.name === "Verify released migration lineage");
+  assert.ok(lineage);
+  assert.equal(lineage.if, undefined);
+  assert.ok(lineage.run.includes("git tag --list 'v[0-9]*'"));
+  assert.ok(lineage.run.includes("node scripts/check-migration-lineage.ts"));
+  const run = (gitBody, nodeBody) =>
+    spawnSync(
+      "bash",
+      ["-e", "-c", `git() { ${gitBody}; }\nnode() { ${nodeBody}; }\n${lineage.run}`],
+      { encoding: "utf8" },
+    );
+  const missing = run("return 0", "echo unexpected; return 0");
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /Release tags are missing/);
+  assert.doesNotMatch(missing.stdout, /unexpected/);
+  assert.equal(run("echo v1.0.0", "return 1").status, 1);
+  assert.equal(run("echo v1.0.0", "return 0").status, 0);
+});
 test("history readers clone blobless; jobs that never read history stay shallow", () => {
-  // Measured: a blobless full clone took 9-12 s per hosted job against 6 s
-  // shallow, and 10 s against 37 s for the full clone Migration Lineage used.
-  const jobs = workflow.split(/\n(?=  [a-z_-]+:\n)/);
-  const historyReaders = ["migration_lineage"];
-  let checked = 0;
-  for (const job of jobs) {
-    const name = job.trimStart().split(":")[0];
-    for (const rest of job.split("uses: actions/checkout@v6").slice(1)) {
-      const options = rest.split("\n      - ")[0];
-      checked++;
-      if (historyReaders.includes(name)) {
-        assert.ok(options.includes("fetch-depth: 0"), name);
-        assert.ok(options.includes("filter: blob:none"), name);
-      } else {
-        assert.ok(!options.includes("fetch-depth: 0"), `${name} needs no history`);
-      }
+  const historyReaders = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    for (const step of job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"))) {
+      if (step.with?.["fetch-depth"] !== 0) continue;
+      historyReaders.push(name);
+      assert.equal(step.with.filter, "blob:none", name);
     }
   }
-  assert.ok(checked >= 8);
+  assert.deepEqual(historyReaders, ["static-typecheck"]);
 });
 test("filtered scopes preserve lifecycle scripts and the scripts workspace links", () => {
   assert.ok(
@@ -333,7 +347,7 @@ test("Windows uses the runner-volume cache and Web installs only its dependency 
   }
 });
 test("native Windows runtime and recovery tests are not replaced with Linux checks", () => {
-  const windows = workflow.split("  windows_process:\n")[1].split("  migration_lineage:\n")[0];
+  const windows = workflow.split("  windows_process:\n")[1];
   for (const file of [
     "scripts/node-pty-smoke.mjs",
     "src/windowsProcess.test.ts",

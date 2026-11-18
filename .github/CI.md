@@ -45,6 +45,14 @@ runs only through its dedicated workflow, not on every PR build: it measures
 copied baseline/candidate algorithms and adds no application regression assertion.
 This removes twelve ten-second measurement waits from the blocking build lane.
 
+Typecheck also owns the released migration lineage check. It uses a full
+blobless checkout with release tags, and both checks share the same Node
+setup. The lineage command still fails on missing tags or a changed
+released migration. The required gate waits for both checks through the
+Typecheck job. This frees one runner allocation. In the last separate
+hosted observation, Migration Lineage ran for 22 s, including 9 s for
+checkout and 3 s for Node setup. [Hosted run](https://github.com/Emanuele-web04/synara/actions/runs/44314113710)
+
 The desktop build lane also runs the composer-focus Electron regression under
 Xvfb. It covers navigation in previews, visible native views and renderer guests,
 plus popup opener/POST/close behavior and deliberate browser input. The test

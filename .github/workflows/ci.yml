@@ -115,6 +115,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        # The lineage check needs release tags and their migration manifests.
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # The single saver for the shared full Linux node_modules key: every other
       # full lane restores only, so a miss is archived once instead of per lane.
@@ -123,15 +127,18 @@ jobs:
         with:
           save-modules: "true"
 
-      # `bun check` type-checks every project in one pass. Only the patched
-      # TypeScript 7 compiler reports the Effect language-service diagnostics,
-      # so they run next, in their own step: running both at once made them
-      # compete for the runner's cores. `bun run typecheck` runs both.
-      - name: Typecheck
-        run: node scripts/typecheck.ts --only=types
+      - parallel:
+          # The two compilers compete for cores, so run their checks in order.
+          - name: Typecheck and Effect diagnostics
+            shell: bash
+            run: |
+              node scripts/typecheck.ts --only=types
+              node scripts/typecheck.ts --only=effect
 
-      - name: Effect diagnostics
-        run: node scripts/typecheck.ts --only=effect
+          - name: Verify released migration lineage
+            run: |
+              test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+              node scripts/check-migration-lineage.ts
 
   # Keep each server shard serial internally, but use three independent runners.
   # The measured native 3-way split lowers the slowest shard without changing
@@ -359,7 +366,6 @@ jobs:
       - browser
       - build
       - windows_process
-      - migration_lineage
     if: always()
     steps:
       - name: Aggregate lane results
@@ -372,7 +378,6 @@ jobs:
           BROWSER: ${{ needs.browser.result }}
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
-          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
         run: |
           fail=0
           # The docs-only filter itself must have run: without it a skip proves nothing.
@@ -389,7 +394,7 @@ jobs:
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
+          for lane in "typecheck-and-lineage=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS"; do
             name="${lane%%=*}"
             result="${lane#*=}"
             if [ "$CODE" != "true" ]; then
@@ -469,31 +474,3 @@ jobs:
           bun run --cwd apps/desktop test
           src/backendShutdown.windows.integration.test.ts
           src/desktopMigrationRecovery.test.ts
-
-  # Released (id, name) migration pairs are recorded in every user's
-  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
-  # installs. This job needs the release tags, hence the unshallow checkout; the
-  # dependency-free guard needs a real tag history, never a missing-history skip.
-  migration_lineage:
-    name: Migration Lineage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      # Reads history: a blobless full clone (commits and trees, blobs on demand).
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Verify released migration lineage
-        run: |
-          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
-          node scripts/check-migration-lineage.ts
