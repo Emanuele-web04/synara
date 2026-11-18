@@ -461,7 +461,7 @@ export const AppSettingsSchema = Schema.Struct({
   // `showChatsSection` controls the standalone "Chats" list and its pinned selector
   // (rootless chats not tied to a project). `showGroupsSection` controls the
   // optional Groups tab in the section switcher.
-  showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showChatsSection: Schema.Boolean.pipe(withDefaults(() => false)),
   showGroupsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
