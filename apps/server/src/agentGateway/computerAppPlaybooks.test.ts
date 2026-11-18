@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMPUTER_APP_PLAYBOOKS,
+  type ComputerAppPlaybook,
   COMPUTER_APP_PLAYBOOK_POLICY,
   COMPUTER_APP_PLAYBOOK_SECTIONS,
   COMPUTER_APP_PLAYBOOK_TOPICS,
@@ -34,6 +35,10 @@ const EXPECTED_TOPICS = [
   "apple_music",
   "youtube",
   "youtube_music",
+  "xcode",
+  "zed",
+  "linear",
+  "docker_desktop",
 ] as const;
 
 const OFFICIAL_HOSTS = new Set([
@@ -56,6 +61,10 @@ const OFFICIAL_HOSTS = new Set([
   "support.apple.com",
   "developers.google.com",
   "support.google.com",
+  "developer.apple.com",
+  "zed.dev",
+  "linear.app",
+  "docs.docker.com",
 ]);
 
 describe("on-demand application playbooks", () => {
@@ -91,7 +100,8 @@ describe("on-demand application playbooks", () => {
       expect(evidence).toMatchObject({
         support: "documentation-backed",
         interactionTesting: "not-performed",
-        documentationReviewedOn: "2026-10-13",
+        documentationReviewedOn:
+          (COMPUTER_APP_PLAYBOOKS[topic] as ComputerAppPlaybook).reviewedOn ?? "2026-10-13",
         scope: COMPUTER_APP_PLAYBOOKS[topic].scope,
       });
       expect(evidence?.sources.length).toBeGreaterThan(0);
@@ -132,6 +142,11 @@ describe("on-demand application playbooks", () => {
     ["Apple Music", "apple_music"],
     ["YouTube Music", "youtube_music"],
     ["YouTube", "youtube"],
+    ["Xcode", "xcode"],
+    ["Zed", "zed"],
+    ["Linear", "linear"],
+    ["Docker Desktop", "docker_desktop"],
+    ["docker", "docker_desktop"],
   ])("normalizes %s to the explicit %s topic", (input, topic) => {
     expect(normalizeComputerHelpTopic(input)).toBe(topic);
     expect(computerAppPlaybook(topic)).toBeDefined();

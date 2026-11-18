@@ -1,11 +1,12 @@
 /** Maintained, on-demand guidance, not application drivers or permission grants. */
-interface ComputerAppPlaybook {
+export interface ComputerAppPlaybook {
   readonly title: string;
   readonly summary: string;
   readonly scope: string;
   readonly documented: string;
   readonly workflow: string;
   readonly approval: string;
+  readonly reviewedOn?: string;
   readonly sources: readonly { readonly title: string; readonly url: string }[];
 }
 
@@ -283,6 +284,79 @@ export const COMPUTER_APP_PLAYBOOKS = {
       },
     ],
   },
+  xcode: {
+    title: "Xcode",
+    summary: "project, scheme and destination; build boundaries",
+    scope: "Xcode desktop; workspace, scheme and signing are per-project",
+    reviewedOn: "2026-11-18",
+    documented:
+      "The Product menu offers Build (Cmd+B), Test (Cmd+U) and Archive. Schemes choose the target and destination; signing uses teams, certificates and profiles. `xcodebuild` is the documented command-line driver for the same actions.",
+    workflow:
+      "Confirm project/workspace, scheme and destination. Prefer approved terminal tools with `xcodebuild` for deterministic builds and readable test logs; inspect the exact Xcode window only for UI-only work (scheme editor, Organizer, signing). Verify the resulting product and the actual build log — a finished build is not a signed or distributed archive.",
+    approval:
+      "Require approval for scheme/signing/destination changes, archive distribution, derived-data or provisioning deletion, and installs or launches on real devices; no releases.",
+    sources: [
+      {
+        title: "Building and running an app",
+        url: "https://developer.apple.com/documentation/xcode/building-and-running-an-app",
+      },
+      {
+        title: "Command-line builds FAQ",
+        url: "https://developer.apple.com/library/archive/technotes/tn2339/_index.html",
+      },
+    ],
+  },
+  zed: {
+    title: "Zed",
+    summary: "command palette, agent panel and settings",
+    scope: "Zed desktop (macOS/Linux); keymap and settings are user-configurable",
+    reviewedOn: "2026-11-18",
+    documented:
+      "Cmd+Shift+P opens the command palette. The Agent Panel is a docked editor for AI threads; settings live in settings.json. Zed documents ACP for external agents and Vim/alternate keymaps that change shortcuts.",
+    workflow:
+      "Confirm project, file and focused panel. Prefer existing file/search/edit and terminal tools; inspect the actual palette or Agent Panel for UI work and verify the applied diff, not the panel's stated intent. Do not reconfigure the agent, keymap or extensions to make a shortcut work.",
+    approval:
+      "Require approval for settings/keymap changes, extension installs, agent threads with side effects, project trust changes and shared calls/channels.",
+    sources: [
+      { title: "Command palette", url: "https://zed.dev/docs/command-palette" },
+      { title: "Agent Panel", url: "https://zed.dev/docs/ai/agent-panel" },
+    ],
+  },
+  linear: {
+    title: "Linear",
+    summary: "issue identity, command menu and API boundaries",
+    scope: "Linear desktop/web; workspace, team and active view are context",
+    reviewedOn: "2026-11-18",
+    documented:
+      "Cmd/Ctrl+K opens the command menu for navigation and actions. Issues belong to teams and carry statuses within workflows; the GraphQL API covers scoped reads and mutations.",
+    workflow:
+      "Confirm workspace, team and issue identifier. Prefer an available authorized Linear tool or its API for searches and writes; inspect the actual command menu and filters for UI work. Verify the issue's resulting state — a draft, optimistic update or filtered-out row is not saved state.",
+    approval:
+      "Require approval for issue/comment writes, status moves, deletes, cycle/project edits, automations and workspace settings or integrations.",
+    sources: [
+      { title: "Command menu", url: "https://linear.app/docs/command-menu" },
+      { title: "GraphQL API", url: "https://linear.app/developers/graphql" },
+    ],
+  },
+  docker_desktop: {
+    title: "Docker Desktop",
+    summary: "container/image lifecycle and destructive actions",
+    scope: "Docker Desktop dashboard; the docker CLI is the documented counterpart",
+    reviewedOn: "2026-11-18",
+    documented:
+      "The dashboard lists Containers and Images with start/stop/restart/delete actions plus a Logs view. The `docker` CLI (`ps`, `logs`, `start`, `stop`, `rm`) performs the same lifecycle operations.",
+    workflow:
+      "Confirm the exact container or image name, tag and state. Prefer approved terminal tools with the `docker` CLI for deterministic lifecycle and log reads; use the dashboard only for views the CLI does not render. Verify the resulting `docker ps` state — stopped is not removed, pulled is not running.",
+    approval:
+      "Require approval for stop/rm/prune on containers, images or volumes, port/publish changes, pulling new images and resource or settings changes.",
+    sources: [
+      {
+        title: "Containers view",
+        url: "https://docs.docker.com/desktop/use-desktop/container/",
+      },
+      { title: "Docker CLI", url: "https://docs.docker.com/reference/cli/docker/" },
+    ],
+  },
 } as const satisfies Record<string, ComputerAppPlaybook>;
 
 export type ComputerAppPlaybookTopic = keyof typeof COMPUTER_APP_PLAYBOOKS;
@@ -304,7 +378,7 @@ export function computerAppPlaybookEvidence(topic: string) {
   return {
     support: "documentation-backed" as const,
     interactionTesting: "not-performed" as const,
-    documentationReviewedOn: "2026-10-13",
+    documentationReviewedOn: playbook.reviewedOn ?? "2026-10-13",
     scope: playbook.scope,
     sources: playbook.sources,
   };

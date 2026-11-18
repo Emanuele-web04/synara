@@ -92,6 +92,8 @@ export function normalizeComputerHelpTopic(topic: string): string {
     case "social":
     case "general_social_media":
       return "social_media";
+    case "docker":
+      return "docker_desktop";
     default:
       return normalized;
   }
