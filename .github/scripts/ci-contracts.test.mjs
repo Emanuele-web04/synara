@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { compilerCacheFingerprint } from "../../apps/web/scripts/compiler-cache-key.ts";
+import { workspaceInstallFingerprint } from "../../scripts/ci-install-key.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = read("../workflows/ci.yml");
@@ -155,11 +156,15 @@ test("caches restore in every consumer and save from one owner per key", () => {
       .map((step) => [step.split("\n")[0], step]),
   );
   const modulesKey =
-    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ hashFiles('bun.lock', 'package.json') }}";
+    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}";
   const modulesConsumers =
     "runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server')";
   // The Bun package archive shared the modules hash, so it missed whenever it was needed.
   assert.ok(!setup.includes("~/.bun/install/cache"));
+  const fingerprint = steps["Fingerprint dependency inputs"];
+  assert.ok(fingerprint.includes("id: modules-key"));
+  assert.ok(fingerprint.includes(`if: \${{ ${modulesConsumers} }}`));
+  assert.ok(fingerprint.includes("node scripts/ci-install-key.ts"));
   assert.ok(
     steps["Install dependencies"].includes(
       "server) bun install --frozen-lockfile --filter './' --filter '@synara/cli' --filter '@synara/desktop' --filter '@synara/analytics' --concurrent-scripts=1",
@@ -250,7 +255,14 @@ test("compiler cache survives workspace release bumps and invalidates dependency
   const scratch = mkdtempSync(join(tmpdir(), "synara-compiler-key-"));
   try {
     mkdirSync(join(scratch, "apps/web"), { recursive: true });
-    for (const file of ["package.json", "apps/web/vite.config.ts", "apps/web/scripts", "patches"]) {
+    mkdirSync(join(scratch, "scripts"));
+    for (const file of [
+      "package.json",
+      "apps/web/vite.config.ts",
+      "apps/web/scripts",
+      "scripts/bun-lockfile.ts",
+      "patches",
+    ]) {
       cpSync(new URL(`../../${file}`, import.meta.url), join(scratch, file), { recursive: true });
     }
     const lockfile = `{
@@ -277,6 +289,56 @@ test("compiler cache survives workspace release bumps and invalidates dependency
     assert.notEqual(fingerprint(unknown), fingerprint(unknown.replace("1.5.4", "1.6.2")));
     writeFileSync(join(scratch, "patches/compiler.patch"), "fixture patch");
     assert.notEqual(fingerprint(lockfile), baseline);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("dependency archives survive release metadata bumps and invalidate install inputs", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "synara-install-key-"));
+  try {
+    const inputs = {
+      "package.json": JSON.stringify({
+        packageManager: "bun@1.4.4",
+        workspaces: { packages: ["apps/*"] },
+        patchedDependencies: { "dep@2.0.0": "patches/dep.patch" },
+      }),
+      "bun.lock": `{
+        "lockfileVersion": 3,
+        "workspaces": { "apps/web": { "version": "1.5.4", }, },
+        "packages": { "dep": ["dep@2.0.0", "", {}, "sha512-example",], },
+      }`,
+      "apps/web/package.json": JSON.stringify({
+        name: "@synara/web",
+        version: "1.5.4",
+        scripts: { prepare: "node prepare.mjs" },
+      }),
+      "bunfig.toml": '[install]\nlinker = "isolated"\n',
+      "scripts/patch-workspace-typescript.ts": "// root install hook\n",
+      "patches/dep.patch": "original patch",
+    };
+    for (const directory of ["apps/web", "scripts", "patches"])
+      mkdirSync(join(scratch, directory), { recursive: true });
+    const write = (file, text) => writeFileSync(join(scratch, file), text);
+    for (const [file, input] of Object.entries(inputs)) write(file, input);
+    const fingerprint = () => workspaceInstallFingerprint(scratch);
+    const seed = fingerprint();
+    for (const file of ["bun.lock", "apps/web/package.json"]) {
+      write(file, inputs[file].replace("1.5.4", "1.6.2"));
+      assert.equal(fingerprint(), seed, file);
+    }
+    for (const [file, before, after] of [
+      ["package.json", "bun@1.4.4", "bun@1.4.5"],
+      ["apps/web/package.json", "prepare.mjs", "other.mjs"],
+      ["bun.lock", "sha512-example", "sha512-changed"],
+      ["bunfig.toml", "isolated", "hoisted"],
+      ["scripts/patch-workspace-typescript.ts", "root install hook", "updated hook"],
+      ["patches/dep.patch", "original patch", "updated patch"],
+    ]) {
+      write(file, inputs[file].replace(before, after));
+      assert.notEqual(fingerprint(), seed, file);
+      write(file, inputs[file]);
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

@@ -7,9 +7,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { normalizeBunLockfile } from "../../../scripts/bun-lockfile.ts";
+
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
 const inputFiles = [
   "package.json",
+  "scripts/bun-lockfile.ts",
   "apps/web/vite.config.ts",
   "apps/web/scripts/compiler-cache-key.ts",
   "apps/web/scripts/react-compiler-plugin.mjs",
@@ -17,24 +20,6 @@ const inputFiles = [
   "apps/web/scripts/parallel-transform.ts",
   "apps/web/scripts/parallel-transform.worker.mjs",
 ];
-
-function compilerLockfile(contents: string): string {
-  try {
-    // Bun's generated lockfile permits trailing commas. Match quoted strings
-    // first so dependency values and integrity strings are preserved verbatim.
-    const lockfile = JSON.parse(
-      contents.replace(/"(?:[^"\\]|\\.)*"|,(?=\s*[}\]])/g, (token) => (token === "," ? "" : token)),
-    ) as { lockfileVersion?: number; workspaces?: Record<string, { version?: string }> };
-    if (lockfile.lockfileVersion !== 3 || !lockfile.workspaces) return contents;
-    for (const workspace of Object.values(lockfile.workspaces)) {
-      if (typeof workspace.version === "string") delete workspace.version;
-    }
-    return JSON.stringify(lockfile);
-  } catch {
-    // Unrecognized lockfile syntax still invalidates on every byte change.
-    return contents;
-  }
-}
 
 export function compilerCacheFingerprint(root = repository) {
   const hash = createHash("sha256").update(process.versions.node).update("\0");
@@ -49,7 +34,7 @@ export function compilerCacheFingerprint(root = repository) {
       .update(readFileSync(join(root, name)))
       .update("\0");
   }
-  hash.update(compilerLockfile(readFileSync(join(root, "bun.lock"), "utf8")));
+  hash.update(normalizeBunLockfile(readFileSync(join(root, "bun.lock"), "utf8")));
   return hash.digest("hex");
 }
 

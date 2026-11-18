@@ -90,6 +90,17 @@ Build install the entire workspace. Other jobs select the dependencies they use.
   supervised process teardown, so `@synara/scripts` alone cannot resolve `effect`.
 
 The `full`, `web`, and `server` scopes use separate exact `node_modules` keys.
+The install fingerprint includes the Node ABI, Bun configuration, manifests,
+dependency resolutions and patch inputs. A release-only version bump leaves
+the fingerprint stable because workspace links read the current checkout's
+manifests. The first run with a new key seeds its archive.
+
+After replaying a release bump on the Mac mini, Bun's frozen install took
+0.49 s for Web, 0.59 s for Server, and 1.02 s for Full when reusing an installed
+tree. With empty trees and a warm Bun download cache, the respective installs
+took 3.14 s, 5.69 s, and 8.89 s. Every installed file and symlink matched
+within each scope. These times exclude archive transfer and extraction.
+
 Static, runtime, and Windows jobs install directly. On Windows, `RUNNER_TEMP` puts the
 Bun package cache on the hosted checkout's drive so Bun can hardlink package
 files. Each archive has one writer after a miss. Typecheck and Desktop Build

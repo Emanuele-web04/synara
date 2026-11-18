@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
+    "rewriteRelativeImportExtensions": true,
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
@@ -24,6 +25,7 @@
   "include": [
     "src",
     "perf",
+    "../../scripts/bun-lockfile.ts",
     "scripts/compiler-cache-key.ts",
     "scripts/production-assets*.ts",
     "scripts/transform-cache*.ts",

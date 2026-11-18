@@ -46,6 +46,14 @@ runs:
       with:
         node-version-file: package.json
 
+    - name: Fingerprint dependency inputs
+      id: modules-key
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') }}
+      shell: bash
+      run: |
+        fingerprint="$(node scripts/ci-install-key.ts)"
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
     - name: Fingerprint web compiler inputs
       id: web-transform-key
       if: inputs.web-transform-cache != ''
@@ -67,7 +75,7 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ hashFiles('bun.lock', 'package.json') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}
 
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
