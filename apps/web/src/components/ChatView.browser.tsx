@@ -125,7 +125,6 @@ import {
   removeWorkspaceSession,
   updateWorkspaceSession,
 } from "../lib/hosts/workspaceSessions";
-import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "./hosts/RemoteConnectionsAnnouncement";
 import { WorkspacePanels } from "./hosts/WorkspacePanels";
 
 vi.mock("../lib/hosts/executionContext", { spy: true });
@@ -4488,10 +4487,6 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   it("keeps an empty remote project in its Space until the user confirms removal", async () => {
-    localStorage.setItem(
-      REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
-      JSON.stringify({ acknowledged: true }),
-    );
     const destinationSpaceId = SpaceId.makeUnsafe("remote-destination");
     const hostId = "remote-project-owner";
     const projectId = ProjectId.makeUnsafe("remote-created-project");

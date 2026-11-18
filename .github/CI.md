@@ -343,9 +343,13 @@ guard first. The guard started at 37.21 s and 0.14 s, respectively. Both
 runs matched all 6,279 case outcomes and multiplicities across 503 files.
 An earlier seed (`2198`) had nearly identical wall times (54.85 s and
 54.52 s). The scheduling change targets the late-start tail. The hosted unit
-job using seed `1795006867144` passed and the compiler guard finished last,
-after 147.48 s of execution. The hosted effect of the new schedule remains
-unmeasured. [Hosted run](https://github.com/Emanuele-web04/synara/actions/runs/44309338095)
+job using seed `1795006867144` reported the compiler guard near the end of the
+file results, after 147.48 s of execution. The next hosted Web Unit ran with
+the new schedule and reported the guard near the middle. Both jobs passed all
+6,276 active cases. Job wall time was 261 s and 262 s respectively, so these
+samples establish the earlier completion order but no hosted wall-time saving.
+[First hosted run](https://github.com/Emanuele-web04/synara/actions/runs/44309338095),
+[Hosted scheduling check](https://github.com/Emanuele-web04/synara/actions/runs/44314113710)
 
 ## November 2026 critical-path rebalance
 
