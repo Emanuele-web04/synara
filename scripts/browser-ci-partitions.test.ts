@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { createVitest, type TestSpecification } from "vitest/node";
+import { BaseSequencer, createVitest, type TestSpecification } from "vitest/node";
 
 const webRoot = fileURLToPath(new URL("../apps/web/", import.meta.url));
 
@@ -16,8 +16,6 @@ async function collectPartitions(config: string) {
       pattern:
         vitest.getGlobalTestNamePattern() ?? specification.project.serializedConfig.testNamePattern,
       fileParallelism: specification.project.config.browser.fileParallelism,
-      isolate: specification.project.config.browser.isolate,
-      maxWorkers: specification.project.config.maxWorkers,
     }));
   } finally {
     await vitest.close();
@@ -60,6 +58,7 @@ async function collectComponentShard(shard: string) {
     return {
       all: files.map(name).toSorted(),
       configured: (await new Sequencer(vitest).shard(files)).map(name).toSorted(),
+      native: (await new BaseSequencer(vitest).shard(files)).map(name).toSorted(),
     };
   } finally {
     await vitest.close();
@@ -84,7 +83,6 @@ describe("browser CI partitions", () => {
           "chat-projects (chromium)",
           "chat-workflows (chromium)",
         ]);
-        expect(owners.every(({ fileParallelism }) => fileParallelism === false)).toBe(true);
         const geometry = "ChatView transcript geometry (full app)";
         for (const [name, lane] of [
           [`${geometry} renders the active thread title`, "chat-workflows"],
@@ -132,23 +130,34 @@ describe("browser CI partitions", () => {
       } else {
         expect(owners.map(({ project }) => project)).toEqual(["components (chromium)"]);
         expect(owners[0]!.pattern).toEqual(stable[0]!.pattern);
-        expect(owners[0]).toMatchObject({ fileParallelism: true, isolate: true, maxWorkers: 3 });
       }
+      expect(owners.every(({ fileParallelism }) => fileParallelism === false)).toBe(true);
     }
   }, 120_000);
 
-  it("places all component files exactly once across three CI jobs", async () => {
+  it("places all component files exactly once and moves only the four measured files", async () => {
     const shards = [];
-    for (const shard of ["1/3", "2/3", "3/3"]) {
-      shards.push(await collectComponentShard(shard));
+    for (let index = 1; index <= 6; index++) {
+      shards.push(await collectComponentShard(`${index}/6`));
     }
     const all = shards[0]!.all;
     expect(all.length).toBeGreaterThan(0);
     expect(shards.flatMap(({ configured }) => configured).toSorted()).toEqual(all);
 
-    for (const { all: collected, configured } of shards) {
+    const expectedPins = {
+      "src/components/EventRouter.browser.tsx": 5,
+      "src/components/chat/environment/EnvironmentPullRequestSection.browser.tsx": 6,
+      "src/components/chat/GeneratedMarkdownImage.browser.tsx": 6,
+      "src/hooks/useWorkspaceFileEditorSession.browser.tsx": 6,
+    };
+    for (const [file, index] of Object.entries(expectedPins)) {
+      expect(shards[index - 1]!.configured).toContain(file);
+    }
+    for (const { all: collected, configured, native } of shards) {
       expect(collected).toEqual(all);
-      expect(configured.length).toBeGreaterThan(0);
+      expect(configured.filter((file) => !(file in expectedPins))).toEqual(
+        native.filter((file) => !(file in expectedPins)),
+      );
     }
   }, 120_000);
 });

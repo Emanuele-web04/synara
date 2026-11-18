@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 
+import { createPinnedShardSequencer } from "../../vitest.shards";
 import stableConfig from "./vitest.browser.stable.config";
 
 const chatViewFile = "src/components/ChatView.browser.tsx";
@@ -18,6 +19,17 @@ const projectPattern = `(?:project|worktree|Space|approval|preserves three answe
 const projectSlicePattern = `(?:worktree|queue|queued|handoff|${tabNavigationPattern})`;
 const workflowSlicePattern = "(?:[Cc]omposer|[Dd]raft|[Pp]icker|[Ss]hortcut|[Ee]ditor)";
 const chatSlice = process.env.VITEST_BROWSER_CHAT_SLICE;
+
+// Balance the two Chromium processes on components 3/3. All other files use
+// their native shard, and the single-shard ChatView jobs have no pins.
+const componentSequencer = createPinnedShardSequencer({
+  6: {
+    "src/components/EventRouter.browser.tsx": 5,
+    "src/components/chat/environment/EnvironmentPullRequestSection.browser.tsx": 6,
+    "src/components/chat/GeneratedMarkdownImage.browser.tsx": 6,
+    "src/hooks/useWorkspaceFileEditorSession.browser.tsx": 6,
+  },
+});
 
 // Each paired runner uses complementary filters after the original project
 // filter. New cases stay covered even if they match neither slice's keywords.
@@ -43,6 +55,7 @@ export default defineConfig({
     // A root testNamePattern overrides project patterns at runtime in Vitest.
     // Keep the quarantine in each project so the ChatView split also applies.
     ...stableTestConfig,
+    sequence: { sequencer: componentSequencer },
     // Project inheritance concatenates include arrays. Give each project sole
     // ownership of its files instead of inheriting the full browser glob set.
     include: [],
@@ -81,12 +94,6 @@ export default defineConfig({
         extends: true,
         test: {
           name: "components",
-          // Each worker gets its own Chromium context and an isolated frame per file.
-          // The workers share one Vite server and dependency optimizer.
-          fileParallelism: true,
-          maxWorkers: 3,
-          isolate: true,
-          browser: { fileParallelism: true },
           include: stableTestConfig.include!,
           exclude: [chatViewFile],
           testNamePattern: stablePattern,

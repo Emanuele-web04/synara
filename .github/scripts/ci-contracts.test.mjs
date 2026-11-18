@@ -540,24 +540,26 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const browserMatrix = jobs.browser.strategy.matrix.include;
   const components = browserMatrix.filter(({ project }) => project === "components");
   assert.deepEqual(components.map(({ shard }) => shard).sort(), ["1/3", "2/3", "3/3"]);
+  // Duplicating a child shard would leave its sibling's tests out of a green gate.
+  assert.deepEqual(components.flatMap(({ shardA, shardB }) => [shardA, shardB]).sort(), [
+    "1/6",
+    "2/6",
+    "3/6",
+    "4/6",
+    "5/6",
+    "6/6",
+  ]);
   assert.deepEqual(
     browserMatrix
       .filter(({ project }) => project !== "components")
-      .map(({ project, shard }) => [project, shard]),
+      .map(({ project, shardA, shardB }) => [project, shardA, shardB]),
     [
-      ["chat-follow", "1/1"],
-      ["chat-projects", "1/1"],
-      ["chat-workflows", "1/1"],
+      ["chat-follow", "1/1", "1/1"],
+      ["chat-projects", "1/1", "1/1"],
+      ["chat-workflows", "1/1", "1/1"],
     ],
   );
   const browserPair = jobs.browser.steps.find((step) => step.parallel)?.parallel;
-  assert.deepEqual(
-    browserPair?.map((step) => step.if),
-    [undefined, "matrix.project != 'components'"],
-  );
-  for (const step of browserPair) {
-    assert.ok(step.run.includes("--project=${{ matrix.project }} --shard=${{ matrix.shard }}"));
-  }
   assert.deepEqual(
     browserPair?.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
     ["a", "b"],
