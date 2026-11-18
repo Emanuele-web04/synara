@@ -70,7 +70,10 @@ for (const name of threadNames) {
         .filter((number) => typeof number === "number"),
     );
     if (perBuild.every((numbers) => numbers.length === 0)) continue;
-    const medians = perBuild.map((numbers) => median(numbers));
+    const medians = perBuild.map((numbers) => {
+      const value = median(numbers);
+      return value === null ? null : Math.round(value * 10) / 10;
+    });
     const cells = perBuild.map((numbers, index) =>
       numbers.length === 0 ? "-" : `${medians[index]} [${numbers.join(", ")}]`,
     );
