@@ -248,6 +248,7 @@ const allProvidersDisabledSettings = {
     opencode: { enabled: false },
     pi: { enabled: false },
     omp: { enabled: false },
+    acp: { enabled: false },
   },
 } as const;
 
@@ -264,6 +265,7 @@ const allProvidersDisabledServerSettings = {
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
     omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: false },
+    acp: { ...DEFAULT_SERVER_SETTINGS.providers.acp, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 

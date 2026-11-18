@@ -35,6 +35,7 @@ export const PROVIDER_SERIES_COLOR: Record<UsageAnalyticsProvider, string> = {
   pi: "#C77DA6",
   devin: "#5E9BD6",
   omp: "#B0855A",
+  acp: "#7D6BC4",
   unknown: "#A3A3A3",
 };
 

@@ -15,6 +15,7 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
+  acp: "acp",
 } as const satisfies Record<ProviderKind, string>;
 
 const CLI_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -122,6 +123,11 @@ export const PROVIDER_AUTHENTICATION = {
     instructions:
       "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
     interactiveCommand: "/login",
+  },
+  acp: {
+    flow: "interactive",
+    args: [],
+    instructions: "Complete any startup prompts in the agent CLI to authenticate it for ACP use.",
   },
 } as const satisfies Record<
   ProviderKind,

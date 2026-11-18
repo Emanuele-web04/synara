@@ -151,6 +151,7 @@ const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 const OMP_PROVIDER = "omp" as const;
+const ACP_PROVIDER = "acp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -166,6 +167,7 @@ const PROVIDERS = [
   OPENCODE_PROVIDER,
   PI_PROVIDER,
   OMP_PROVIDER,
+  ACP_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -908,7 +910,8 @@ function isAccountIsolatedProviderDriver(
     provider === "grok" ||
     provider === "opencode" ||
     provider === "pi" ||
-    provider === "omp"
+    provider === "omp" ||
+    provider === "acp"
   );
 }
 
@@ -932,6 +935,7 @@ export const makeProviderUpdateEnv = (
     case "opencode":
     case "pi":
     case "omp":
+    case "acp":
       return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
@@ -2153,6 +2157,105 @@ export const checkOmpProviderStatus = (
         : "OMP CLI is installed. Configure provider credentials inside the OMP app as needed.",
     } satisfies ServerProviderStatus;
   });
+
+/** Liveness probe for a configured ACP agent instance: `<command> --version`. */
+export const checkAcpProviderStatus = (
+  command?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: ProviderInstanceId,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = command?.trim();
+    if (!executable) {
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        installed: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "No agent command configured for this ACP provider instance.",
+      } satisfies ServerProviderStatus;
+    }
+    const probeEnvResult = tryMakeProviderProbeEnv(ACP_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(ACP_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const versionProbe = yield* probeProviderCliVersion(
+      runAcpCommand(["--version"], executable, probeEnvResult.env),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? `The ACP agent command '${executable}' is not on PATH.`
+            : `ACP agent health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "ACP agent health check timed out before Synara could verify the command.",
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "nonzero") {
+      const detail = detailFromResult(versionProbe.result);
+      return {
+        provider: ACP_PROVIDER,
+        instanceId: instanceId ?? ACP_PROVIDER,
+        driver: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `ACP agent health check failed. ${detail}`
+          : "ACP agent health check failed.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    return {
+      provider: ACP_PROVIDER,
+      instanceId: instanceId ?? ACP_PROVIDER,
+      driver: ACP_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: `ACP agent '${executable}' is installed. Authenticate it in its own CLI as needed.`,
+    } satisfies ServerProviderStatus;
+  });
+
+const runAcpCommand = (args: ReadonlyArray<string>, executable: string, env: NodeJS.ProcessEnv) =>
+  runProviderCommand(executable, args, { env }).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
 // ── Antigravity CLI health check ──────────────────────────────────
 
@@ -3470,6 +3573,18 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 readInstanceConfigString(instance, "agentDir"),
                 binaryPath,
                 ompOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "acp": {
+            const acpOptions = providerStartOptionsFromInstance(instance)?.acp;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              checkAcpProviderStatus(
+                readInstanceConfigString(instance, "command") ?? acpOptions?.command ?? binaryPath,
+                acpOptions?.environment,
                 instance.instanceId,
                 { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
               ),

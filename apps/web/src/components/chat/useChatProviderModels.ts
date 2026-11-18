@@ -235,6 +235,7 @@ export function useChatProviderModels({
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
       omp: resolveHint("omp"),
+      acp: resolveHint("acp"),
     };
   }, [
     activeProject?.defaultModelSelection,

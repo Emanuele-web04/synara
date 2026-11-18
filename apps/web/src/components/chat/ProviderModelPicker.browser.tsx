@@ -75,6 +75,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   omp: [],
+  acp: [],
   antigravity: [
     {
       slug: "Gemini 3.5 Flash",

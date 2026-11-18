@@ -32,6 +32,7 @@ import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
+import { AcpAdapter } from "../Services/AcpAdapter.ts";
 import { OmpAdapter } from "../Services/OmpAdapter.ts";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -230,6 +231,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* DroidAdapter,
             yield* OpenCodeAdapter,
             yield* OmpAdapter,
+            yield* AcpAdapter,
             yield* PiAdapter,
           ];
 

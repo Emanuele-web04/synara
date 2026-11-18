@@ -29,6 +29,7 @@ const GENERIC_DRIVER_BY_PROVIDER = {
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
+  acp: "acp",
 } as const;
 
 const PROFILE_ENVIRONMENT_KEYS = new Set([
