@@ -346,6 +346,11 @@ and workflows 55.72 s and 44.36 s. The slowest ChatView lane fell from
 quarantined cases still run in the geometry lane. GitHub schedules six
 browser jobs. The final layout has yet to run on hosted Linux.
 
+The workflows lane starts transforming ChatView and its routes while Chromium
+launches. One matched A/B on the Mac mini used fresh Vite and compiler caches
+and passed the same 131 cases in both variants. Imports fell from 26.9 s to
+23.4 s per process and lane wall time fell from 76.36 s to 74.05 s.
+
 ### Desktop lifecycle smoke during the build
 
 The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it

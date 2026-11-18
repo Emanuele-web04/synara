@@ -82,6 +82,16 @@ export default defineConfig({
       },
       {
         extends: true,
+        // Start the shared app route transforms while Chromium starts.
+        server: {
+          warmup: {
+            clientFiles: [
+              "./src/components/ChatView.tsx",
+              "./src/routes/_chat.tsx",
+              "./src/routes/_chat.$threadId.tsx",
+            ],
+          },
+        },
         test: {
           name: "chat-workflows",
           include: [chatViewFile],
