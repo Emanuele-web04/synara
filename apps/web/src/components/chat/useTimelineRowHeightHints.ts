@@ -26,20 +26,6 @@ function readTimelineFontKey(): string {
   ]);
 }
 
-// The list measures every new row in one synchronous pass; the typography variables
-// cannot change inside it, so one read serves the whole pass instead of one
-// getComputedStyle + JSON.stringify per row. Cleared at the next microtask.
-let fontKeyForCurrentTask: string | null = null;
-function readTimelineFontKeyOncePerTask(): string {
-  if (fontKeyForCurrentTask !== null) return fontKeyForCurrentTask;
-  const fontKey = readTimelineFontKey();
-  fontKeyForCurrentTask = fontKey;
-  queueMicrotask(() => {
-    fontKeyForCurrentTask = null;
-  });
-  return fontKey;
-}
-
 export function useTimelineRowHeightHints(
   listRef: RefObject<LegendListRef | null>,
   chatFontSizePx: number,
@@ -62,7 +48,7 @@ export function useTimelineRowHeightHints(
     if (width > 0) {
       rowWidthPxRef.current = width;
       rowWidthMeasuredRef.current = true;
-      fontKeyRef.current = readTimelineFontKeyOncePerTask();
+      fontKeyRef.current = readTimelineFontKey();
     }
   }, [listRef]);
 
@@ -101,7 +87,7 @@ export function useTimelineRowHeightHints(
       // rebuilt after render, so the report carries no row or the row now at that index.
       if (itemData?.id !== itemKey) return;
       if (!rowWidthMeasuredRef.current) measureRowWidth();
-      fontKeyRef.current = readTimelineFontKeyOncePerTask();
+      fontKeyRef.current = readTimelineFontKey();
       rememberTimelineRowHeight(
         itemKey,
         { rowWidthPx: rowWidthPxRef.current, chatFontSizePx, fontKey: fontKeyRef.current },
