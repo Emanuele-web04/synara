@@ -243,6 +243,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Chromium restores to its own directory while the workspace installs.
+      - name: Restore Chromium headless shell
+        id: chromium-cache
+        uses: actions/cache/restore@v5
+        background: true
+        with:
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-${{ hashFiles('bun.lock') }}
+
       # React Compiler only compiles the browser (client) environment, so the
       # node unit lanes have nothing to reuse. Each browser lane loads a
       # different module set, so each owns its own archive.
@@ -252,11 +261,8 @@ jobs:
           scope: "web"
           web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
 
-      - name: Cache Chromium headless shell
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/playwright-headless
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-${{ hashFiles('bun.lock') }}
+      - name: Wait for Chromium cache
+        wait: chromium-cache
 
       # GitHub's pinned Ubuntu image already provides the Chromium shared-library
       # dependencies used by this stable suite. Avoid a redundant apt/font pass on
@@ -268,6 +274,17 @@ jobs:
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           cd apps/web
           ./node_modules/.bin/playwright install chromium --only-shell
+
+      # One lane saves the shared key after Playwright has installed the shell.
+      - name: Save Chromium headless shell
+        if: >-
+          matrix.project == 'chat-follow' &&
+          steps.chromium-cache.outputs.cache-hit != 'true' &&
+          steps.chromium-cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
 
       - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
         if: ${{ !matrix.shardA }}

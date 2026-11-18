@@ -419,8 +419,30 @@ test("measured critical-path distribution stays three-way and skips redundant ap
     browserPair?.map((step) => step.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED),
     ["true", "true"],
   );
-  const runtime = jobs.browser.steps.find((step) => step.name === "Install browser test runtime");
-  const cache = jobs.browser.steps.find((step) => step.name === "Cache Chromium headless shell");
+  const browserSteps = jobs.browser.steps;
+  const checkoutIndex = browserSteps.findIndex((step) => step.name === "Checkout");
+  const cacheIndex = browserSteps.findIndex((step) => step.id === "chromium-cache");
+  const setupIndex = browserSteps.findIndex((step) => step.name === "Setup workspace");
+  const waitIndex = browserSteps.findIndex((step) => step.wait === "chromium-cache");
+  const installIndex = browserSteps.findIndex(
+    (step) => step.name === "Install browser test runtime",
+  );
+  const saveIndex = browserSteps.findIndex((step) => step.name === "Save Chromium headless shell");
+  const firstTestIndex = browserSteps.findIndex((step) => step.name?.startsWith("Browser test ("));
+  const cache = browserSteps[cacheIndex];
+  const runtime = browserSteps[installIndex];
+  const save = browserSteps[saveIndex];
+  assert.ok(checkoutIndex >= 0 && checkoutIndex < cacheIndex && cacheIndex < setupIndex);
+  assert.ok(setupIndex < waitIndex && waitIndex < installIndex);
+  assert.ok(installIndex < saveIndex && saveIndex < firstTestIndex);
+  assert.equal(cache.uses, "actions/cache/restore@v5");
+  assert.equal(cache.background, true);
+  assert.equal(save.uses, "actions/cache/save@v5");
+  assert.equal(save.with.path, cache.with.path);
+  assert.equal(save.with.key, "${{ steps.chromium-cache.outputs.cache-primary-key }}");
+  assert.match(save.if, /matrix\.project == 'chat-follow'/);
+  assert.match(save.if, /steps\.chromium-cache\.outputs\.cache-hit != 'true'/);
+  assert.match(save.if, /steps\.chromium-cache\.outputs\.cache-primary-key != ''/);
   assert.ok(runtime.run.includes("./node_modules/.bin/playwright install chromium --only-shell"));
   assert.ok(!runtime.run.includes("--with-deps"));
   assert.ok(runtime.run.includes('PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-headless"'));

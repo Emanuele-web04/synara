@@ -177,6 +177,15 @@ stable CI setup uses `playwright install chromium --only-shell` with a dedicated
 cache. The browser config launches Playwright's default headless Chromium.
 Nightly geometry retains `--with-deps` for its font and layout checks.
 
+The stable browser jobs restore Chromium while setting up the workspace and
+wait for both before running the Playwright installer. On a miss, only
+`chat-follow` saves the original cache key after installation. In the cold
+[pilot](https://github.com/Emanuele-web04/synara/actions/runs/44200709891),
+all six jobs compressed the same archive and five lost the reservation.
+In a [run with a warm Chromium cache](https://github.com/Emanuele-web04/synara/actions/runs/44326104528),
+the six serial restores occupied 23 runner-seconds, including 3 seconds on the
+critical job. Those durations bound the savings from overlap in that trace.
+
 ### ChatView three-way distribution
 
 The same benchmark compared the current two complementary ChatView projects with
