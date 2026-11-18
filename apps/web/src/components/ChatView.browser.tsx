@@ -4621,6 +4621,8 @@ describe("ChatView transcript geometry (full app)", () => {
         "Remote destination Space header missing",
       );
       header.querySelector<HTMLButtonElement>('button[aria-label="Add project"]')!.click();
+      // The dialog focuses the name field on the next frame, which closes an open picker.
+      await expect.element(page.getByRole("textbox", { name: "Project name" })).toHaveFocus();
       await page.getByRole("button", { name: "Project computer: This computer" }).click();
       await page.getByRole("menuitem", { name: /Remote test computer/ }).click();
       await page.getByLabelText("Project folder path").fill(workspaceRoot);
@@ -4648,6 +4650,7 @@ describe("ChatView transcript geometry (full app)", () => {
         name: `Project actions for ${projectName} on Remote test computer`,
       });
       const remove = page.getByRole("menuitem", { name: "Remove project", exact: true });
+      const rename = page.getByRole("menuitem", { name: "Rename project", exact: true });
       const openProjectActions = async () => {
         await projectRow.hover();
         await actions.click();
@@ -4671,9 +4674,10 @@ describe("ChatView transcript geometry (full app)", () => {
         },
       });
       await openProjectActions();
-      await expect.element(page.getByRole("menuitem", { name: "Rename project" })).toBeVisible();
+      await expect.element(rename).toBeVisible();
       await expect.element(remove).not.toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
+      await expect.element(rename).not.toBeInTheDocument();
 
       updateWorkspaceSession(hostId, {
         summary: { state: "open", path: "/", projects, threads: [] },
