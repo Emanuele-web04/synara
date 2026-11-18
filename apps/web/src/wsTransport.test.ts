@@ -3499,6 +3499,37 @@ describe("WsTransport", () => {
     expect(sockets.length).toBe(socketsBefore);
   }, 10_000);
 
+  it("declines compression on the desktop's own feature socket and nowhere else", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    const desktopUrl = "ws://127.0.0.1:53036/?token=old";
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: { protocol: "http:", hostname: "localhost", port: "3020" },
+        desktopBridge: { getWsUrl: () => desktopUrl },
+        setTimeout: globalThis.setTimeout.bind(globalThis),
+        clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      },
+    });
+    const flag = (index: number) =>
+      new URL(sockets[index]!.url).searchParams.get(WS_FEATURE_UNCOMPRESSED_QUERY.name);
+
+    const local = new WsTransport();
+    await waitForSockets(1);
+    expect(flag(0)).toBe(WS_FEATURE_UNCOMPRESSED_QUERY.value);
+
+    // Same loopback address, but an explicit URL: a host or execution transport.
+    const explicit = new WsTransport(desktopUrl);
+    await waitForSockets(2);
+    expect(flag(1)).toBeNull();
+
+    await local.dispose();
+    await explicit.dispose();
+  });
+
   it("uses the desktop bridge URL before falling back to the browser location", async () => {
     const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {

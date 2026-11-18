@@ -1159,7 +1159,8 @@ export class WsTransport {
     this.declineCompression = shouldDeclineCompressionForLocalBackend({
       constructedWithUrl: url !== undefined,
       socketUrl: this.explicitUrl,
-      inWorkspaceFrame: readWorkspaceFrame() !== null,
+      // readWorkspaceFrame() is undefined outside a frame (never null).
+      inWorkspaceFrame: readWorkspaceFrame() !== undefined,
       desktopWsUrl: window.desktopBridge?.getWsUrl?.(),
       browserOverride: readLocalBackendUncompressedOverride(),
     });
