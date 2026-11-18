@@ -139,17 +139,36 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
           ${{ inputs.web-transform-fallback != '' && format('{0}-{1}-web-transform-v2-{2}-{3}-', runner.os, runner.arch, inputs.web-transform-fallback, steps.web-transform-key.outputs.fingerprint) || '' }}
 
+    # A browser process that exits mid-compile leaves its claim directory or
+    # staging file behind, and a later save would archive it. Drop both so no
+    # run waits on a claim whose owner is gone.
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}
       shell: bash
-      run: echo "SYNARA_WEB_TRANSFORM_CACHE_DIR=$RUNNER_TEMP/web-transform-cache" >> "$GITHUB_ENV"
+      run: |
+        cache="$RUNNER_TEMP/web-transform-cache"
+        if [ -d "$cache" ]; then
+          find "$cache" -type d -name '*.lock' -prune -exec rm -rf {} +
+          find "$cache" -type f -name '*.tmp' -delete
+        fi
+        echo "SYNARA_WEB_TRANSFORM_CACHE_DIR=$cache" >> "$GITHUB_ENV"
+
+    # Keyed by the Electron resolution alone, so release version bumps that
+    # rewrite bun.lock keep the downloaded runtime.
+    - name: Fingerprint Electron runtime
+      id: electron-key
+      if: ${{ inputs.electron == 'true' }}
+      shell: bash
+      run: |
+        fingerprint="$(node .github/scripts/lockfile-package-key.mjs electron)"
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}
       uses: actions/cache@v5
       with:
         path: ~/.cache/electron
-        key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-electron-v2-${{ steps.electron-key.outputs.fingerprint }}
 
     - name: Install dependencies
       shell: bash

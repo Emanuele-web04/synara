@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { compilerCacheFingerprint } from "../../apps/web/scripts/compiler-cache-key.ts";
+import { lockfilePackageFingerprint } from "./lockfile-package-key.mjs";
 import { workspaceInstallFingerprint } from "../../scripts/ci-install-key.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -454,6 +455,97 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
 });
+test("runtime caches key on their own lockfile resolutions", () => {
+  const steps = Object.fromEntries(
+    setup
+      .split("\n    - name: ")
+      .slice(1)
+      .map((step) => [step.split("\n")[0], step]),
+  );
+  const electronKey = steps["Fingerprint Electron runtime"];
+  assert.ok(electronKey.includes("id: electron-key"));
+  assert.ok(electronKey.includes("if: ${{ inputs.electron == 'true' }}"));
+  assert.ok(
+    electronKey.includes('fingerprint="$(node .github/scripts/lockfile-package-key.mjs electron)"'),
+  );
+  assert.ok(setup.indexOf(electronKey) < setup.indexOf(steps["Cache Electron runtime"]));
+  assert.ok(
+    steps["Cache Electron runtime"].includes(
+      "key: ${{ runner.os }}-${{ runner.arch }}-electron-v2-${{ steps.electron-key.outputs.fingerprint }}",
+    ),
+  );
+
+  const browserSteps = jobs.browser.steps;
+  const keyIndex = browserSteps.findIndex((step) => step.id === "chromium-key");
+  const cacheIndex = browserSteps.findIndex((step) => step.id === "chromium-cache");
+  assert.ok(keyIndex > 0 && keyIndex < cacheIndex, "the key exists before the background restore");
+  assert.equal(browserSteps[keyIndex].uses, undefined, "the runner's own Node computes it");
+  assert.ok(
+    browserSteps[keyIndex].run.includes(
+      'fingerprint="$(node .github/scripts/lockfile-package-key.mjs playwright playwright-core)"',
+    ),
+  );
+  assert.equal(
+    browserSteps[cacheIndex].with.key,
+    "${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-v2-${{ steps.chromium-key.outputs.fingerprint }}",
+  );
+
+  const lockfile = `{
+    "lockfileVersion": 1,
+    "workspaces": {
+      "apps/web": { "name": "@synara/web", "version": "1.5.4" },
+    },
+    "packages": {
+      "@axe-core/playwright": ["@axe-core/playwright@4.13.0", "", {}, "sha512-axe"],
+      "@electron/get": ["@electron/get@5.0.0", "", {}, "sha512-get"],
+      "betterwright/playwright-core": ["playwright-core@1.61.1", "", {}, "sha512-nested"],
+      "electron": ["electron@43.8.7", "", {}, "sha512-electron"],
+      "playwright": ["playwright@1.62.1", "", {}, "sha512-playwright"],
+      "playwright-core": ["playwright-core@1.62.1", "", {}, "sha512-core"],
+    },
+  }`;
+  const playwright = (contents) =>
+    lockfilePackageFingerprint(contents, ["playwright", "playwright-core"]);
+  const electron = (contents) => lockfilePackageFingerprint(contents, ["electron"]);
+  assert.equal(playwright(lockfile.replace("1.5.4", "1.6.2")), playwright(lockfile));
+  assert.equal(electron(lockfile.replace("1.5.4", "1.6.2")), electron(lockfile));
+  assert.equal(playwright(lockfile.replace("sha512-axe", "sha512-other")), playwright(lockfile));
+  assert.equal(electron(lockfile.replace("sha512-get", "sha512-other")), electron(lockfile));
+  assert.notEqual(playwright(lockfile.replace("core@1.62.1", "core@1.63.0")), playwright(lockfile));
+  assert.notEqual(playwright(lockfile.replace("core@1.61.1", "core@1.61.2")), playwright(lockfile));
+  assert.notEqual(
+    electron(lockfile.replace("electron@43.8.7", "electron@43.9.0")),
+    electron(lockfile),
+  );
+  assert.throws(() => lockfilePackageFingerprint(lockfile, ["missing"]), /no entry for missing/);
+});
+test("a restored compiler cache drops claims and staging files from interrupted processes", () => {
+  const enable = setup.match(
+    /- name: Enable web transform cache[\s\S]*?      run: \|\n([\s\S]*?)(?=\n\n|\n    - name:)/,
+  )?.[1];
+  assert.ok(enable, "The actual setup shell must be covered");
+  const scratch = mkdtempSync(join(tmpdir(), "synara-transform-claims-"));
+  try {
+    const cache = join(scratch, "web-transform-cache");
+    mkdirSync(join(cache, "ab", "abcd.json.lock"), { recursive: true });
+    writeFileSync(join(cache, "ab", "abcd.json"), "{}");
+    writeFileSync(join(cache, "ab", "abcd.json.123.1.tmp"), "partial");
+    const githubEnv = join(scratch, "github-env");
+    const result = spawnSync("bash", ["-e", "-c", enable.replace(/^        /gm, "")], {
+      encoding: "utf8",
+      env: { ...process.env, RUNNER_TEMP: scratch, GITHUB_ENV: githubEnv },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const listing = spawnSync("find", [cache, "-mindepth", "1"], { encoding: "utf8" })
+      .stdout.trim()
+      .split("\n")
+      .toSorted();
+    assert.deepEqual(listing, [join(cache, "ab"), join(cache, "ab", "abcd.json")]);
+    assert.equal(readFileSync(githubEnv, "utf8"), `SYNARA_WEB_TRANSFORM_CACHE_DIR=${cache}\n`);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 test("Windows uses the runner-volume cache and Web installs only its dependency closure", () => {
   const install = setup.match(
     /- name: Install dependencies[\s\S]*?      run: \|\n([\s\S]*?)(?=\n    - name:)/,
@@ -537,7 +629,16 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   // Web Unit selects the two other projects. A missing compiler file must
   // therefore fail the Core lane instead of silently passing the required gate.
   assert.equal(compiler?.if, "matrix.pkg == 'core'");
-  assert.ok(compiler.run.includes("--project=web-compiler --no-passWithNoTests --maxWorkers=1"));
+  assert.ok(compiler.run.includes("--project=web-compiler --no-passWithNoTests --maxWorkers=2"));
+  // ChatView compiles in its own file so both files can run at once.
+  const unitConfig = read("../../apps/web/vitest.unit.ci.config.ts");
+  for (const file of [
+    "src/components/ChatView.compiler.test.ts",
+    "src/components/chatHotPath.compiler.test.ts",
+  ]) {
+    assert.ok(unitConfig.includes(`"${file}"`), file);
+    assert.ok(read(`../../apps/web/${file}`).includes("describeHotPathCompilation("), file);
+  }
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
   // Pinned placement only moves whole files between shards; each shard runs

@@ -135,7 +135,7 @@ describe("browser CI partitions", () => {
     }
   }, 120_000);
 
-  it("places all component files exactly once and moves only the four measured files", async () => {
+  it("places all component files exactly once and moves only the measured files", async () => {
     const shards = [];
     for (let index = 1; index <= 6; index++) {
       shards.push(await collectComponentShard(`${index}/6`));
@@ -145,6 +145,14 @@ describe("browser CI partitions", () => {
     expect(shards.flatMap(({ configured }) => configured).toSorted()).toEqual(all);
 
     const expectedPins = {
+      "src/components/ChatMarkdown.streaming.browser.tsx": 3,
+      "src/components/DiffPanel.browser.tsx": 3,
+      "src/components/EditorWorkspaceView.browser.tsx": 3,
+      "src/components/ProjectImportPanel.browser.tsx": 3,
+      "src/components/WorkspaceSearchPalette.browser.tsx": 3,
+      "src/components/codeEditor/CodeEditorPane.pierre.browser.tsx": 3,
+      "src/components/chat/SubagentsDockPane.browser.tsx": 4,
+      "src/components/chat/group/GroupSettingsDialog.browser.tsx": 4,
       "src/components/EventRouter.browser.tsx": 5,
       "src/components/chat/environment/EnvironmentPullRequestSection.browser.tsx": 6,
       "src/components/chat/GeneratedMarkdownImage.browser.tsx": 6,

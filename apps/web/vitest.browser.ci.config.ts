@@ -20,10 +20,21 @@ const projectSlicePattern = `(?:worktree|queue|queued|handoff|${tabNavigationPat
 const workflowSlicePattern = "(?:[Cc]omposer|[Dd]raft|[Pp]icker|[Ss]hortcut|[Ee]ditor)";
 const chatSlice = process.env.VITEST_BROWSER_CHAT_SLICE;
 
-// Balance the two Chromium processes on components 3/3. All other files use
-// their native shard, and the single-shard ChatView jobs have no pins.
+// Balance the six component processes. EventRouter and three shorter files
+// balance the pair on components 3/3. The files moved to shards 3 and 4 shift
+// work from components 3/3, the slowest job, to components 2/3, the fastest
+// (.github/CI.md). All other files use their native shard, and the
+// single-shard ChatView jobs have no pins.
 const componentSequencer = createPinnedShardSequencer({
   6: {
+    "src/components/ChatMarkdown.streaming.browser.tsx": 3,
+    "src/components/DiffPanel.browser.tsx": 3,
+    "src/components/EditorWorkspaceView.browser.tsx": 3,
+    "src/components/ProjectImportPanel.browser.tsx": 3,
+    "src/components/WorkspaceSearchPalette.browser.tsx": 3,
+    "src/components/codeEditor/CodeEditorPane.pierre.browser.tsx": 3,
+    "src/components/chat/SubagentsDockPane.browser.tsx": 4,
+    "src/components/chat/group/GroupSettingsDialog.browser.tsx": 4,
     "src/components/EventRouter.browser.tsx": 5,
     "src/components/chat/environment/EnvironmentPullRequestSection.browser.tsx": 6,
     "src/components/chat/GeneratedMarkdownImage.browser.tsx": 6,

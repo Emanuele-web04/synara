@@ -195,7 +195,8 @@ jobs:
         run: node scripts/node-pty-smoke.mjs
 
       # Core already installs the Web dependencies and can run the long
-      # compiler check alongside its own tests on the same runner.
+      # compiler check alongside its own tests on the same runner. ChatView
+      # and the other hot-path modules are two files, one worker each.
       - parallel:
           - name: Test (${{ matrix.pkg }})
             run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
@@ -205,7 +206,7 @@ jobs:
             run: >-
               bun run --cwd apps/web test --
               --config=vitest.unit.ci.config.ts --project=web-compiler
-              --no-passWithNoTests --maxWorkers=1
+              --no-passWithNoTests --maxWorkers=2
 
   # ChatView is one large file, so split it by complementary test-name groups.
   # Each ChatView job runs two name groups on one runner. The component jobs
@@ -251,6 +252,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Key Chromium by the Playwright resolutions alone, so release version
+      # bumps keep the archive. The runner's own Node reads the lockfile.
+      - name: Fingerprint Chromium runtime
+        id: chromium-key
+        run: |
+          fingerprint="$(node .github/scripts/lockfile-package-key.mjs playwright playwright-core)"
+          printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
       # Chromium restores to its own directory while the workspace installs.
       - name: Restore Chromium headless shell
         id: chromium-cache
@@ -258,7 +267,7 @@ jobs:
         background: true
         with:
           path: ${{ runner.temp }}/playwright-headless
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-v2-${{ steps.chromium-key.outputs.fingerprint }}
 
       # React Compiler only compiles the browser (client) environment, so the
       # node unit lanes have nothing to reuse. Each browser lane loads a

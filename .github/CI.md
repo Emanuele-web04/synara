@@ -308,6 +308,17 @@ multiplicity. The rebalanced hosted job passed in 169 s. Its preceding
 sample took 211 s. Both restored the browser caches.
 [Rebalanced hosted job](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
 
+With those four pins, components 3/3 was the slowest component job in both
+hosted runs that restored their caches, and components 2/3 was the fastest.
+In [run 44368935032](https://github.com/Emanuele-web04/synara/actions/runs/44368935032)
+the halves took 121 s (`1/6`), 128 s, 129 s, 141 s, 173 s and 171 s (`6/6`).
+Eight more pins move six short files from `5/6` to `3/6` and two from `6/6`
+to `4/6`. In that run they took about 27 s of the `5/6` half and 13 s of the
+`6/6` half. On the Mac mini with the main-merged file set, a warm compiler
+cache and the three pairs run like CI, the slowest half fell from 66.8 s to
+61.2 s. The range narrowed from 55.1–66.8 s to 54.8–61.2 s, and all 1,426
+cases kept their outcomes. Hosted timing for the new placement is pending.
+
 The keybindings warning case shares EventRouter's real route and WebSocket
 fixture. The former standalone file mounted the app twice. In two cold hosted
 runs that file took 81–83 s, with 1–3 s in the test body. On the Mac mini
@@ -352,6 +363,13 @@ On the Mac mini, the complete cold `chat-workflows` pair took 90.54 s before and
 331.18 s to 250.37 s. The final runs passed the same 149 cases, and all 1,507
 common compiler cache entries were byte-identical. The hosted impact remains
 unmeasured.
+
+A process that exits during a compile leaves its `.lock` claim directory, and
+a failed write can leave a `.tmp` staging file. If a later save archived the
+claim, every run restoring that archive would wait 30 s for the module before
+compiling it independently. The setup action deletes both kinds of leftovers
+from a restored archive before any test process starts. The CI contract test
+runs that exact shell against a fixture cache.
 
 The follow lane now runs the streaming-follow matrix in one process and its
 other cases in the second. Pane and detached-reading cases join the second
@@ -403,6 +421,18 @@ server reporter test.
 [Cold run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1),
 [Warm run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/2)
 
+The Chromium archive is keyed by the `playwright` and `playwright-core`
+entries in `bun.lock`, and the Electron download cache by the `electron`
+entry. `.github/scripts/lockfile-package-key.mjs` hashes those lines,
+including nested resolutions. Release version bumps rewrite `bun.lock`
+without touching them, so both archives survive a release. Keyed by the whole
+lockfile, every release forced six browser jobs to download Chromium again
+and Desktop Build to download Electron. The script is plain JavaScript because
+browser jobs compute the key with the runner's own Node, before workspace
+setup. Turbo keeps its lockfile key. Turbo task hashes include each package's
+`package.json`, so a release bump misses every task whichever archive is
+restored.
+
 ### Web Unit worker-pool trial
 
 Mac mini comparisons through Turbo used three workers with the Vitest result
@@ -451,8 +481,9 @@ samples establish the earlier completion order but no hosted wall-time saving.
 
 The compiler guard now runs alongside the existing Core tests on their
 runner, which already installs the Web dependencies. Web Unit selects the
-other two Vitest projects. The compiler command fails when its file is
-missing, and the required aggregate gate still checks the whole Unit matrix.
+other two Vitest projects. The compiler command fails when neither guard file
+is found, the CI contract test checks that both files exist, and the required
+aggregate gate still checks the whole Unit matrix.
 
 Two local comparisons on the Mac mini included the app source at main
 `5975b5238` and used three Web Unit workers. Moving the compiler guard
@@ -464,6 +495,15 @@ fell from 127.76 s to 112.44 s in that comparison. Reversing the Core run
 order measured 71.91 s before and 70.79 s with the guard. Placing the compiler
 guard alongside warm typechecking instead added about 14 seconds to
 the summed time. Hosted timing remains unverified for the new layout.
+
+In a later Mac mini run, `ChatView.tsx` took 26.68 s of the guard's 37.0 s of
+compile time, `Sidebar.tsx` 6.71 s, and the other 47 modules 3.6 s together.
+Hosted, the single-file guard took 107–139 s on one worker and finished last
+in Core. ChatView now has its own `ChatView.compiler.test.ts`. Both guard
+files register their cases through `src/test/hotPathCompiler.ts`, and Core
+runs them with two workers. On the Mac mini the guard took 32.6 s with two
+workers, against 37.8 s for the single file and 44.7 s for both files on one
+worker. ChatView's own compile sets the floor. Hosted timing is pending.
 
 ## November 2026 critical-path rebalance
 
