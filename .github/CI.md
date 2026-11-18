@@ -299,13 +299,13 @@ results for all 149 assigned cases.
 
 ### ChatView name groups on the same runner
 
-Projects and workflows each keep their existing runner and run two
-complementary name filters in separate Chromium processes. The original
-project and geometry filters still apply to each half. The follow lane uses
-a single process. Each process has its own port and Vite cache
-directory, while both processes use the job's compiler cache.
+Each ChatView lane runs two complementary name filters on its existing runner
+in separate Chromium processes. Each process has its own port and Vite cache
+directory. The two processes share the job's compiler cache. The stable
+geometry quarantine applies to both halves.
 
-On the Mac mini, with fresh Vite caches and warm compiler caches, the
+In the first paired pilot on the Mac mini, with fresh Vite caches and warm
+compiler caches, the
 `chat-projects` sample fell from 70.47 s to 42.38 s. The warm
 `chat-workflows` sample fell from 106.01 s to 58.01 s. The paired runs
 passed all 87 and 149 assigned cases respectively, matching the serial case
@@ -324,6 +324,16 @@ On the Mac mini, the complete cold `chat-workflows` pair took 90.54 s before and
 331.18 s to 250.37 s. The final runs passed the same 149 cases, and all 1,507
 common compiler cache entries were byte-identical. The hosted impact remains
 unmeasured.
+
+The follow lane now runs the streaming-follow matrix in one process and its
+other cases in the second. Pane and detached-reading cases join the second
+follow process. Editor and tab navigation cases join the projects lane.
+With fresh Vite caches and matched warm compiler caches on the Mac mini,
+follow took 64.96 s before and 47.78 s after, projects 41.72 s and 51.26 s,
+and workflows 55.72 s and 44.36 s. The slowest ChatView lane fell from
+64.96 s to 51.26 s. All 265 stable cases passed once per variant. The four
+quarantined cases still run in the geometry lane. GitHub schedules six
+browser jobs. The final layout has yet to run on hosted Linux.
 
 ### Desktop lifecycle smoke during the build
 

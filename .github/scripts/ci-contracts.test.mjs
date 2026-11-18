@@ -430,7 +430,7 @@ test("measured critical-path distribution stays three-way and skips redundant ap
       .filter(({ project }) => project !== "components")
       .map(({ project, shardA, shardB }) => [project, shardA, shardB]),
     [
-      ["chat-follow", undefined, undefined],
+      ["chat-follow", "1/1", "1/1"],
       ["chat-projects", "1/1", "1/1"],
       ["chat-workflows", "1/1", "1/1"],
     ],
@@ -453,7 +453,7 @@ test("measured critical-path distribution stays three-way and skips redundant ap
     (step) => step.name === "Install browser test runtime",
   );
   const saveIndex = browserSteps.findIndex((step) => step.name === "Save Chromium headless shell");
-  const firstTestIndex = browserSteps.findIndex((step) => step.name?.startsWith("Browser test ("));
+  const firstTestIndex = browserSteps.findIndex((step) => step.parallel);
   const cache = browserSteps[cacheIndex];
   const runtime = browserSteps[installIndex];
   const save = browserSteps[saveIndex];

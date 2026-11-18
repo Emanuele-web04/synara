@@ -8,12 +8,15 @@ const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
 const stablePattern = testNamePattern as RegExp;
 // Measured complementary groups keep every stable ChatView case in exactly one lane.
 // The final fallback also owns unknown future stable cases instead of silently skipping them.
-// Sidebar and provider-handoff cases moved from the fallback to balance lane time.
+// Keep pane/follow cases and workspace tab navigation with their related lanes.
 // See .github/CI.md for the paired measurements and runner-time tradeoff.
-const followPattern = "(?:restores streaming follow|anchor|scroll|tool)";
-const projectPattern =
-  "(?:project|worktree|Space|approval|preserves three answers|queued|queue|sidebar|handoff)";
-const projectSlicePattern = "(?:worktree|queue|queued|handoff)";
+const followPattern =
+  "(?:restores streaming follow|anchor|scroll|tool|detached (?:reading|transcript)|\\bpanes?\\b|split widths|split collapses)";
+const followSlicePattern = "restores streaming follow";
+const tabNavigationPattern =
+  "(?:pending editor chat tab switch|horizontal tabs|Cmd/Ctrl\\+W yields to the editor surface)";
+const projectPattern = `(?:project|worktree|Space|approval|preserves three answers|queued|queue|sidebar|handoff|${tabNavigationPattern})`;
+const projectSlicePattern = `(?:worktree|queue|queued|handoff|${tabNavigationPattern})`;
 const workflowSlicePattern = "(?:[Cc]omposer|[Dd]raft|[Pp]icker|[Ss]hortcut|[Ee]ditor)";
 const chatSlice = process.env.VITEST_BROWSER_CHAT_SLICE;
 
@@ -62,7 +65,9 @@ export default defineConfig({
         test: {
           name: "chat-follow",
           include: [chatViewFile],
-          testNamePattern: new RegExp(`${stablePattern.source}(?=.*${followPattern})`),
+          testNamePattern: new RegExp(
+            `${stablePattern.source}(?=.*${followPattern})${sliceCondition(followSlicePattern)}`,
+          ),
         },
       },
       {

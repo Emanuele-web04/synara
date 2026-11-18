@@ -35,7 +35,9 @@ async function collectChatSlices() {
   }
   return slices.filter(
     ({ project }) =>
-      project === "chat-projects (chromium)" || project === "chat-workflows (chromium)",
+      project === "chat-follow (chromium)" ||
+      project === "chat-projects (chromium)" ||
+      project === "chat-workflows (chromium)",
   );
 }
 
@@ -75,10 +77,7 @@ describe("browser CI partitions", () => {
     for (const file of stableFiles) {
       const owners = partitions.filter((partition) => partition.file === file);
       if (file.endsWith("/ChatView.browser.tsx")) {
-        const ciOwners = [
-          ...owners.filter(({ project }) => project === "chat-follow (chromium)"),
-          ...pairedPartitions.filter((partition) => partition.file === file),
-        ];
+        const ciOwners = pairedPartitions.filter((partition) => partition.file === file);
         expect(owners.map(({ project }) => project).sort()).toEqual([
           "chat-follow (chromium)",
           "chat-projects (chromium)",
@@ -90,6 +89,9 @@ describe("browser CI partitions", () => {
           [`${geometry} restores streaming follow after wheel`, "chat-follow"],
           ["keeps scroll anchor stable", "chat-follow"],
           ["renders tool activity", "chat-follow"],
+          ["does not rearm detached reading for non-message activity", "chat-follow"],
+          ["keeps the surviving non-route chat mounted when a split collapses", "chat-follow"],
+          ["closes only the inactive ordinary source pane", "chat-follow"],
           // Follow keywords keep precedence over the projects group.
           [
             `${geometry} keeps subagents out of the sidebar while navigating ('click', scroll takeover: false)`,
@@ -99,6 +101,8 @@ describe("browser CI partitions", () => {
           ["new worktree", "chat-projects"],
           ["approval already answered", "chat-projects"],
           ["queued composer request", "chat-projects"],
+          ["cancels a pending editor chat tab switch after inflight", "chat-projects"],
+          ["switches horizontal tabs without blanking the header or composer", "chat-projects"],
           [`${geometry} keeps sidebar shortcut hints clear of row content`, "chat-projects"],
           [
             `${geometry} provider handoff destination hands the thread off before sending`,

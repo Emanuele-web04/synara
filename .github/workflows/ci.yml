@@ -206,8 +206,8 @@ jobs:
               --no-passWithNoTests --maxWorkers=1
 
   # ChatView is one large file, so split it by complementary test-name groups.
-  # Projects and workflows each use two name groups on the same runner, while
-  # the component jobs each run two Vitest file shards.
+  # Each ChatView job runs two name groups on one runner. The component jobs
+  # each run two Vitest file shards.
   # Each browser process still executes files serially.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
@@ -223,6 +223,8 @@ jobs:
         include:
           - project: chat-follow
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: chat-projects
             shard: 1/1
             shardA: 1/1
@@ -290,16 +292,10 @@ jobs:
           path: ${{ runner.temp }}/playwright-headless
           key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
 
-      - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
-        if: ${{ !matrix.shardA }}
-        timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
-
       # Share cold compiler work by cache key. Vite's optimizer cache and the
       # browser API listener still need a separate directory and port.
       - parallel:
           - name: Browser test (${{ matrix.project }} ${{ matrix.shardA }} A)
-            if: matrix.shardA
             timeout-minutes: 20
             env:
               SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
@@ -309,7 +305,6 @@ jobs:
             run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardA }}
 
           - name: Browser test (${{ matrix.project }} ${{ matrix.shardB }} B)
-            if: matrix.shardB
             timeout-minutes: 20
             env:
               SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
