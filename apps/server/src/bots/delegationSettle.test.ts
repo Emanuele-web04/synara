@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateDelegationSettlement, type SettleItem, type SettleTurn } from "./delegationSettle";
+import {
+  evaluateDelegationSettlement,
+  type SettleItem,
+  type SettleOnward,
+  type SettleTurn,
+} from "./delegationSettle";
 
 const NOW = Date.parse("2026-11-05T12:00:00.000Z");
 const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
@@ -30,6 +35,13 @@ const evaluate = (turns: SettleTurn[], items: SettleItem[] = [], active: string 
     sessionActiveTurnId: active,
     nowMs: NOW,
   });
+
+const onward = (overrides: Partial<SettleOnward>): SettleOnward => ({
+  fromTurnId: "t1",
+  reportMessageId: null,
+  reportedAt: null,
+  ...overrides,
+});
 
 describe("evaluateDelegationSettlement", () => {
   it("is sent until the target turn exists, working while it runs", () => {
@@ -81,5 +93,72 @@ describe("evaluateDelegationSettlement", () => {
     expect(evaluate([turn({})], [item({ state: "failed" }), item({ id: "w2" })]).outcome).toBe(
       "completed",
     );
+  });
+
+  describe("work handed on", () => {
+    const evaluateChain = (turns: SettleTurn[], children: SettleOnward[]) =>
+      evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns,
+        attributableMessageIds: new Set(),
+        items: [],
+        onward: children,
+        sessionActiveTurnId: null,
+        nowMs: NOW,
+      });
+    const reportWake = turn({
+      turnId: "t2",
+      pendingMessageId: "synbot:report:r1",
+      requestedAt: at(200),
+      completedAt: at(100),
+      assistantMessageId: "a2",
+    });
+
+    it("stays working while a hand-off from the delegated turn is not reported", () => {
+      expect(evaluateChain([turn({})], [onward({})]).state).toBe("working");
+      // A hand-off from another turn of the target's is not this delegation's work.
+      expect(evaluateChain([turn({})], [onward({ fromTurnId: "t-other" })]).state).toBe("settled");
+    });
+
+    it("waits for the turn the report wakes, then settles with its answer", () => {
+      const reported = onward({ reportMessageId: "synbot:report:r1", reportedAt: at(250) });
+      // Reported a moment ago, and the wake has not started yet.
+      expect(evaluateChain([turn({})], [{ ...reported, reportedAt: at(30) }]).state).toBe(
+        "working",
+      );
+      // The wake runs: still working, and it counts as the delegation's turn.
+      const running = evaluateChain(
+        [
+          turn({}),
+          { ...reportWake, state: "running", completedAt: null, assistantMessageId: null },
+        ],
+        [reported],
+      );
+      expect(running.state).toBe("working");
+      expect(running.turnIds).toEqual(["t1", "t2"]);
+      // The wake answered: the delegation settles with that answer.
+      const settled = evaluateChain([turn({}), reportWake], [reported]);
+      expect(settled.state).toBe("settled");
+      expect(settled.outcome).toBe("completed");
+      expect(settled.lastAssistantMessageId).toBe("a2");
+    });
+
+    it("follows a wake that hands work on again", () => {
+      const first = onward({ reportMessageId: "synbot:report:r1", reportedAt: at(250) });
+      const second = onward({ fromTurnId: "t2" });
+      expect(evaluateChain([turn({}), reportWake], [first, second]).state).toBe("working");
+    });
+
+    it("stops holding on for a stopped hand-off or a report that never woke anyone", () => {
+      // Stopped by the user: closed without a report message.
+      expect(evaluateChain([turn({})], [onward({ reportedAt: at(250) })]).state).toBe("settled");
+      // Reported long ago, and no wake ever showed up.
+      expect(
+        evaluateChain(
+          [turn({})],
+          [onward({ reportMessageId: "synbot:report:r1", reportedAt: at(300) })],
+        ).state,
+      ).toBe("settled");
+    });
   });
 });

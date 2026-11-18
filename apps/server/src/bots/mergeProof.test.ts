@@ -59,11 +59,12 @@ const detail = (overrides: Partial<PullRequestDetail> = {}): PullRequestDetail =
   ...overrides,
 });
 
-const evaluate = (overrides: Partial<PullRequestDetail> = {}, patch = "") =>
+const evaluate = (overrides: Partial<PullRequestDetail> = {}, patch = "", patchComplete = true) =>
   evaluateMergeProof({
     threadId: ThreadId.makeUnsafe("worker"),
     detail: detail(overrides),
     patch,
+    patchComplete,
     checkedAt: "2026-11-05T00:00:00.000Z",
   });
 
@@ -91,6 +92,20 @@ describe("evaluateMergeProof", () => {
     expect(evaluate({ isDraft: true }).ready).toBe(false);
     expect(evaluate({ checks: [] })).toMatchObject({ ready: false, checks: "none" });
     expect(evaluate({ state: "merged" })).toMatchObject({ ready: false, state: "merged" });
+    expect(evaluate({ state: "closed" })).toMatchObject({ ready: false, state: "closed" });
+    expect(evaluate({ mergeStateStatus: "BLOCKED" }).ready).toBe(false);
+    expect(evaluate({ mergeability: "conflicting" })).toMatchObject({
+      ready: false,
+      conflicts: true,
+    });
+  });
+
+  it("blocks without a known head, since Merge pins the head the user saw", () => {
+    expect(evaluate({ commits: [] })).toMatchObject({ ready: false, headSha: "unknown" });
+  });
+
+  it("blocks when the patch could not be read whole, so red flags are not ruled out", () => {
+    expect(evaluate({}, "", false).ready).toBe(false);
   });
 });
 

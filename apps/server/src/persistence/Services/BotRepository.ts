@@ -108,6 +108,11 @@ export interface BotRepositoryShape {
     readonly fromThreadId: ThreadId;
     readonly fromTurnId: string | null;
   }) => Effect.Effect<readonly BotDelegationRecord[], BotRepositoryError>;
+  /** Delegations a bot thread handed out since `since`, oldest first. */
+  readonly listDelegationsFromThread: (input: {
+    readonly fromThreadId: ThreadId;
+    readonly since: string;
+  }) => Effect.Effect<readonly BotDelegationRecord[], BotRepositoryError>;
   readonly listDelegationsByReportMessage: (
     messageId: string,
   ) => Effect.Effect<readonly BotDelegationRecord[], BotRepositoryError>;

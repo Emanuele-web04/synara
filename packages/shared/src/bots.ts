@@ -258,7 +258,8 @@ export function botScopePathMatches(path: string, globs: readonly string[]): boo
   if (globs.length === 0) return true;
   const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
   return globs.some((glob) => {
-    const trimmed = glob.trim();
+    // "./apps/web" names the same folder as "apps/web".
+    const trimmed = glob.trim().replace(/^\.\//, "");
     if (!trimmed) return false;
     // A bare folder ("apps/web") covers everything inside it.
     if (!/[*?]/.test(trimmed)) {

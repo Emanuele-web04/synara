@@ -46,7 +46,8 @@ export interface BotDelegationContext {
   readonly humanRooted: boolean;
 }
 
-const clip = (text: string, max: number) => {
+/** `text` trimmed to at most `max` characters, an ellipsis marking a cut. */
+export const clip = (text: string, max: number) => {
   const trimmed = text.trim();
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1).trimEnd()}…`;
 };

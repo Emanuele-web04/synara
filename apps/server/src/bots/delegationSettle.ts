@@ -29,6 +29,16 @@ export interface SettleItem {
   readonly updatedAt: string;
 }
 
+/** A delegation the target bot handed on from its own thread. */
+export interface SettleOnward {
+  /** The target's turn that handed it on. */
+  readonly fromTurnId: string | null;
+  /** The report message that wakes the target with its result, once one was sent. */
+  readonly reportMessageId: string | null;
+  /** When it was reported back, or stopped by the user (then without a report message). */
+  readonly reportedAt: string | null;
+}
+
 export interface SettleResult {
   readonly state: "sent" | "working" | "waiting" | "settled";
   readonly outcome: "completed" | "failed" | null;
@@ -49,6 +59,12 @@ export function evaluateDelegationSettlement(input: {
   /** Pending messages of later turns that belong to the delegation (the Hub's own wakes). */
   readonly attributableMessageIds: ReadonlySet<string>;
   readonly items: readonly SettleItem[];
+  /**
+   * Delegations the target handed on from its thread. Work handed on during the delegation is
+   * part of it: the delegation stays open until each such hand-off is reported back and the
+   * turn its report wakes has answered, so the asker hears the end of the chain, not its middle.
+   */
+  readonly onward?: readonly SettleOnward[];
   readonly sessionActiveTurnId: string | null;
   readonly nowMs: number;
   readonly graceMs?: number;
@@ -61,15 +77,41 @@ export function evaluateDelegationSettlement(input: {
     return { state: "sent", outcome: null, turnIds: [], itemIds: [], lastAssistantMessageId: null };
   }
   const startedAt = time(own[0]!.requestedAt);
-  const delegated = input.turns.filter(
-    (turn) =>
-      turn.pendingMessageId === input.messageId ||
-      (turn.pendingMessageId !== null &&
-        input.attributableMessageIds.has(turn.pendingMessageId) &&
-        time(turn.requestedAt) >= startedAt),
+  const reportIds = new Set<string>();
+  const belongs = (turn: SettleTurn) =>
+    turn.pendingMessageId === input.messageId ||
+    (turn.pendingMessageId !== null &&
+      (input.attributableMessageIds.has(turn.pendingMessageId) ||
+        reportIds.has(turn.pendingMessageId)) &&
+      time(turn.requestedAt) >= startedAt);
+  let delegated = input.turns.filter(belongs);
+  let turnIdSet = new Set(delegated.flatMap((turn) => (turn.turnId ? [turn.turnId] : [])));
+  let onward: readonly SettleOnward[] = [];
+  // A hand-off's report wakes the target in a turn of its own, which may hand work on again:
+  // follow the reports until no new turn joins.
+  for (;;) {
+    onward = (input.onward ?? []).filter(
+      (child) => child.fromTurnId !== null && turnIdSet.has(child.fromTurnId),
+    );
+    const before = reportIds.size;
+    for (const child of onward) {
+      if (child.reportMessageId !== null) reportIds.add(child.reportMessageId);
+    }
+    if (reportIds.size === before) break;
+    delegated = input.turns.filter(belongs);
+    turnIdSet = new Set(delegated.flatMap((turn) => (turn.turnId ? [turn.turnId] : [])));
+  }
+  const turnIds = [...turnIdSet];
+  const woken = new Set(delegated.map((turn) => turn.pendingMessageId));
+  // Still owed: not reported yet, or reported while the turn its report wakes has not shown up
+  // (a report that never wakes anyone stops holding the delegation after the grace window).
+  const onwardOpen = onward.some(
+    (child) =>
+      child.reportedAt === null ||
+      (child.reportMessageId !== null &&
+        !woken.has(child.reportMessageId) &&
+        input.nowMs - time(child.reportedAt) < graceMs),
   );
-  const turnIds = delegated.flatMap((turn) => (turn.turnId ? [turn.turnId] : []));
-  const turnIdSet = new Set(turnIds);
   const items = input.items.filter(
     (item) => item.delegationTurnId !== null && turnIdSet.has(item.delegationTurnId),
   );
@@ -83,7 +125,7 @@ export function evaluateDelegationSettlement(input: {
       .toSorted((left, right) => time(left.completedAt) - time(right.completedAt))
       .at(-1)?.assistantMessageId ?? null;
   const base = { turnIds, itemIds, lastAssistantMessageId };
-  if (running || items.some((item) => ACTIVE_ITEM_STATES.has(item.state))) {
+  if (running || onwardOpen || items.some((item) => ACTIVE_ITEM_STATES.has(item.state))) {
     return { state: "working", outcome: null, ...base };
   }
   if (items.some((item) => item.state === "waiting")) {
