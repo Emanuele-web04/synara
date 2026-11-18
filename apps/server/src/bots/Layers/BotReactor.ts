@@ -1,7 +1,7 @@
 // FILE: BotReactor.ts (layer)
 // Purpose: Drives SynBot from orchestration events: settles delegations and delivers reports when
-//          a bot's turns or tasks move, refreshes bot status, offers bots for new projects, runs
-//          the one-time Beta fresh start, and sweeps every few seconds as a restart-safe backstop.
+//          a bot's turns or tasks move, refreshes bot status, offers bots for new projects, and
+//          sweeps every few seconds as a restart-safe backstop.
 // Layer: Server reactor
 // Notes: All work is idempotent (deterministic ids), so a missed or repeated event is harmless.
 
@@ -45,7 +45,6 @@ const make = Effect.gen(function* () {
   const bots = yield* BotService;
 
   if (isServerSynbotEnabled()) {
-    yield* bots.freshStart();
     yield* bots.evaluateDelegations({});
     yield* bots
       .evaluateDelegations({})

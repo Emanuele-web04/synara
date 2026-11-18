@@ -238,10 +238,10 @@ describe("buildRailSpacesSections", () => {
 });
 
 describe("SynBot rail item", () => {
-  it("replaces Hubs where SynBot ships and owns /synbot", () => {
+  it("sits next to Hubs where SynBot ships and owns /synbot", () => {
     const availability = { studioAvailable: true, inboxAvailable: true, synbotAvailable: true };
     expect(isRailItemAvailable("synbot", availability)).toBe(true);
-    expect(isRailItemAvailable("studio", availability)).toBe(false);
+    expect(isRailItemAvailable("studio", availability)).toBe(true);
     expect(isRailItemAvailable("synbot", { ...availability, synbotAvailable: false })).toBe(false);
     expect(railItemForPathname("/synbot")).toBe("synbot");
     expect(railItemShowsPanel("synbot")).toBe(true);

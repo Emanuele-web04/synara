@@ -3,8 +3,8 @@
 SynBot is a layer above every chat. You talk to **SynBot**; it hands work to **bots**, each bot
 starts **tasks** in their own worktree, and when the work is done you get one short recap.
 
-> **Synara Beta only.** SynBot replaces the Hubs UI in Synara Beta. Synara Stable keeps
-> [Hubs](hubs.md) as they are.
+> **Synara Beta only.** SynBot runs next to [Hubs](hubs.md) in Synara Beta; bots are listed here,
+> not in the Hubs sidebar section. Synara Stable has Hubs only.
 
 ## Bots
 

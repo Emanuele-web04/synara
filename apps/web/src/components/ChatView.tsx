@@ -145,7 +145,7 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { HUBS_UI_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
+import { MCP_CONNECTORS_ON } from "../betaFeatures";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -245,6 +245,7 @@ import {
   type SplitViewPanePanelState,
 } from "../splitViewStore";
 import { useStore } from "../store";
+import { useIsBotProject } from "../synbot/botHubs";
 import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -1301,6 +1302,8 @@ export default function ChatView({
     studioWorkspaceRoot,
     groupsWorkspaceRoot,
   });
+  // A bot is a Hub, but its chat is SynBot's: no Hubs panel, Library or coordinator chips.
+  const isBotHub = useIsBotProject(activeProject?.id);
   const isContainerLandingProject = isHomeChatContainer || isGroupContainer;
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
@@ -2158,8 +2161,8 @@ export default function ChatView({
     linkedProjectCount: activeGroupSummary?.linkedProjectIds?.length ?? 0,
   });
   const showCoordinatorSuggestions =
-    HUBS_UI_ON &&
     isGroupContainer &&
+    !isBotHub &&
     coordinatorSuggestionChips.length > 0 &&
     shouldShowCoordinatorSuggestions({
       isCoordinatorThread: isCoordinatorConversation,
@@ -3392,8 +3395,7 @@ export default function ChatView({
   });
   const projectPanelEnabled = resolveProjectPanelEnabled({
     environmentEnabled,
-    // Where SynBot replaces the Hubs UI, a bot's chat has no Hubs panel or Library.
-    isGroupContainer: isGroupContainer && HUBS_UI_ON,
+    isGroupContainer: isGroupContainer && !isBotHub,
   });
   // Group chats default to the Groups panel — a newly created group's
   // coordinator chat opens with Focus/sections visible. An explicit toggle wins

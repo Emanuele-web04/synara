@@ -72,12 +72,6 @@ export interface BotDelegationRecord {
   readonly updatedAt: string;
 }
 
-export interface BotSettingsRecord {
-  readonly settings: BotSettings;
-  /** When the one-time Beta fresh start paused the legacy Hubs; null until it ran. */
-  readonly freshStartAt: string | null;
-}
-
 export interface BotRepositoryShape {
   readonly getProfile: (
     projectId: ProjectId,
@@ -124,9 +118,8 @@ export interface BotRepositoryShape {
     projectId: ProjectId,
   ) => Effect.Effect<void, BotRepositoryError>;
 
-  readonly getSettings: () => Effect.Effect<BotSettingsRecord, BotRepositoryError>;
+  readonly getSettings: () => Effect.Effect<BotSettings, BotRepositoryError>;
   readonly putSettings: (settings: BotSettings) => Effect.Effect<void, BotRepositoryError>;
-  readonly markFreshStart: (at: string) => Effect.Effect<void, BotRepositoryError>;
 }
 
 export class BotRepository extends ServiceMap.Service<BotRepository, BotRepositoryShape>()(

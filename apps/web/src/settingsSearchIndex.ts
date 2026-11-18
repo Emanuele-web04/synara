@@ -4,7 +4,6 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
-import { HUBS_UI_ON } from "~/betaFeatures";
 import { isElectron } from "~/env";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
@@ -192,8 +191,6 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
 
 /** Rows that exist only on some machines; omitted rows are offered everywhere. */
 export const ROW_APPLIES: Readonly<Record<string, (context: SettingsSearchContext) => boolean>> = {
-  // Where SynBot replaces the Hubs UI, the row is not rendered.
-  "setting-hubs": () => HUBS_UI_ON,
   "setting-app-icon": () => isElectron,
   "setting-use-custom-title-bar": () => {
     const platform = getNavigatorPlatform();

@@ -4,7 +4,7 @@
 // Exports: LayoutSettingsView
 
 import { type AppSettingsBinding } from "~/appSettings";
-import { HUBS_UI_ON } from "~/betaFeatures";
+import { GROUPS_ON } from "~/betaFeatures";
 import { BooleanSettingRow, BooleanSettingToggle } from "~/components/settings/BooleanSettingRow";
 import { SettingResetButton, SettingsSelectControl } from "~/components/settings/SettingControls";
 import {
@@ -134,7 +134,7 @@ export function LayoutSettingsView(binding: AppSettingsBinding) {
           ariaLabel="settings:showTheChatsSectionInTheSidebar"
         />
 
-        {HUBS_UI_ON ? (
+        {GROUPS_ON ? (
           <BooleanSettingRow
             {...binding}
             id="setting-hubs"

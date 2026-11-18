@@ -355,7 +355,8 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
 import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
-import { GROUPS_ON, HUBS_UI_ON, INBOX_ON, SYNBOT_ON, isBetaFeatureOn } from "../betaFeatures";
+import { GROUPS_ON, INBOX_ON, SYNBOT_ON, isBetaFeatureOn } from "../betaFeatures";
+import { useBotProjectIds, withoutBotHubs } from "../synbot/botHubs";
 import { startSynbotLiveSync, useSynbotStore } from "../synbot/synbotStore";
 import { SynbotSidebar } from "./synbot/shell/SynbotSidebar";
 import { synbotNeedsYouCount } from "../synbot/synbotState.logic";
@@ -1530,8 +1531,9 @@ export default function Sidebar() {
   // Projects is always available; Groups and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
-  // Where SynBot ships (Beta) it replaces the Hubs UI; Hubs keep running underneath bots.
-  const groupsSectionVisible = HUBS_UI_ON && appSettings.showGroupsSection;
+  const groupsSectionVisible = GROUPS_ON && appSettings.showGroupsSection;
+  // Bots are Hubs too, but SynBot lists them: the Hubs UI skips them.
+  const botProjectIds = useBotProjectIds();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewGroupChat } = useHandleNewGroupChat();
@@ -3741,7 +3743,7 @@ export default function Sidebar() {
       // Group actions only make sense for threads in ordinary (non-group)
       // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
-        HUBS_UI_ON &&
+        GROUPS_ON &&
         !mayBelongToGroup({
           threadId,
           projectId: thread.projectId,
@@ -3756,7 +3758,7 @@ export default function Sidebar() {
       // Paused and archived groups can't run a coordinator turn, so they
       // aren't move targets — the server refuses the turn either way.
       const eligibleGroups = canUseHubActions
-        ? projects.filter((project) => {
+        ? withoutBotHubs(projects, botProjectIds).filter((project) => {
             const summary = summaryFor(project.id);
             return (
               groupProjectIdSet.has(project.id) &&
@@ -4082,6 +4084,7 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       clearThreadNotification,
       continueHandoffInThread,
+      botProjectIds,
       continueThreadAsGroup,
       forkThread,
       groupProjectIdSet,
@@ -4977,15 +4980,25 @@ export default function Sidebar() {
   );
   const groupProjects = useMemo(
     () =>
-      sortedProjects.filter((project) =>
-        isGroupContainerProject(project, {
-          homeDir,
-          chatWorkspaceRoot,
-          studioWorkspaceRoot,
-          groupsWorkspaceRoot,
-        }),
+      withoutBotHubs(
+        sortedProjects.filter((project) =>
+          isGroupContainerProject(project, {
+            homeDir,
+            chatWorkspaceRoot,
+            studioWorkspaceRoot,
+            groupsWorkspaceRoot,
+          }),
+        ),
+        botProjectIds,
       ),
-    [chatWorkspaceRoot, groupsWorkspaceRoot, homeDir, sortedProjects, studioWorkspaceRoot],
+    [
+      botProjectIds,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      sortedProjects,
+      studioWorkspaceRoot,
+    ],
   );
   const visibleChatThreads = useMemo(() => {
     if (!chatSectionExpanded) {

@@ -48,7 +48,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "pullRequests",
   "automations",
   "studio",
-  // SynBot (Beta): takes the Hubs slot where it ships (see RailAvailability).
+  // SynBot (Beta), next to Hubs.
   "synbot",
 ] as const;
 export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
@@ -82,13 +82,13 @@ export interface RailAvailability {
   readonly studioAvailable: boolean;
   /** Whether this host offers Inbox. */
   readonly inboxAvailable: boolean;
-  /** Whether this host offers SynBot (Beta). Where it does, it replaces Hubs. */
+  /** Whether this host offers SynBot (Beta). */
   readonly synbotAvailable: boolean;
 }
 
 /** Whether an item exists on this host at all: the rail and its Customize list agree. */
 export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
-  if (id === "studio") return availability.studioAvailable && !availability.synbotAvailable;
+  if (id === "studio") return availability.studioAvailable;
   if (id === "synbot") return availability.synbotAvailable;
   if (id === "inbox") return availability.inboxAvailable;
   return true;

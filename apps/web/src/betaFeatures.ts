@@ -37,13 +37,10 @@ export const isBetaFeatureOn = (feature: string): boolean =>
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
 /**
- * SynBot is Beta-only. Bots run on the Hubs engine, so GROUPS_ON stays true underneath;
- * where SynBot is on, the Hubs UI is hidden (HUBS_UI_ON) and SynBot takes its place.
+ * SynBot is Beta-only. Bots run on the Hubs engine and sit next to Hubs: a bot is a Hub that
+ * only the SynBot page lists (see synbot/botHubs.ts).
  */
 export const SYNBOT_ON = isBetaFeatureOn(SYNBOT_BETA_FEATURE);
-
-/** The Hubs UI (sidebar section, /hubs, the Hubs panel). Stable only once SynBot exists. */
-export const HUBS_UI_ON = GROUPS_ON && !SYNBOT_ON;
 
 /**
  * Inbox is available in Stable and Beta. Tasks within it retain their separate gate.

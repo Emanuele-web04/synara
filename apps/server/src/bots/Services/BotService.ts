@@ -169,7 +169,6 @@ export interface BotServiceShape {
   readonly onProjectCreated: (projectId: ProjectId) => Effect.Effect<void, never>;
   /** Republishes the bot whose chat is `threadId` when its derived status changed. */
   readonly refreshThread: (threadId: ThreadId) => Effect.Effect<void, never>;
-  readonly freshStart: () => Effect.Effect<void, never>;
 }
 
 export class BotService extends ServiceMap.Service<BotService, BotServiceShape>()(

@@ -347,10 +347,9 @@ const make = Effect.gen(function* () {
     );
 
   const getSettings = () =>
-    repository.getSettings().pipe(
-      Effect.map((row) => row.settings),
-      Effect.mapError(toServiceError("Could not load SynBot settings.")),
-    );
+    repository
+      .getSettings()
+      .pipe(Effect.mapError(toServiceError("Could not load SynBot settings.")));
 
   // ── Thread writes ──────────────────────────────────────────────────
 
@@ -676,34 +675,9 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const freshStart: BotServiceShape["freshStart"] = () =>
-    Effect.gen(function* () {
-      if (!isServerSynbotEnabled()) return;
-      const row = yield* repository.getSettings();
-      if (row.freshStartAt) return;
-      const configs = yield* projectAgentRepository.listConfigs();
-      const profiles = new Set(
-        (yield* repository.listProfiles()).map((profile) => profile.projectId),
-      );
-      for (const { projectId } of configs) {
-        if (profiles.has(projectId)) continue;
-        const config = yield* projectAgentRepository.getConfig(projectId);
-        if (Option.isNone(config) || config.value.pausedAt || config.value.archivedAt) continue;
-        yield* projectAgent
-          .pauseGroup({ requestId: `synbot-fresh-start:${projectId}`, projectId }, USER)
-          .pipe(Effect.catch(() => Effect.void));
-      }
-      yield* repository.markFreshStart(isoNow());
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("SynBot fresh start failed", { cause: Cause.pretty(cause) }),
-      ),
-    );
-
   const ensureMain: BotServiceShape["ensureMain"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
-      yield* freshStart();
       const main = yield* repository
         .getMainProfile()
         .pipe(Effect.mapError(toServiceError("Could not load SynBot.")));
@@ -2186,7 +2160,6 @@ const make = Effect.gen(function* () {
     isBotProject,
     evaluateDelegations,
     onProjectCreated,
-    freshStart,
     refreshThread: (threadId: ThreadId) =>
       projectAgentRepository.getConfigByCoordinatorThread(threadId).pipe(
         Effect.flatMap((config) =>

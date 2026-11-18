@@ -300,29 +300,20 @@ export const makeBotRepository = Effect.gen(function* () {
       Effect.gen(function* () {
         const rows = yield* sql<{
           readonly settingsJson: string;
-          readonly freshStartAt: string | null;
-        }>`SELECT settings_json AS "settingsJson", fresh_start_at AS "freshStartAt"
-           FROM bot_settings WHERE id = 1`;
+        }>`SELECT settings_json AS "settingsJson" FROM bot_settings WHERE id = 1`;
         const row = rows[0];
-        if (!row) return { settings: DEFAULT_BOT_SETTINGS, freshStartAt: null };
+        if (!row) return DEFAULT_BOT_SETTINGS;
         // Unknown or damaged rows fall back to the defaults instead of breaking SynBot.
-        const settings = yield* decodeSettings(row.settingsJson).pipe(
+        return yield* decodeSettings(row.settingsJson).pipe(
           Effect.orElseSucceed(() => DEFAULT_BOT_SETTINGS),
         );
-        return { settings, freshStartAt: row.freshStartAt };
       }).pipe(Effect.mapError(storageError)),
     putSettings: (settings) =>
       sql`
-        INSERT INTO bot_settings (id, settings_json, fresh_start_at, updated_at)
-        VALUES (1, ${JSON.stringify(settings)}, NULL, ${new Date().toISOString()})
+        INSERT INTO bot_settings (id, settings_json, updated_at)
+        VALUES (1, ${JSON.stringify(settings)}, ${new Date().toISOString()})
         ON CONFLICT (id) DO UPDATE SET
           settings_json = excluded.settings_json, updated_at = excluded.updated_at
-      `.pipe(Effect.asVoid, Effect.mapError(storageError)),
-    markFreshStart: (at) =>
-      sql`
-        INSERT INTO bot_settings (id, settings_json, fresh_start_at, updated_at)
-        VALUES (1, ${JSON.stringify(DEFAULT_BOT_SETTINGS)}, ${at}, ${at})
-        ON CONFLICT (id) DO UPDATE SET fresh_start_at = excluded.fresh_start_at
       `.pipe(Effect.asVoid, Effect.mapError(storageError)),
   };
   return repository;
