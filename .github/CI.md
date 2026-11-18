@@ -25,6 +25,19 @@ patches. This overlaps work on one runner; it does not add runner capacity or
 establish an overall CI speedup without hosted measurements. See the
 [workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsparallel).
 
+Static Checks scans localization sources once with `i18n:coverage`. The
+combined report includes the catalog errors and UI literals from the former
+two commands. Catalog errors still fail the check. The Mac mini scan took
+0.80 s, down from 1.77 s for the two calls, with identical findings on the
+measured checkout.
+
+PR Size builds its label definitions and updates the PR in one runner job.
+The existing per-PR concurrency group now covers all three steps. This
+removes two runner allocations per invocation while preserving the label
+definitions, line-count rules and manual rollout. On the last draft run,
+the two setup jobs each held a runner for 4 s.
+[PR Size run](https://github.com/Emanuele-web04/synara/actions/runs/44314109435)
+
 The Linux PTY dependency smoke runs once, on the first server shard; the Windows
 PTY smoke remains a separate native check. The desktop lifecycle smoke exercises
 the real Electron browser integration. The synthetic Energy Cloud A/B benchmark

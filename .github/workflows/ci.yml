@@ -95,7 +95,7 @@ jobs:
             run: bun run windows-runtime:check
 
           - name: Verify localization catalogs and report UI coverage
-            run: bun run i18n:check && bun run i18n:extract
+            run: bun run i18n:coverage
 
           - name: Format
             run: bun run fmt:check
