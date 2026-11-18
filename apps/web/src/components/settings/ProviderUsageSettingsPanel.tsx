@@ -30,6 +30,8 @@ import {
   SettingsListRow,
   SettingsSection,
   SettingsSectionShell,
+  SettingsToggleGroup,
+  SettingsToggleItem,
 } from "~/components/settings/SettingsPanelPrimitives";
 import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
 import { Button } from "~/components/ui/button";
@@ -55,27 +57,31 @@ const RAIL_USAGE_WINDOW_OPTIONS = [
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
 
-interface StatusPill {
+interface StatusMark {
   label: string;
-  className: string;
+  dotClassName: string;
+  textClassName: string;
 }
 
-function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill | null {
+function statusMark(status: ServerProviderUsageSnapshot["status"]): StatusMark | null {
   switch (status) {
     case "needs-auth":
       return {
         label: t("settings:providerUsage_needsAuth"),
-        className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
+        dotClassName: "bg-amber-500",
+        textClassName: "text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
       return {
         label: t("chat:providerUsage_unsupported"),
-        className: "bg-muted text-muted-foreground",
+        dotClassName: "bg-muted-foreground/40",
+        textClassName: "text-muted-foreground",
       };
     case "error":
       return {
         label: t("chat:providerModelPicker_unavailable"),
-        className: "bg-red-500/12 text-red-600 dark:text-red-400",
+        dotClassName: "bg-red-500",
+        textClassName: "text-red-600 dark:text-red-400",
       };
     default:
       return null;
@@ -125,7 +131,7 @@ export function ProviderUsageCard({
   const resetCredits = provider === "codex" ? snapshot.resetCredits : undefined;
   const hasResetCredits = Boolean(resetCredits && resetCredits.availableCount > 0);
   const hasUsage = meterRows.length > 0 || usageLines.length > 0 || hasResetCredits;
-  const pill = status === "ok" ? null : statusPill(snapshot.status);
+  const mark = status === "ok" ? null : statusMark(snapshot.status);
 
   return (
     <SettingsCard>
@@ -150,8 +156,11 @@ export function ProviderUsageCard({
             <span className={cn(PILL_CLASS_NAME, "bg-muted text-muted-foreground")}>
               {snapshot.planName}
             </span>
-          ) : pill ? (
-            <span className={cn(PILL_CLASS_NAME, pill.className)}>{pill.label}</span>
+          ) : mark ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-none">
+              <span className={cn("size-1.5 rounded-full", mark.dotClassName)} aria-hidden="true" />
+              <span className={mark.textClassName}>{mark.label}</span>
+            </span>
           ) : null}
         </div>
 
@@ -258,43 +267,49 @@ export function ProviderUsageSettingsPanel() {
         translateTitle={false}
         title={t("settings:sidebarUsageAccountLimit", { count: MAX_RAIL_USAGE_ACCOUNTS })}
       >
-        {railUsageAccounts.map(({ instance, label }) => {
-          const checked = railUsageInstanceIds.includes(instance.instanceId);
-          return (
-            <SettingsListRow
-              key={instance.instanceId}
-              title={
-                <span className="flex items-center gap-2">
-                  <ProviderAccountAvatar
-                    provider={instance.driver}
-                    accentColor={instance.raw.accentColor}
-                    className="size-6"
+        <SettingsToggleGroup>
+          {railUsageAccounts.map(({ instance, label }) => {
+            const checked = railUsageInstanceIds.includes(instance.instanceId);
+            return (
+              <SettingsToggleItem
+                key={instance.instanceId}
+                id={`setting-rail-usage-${instance.instanceId}`}
+                title={
+                  <span className="flex min-w-0 items-center gap-2">
+                    <ProviderAccountAvatar
+                      provider={instance.driver}
+                      accentColor={instance.raw.accentColor}
+                      className="size-5 shrink-0"
+                    />
+                    <span className="truncate">{label}</span>
+                  </span>
+                }
+                tooltip={t("settings:showUsageAtTheBottomOfTheSidebar", {
+                  value0: label,
+                })}
+                control={
+                  <Switch
+                    checked={checked}
+                    disabled={serverSettingsQuery.isPending || (!checked && railUsageFull)}
+                    onCheckedChange={(next) =>
+                      updateSettings({
+                        railUsageInstanceIds: toggleRailUsageAccount(
+                          savedRailUsageInstanceIds,
+                          instance.instanceId,
+                          Boolean(next),
+                          railUsageAccounts,
+                        ),
+                      })
+                    }
+                    aria-label={t("settings:showUsageAtTheBottomOfTheSidebar", {
+                      value0: label,
+                    })}
                   />
-                  <span className="truncate">{label}</span>
-                </span>
-              }
-              actions={
-                <Switch
-                  checked={checked}
-                  disabled={serverSettingsQuery.isPending || (!checked && railUsageFull)}
-                  onCheckedChange={(next) =>
-                    updateSettings({
-                      railUsageInstanceIds: toggleRailUsageAccount(
-                        savedRailUsageInstanceIds,
-                        instance.instanceId,
-                        Boolean(next),
-                        railUsageAccounts,
-                      ),
-                    })
-                  }
-                  aria-label={t("settings:showUsageAtTheBottomOfTheSidebar", {
-                    value0: label,
-                  })}
-                />
-              }
-            />
-          );
-        })}
+                }
+              />
+            );
+          })}
+        </SettingsToggleGroup>
         <SettingsListRow
           title={t("settings:ring")}
           description={t("settings:showBothLimitsAsTwoRingsOrASingle")}

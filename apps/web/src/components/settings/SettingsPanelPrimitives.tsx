@@ -107,12 +107,19 @@ export function SettingsSection({
  * family of small switches that all say "show X here" (the Environment panel's sections),
  * where a full row each would bury the card. Separators come from the parent card.
  */
-export function SettingsToggleGroup({ title, children }: { title: string; children: ReactNode }) {
+export function SettingsToggleGroup({
+  title,
+  children,
+}: {
+  /** i18n key for the block's small heading; omit when the section title already covers it. */
+  title?: string;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
   return (
     <div className={SETTINGS_CARD_ROW_CLASS_NAME} data-slot="settings-toggle-group">
-      <h3 className="text-ui-sm text-muted-foreground">{t(title)}</h3>
-      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">{children}</div>
+      {title ? <h3 className="text-ui-sm text-muted-foreground">{t(title)}</h3> : null}
+      <div className={cn("grid gap-x-6 gap-y-1 sm:grid-cols-2", title && "mt-2")}>{children}</div>
     </div>
   );
 }
@@ -120,27 +127,36 @@ export function SettingsToggleGroup({ title, children }: { title: string; childr
 /**
  * One option in a {@link SettingsToggleGroup}: its name and switch on one line. The
  * description stays available as the hover hint; `id` keeps search deep links working.
+ * `title` also takes a rendered node (icon + label rows); `tooltip` is for
+ * pre-translated hint text when the label is dynamic data rather than an i18n key.
  */
 export function SettingsToggleItem({
   id,
   title,
   description,
+  tooltip,
   control,
 }: {
   id: string;
-  title: string;
-  description: string;
+  title: string | ReactNode;
+  description?: string;
+  tooltip?: string;
   control: ReactNode;
 }) {
   const { t } = useTranslation();
+  const hint = tooltip ?? (description ? t(description) : undefined);
   return (
     <div
       id={id}
-      title={t(description)}
+      title={hint}
       className="flex min-h-8 scroll-mt-24 items-center justify-between gap-3"
       data-slot="settings-toggle"
     >
-      <span className="min-w-0 truncate text-ui text-foreground">{t(title)}</span>
+      {typeof title === "string" ? (
+        <span className="min-w-0 truncate text-ui text-foreground">{t(title)}</span>
+      ) : (
+        <span className="min-w-0 truncate text-ui text-foreground">{title}</span>
+      )}
       {control}
     </div>
   );

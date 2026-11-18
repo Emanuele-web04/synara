@@ -3926,6 +3926,16 @@ diffs-container {
     var(--app-overlay-backing, transparent);
 }
 
+/* Settings popups float over the dense settings page: the frosted overlay tint lets
+   the rows beneath read through, so on opaque windows they paint a solid fill and
+   skip the pointless blur. Translucent windows keep the cutout glass below. */
+:root:not([data-window-material="translucent"]) .app-popup-surface--settings {
+  background: var(--popover);
+}
+:root:not([data-window-material="translucent"]) .app-popup-surface--settings::before {
+  display: none;
+}
+
 :root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;

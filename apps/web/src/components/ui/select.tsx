@@ -158,7 +158,7 @@ function SelectPopup({
     surface === "settings"
       ? cn(
           APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-          "rounded-lg",
+          "app-popup-surface--settings rounded-lg",
           COMPOSER_SURFACE_SHADOW_CLASS_NAME,
         )
       : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
