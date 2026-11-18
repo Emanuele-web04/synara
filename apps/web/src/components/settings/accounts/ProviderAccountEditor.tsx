@@ -47,7 +47,6 @@ import { CodexDefaultAccountControl } from "./CodexDefaultAccountControl";
 import { ProviderAccentColorControl } from "./ProviderAccentColorControl";
 import {
   ACCOUNT_STATUS_DOT_CLASS_NAME,
-  ACCOUNT_STATUS_PILL_CLASS_NAME,
   DefaultAccountBadge,
   providerInstanceUpdater,
   useProviderAccountSignIn,
@@ -172,16 +171,15 @@ export function ProviderAccountEditor(props: {
               </span>
               {account.isDefault ? <DefaultAccountBadge /> : null}
             </div>
-            {identity ? (
-              <span className="block truncate text-ui-sm text-muted-foreground">{identity}</span>
-            ) : null}
-            <StatusChip
-              variant="pill"
-              className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
-              dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[status.tone]}
-            >
-              <span className="truncate">{status.headline}</span>
-            </StatusChip>
+            <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground">
+              <StatusChip
+                className="min-w-0 shrink-0"
+                dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[status.tone]}
+              >
+                <span className="truncate">{status.headline}</span>
+              </StatusChip>
+              {identity ? <span className="min-w-0 truncate">· {identity}</span> : null}
+            </span>
           </div>
           <Button
             type="button"

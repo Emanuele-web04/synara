@@ -4,7 +4,7 @@
 //          colors.
 // Layer: Settings UI
 // Exports: useProviderAccountSignIn, providerInstanceUpdater, DefaultAccountBadge,
-//          ACCOUNT_STATUS_PILL_CLASS_NAME, ACCOUNT_STATUS_DOT_CLASS_NAME
+//          ACCOUNT_STATUS_DOT_CLASS_NAME
 
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -20,13 +20,6 @@ import type { ProviderAccountStatusTone } from "~/lib/providerSetupStatus";
 import { toastManager } from "../../ui/toast";
 
 const ProviderSignInDialog = lazy(() => import("./ProviderSignInDialog"));
-
-export const ACCOUNT_STATUS_PILL_CLASS_NAME: Record<ProviderAccountStatusTone, string> = {
-  ready: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  warning: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
-  error: "bg-red-500/12 text-red-700 dark:text-red-300",
-  idle: "bg-muted text-muted-foreground",
-};
 
 export const ACCOUNT_STATUS_DOT_CLASS_NAME: Record<ProviderAccountStatusTone, string> = {
   ready: "bg-emerald-500",
