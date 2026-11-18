@@ -54,6 +54,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyTextToClipboard, useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
+import { LRUCache } from "../lib/lruCache";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
 import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
@@ -259,7 +260,26 @@ interface ParsedMarkdownProps {
   remarkPlugins: MarkdownRemarkPlugins;
   rehypePlugins: MarkdownRehypePlugins;
   components: Components;
+  /**
+   * Everything besides the text that shapes the parse output, when the parse may be
+   * shared through `parsedMarkdownCache`; null for streaming or per-message plugins.
+   */
+  parseCacheScope: string | null;
 }
+
+// Parsed element trees of settled messages, keyed by parse scope and source text.
+// A virtualized transcript unmounts rows that scroll away and remounts them on the way
+// back, which re-ran the whole unified pipeline for every remount. Element trees are
+// immutable and every render-time input (theme, find highlights, file chips, links)
+// is read from context by the markdown components, so one tree serves every mount of
+// the same text. The size estimate counts the hast nodes the tree keeps alive.
+const PARSED_MARKDOWN_CACHE_MAX_ENTRIES = 600;
+const PARSED_MARKDOWN_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+const PARSED_MARKDOWN_BYTES_PER_SOURCE_CHAR = 40;
+const parsedMarkdownCache = new LRUCache<readonly ReactNode[]>(
+  PARSED_MARKDOWN_CACHE_MAX_ENTRIES,
+  PARSED_MARKDOWN_CACHE_MAX_BYTES,
+);
 
 // react-markdown's `Markdown` is synchronous and hook-free, so calling it as a
 // function yields exactly the element tree it renders as a component.
@@ -282,9 +302,30 @@ interface MarkdownParseOptions {
   readonly remarkPlugins: MarkdownRemarkPlugins;
   readonly rehypePlugins: MarkdownRehypePlugins;
   readonly components: Components;
+  readonly parseCacheScope: string | null;
 }
 
 function parseMarkdownBlock(
+  block: StreamingMarkdownBlock,
+  options: MarkdownParseOptions,
+): readonly ReactNode[] {
+  // Only a whole-message parse (offset 0, not split for streaming) is shared.
+  if (options.parseCacheScope === null || block.offset !== 0) {
+    return parseMarkdownBlockUncached(block, options);
+  }
+  const cacheKey = `${options.parseCacheScope}\u0000${block.text}`;
+  const cached = parsedMarkdownCache.get(cacheKey);
+  if (cached !== null) return cached;
+  const children = parseMarkdownBlockUncached(block, options);
+  parsedMarkdownCache.set(
+    cacheKey,
+    children,
+    block.text.length * PARSED_MARKDOWN_BYTES_PER_SOURCE_CHAR,
+  );
+  return children;
+}
+
+function parseMarkdownBlockUncached(
   block: StreamingMarkdownBlock,
   options: MarkdownParseOptions,
 ): readonly ReactNode[] {
@@ -308,11 +349,17 @@ const ParsedMarkdown = memo(function ParsedMarkdown({
   remarkPlugins,
   rehypePlugins,
   components,
+  parseCacheScope,
 }: ParsedMarkdownProps) {
   const children = useStreamingMarkdownChildren(
     text,
     splitBlocks,
-    { remarkPlugins, rehypePlugins, components },
+    {
+      remarkPlugins,
+      rehypePlugins,
+      components,
+      parseCacheScope: splitBlocks ? null : parseCacheScope,
+    },
     parseMarkdownBlock,
   );
   return <>{children}</>;
@@ -1897,6 +1944,12 @@ function ChatMarkdown({
         : MARKDOWN_REHYPE_PLUGINS;
     return usesAutomaticBlockDirection ? [...basePlugins, rehypeBidiBlockDirection] : basePlugins;
   }, [isUserVariant, parseHtml, usesAutomaticBlockDirection]);
+  // The parse depends on the text plus exactly these inputs (see remarkPlugins and
+  // rehypePlugins above). User messages carry per-message chip plugins and are not shared.
+  const parseCacheScope =
+    isStreaming || composerChipsRemarkPlugin
+      ? null
+      : `${parseHtml ? 1 : 0}${usesAutomaticBlockDirection ? 1 : 0}:${wikiLinkRoot ?? cwd ?? ""}`;
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
@@ -1958,6 +2011,7 @@ function ChatMarkdown({
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={rehypePlugins}
                 components={MARKDOWN_COMPONENTS}
+                parseCacheScope={parseCacheScope}
               />
             </MarkdownSourceTextReaderContext.Provider>
           </MarkdownSourceTextContext.Provider>

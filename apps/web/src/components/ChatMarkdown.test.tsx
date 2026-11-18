@@ -606,6 +606,24 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).not.toContain("[[03-Resources");
 });
 
+it("shares a settled parse only between renders with the same parse inputs", async () => {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const text = "Shared parse: see [[My note]] and **bold**.";
+  const first = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/vault" />);
+  const again = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/vault" />);
+  const otherRoot = renderWithQueryClient(<ChatMarkdown text={text} wikiLinkRoot="/other" />);
+  const user = renderWithQueryClient(
+    <ChatMarkdown text={text} wikiLinkRoot="/vault" variant="user" />,
+  );
+
+  expect(again).toBe(first);
+  expect(first).toContain('href="/vault/My%20note.md"');
+  expect(otherRoot).toContain('href="/other/My%20note.md"');
+  expect(otherRoot).not.toContain("/vault/");
+  // User messages parse with their own plugins (no wiki links), never the shared tree.
+  expect(user).not.toContain('href="/vault/My%20note.md"');
+});
+
 it.each(["\n", "\r\n"])(
   "keeps wiki links on the first line of a GitHub alert (%j)",
   async (eol) => {
