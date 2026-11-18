@@ -303,6 +303,7 @@ jobs:
         with:
           electron: "true"
           turbo: "true"
+          web-transform-cache: desktop-production
           # Sole consumer of the electron:true node_modules key.
           save-modules: "true"
 
@@ -314,6 +315,8 @@ jobs:
 
       - name: Build desktop pipeline
         id: desktop-build
+        env:
+          SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR: ${{ runner.temp }}/web-transform-cache
         run: bun run build:desktop
         background: true
 

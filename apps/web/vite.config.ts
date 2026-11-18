@@ -66,21 +66,32 @@ function centralIconPrunePlugin(): Plugin {
   };
 }
 
-// React Compiler output is a pure function of the module, the lockfile, the
-// Babel environment and this file, so test lanes may reuse it between runs
-// (.github/CI.md). Only Vitest opts in: a production build never reads or
-// writes this cache.
-const transformCacheDirectory =
+// Browser tests and the Desktop CI build opt into separate cache namespaces.
+const testTransformCacheDirectory =
   process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
 
-function transformCacheSalt(): string {
+function transformCacheSalt(productionBuild: boolean): string {
   const hash = createHash("sha256");
   hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
+  if (productionBuild) {
+    hash.update(
+      JSON.stringify([
+        "desktop-production",
+        process.versions.node,
+        buildSourcemap,
+        process.env.BROWSERSLIST,
+        process.env.BROWSERSLIST_ENV,
+      ]),
+    );
+  }
   for (const file of [
+    "../../package.json",
     "../../bun.lock",
     "vite.config.ts",
     "scripts/react-compiler-plugin.mjs",
     "scripts/transform-cache.ts",
+    "scripts/parallel-transform.ts",
+    "scripts/parallel-transform.worker.mjs",
   ]) {
     hash.update(readFileSync(path.resolve(import.meta.dirname, file)));
     hash.update("\0");
@@ -177,8 +188,7 @@ export default defineConfig({
     react(),
     // React Compiler is a single-threaded Babel pass and nearly all of a
     // production build's time (.github/CI.md). Worker threads run the same
-    // plugin's own hook, so the output is unchanged; the cache, when a test
-    // lane enables it, sits in front and only compiles what it misses.
+    // plugin's own hook. Opt-in CI caches only reuse identical inputs.
     createReactCompilerPlugin().then((plugin) => {
       const workers = transformWorkerCount();
       const compiler =
@@ -192,23 +202,33 @@ export default defineConfig({
               ),
             })
           : plugin;
+      let cacheWrapped = false;
       return {
-        ...(transformCacheDirectory
-          ? withTransformCache(compiler, {
-              directory: path.resolve(import.meta.dirname, transformCacheDirectory),
-              salt: transformCacheSalt(),
-            })
-          : compiler),
+        ...compiler,
         // Large chat modules make the compiler expensive on cold loads and every
         // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
         // Keep production builds and browser tests compiled, with an opt-in for
         // debugging compiler-specific behavior in the development app.
-        apply: ((_config, { command, mode }) =>
-          command === "build" ||
-          mode === "test" ||
-          /^(1|true)$/i.test(
-            process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
-          )) satisfies Plugin["apply"],
+        apply: ((_config, { command, mode }) => {
+          const productionBuild = command === "build" && mode === "production";
+          const cacheDirectory = productionBuild
+            ? process.env.SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR?.trim()
+            : mode === "test"
+              ? testTransformCacheDirectory
+              : undefined;
+          if (cacheDirectory && !cacheWrapped) {
+            withTransformCache(compiler, {
+              directory: path.resolve(import.meta.dirname, cacheDirectory),
+              salt: transformCacheSalt(productionBuild),
+            });
+            cacheWrapped = true;
+          }
+          return (
+            command === "build" ||
+            mode === "test" ||
+            /^(1|true)$/i.test(process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "")
+          );
+        }) satisfies Plugin["apply"],
       };
     }),
     tailwindcss(),

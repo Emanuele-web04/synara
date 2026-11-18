@@ -203,7 +203,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
     "Cache Electron runtime",
   ]);
 });
-test("web transform cache stays keyed by its inputs and out of production builds", () => {
+test("browser tests and Desktop CI use separate compiler cache namespaces", () => {
   const steps = Object.fromEntries(
     setup
       .split("\n    - name: ")
@@ -212,7 +212,7 @@ test("web transform cache stays keyed by its inputs and out of production builds
   );
   const main = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
   const prefix =
-    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-";
+    "${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-";
   const restore = steps["Restore web transform cache"];
   const save = steps["Cache web transform results (main or first branch run)"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
@@ -231,14 +231,16 @@ test("web transform cache stays keyed by its inputs and out of production builds
   // The salt in vite.config.ts must cover every file the archive key hashes.
   const viteConfig = read("../../apps/web/vite.config.ts");
   for (const file of [
+    "../../package.json",
     "../../bun.lock",
     "vite.config.ts",
     "scripts/react-compiler-plugin.mjs",
     "scripts/transform-cache.ts",
+    "scripts/parallel-transform.ts",
+    "scripts/parallel-transform.worker.mjs",
   ])
     assert.ok(viteConfig.includes(`"${file}"`), file);
-  // Workers must compile with the plugin definition the main thread uses, and
-  // the pool must stay out of the cache key: it never changes a module's output.
+  // Workers must compile with the plugin definition the main thread uses.
   const worker = read("../../apps/web/scripts/parallel-transform.worker.mjs");
   assert.ok(worker.includes('from "./react-compiler-plugin.mjs"'));
   assert.ok(viteConfig.includes('from "./scripts/react-compiler-plugin.mjs"'));
@@ -246,18 +248,27 @@ test("web transform cache stays keyed by its inputs and out of production builds
   const pool = read("../../apps/web/scripts/parallel-transform.ts");
   for (const relaxed of ["retry", "setTimeout"])
     assert.ok(!pool.includes(relaxed), `the transform pool must not ${relaxed}`);
-  assert.ok(
-    viteConfig.includes(
-      'process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined',
-    ),
-    "only Vitest may enable the transform cache",
+  assert.ok(viteConfig.includes('command === "build" && mode === "production"'));
+  assert.ok(viteConfig.includes('process.env.VITEST === "true"'));
+  assert.ok(viteConfig.includes("transformCacheSalt(productionBuild)"));
+  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 2);
+  assert.equal(
+    jobs.browser.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
+    "browser-${{ matrix.project }}-${{ strategy.job-index }}",
   );
-  // Only the stable browser lanes opt in: no build, release or nightly lane.
-  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 1);
-  const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
+  assert.equal(
+    jobs.build.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
+    "desktop-production",
+  );
+  const desktopBuild = jobs.build.steps.find((step) => step.id === "desktop-build");
+  assert.equal(
+    desktopBuild.env.SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR,
+    "${{ runner.temp }}/web-transform-cache",
+  );
+  assert.equal(workflow.match(/SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR:/g)?.length, 1);
   assert.ok(
-    browser.includes(
-      "web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}",
+    read("../../apps/web/turbo.jsonc").includes(
+      '"passThroughEnv": ["SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"]',
     ),
   );
   for (const other of [
@@ -268,6 +279,7 @@ test("web transform cache stays keyed by its inputs and out of production builds
     const text = read(other);
     assert.ok(!text.includes("web-transform-cache"), other);
     assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
+    assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
 });
 test("Windows uses the runner-volume cache and Web installs only its dependency closure", () => {

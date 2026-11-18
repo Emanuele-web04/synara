@@ -1,6 +1,6 @@
 // FILE: transform-cache.ts
-// Purpose: Persist one Vite plugin's transform results on disk between test runs.
-// Layer: Web build config (test lanes only; production builds never enable it)
+// Purpose: Persist one Vite plugin's transform results between CI runs.
+// Layer: Web build config
 // Depends on: Node crypto and filesystem.
 
 import { createHash } from "node:crypto";
@@ -87,7 +87,7 @@ export function withTransformCache<T extends { readonly name: string; transform?
         );
         await fs.promises.rename(temporaryPath, entryPath);
       } catch {
-        // The browser lane can use the compiled module even if disk caching fails.
+        // The caller can use the compiled module even if disk caching fails.
         await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
       }
     }

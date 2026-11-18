@@ -15,7 +15,7 @@ inputs:
     description: Save the node_modules archive after a miss. Only one job per cache key sets this.
     default: "false"
   web-transform-cache:
-    description: Browser lane name that owns a React Compiler transform cache; empty disables it.
+    description: CI lane name that owns a React Compiler transform cache; empty disables it.
     default: ""
 
 runs:
@@ -90,8 +90,8 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
 
-    # Browser test lanes recompile every web module with React Compiler on a
-    # cold Vite server. apps/web/scripts/transform-cache.ts keys each result by
+    # Browser tests and Desktop CI use separate cache namespaces.
+    # apps/web/scripts/transform-cache.ts keys each result by
     # the exact module source, so an archive only ever supplies output for
     # unchanged modules; a changed module is always recompiled. The key prefix
     # hashes everything else that shapes the output (lockfile, Vite config,
@@ -104,18 +104,18 @@ runs:
       uses: actions/cache/restore@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-
 
     - name: Cache web transform results (main or first branch run)
       if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('package.json', 'bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts', 'apps/web/scripts/parallel-transform.ts', 'apps/web/scripts/parallel-transform.worker.mjs') }}-
 
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}

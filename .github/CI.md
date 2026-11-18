@@ -558,13 +558,12 @@ for `components 3/3` (343 s total).
 
 `apps/web/scripts/transform-cache.ts` stores each compiled module on disk. An
 entry is keyed by the exact module source, its id, the Vite environment, the
-module type and a salt that hashes `bun.lock`, `apps/web/vite.config.ts`, the
-cache code and the Babel environment. A changed module therefore never matches
-an older entry and is recompiled; a dependency or config change starts empty; a
-malformed entry is recomputed. Only Vitest enables it (`VITEST=true` and
-`SYNARA_WEB_TRANSFORM_CACHE_DIR`), so `vite build`, the release workflow and the
-nightly geometry lane never read or write it. React Compiler runs only in the
-browser (client) environment, so the node unit lanes have nothing to reuse.
+module type and a salt that hashes the toolchain manifests, Vite config,
+compiler and worker implementations, cache code, and Babel environment.
+A changed module is recompiled. Dependency or config changes use fresh
+entries, and malformed entries are recomputed. Vitest enables the test
+cache through `SYNARA_WEB_TRANSFORM_CACHE_DIR`. React Compiler runs in
+the client environment, so the node unit lanes have nothing to reuse.
 
 Each stable browser lane owns one archive. Pull requests restore main's newest
 archive for the same lockfile and config and save only when nothing matched;
@@ -618,6 +617,24 @@ With the cache warm, renaming `data-chat-scroll-container` in
 transcript end` fail, and restoring the file made it pass again: a cached run
 still sees a real change. `apps/web/scripts/transform-cache.test.ts` covers the
 key, malformed entries and unchanged-module results.
+
+Desktop CI uses its own `desktop-production` archive and opts in only
+for the production Web build. Turbo passes the cache directory to that
+task without hashing the machine-specific path into its full-build key.
+The production entries also include the Node version, source-map setting
+and Browserslist environment. Release builds and nightly geometry have
+their existing uncached compiler behavior.
+
+A paired Web build on the Mac mini used the app source at main
+`5975b5238` and fresh output directories. After seeding the compiler
+cache, a one-module edit took 43.99 s with no transform cache and
+10.75 s with the cache. All 3,198 emitted files matched byte for byte,
+including 1,724 compressed sidecars. The edited module populated one
+new cache entry. The integrated Turbo build repeated the result at
+37.08 s and 10.52 s with identical file hashes and one new entry.
+The populated archive compressed to 8.7 MB locally. Hosted timings
+include archive restore and job queue time and remain unverified for
+this Desktop layout.
 
 ### React Compiler on worker threads
 
