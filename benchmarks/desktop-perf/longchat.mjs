@@ -10,7 +10,7 @@
 // Chromium rasterizes in software, so use run.mjs (suite "longchat") for frames on a GPU.
 //
 //   node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
-//   node benchmarks/desktop-perf/longchat.mjs --build main [--build branch] [--runs 3]
+//   node benchmarks/desktop-perf/longchat.mjs --build main [--build branch] [--runs 6]
 //        [--label x] [--only small-38,agent-heavy] [--profile] [--capture] [--press-ms 80]
 //
 // --prepare-base  copies the seeded template and appends the realistic long threads
@@ -20,6 +20,7 @@
 //                 to resolve frames to source)
 // --capture       writes each cold snapshot frame to <results>/frames/frame-<name>.json,
 //                 the input of apps/web/perf/longChatDerivations.perf.test.ts
+// --runs          samples per build (default 6: open timings are bimodal, 3 hide that)
 // --press-ms      time between pointerdown and pointerup on a sidebar row (default 80, a
 //                 typical mouse click). Open timings start at pointerdown, so they include
 //                 the press; work started on pointerdown overlaps it. 0 = instant click.
@@ -551,7 +552,7 @@ async function oneSample(build, sampleIndex, options) {
   return record;
 }
 
-const runs = Number(value("runs", "3"));
+const runs = Number(value("runs", "6"));
 const label = value("label", "longchat");
 const options = {
   profile: args.includes("--profile"),

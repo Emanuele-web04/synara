@@ -145,7 +145,7 @@ build's production web bundle in headless Chromium. It runs with the screen lock
 node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
 # Two builds alternate A B B A; --profile adds CPU profiles (build with
 # SYNARA_WEB_SOURCEMAP=hidden to resolve them), --capture writes snapshot frames.
-node benchmarks/desktop-perf/longchat.mjs --build main --build branch --runs 3 --label x
+node benchmarks/desktop-perf/longchat.mjs --build main --build branch --label x
 node benchmarks/desktop-perf/longchat-report.mjs benchmarks/desktop-perf/results/longchat-*-x.json
 ```
 
@@ -163,6 +163,13 @@ rows, and a fling that samples how much of the viewport no row covers.
 | `snapshot KB / arrival ms` | largest WebSocket frame after the press, and when it arrived                                 |
 | `retained heap MB`         | JS heap after GC, after the cold open, minus before it                                       |
 | `blank >25% frames`        | fling frames where mounted rows cover less than 75% of the viewport                          |
+
+Each build gets 6 samples by default (`--runs`), alternating A B B A. Open timings are
+bimodal on the same build (a switch back to agent-heavy read 90, 109 and 109 ms), so 3
+samples only separate large differences: an apparent +23% on 3 samples was noise.
+`longchat-report.mjs` prints `median (min–max) [samples]` and marks a change
+`≈ spread` when the new median falls inside the first build's range. Treat such a
+change as no difference.
 
 Open timings start at **pointerdown**, so they include the press itself: by default
 the button is released after 80 ms (`--press-ms`, a typical mouse click), and work the

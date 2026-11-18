@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Tables for longchat.mjs results: median [raw samples] per build, and the change of the
-// last build against the first. Several files are merged, so builds measured in separate
+// Tables for longchat.mjs results: median (min–max) [raw samples] per build, and the
+// change of the last build's median against the first. A change marked "≈ spread" puts
+// the last median inside the first build's min–max range: no difference shown. Several files are merged, so builds measured in separate
 // sessions can be compared (prefer one session with two --build flags: it alternates).
 //   node benchmarks/desktop-perf/longchat-report.mjs <results.json> [...]
 import { readFileSync } from "node:fs";
@@ -56,6 +57,9 @@ const METRICS = [
 
 const threadNames = [...new Set(valid.flatMap((sample) => Object.keys(sample.threads)))];
 console.log(`samples: ${valid.length} valid of ${samples.length}; builds: ${builds.join(", ")}`);
+console.log(
+  'cells: median (min–max) [samples]; "≈ spread": the last median lies inside the first build\'s range',
+);
 for (const name of threadNames) {
   console.log(`\n## ${name}\n`);
   console.log(`| metric | ${builds.join(" | ")} |${builds.length > 1 ? " change |" : ""}`);
@@ -75,13 +79,20 @@ for (const name of threadNames) {
       return value === null ? null : Math.round(value * 10) / 10;
     });
     const cells = perBuild.map((numbers, index) =>
-      numbers.length === 0 ? "-" : `${medians[index]} [${numbers.join(", ")}]`,
+      numbers.length === 0
+        ? "-"
+        : `${medians[index]} (${Math.min(...numbers)}–${Math.max(...numbers)}) [${numbers.join(", ")}]`,
     );
     const first = medians[0];
     const last = medians.at(-1);
+    const withinFirstSpread =
+      typeof last === "number" &&
+      perBuild[0].length > 0 &&
+      last >= Math.min(...perBuild[0]) &&
+      last <= Math.max(...perBuild[0]);
     const change =
       builds.length > 1 && typeof first === "number" && typeof last === "number" && first !== 0
-        ? ` ${last - first > 0 ? "+" : ""}${Math.round(((last - first) / first) * 1000) / 10}% |`
+        ? ` ${last - first > 0 ? "+" : ""}${Math.round(((last - first) / first) * 1000) / 10}%${withinFirstSpread ? " ≈ spread" : ""} |`
         : builds.length > 1
           ? " - |"
           : "";
