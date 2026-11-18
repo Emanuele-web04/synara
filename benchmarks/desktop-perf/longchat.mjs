@@ -11,7 +11,7 @@
 //
 //   node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
 //   node benchmarks/desktop-perf/longchat.mjs --build main [--build branch] [--runs 3]
-//        [--label x] [--only small-38,agent-heavy] [--profile] [--capture] [--press-ms 0]
+//        [--label x] [--only small-38,agent-heavy] [--profile] [--capture] [--press-ms 80]
 //
 // --prepare-base  copies the seeded template and appends the realistic long threads
 //                 (seed-realistic-threads.ts) with that build, then migrates it once
@@ -20,7 +20,9 @@
 //                 to resolve frames to source)
 // --capture       writes each cold snapshot frame to <results>/frames/frame-<name>.json,
 //                 the input of apps/web/perf/longChatDerivations.perf.test.ts
-// --press-ms      time between pointerdown and pointerup on a sidebar row (default 0)
+// --press-ms      time between pointerdown and pointerup on a sidebar row (default 80, a
+//                 typical mouse click). Open timings start at pointerdown, so they include
+//                 the press; work started on pointerdown overlaps it. 0 = instant click.
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -555,7 +557,7 @@ const options = {
   profile: args.includes("--profile"),
   capture: args.includes("--capture"),
   only: value("only")?.split(","),
-  pressMs: Number(value("press-ms", "0")),
+  pressMs: Number(value("press-ms", "80")),
 };
 const output = {
   suite: "longchat",

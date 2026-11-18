@@ -156,12 +156,18 @@ rows, and a fling that samples how much of the viewport no row covers.
 
 | Reading                    | Meaning                                                                                      |
 | -------------------------- | -------------------------------------------------------------------------------------------- |
+| `cold/warm: first row ms`  | pointerdown on the sidebar row until the first new message row is on screen                  |
 | `cold/warm: at bottom ms`  | pointerdown on the sidebar row until new rows are on screen and the transcript is at the end |
 | `script`, `style+layout`   | main-thread time from `Performance.getMetrics` over the measurement                          |
 | `long tasks`               | tasks over 50 ms (PerformanceObserver)                                                       |
 | `snapshot KB / arrival ms` | largest WebSocket frame after the press, and when it arrived                                 |
 | `retained heap MB`         | JS heap after GC, after the cold open, minus before it                                       |
 | `blank >25% frames`        | fling frames where mounted rows cover less than 75% of the viewport                          |
+
+Open timings start at **pointerdown**, so they include the press itself: by default
+the button is released after 80 ms (`--press-ms`, a typical mouse click), and work the
+app starts on pointerdown (subscribing a thread) overlaps it. `--press-ms 0` releases at
+once, which hides that overlap and reads the same as an instant synthetic click.
 
 Valid: main-thread times, long tasks, open latency, payload sizes, heap. **Not valid:
 frame times** — headless Chromium rasterizes in software. For frames on the real GPU,
