@@ -30,6 +30,7 @@ import { BotFace, botMood } from "../BotFace";
 import { useBotEditor } from "../editor/botEditorStore";
 import { IconButton, Strip } from "../kit/controls";
 import { Icon } from "../kit/Icon";
+import { Backdrop } from "../kit/Backdrop";
 import { Menu, type MenuEntry } from "../kit/Menu";
 import { MetalRing } from "~/components/ui/metal/LiquidMetal";
 import { MessageList } from "./MessageList";
@@ -167,6 +168,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
       data-under-top={edges.top || undefined}
       data-under-bottom={edges.bottom || undefined}
     >
+      <Backdrop />
       <div className="thread-pane__top" ref={top}>
         <TopBar bot={bot} answering={answering} controlsRef={setControls} />
         {error ? <Banner text={error} /> : null}

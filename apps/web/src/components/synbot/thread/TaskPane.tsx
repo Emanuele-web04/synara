@@ -18,6 +18,7 @@ import { retainThreadDetailSubscription } from "~/threadDetailSubscriptionRetent
 
 import { DeferredChatView, noopChatSurfaceAction } from "../../chat/ChatThreadSurfacePrimitives";
 import { BotFace, taskMood } from "../BotFace";
+import { Backdrop } from "../kit/Backdrop";
 import { Chip, IconButton, Pane, Strip, Text } from "../kit/controls";
 import { useOpenTask } from "../synbotNav";
 import { ProofCard } from "./ProofCard";
@@ -52,6 +53,7 @@ export function TaskPane({
   const pr = useStore((state) => state.threadShellById?.[threadId]?.lastKnownPr?.url ?? null);
   return (
     <Pane width="sessions" edge="left" className="task-pane">
+      <Backdrop />
       <Strip
         className="task-bar"
         leading={

@@ -78,3 +78,6 @@ SOFTWARE.
 SynBot's face (`assets/synbot-ghost-*.webp`) is HoloBot's chrome logo render
 (`assets/brand/logo-chrome-1024.png` in the HoloBot repository), cut out of its black square and
 scaled to 48, 96, 192 and 384 px, ported to SynBot at the owner's request.
+
+The dithered backdrop (`Backdrop.tsx`, `dither.ts`) is HoloBot's own, generated in code (HoloBot's
+`packages/ui/src/dither.ts`), ported to SynBot at the owner's request.

@@ -993,6 +993,19 @@
   height: 100%;
 }
 
+/* The dithered backdrop (Backdrop.tsx): along the bottom of its pane, behind the pane's content
+   (an .hb-pane stacks its own content, so z-index -1 sits over the pane's surface and under its
+   rows), one canvas pixel per device pixel, scaled without smoothing. */
+.hb-backdrop {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: -1;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
 /* Menu (ui/menu's bare popup): a rounded panel over everything, compact rows. It never runs
    past the window: ui/menu flips it and `--available-height` caps it. */
 .hb-menu__panel {
