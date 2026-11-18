@@ -32,6 +32,7 @@ const harness = vi.hoisted(() => ({
     provider: {
       listAcpRegistryAgents: vi.fn(async () => ({ agents: [] })),
       installAcpRegistryAgent: vi.fn(async () => ({ command: "", args: [] })),
+      uninstallAcpAgent: vi.fn(async () => ({ removed: false })),
       resolveExecutable: vi.fn(async () => ({ resolvedPath: null })),
     },
   },

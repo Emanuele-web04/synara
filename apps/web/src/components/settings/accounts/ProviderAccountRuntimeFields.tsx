@@ -404,6 +404,23 @@ export function AcpAgentAdvancedFields({ config, onCommit }: AcpInstanceConfigFi
       </label>
       <label className="block sm:col-span-2">
         <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentAuthMethodId")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={readConfigString(config, "authMethodId")}
+          onCommit={(authMethodId) => onCommit("authMethodId", authMethodId || undefined)}
+          placeholder="claude-api-key"
+          spellCheck={false}
+        />
+        <span className="mt-1 block text-ui-sm text-muted-foreground">
+          {t("settings:acpAgentAuthMethodIdDescription")}
+        </span>
+      </label>
+      <label className="block sm:col-span-2">
+        <span className="block text-ui-sm font-medium text-foreground">
           {t("settings:acpAgentModels")}
         </span>
         <DebouncedSettingTextInput

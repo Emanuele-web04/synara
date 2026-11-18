@@ -11,9 +11,11 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
+
+import { resolveExecutable } from "@synara/shared/executable";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +57,16 @@ export type AcpRegistryLaunch = {
   args?: string[];
 };
 
+export type AcpRegistryAvailability = {
+  // "installed": the pinned managed build for this registry version is on disk.
+  // "update-available": an older managed version is on disk; installing fetches
+  //   the registry's current build.
+  // "on-path": the agent's own CLI resolves on PATH (binary agents only).
+  state: "installed" | "update-available" | "on-path";
+  path?: string;
+  installedVersion?: string;
+};
+
 export type AcpRegistryAgentDescriptor = {
   id: string;
   name: string;
@@ -63,6 +75,7 @@ export type AcpRegistryAgentDescriptor = {
   repository?: string;
   icon?: string;
   launch: AcpRegistryLaunch;
+  availability?: AcpRegistryAvailability;
 };
 
 export type AcpRegistryInstallResult = {
@@ -166,32 +179,97 @@ function resolveLaunch(agent: RegistryAgentJson, platformKey: string | null): Ac
       args: [asString(uvx.package)!, ...asArgs(uvx.args)],
     };
   }
+  const target = platformKey !== null ? binaryTargetFor(agent, platformKey) : null;
+  if (!target) {
+    return { kind: "binary", installable: false };
+  }
+  // The bare executable name (e.g. "cursor-agent") for PATH detection and
+  // display; the managed absolute path only exists after install.
+  const cmd = asString(target.cmd)!;
   return {
     kind: "binary",
-    installable: platformKey !== null && binaryTargetFor(agent, platformKey) !== null,
+    installable: true,
+    command: nodePath.basename(cmd.replaceAll("\\", "/")),
+    args: asArgs(target.args),
   };
 }
 
-export async function listAcpRegistryAgents(): Promise<{
+// ---- Managed-install availability ----
+
+async function hasInstallMarker(dir: string): Promise<boolean> {
+  try {
+    await stat(nodePath.join(dir, INSTALL_MARKER));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Detects which lifecycle state a binary agent is in for this machine:
+// managed install at the registry's version, an older managed install
+// (update-available), or the agent's own CLI already on PATH.
+async function resolveAvailability(
+  agent: RegistryAgentJson,
+  launch: AcpRegistryLaunch,
+  platformKey: string | null,
+  synaraBaseDir: string,
+): Promise<AcpRegistryAvailability | undefined> {
+  if (launch.kind !== "binary" || platformKey === null) return undefined;
+  const id = asString(agent.id);
+  const version = asString(agent.version);
+  const target = binaryTargetFor(agent, platformKey);
+  if (!id || !version || !target) return undefined;
+  const relCmd = asString(target.cmd)!.replaceAll("\\", "/").replace(/^\.\//u, "");
+  const parent = nodePath.join(synaraAcpAgentsDir(synaraBaseDir), sanitizePathSegment(id));
+  const currentDir = nodePath.join(parent, sanitizePathSegment(version));
+  const managedCommand = nodePath.join(currentDir, relCmd);
+  if ((await hasInstallMarker(currentDir)) && (await stat(managedCommand).catch(() => null))) {
+    return { state: "installed", path: managedCommand };
+  }
+  try {
+    for (const entry of await readdir(parent)) {
+      if (entry === sanitizePathSegment(version)) continue;
+      if (await hasInstallMarker(nodePath.join(parent, entry))) {
+        return { state: "update-available", installedVersion: entry };
+      }
+    }
+  } catch {
+    // No managed directory at all.
+  }
+  const onPath = launch.command ? resolveExecutable(launch.command) : null;
+  return onPath ? { state: "on-path", path: onPath } : undefined;
+}
+
+export async function listAcpRegistryAgents(synaraBaseDir?: string): Promise<{
   agents: AcpRegistryAgentDescriptor[];
   cached: boolean;
+  runners: { npx: boolean; uvx: boolean };
 }> {
   const hadCache =
     registryCache !== null && Date.now() - registryCache.fetchedAt < REGISTRY_CACHE_TTL_MS;
   const agents = await fetchRegistryAgents();
   const platformKey = acpRegistryPlatformKey();
+  const runners = {
+    npx: resolveExecutable("npx") !== null,
+    uvx: resolveExecutable("uvx") !== null,
+  };
   const descriptors: AcpRegistryAgentDescriptor[] = [];
   for (const agent of agents) {
     const id = asString(agent.id);
     const name = asString(agent.name);
     const version = asString(agent.version);
     if (!id || !name || !version) continue;
+    const launch = resolveLaunch(agent, platformKey);
     const descriptor: AcpRegistryAgentDescriptor = {
       id,
       name,
       version,
-      launch: resolveLaunch(agent, platformKey),
+      launch,
     };
+    if (synaraBaseDir !== undefined) {
+      const availability = await resolveAvailability(agent, launch, platformKey, synaraBaseDir);
+      if (availability !== undefined) descriptor.availability = availability;
+    }
     const description = asString(agent.description);
     if (description !== undefined) descriptor.description = description;
     const repository = asString(agent.repository);
@@ -200,7 +278,7 @@ export async function listAcpRegistryAgents(): Promise<{
     if (icon !== undefined) descriptor.icon = icon;
     descriptors.push(descriptor);
   }
-  return { agents: descriptors, cached: hadCache };
+  return { agents: descriptors, cached: hadCache, runners };
 }
 
 // ---- Install ----
@@ -357,4 +435,49 @@ export async function installAcpRegistryAgent(
     );
   }
   return installBinaryAgent(agent, platformKey, synaraBaseDir);
+}
+
+// ---- Uninstall ----
+
+export type AcpUninstallResult = {
+  removed: boolean;
+  /** Set when another provider instance still launches from this managed dir. */
+  inUseByInstanceId?: string;
+};
+
+// Removes the managed install an account's command points into. Only deletes
+// directories under the private `acp-agents` root; any other path is a no-op.
+export async function uninstallAcpManagedAgent(input: {
+  command: string;
+  synaraBaseDir: string;
+  /** instanceId -> command of other ACP instances that may share this install. */
+  otherInstances: ReadonlyArray<{ instanceId: string; command?: string }>;
+}): Promise<AcpUninstallResult> {
+  const root = nodePath.resolve(synaraAcpAgentsDir(input.synaraBaseDir));
+  const relative = nodePath.relative(root, nodePath.resolve(input.command));
+  if (relative === "" || relative.startsWith("..") || nodePath.isAbsolute(relative)) {
+    return { removed: false };
+  }
+  const segments = relative.split(nodePath.sep);
+  const id = segments[0];
+  const version = segments[1];
+  // Command must name a file inside <id>/<version>/, not the dir itself.
+  if (!id || !version || segments.length < 3) {
+    return { removed: false };
+  }
+  const idDir = nodePath.join(root, id);
+  for (const other of input.otherInstances) {
+    if (!other.command) continue;
+    const otherRel = nodePath.relative(idDir, nodePath.resolve(other.command));
+    if (otherRel !== "" && !otherRel.startsWith("..") && !nodePath.isAbsolute(otherRel)) {
+      return { removed: false, inUseByInstanceId: other.instanceId };
+    }
+  }
+  await rm(nodePath.join(idDir, version), { recursive: true, force: true });
+  // Drop the agent dir entirely once its last version is gone.
+  const remaining = await readdir(idDir).catch(() => [] as string[]);
+  if (remaining.length === 0) {
+    await rm(idDir, { recursive: true, force: true });
+  }
+  return { removed: true };
 }

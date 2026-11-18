@@ -12,6 +12,7 @@ import {
   clearAcpRegistryCacheForTests,
   installAcpRegistryAgent,
   listAcpRegistryAgents,
+  uninstallAcpManagedAgent,
 } from "./AcpRegistry.ts";
 
 const scratchDirs: string[] = [];
@@ -168,5 +169,45 @@ describe("installAcpRegistryAgent", () => {
         /has no build for/u,
       );
     }
+  });
+});
+
+describe("uninstallAcpManagedAgent", () => {
+  it.skipIf(process.platform !== "darwin" || process.arch !== "arm64")(
+    "removes a managed install only when no other instance launches from it",
+    async () => {
+      const baseDir = scratch();
+      stubFetch(ARCHIVE_BYTES);
+      const installed = await installAcpRegistryAgent("bin-agent", baseDir);
+
+      const guarded = await uninstallAcpManagedAgent({
+        command: installed.command,
+        synaraBaseDir: baseDir,
+        otherInstances: [{ instanceId: "acp_other", command: installed.command }],
+      });
+      expect(guarded).toEqual({ removed: false, inUseByInstanceId: "acp_other" });
+      expect(existsSync(installed.command)).toBe(true);
+
+      const removed = await uninstallAcpManagedAgent({
+        command: installed.command,
+        synaraBaseDir: baseDir,
+        otherInstances: [{ instanceId: "acp_other", command: "gemini" }],
+      });
+      expect(removed).toEqual({ removed: true });
+      expect(existsSync(installed.command)).toBe(false);
+    },
+  );
+
+  it("never removes executables outside the managed root", async () => {
+    const baseDir = scratch();
+    const outside = join(scratch(), "agent");
+    writeFileSync(outside, "x");
+    const result = await uninstallAcpManagedAgent({
+      command: outside,
+      synaraBaseDir: baseDir,
+      otherInstances: [],
+    });
+    expect(result).toEqual({ removed: false });
+    expect(existsSync(outside)).toBe(true);
   });
 });

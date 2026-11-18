@@ -22,6 +22,7 @@ import {
   type ProviderInstanceOption,
 } from "~/appSettings";
 import { useTranslation } from "~/i18n";
+import { ensureNativeApi } from "~/nativeApi";
 import { Loader2Icon, PlayIcon, XIcon } from "~/lib/icons";
 import { providerAccountIdentityLabel } from "~/lib/providerInstancePresentation";
 import { providerAccountStatusSummary } from "~/lib/providerSetupStatus";
@@ -210,8 +211,26 @@ export function ProviderAccountEditor(props: {
               size="xs"
               variant="ghost"
               onClick={() => {
+                const removedConfig = manageable?.instance.config;
+                const removedCommand =
+                  removedConfig &&
+                  typeof removedConfig === "object" &&
+                  !Array.isArray(removedConfig) &&
+                  typeof (removedConfig as { command?: unknown }).command === "string"
+                    ? (removedConfig as { command: string }).command
+                    : null;
                 props.updateSettings(removeManageableProviderInstance(props.settings, instanceId));
                 props.onAccountRemoved();
+                // Clean up a managed `acp-agents` install the account launched.
+                // Non-managed commands are a server-side no-op.
+                if (provider === "acp" && removedCommand !== null) {
+                  void ensureNativeApi()
+                    .provider.uninstallAcpAgent({
+                      command: removedCommand,
+                      instanceId,
+                    })
+                    .catch(() => {});
+                }
               }}
             >
               <XIcon className="size-3.5" />

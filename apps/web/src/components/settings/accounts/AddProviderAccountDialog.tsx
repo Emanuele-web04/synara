@@ -78,6 +78,10 @@ export function AddProviderAccountDialog(props: {
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [registryAgents, setRegistryAgents] =
     useState<ReadonlyArray<AcpRegistryAgentDescriptor> | null>(null);
+  const [registryRunners, setRegistryRunners] = useState<{
+    npx: boolean;
+    uvx: boolean;
+  } | null>(null);
   const [registrySelection, setRegistrySelection] = useState<string>(ACP_CUSTOM_AGENT);
   const [installingAgentId, setInstallingAgentId] = useState<string | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
@@ -101,6 +105,7 @@ export function AddProviderAccountDialog(props: {
       setConfig({});
       setSubmitAttempted(false);
       setRegistryAgents(null);
+      setRegistryRunners(null);
       setRegistrySelection(ACP_CUSTOM_AGENT);
       setInstallingAgentId(null);
       setRegistryError(null);
@@ -115,7 +120,9 @@ export function AddProviderAccountDialog(props: {
       .provider.listAcpRegistryAgents()
       .then(
         (result) => {
-          if (!cancelled) setRegistryAgents(result.agents);
+          if (cancelled) return;
+          setRegistryAgents(result.agents);
+          if (result.runners) setRegistryRunners(result.runners);
         },
         (error) => {
           if (!cancelled) {
@@ -165,6 +172,15 @@ export function AddProviderAccountDialog(props: {
     setRegistryError(null);
     setLabel(agent.name);
     setIdOverride(`acp_${agent.id}`);
+    // The user's own install on PATH wins over a managed download or npx.
+    if (agent.availability?.state === "on-path" && agent.availability.path) {
+      setConfig((current) => ({
+        ...current,
+        command: agent.availability!.path!,
+        args: acpArgsToText(agent.launch.args ?? []),
+      }));
+      return;
+    }
     if (agent.launch.kind !== "binary") {
       setConfig((current) => ({
         ...current,
@@ -306,6 +322,29 @@ export function AddProviderAccountDialog(props: {
                         ) : null}
                         <span className="truncate">{agent.name}</span>
                         <span className="truncate text-muted-foreground">{agent.version}</span>
+                        {agent.availability?.state === "installed" ? (
+                          <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
+                        ) : null}
+                        {agent.availability?.state === "update-available" ? (
+                          <span className="shrink-0 text-muted-foreground">
+                            {t("settings:acpRegistryUpdateAvailable")}
+                          </span>
+                        ) : null}
+                        {agent.availability?.state === "on-path" ? (
+                          <span className="shrink-0 text-muted-foreground">
+                            {t("settings:acpRegistryOnPath")}
+                          </span>
+                        ) : null}
+                        {agent.launch.kind === "npx" && registryRunners?.npx === false ? (
+                          <span className="shrink-0 text-warning">
+                            {t("settings:acpRegistryNeedsNpx")}
+                          </span>
+                        ) : null}
+                        {agent.launch.kind === "uvx" && registryRunners?.uvx === false ? (
+                          <span className="shrink-0 text-warning">
+                            {t("settings:acpRegistryNeedsUvx")}
+                          </span>
+                        ) : null}
                       </span>
                     </SelectItem>
                   ))}

@@ -322,6 +322,8 @@ import {
   ProviderInstallAcpRegistryAgentResult,
   ProviderResolveExecutableInput,
   ProviderResolveExecutableResult,
+  ProviderUninstallAcpAgentInput,
+  ProviderUninstallAcpAgentResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsInput,
@@ -1816,6 +1818,12 @@ export const WsProviderInstallAcpRegistryAgentRpc = Rpc.make(
   },
 );
 
+export const WsProviderUninstallAcpAgentRpc = Rpc.make(WS_METHODS.providerUninstallAcpAgent, {
+  payload: ProviderUninstallAcpAgentInput,
+  success: ProviderUninstallAcpAgentResult,
+  error: WsRpcError,
+});
+
 export const WsProviderResolveExecutableRpc = Rpc.make(WS_METHODS.providerResolveExecutable, {
   payload: ProviderResolveExecutableInput,
   success: ProviderResolveExecutableResult,
@@ -2521,6 +2529,7 @@ export type WsFeatureRpc =
   | typeof WsProviderListAgentsRpc
   | typeof WsProviderListAcpRegistryAgentsRpc
   | typeof WsProviderInstallAcpRegistryAgentRpc
+  | typeof WsProviderUninstallAcpAgentRpc
   | typeof WsProviderResolveExecutableRpc
   | typeof WsAccountStatusRpc
   | typeof WsAccountBillingStatusRpc
@@ -2731,6 +2740,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsProviderListAgentsRpc,
   WsProviderListAcpRegistryAgentsRpc,
   WsProviderInstallAcpRegistryAgentRpc,
+  WsProviderUninstallAcpAgentRpc,
   WsProviderResolveExecutableRpc,
   WsAccountStatusRpc,
   WsAccountBillingStatusRpc,

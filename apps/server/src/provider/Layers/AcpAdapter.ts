@@ -246,6 +246,10 @@ interface AcpSessionContext {
   resumeReplayLastSuppressedAt: number | undefined;
   // Resolved spawn/config settings for this session's agent instance.
   readonly agentSettings: AcpAgentRuntimeSettings;
+  // Prompt content kinds the agent advertised in initialize
+  // (image/audio/embeddedContext). Baseline ACP guarantees only text and
+  // resource_link; richer blocks MUST be gated on these flags.
+  readonly promptCapabilities: Acp.PromptCapabilities | undefined;
   // Pending until startSession has applied the requested model/effort config.
   // The session is registered in `sessions` before the config RPCs run (so
   // replay keeps draining), which means sendTurn can route to it mid-startup;
@@ -281,6 +285,15 @@ export function isRenderableAcpAssistantDelta(input: {
   readonly text: string;
 }): boolean {
   return input.streamKind !== "reasoning_text" && input.text.trim().length > 0;
+}
+
+// ACP gates image/audio/embedded-context blocks on `promptCapabilities`; a
+// missing flag means the agent accepts only text + resource_link. Unsupported
+// images degrade to their on-disk path inside the file-attachments block.
+export function resolveAcpPromptImageMode(
+  promptCapabilities: Acp.PromptCapabilities | undefined,
+): "blocks" | "path-references" {
+  return promptCapabilities?.image === true ? "blocks" : "path-references";
 }
 
 // Identifies the agent's parent `Task` tool row; child-session progress is not
@@ -1118,6 +1131,7 @@ export function makeAcpAdapter(
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             agentSettings: effectiveAgentSettings,
+            promptCapabilities: started.initializeResult.agentCapabilities?.promptCapabilities,
             sessionConfigReady,
             teardownComplete,
             latestSessionCostUsd: undefined,
@@ -1628,6 +1642,7 @@ export function makeAcpAdapter(
             }),
           ),
         );
+        const imagePromptMode = resolveAcpPromptImageMode(ctx.promptCapabilities);
         const promptParts: Array<Acp.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: appendProviderReferencesPromptBlock({
@@ -1643,6 +1658,9 @@ export function makeAcpAdapter(
           attachments: input.attachments,
           attachmentsDir: serverConfig.attachmentsDir,
           include: "all-files",
+          // Without image support the attachment still reaches the agent as an
+          // on-disk path it can read like any other file.
+          ...(imagePromptMode === "path-references" ? { includeImage: () => true } : {}),
         });
         if (promptText) {
           promptParts.push({
@@ -1651,13 +1669,15 @@ export function makeAcpAdapter(
           });
         }
         promptParts.push(
-          ...(yield* loadProviderPromptImageBlocks({
-            attachments: input.attachments,
-            attachmentsDir: serverConfig.attachmentsDir,
-            provider: PROVIDER,
-            method: "session/prompt",
-            readFile: fileSystem.readFile,
-          })),
+          ...(imagePromptMode === "blocks"
+            ? yield* loadProviderPromptImageBlocks({
+                attachments: input.attachments,
+                attachmentsDir: serverConfig.attachmentsDir,
+                provider: PROVIDER,
+                method: "session/prompt",
+                readFile: fileSystem.readFile,
+              })
+            : []),
         );
 
         if (promptParts.length === 0) {

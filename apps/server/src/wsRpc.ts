@@ -227,7 +227,11 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
-import { installAcpRegistryAgent, listAcpRegistryAgents } from "./provider/acp/AcpRegistry";
+import {
+  installAcpRegistryAgent,
+  listAcpRegistryAgents,
+  uninstallAcpManagedAgent,
+} from "./provider/acp/AcpRegistry";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
@@ -3133,13 +3137,38 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         [WS_METHODS.providerListAcpRegistryAgents]: () =>
           rpcEffect(
-            Effect.tryPromise(() => listAcpRegistryAgents()),
+            Effect.tryPromise(() => listAcpRegistryAgents(config.baseDir)),
             "Failed to list ACP registry agents",
           ),
         [WS_METHODS.providerInstallAcpRegistryAgent]: (input: { agentId: string }) =>
           rpcEffect(
             Effect.tryPromise(() => installAcpRegistryAgent(input.agentId, config.baseDir)),
             "Failed to install the ACP agent",
+          ),
+        [WS_METHODS.providerUninstallAcpAgent]: (input: { command: string; instanceId: string }) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const otherInstances = Object.entries(settings.providerInstances)
+                .filter(
+                  ([instanceId, instance]) =>
+                    instanceId !== input.instanceId && instance.driver === "acp",
+                )
+                .map(([instanceId, instance]) => {
+                  const config = instance.config as { command?: unknown } | undefined;
+                  const entry: { instanceId: string; command?: string } = { instanceId };
+                  if (typeof config?.command === "string") entry.command = config.command;
+                  return entry;
+                });
+              return yield* Effect.tryPromise(() =>
+                uninstallAcpManagedAgent({
+                  command: input.command,
+                  synaraBaseDir: config.baseDir,
+                  otherInstances,
+                }),
+              );
+            }),
+            "Failed to uninstall the ACP agent",
           ),
         [WS_METHODS.providerResolveExecutable]: (input: { command: string }) =>
           rpcEffect(

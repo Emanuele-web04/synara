@@ -417,6 +417,8 @@ import type {
   ProviderInstallAcpRegistryAgentResult,
   ProviderResolveExecutableInput,
   ProviderResolveExecutableResult,
+  ProviderUninstallAcpAgentInput,
+  ProviderUninstallAcpAgentResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsInput,
@@ -1511,6 +1513,9 @@ export interface NativeApi {
     installAcpRegistryAgent: (
       input: ProviderInstallAcpRegistryAgentInput,
     ) => Promise<ProviderInstallAcpRegistryAgentResult>;
+    uninstallAcpAgent: (
+      input: ProviderUninstallAcpAgentInput,
+    ) => Promise<ProviderUninstallAcpAgentResult>;
     resolveExecutable: (
       input: ProviderResolveExecutableInput,
     ) => Promise<ProviderResolveExecutableResult>;

@@ -405,16 +405,30 @@ export const AcpRegistryAgentDescriptor = Schema.Struct({
     kind: AcpRegistryAgentLaunchKind,
     /** False when the registry ships no artifact for the current platform. */
     installable: Schema.Boolean,
-    // `npx`/`uvx` launch immediately, so their command and argv arrive with the
-    // listing; `binary` agents need `provider.installAcpRegistryAgent` first.
+    // `npx`/`uvx` carry the runner + argv; `binary` carries the bare executable
+    // name for PATH detection and display (the managed path comes from
+    // `provider.installAcpRegistryAgent` or `availability.path`).
     command: Schema.optional(TrimmedNonEmptyString),
     args: Schema.optional(Schema.Array(Schema.String)),
   }),
+  availability: Schema.optionalKey(
+    Schema.Struct({
+      /** Lifecycle state on this machine: managed install at the registry
+       * version, an older managed install, or the CLI already on PATH. */
+      state: Schema.Literals(["installed", "update-available", "on-path"]),
+      /** Managed or PATH-resolved executable backing this state. */
+      path: Schema.optional(TrimmedNonEmptyString),
+      /** Version under Synara management when a newer registry build exists. */
+      installedVersion: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
 });
 export type AcpRegistryAgentDescriptor = typeof AcpRegistryAgentDescriptor.Type;
 
 export const ProviderListAcpRegistryAgentsResult = Schema.Struct({
   agents: Schema.Array(AcpRegistryAgentDescriptor),
+  /** Whether the npx/uvx package runners resolve on PATH. */
+  runners: Schema.optionalKey(Schema.Struct({ npx: Schema.Boolean, uvx: Schema.Boolean })),
   cached: Schema.optional(Schema.Boolean),
   error: Schema.optional(TrimmedNonEmptyString),
 });
@@ -433,6 +447,20 @@ export const ProviderInstallAcpRegistryAgentResult = Schema.Struct({
 });
 export type ProviderInstallAcpRegistryAgentResult =
   typeof ProviderInstallAcpRegistryAgentResult.Type;
+
+export const ProviderUninstallAcpAgentInput = Schema.Struct({
+  /** The managed command path the removed account launched. */
+  command: TrimmedNonEmptyString,
+  /** The account being removed; excluded from the in-use check. */
+  instanceId: TrimmedNonEmptyString,
+});
+export type ProviderUninstallAcpAgentInput = typeof ProviderUninstallAcpAgentInput.Type;
+
+export const ProviderUninstallAcpAgentResult = Schema.Struct({
+  removed: Schema.Boolean,
+  inUseByInstanceId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderUninstallAcpAgentResult = typeof ProviderUninstallAcpAgentResult.Type;
 
 export const ProviderResolveExecutableInput = Schema.Struct({
   command: Schema.String,
