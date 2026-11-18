@@ -126,6 +126,56 @@ cause and is counted in `failed`; it is never dropped or replaced.
   install does. Backend memory after launch therefore depends on how many provider
   transcripts this Mac holds.
 
+## Long chats
+
+The generic seeded threads have no turn ids and tiny payloads, so they do not look like
+real long agent threads. [`seed-realistic-threads.ts`](seed-realistic-threads.ts) adds
+three threads whose shape follows aggregate statistics of real data homes (all content
+is synthetic): `real-thread-agent-heavy` (275 messages, 5,751 activities, 9.7 MB of
+payloads; 1,976 activities fit the detail window), `real-thread-agent-mid` (70 messages,
+1,241 activities) and `real-thread-prose` (300 long markdown messages with code and
+tables, no tools). Assistant messages carry turn ids, tool payloads range 0.2–16 KB and
+about one `context-window.updated` follows each tool call.
+
+**Headless suite** ([`longchat.mjs`](longchat.mjs)): real backend in web mode plus the
+build's production web bundle in headless Chromium. It runs with the screen locked.
+
+```bash
+# Once per build schema: seeded template + realistic threads, migrated.
+node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
+# Two builds alternate A B B A; --profile adds CPU profiles (build with
+# SYNARA_WEB_SOURCEMAP=hidden to resolve them), --capture writes snapshot frames.
+node benchmarks/desktop-perf/longchat.mjs --build main --build branch --runs 3 --label x
+node benchmarks/desktop-perf/longchat-report.mjs benchmarks/desktop-perf/results/longchat-*-x.json
+```
+
+It opens `small-38`, `prose-300`, `agent-mid`, `agent-heavy` and `synthetic-1400` cold
+(detail never loaded in the page) and warm (after a switch away), then scrolls each long
+one: 90 wheel ticks of 240 px, a 40×1200 px fling, the same fling again over measured
+rows, and a fling that samples how much of the viewport no row covers.
+
+| Reading                    | Meaning                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `cold/warm: at bottom ms`  | pointerdown on the sidebar row until new rows are on screen and the transcript is at the end |
+| `script`, `style+layout`   | main-thread time from `Performance.getMetrics` over the measurement                          |
+| `long tasks`               | tasks over 50 ms (PerformanceObserver)                                                       |
+| `snapshot KB / arrival ms` | largest WebSocket frame after the press, and when it arrived                                 |
+| `retained heap MB`         | JS heap after GC, after the cold open, minus before it                                       |
+| `blank >25% frames`        | fling frames where mounted rows cover less than 75% of the viewport                          |
+
+Valid: main-thread times, long tasks, open latency, payload sizes, heap. **Not valid:
+frame times** — headless Chromium rasterizes in software. For frames on the real GPU,
+create a template set with the realistic threads and run the opt-in Electron suite (the
+window must stay in front):
+
+```bash
+node benchmarks/desktop-perf/prepare.mjs --ref main --name main --templates --template-set longchat --realistic
+node benchmarks/desktop-perf/run.mjs --build main --suites longchat --template-set longchat
+```
+
+`apps/web/perf/longChatDerivations.perf.test.ts` times the per-event derivation chain on
+the captured snapshot frames (`SYNARA_PERF=1`) and fails on a tenfold regression.
+
 ## Diagnostics
 
 `diagnose.mjs` (startup timeline, quit log, backend and GPU memory, compositor layers,
