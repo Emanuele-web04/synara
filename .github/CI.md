@@ -326,8 +326,8 @@ returns the other five to their native shards. In
 [run 44389626369](https://github.com/Emanuele-web04/synara/actions/runs/44389626369)
 the halves took 121 s (`1/6`), 129 s, 113 s, 118 s, 121 s and 126 s (`6/6`),
 and the three component jobs took 154 s, 161 s and 165 s. The required gate
-passed 184 s after the run was created and used 32.4 runner-minutes. Every
-job finished in 123–165 s. This is one sample. The two earlier runs of the
+passed 184 s after the run was created and used 32.4 runner-minutes. The
+browser, unit and Desktop jobs took 122–165 s. This is one sample. The two earlier runs of the
 branch passed the gate in 240 s and 219 s. In the 240 s run, every file in
 components 1/3 ran 35–40% slower than in other runs, with an unchanged file
 set.
