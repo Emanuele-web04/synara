@@ -19,7 +19,7 @@ export function InboxRecapHistory(props: HistoryProps) {
   const openSignIn = useAccountDialogStore((store) => store.openSignIn);
   if (status?.state !== "signed-in") {
     return (
-      <div className="flex items-center justify-between gap-3 text-ui-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-3 text-ui-sm text-muted-foreground">
         <span>Sign in to automatically save private recaps across your devices.</span>
         <Button variant="outline" size="sm" onClick={openSignIn}>
           Sign in

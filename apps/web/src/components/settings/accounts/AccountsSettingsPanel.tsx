@@ -142,7 +142,7 @@ export function AccountsSettingsPanel({
           onOpenAccount={onOpenAccount}
         />
       ))}
-      <div className="space-y-1.5 px-2 text-ui-sm leading-relaxed text-muted-foreground">
+      <SettingsEmptyState layout="status" className="space-y-1.5 text-ui-sm leading-relaxed">
         {notInstalled.length > 0 ? (
           <p>
             {t("settings:accounts_notInstalled", {
@@ -153,7 +153,7 @@ export function AccountsSettingsPanel({
           </p>
         ) : null}
         <p>{t("settings:accounts_footnote")}</p>
-      </div>
+      </SettingsEmptyState>
     </div>
   );
 }

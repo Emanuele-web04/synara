@@ -9,7 +9,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { SettingsRow, SettingsSection } from "~/components/settings/SettingsPanelPrimitives";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+  SettingsSectionShell,
+} from "~/components/settings/SettingsPanelPrimitives";
 import { Switch } from "~/components/ui/switch";
 import { SkillCubeIcon } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
@@ -112,29 +117,35 @@ export function SkillsSettingsPanel() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="settings:skills_portableSkills">
-        <SettingsRow
-          id="setting-synara-skills-folder"
-          title="settings:skills_synaraSkillsFolder"
-          description="settings:skillsPlacedHereAreAvailableOnEveryProviderWhen"
-          status={
-            synaraSkillsDir ? (
-              <code className="break-all text-ui-sm text-muted-foreground">{synaraSkillsDir}</code>
-            ) : null
-          }
-          control={
-            <span className="text-ui leading-snug font-medium text-muted-foreground">
-              {catalogQuery.isLoading
-                ? t("settings:skills_scanning")
-                : t("settings:skillsEnabledOf", {
-                    enabled: enabledSkills,
-                    total: totalSkills,
-                    count: totalSkills,
-                  })}
+      <SettingsSectionShell
+        title="settings:skills_portableSkills"
+        action={
+          !catalogQuery.isLoading && totalSkills > 0 ? (
+            <span className="text-ui-sm text-muted-foreground">
+              {t("settings:skillsEnabledOf", {
+                enabled: enabledSkills,
+                total: totalSkills,
+                count: totalSkills,
+              })}
             </span>
-          }
-        />
-      </SettingsSection>
+          ) : undefined
+        }
+      >
+        <SettingsCard>
+          <SettingsRow
+            id="setting-synara-skills-folder"
+            title="settings:skills_synaraSkillsFolder"
+            description="settings:skillsPlacedHereAreAvailableOnEveryProviderWhen"
+            status={
+              synaraSkillsDir ? (
+                <code className="break-all text-ui-sm text-muted-foreground">
+                  {synaraSkillsDir}
+                </code>
+              ) : null
+            }
+          />
+        </SettingsCard>
+      </SettingsSectionShell>
 
       {catalogQuery.isError ? (
         <SettingsSection title="common:plugin_skillsSection">

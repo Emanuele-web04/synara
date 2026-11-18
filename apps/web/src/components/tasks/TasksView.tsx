@@ -10,7 +10,16 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "~/components/ui/empty";
 import { useNowMs } from "~/hooks/useNowMs";
+import { CircleCheckIcon } from "~/lib/icons";
 import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 import { useTasksSurfaceEnabled } from "../../tasksSurface";
 import { RouteInsetSurface } from "../RouteInsetSurface";
@@ -73,6 +82,7 @@ export default function TasksView() {
     />
   );
   const shownDone = showsAllDone ? completed : completed.slice(0, DONE_PREVIEW_COUNT);
+  const isEmptyList = !isLoading && !isError && openRows.length === 0 && completed.length === 0;
 
   return (
     <RouteInsetSurface>
@@ -104,12 +114,27 @@ export default function TasksView() {
               </div>
             ) : null}
 
-            <div className="flex flex-col gap-0.5">
-              <div role="list" aria-label={t("common:toDo")} className="flex flex-col gap-0.5">
-                {openRows.map(renderRow)}
+            {isEmptyList ? (
+              <Empty className="gap-4 py-14">
+                <EmptyMedia variant="icon">
+                  <CircleCheckIcon />
+                </EmptyMedia>
+                <EmptyHeader>
+                  <EmptyTitle>{t("common:task_emptyTitle")}</EmptyTitle>
+                  <EmptyDescription>{t("common:task_emptyHint")}</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                <div role="list" aria-label={t("common:toDo")} className="flex flex-col gap-0.5">
+                  {openRows.map(renderRow)}
+                </div>
+                <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
               </div>
-              <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
-            </div>
+            )}
 
             {completed.length > 0 ? (
               <div className="flex flex-col gap-0.5 opacity-80">
