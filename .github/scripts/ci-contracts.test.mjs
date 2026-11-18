@@ -410,11 +410,14 @@ test("measured critical-path distribution stays three-way and skips redundant ap
       ["chat-workflows", "1/1", "1/1"],
     ],
   );
+  const browserPair = jobs.browser.steps.find((step) => step.parallel)?.parallel;
   assert.deepEqual(
-    jobs.browser.steps
-      .find((step) => step.parallel)
-      ?.parallel.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
+    browserPair?.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
     ["a", "b"],
+  );
+  assert.deepEqual(
+    browserPair?.map((step) => step.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED),
+    ["true", "true"],
   );
   const runtime = jobs.browser.steps.find((step) => step.name === "Install browser test runtime");
   const cache = jobs.browser.steps.find((step) => step.name === "Cache Chromium headless shell");

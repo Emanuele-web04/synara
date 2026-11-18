@@ -220,6 +220,8 @@ export default defineConfig({
             withTransformCache(compiler, {
               directory: path.resolve(import.meta.dirname, cacheDirectory),
               salt: transformCacheSalt(productionBuild),
+              coordinateWrites:
+                !productionBuild && process.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED === "true",
             });
             cacheWrapped = true;
           }

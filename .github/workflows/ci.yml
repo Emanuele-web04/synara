@@ -274,13 +274,14 @@ jobs:
         timeout-minutes: 20
         run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
 
-      # The compiler cache uses atomic per-entry writes. Vite's optimizer cache
-      # and the browser API listener need a separate directory and port.
+      # Share cold compiler work by cache key. Vite's optimizer cache and the
+      # browser API listener still need a separate directory and port.
       - parallel:
           - name: Browser test (${{ matrix.project }} ${{ matrix.shardA }} A)
             if: matrix.shardA
             timeout-minutes: 20
             env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
               VITEST_BROWSER_API_PORT: "51101"
               VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-a
               VITEST_BROWSER_CHAT_SLICE: a
@@ -290,6 +291,7 @@ jobs:
             if: matrix.shardB
             timeout-minutes: 20
             env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
               VITEST_BROWSER_API_PORT: "51102"
               VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-b
               VITEST_BROWSER_CHAT_SLICE: b

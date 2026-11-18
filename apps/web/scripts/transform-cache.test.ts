@@ -17,7 +17,7 @@ type Handler = (
   options?: { moduleType?: string },
 ) => Promise<unknown>;
 
-async function fixture(salt = "salt-a", directory?: string) {
+async function fixture(salt = "salt-a", directory?: string, coordinateWrites = false) {
   const root = directory ?? (await fs.mkdtemp(path.join(tmpdir(), "synara-transform-cache-")));
   if (!directory) roots.push(root);
   const calls: string[] = [];
@@ -33,7 +33,7 @@ async function fixture(salt = "salt-a", directory?: string) {
         },
       },
     },
-    { directory: root, salt },
+    { directory: root, salt, coordinateWrites },
   );
   const handler = plugin.transform.handler as Handler;
   const run = (code: string, id = "/src/a.tsx", environment = "client", moduleType = "tsx") =>
@@ -60,6 +60,31 @@ describe("withTransformCache", () => {
       map: { mappings: 11 },
     });
     expect(second.calls).toEqual(["/src/a.tsx"]);
+  });
+
+  it("shares a cold transform between callers with the same cache", async () => {
+    const first = await fixture("salt-a", undefined, true);
+    const second = await fixture("salt-a", first.root, true);
+    const compiled = { code: "compiled(const a = 1)", map: { mappings: 11 } };
+
+    expect(await Promise.all([first.run("const a = 1"), second.run("const a = 1")])).toEqual([
+      compiled,
+      compiled,
+    ]);
+    expect([...first.calls, ...second.calls]).toEqual(["/src/a.tsx"]);
+  });
+
+  it("runs both transforms when neither caller can publish a cache entry", async () => {
+    const first = await fixture("salt-a", undefined, true);
+    const second = await fixture("salt-a", first.root, true);
+
+    expect(await Promise.all([first.run("untouched"), second.run("untouched")])).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(first.calls).toEqual(["/src/a.tsx"]);
+    expect(second.calls).toEqual(["/src/a.tsx"]);
+    expect(await entries(first.root)).toEqual([]);
   });
 
   it("keys entries by salt, module id, environment and module type", async () => {

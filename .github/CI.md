@@ -296,6 +296,16 @@ workflows ran in 181 s and 173 s with the paired processes and new Web setup.
 The preceding pilot took 254 s and 243 s respectively.
 [Paired pilot](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1)
 
+On a cold compiler cache, paired browser processes coordinate per entry. The
+reader reuses the writer's atomic result or compiles independently if the claim
+cannot be used. The test filters, browser profiles and Vite caches stay separate.
+On the Mac mini, the complete cold `chat-workflows` pair took 90.54 s before and
+85.26 s with the prototype. Toggling coordination in the final code measured
+96.65 s disabled and 93.02 s enabled, with process CPU time falling from
+331.18 s to 250.37 s. The final runs passed the same 149 cases, and all 1,507
+common compiler cache entries were byte-identical. The hosted impact remains
+unmeasured.
+
 ### Desktop lifecycle smoke during the build
 
 The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it
