@@ -1,0 +1,12 @@
+diff a/apps/web/src/editorMetadata.ts b/apps/web/src/editorMetadata.ts	(rejected hunks)
+@@ -31,8 +31,9 @@ import {
+   XcodeIcon,
+   Zed,
+ } from "./components/Icons";
++import { resolveFileManagerName } from "./lib/fileManagerNaming";
+ import { AppsIcon, FolderIcon } from "./lib/icons";
+-import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
++import { isMacPlatform } from "./lib/utils";
+ import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+ 
+ export interface EditorOption {

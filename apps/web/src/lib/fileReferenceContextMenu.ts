@@ -2,24 +2,14 @@
 // Purpose: Right-click menu shared by file rows, file previews, and chat file
 //          links (editor explorer, changed-file lists, dock file pane).
 // Layer: Web UI helpers
-// Exports: showFileReferenceContextMenu, getRevealInFolderLabel
+// Exports: showFileReferenceContextMenu
 
 import { t } from "~/i18n";
 import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { getNavigatorPlatform, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
+import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import { readNativeApi } from "~/nativeApi";
-import { toastManager } from "~/components/ui/toast";
-
-export function getRevealInFolderLabel(platform: string): string {
-  if (isWindowsPlatform(platform)) {
-    return t("workspace:revealExplorer");
-  }
-  if (isMacPlatform(platform)) {
-    return t("workspace:revealFinder");
-  }
-  return t("workspace:revealFolder");
-}
 
 // Right-click menu shared by explorer rows, changed-file rows, and the file
 // preview. Falls back to a DOM menu outside the desktop app.
@@ -77,7 +67,7 @@ export async function showFileReferenceContextMenu(input: {
         ? [
             {
               id: "reveal-in-folder" as const,
-              label: getRevealInFolderLabel(getNavigatorPlatform()),
+              label: resolveFileManagerActionLabel("file"),
             },
           ]
         : []),
@@ -97,11 +87,7 @@ export async function showFileReferenceContextMenu(input: {
     try {
       await api.shell.showInFolder(revealPath);
     } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: t("workspace:revealFileFailed"),
-        description: error instanceof Error ? error.message : t("workspace:revealFileUnknownError"),
-      });
+      showFileManagerErrorToast({ kind: "file", error });
     }
     return;
   }

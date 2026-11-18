@@ -4,16 +4,15 @@
 // Layer: lib
 
 import { t } from "~/i18n";
-import { toastManager } from "~/components/ui/toast";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
 import { readNativeApi } from "~/nativeApi";
 
 export function revealFolderInShell(input: { path: string; onRevealed?: () => void }): void {
   const api = readNativeApi();
   if (!api) {
-    toastManager.add({
-      type: "error",
-      title: t("workspace:revealFolderFailed"),
-      description: t("workspace:desktopConnectionUnavailable"),
+    showFileManagerErrorToast({
+      kind: "folder",
+      error: t("workspace:desktopConnectionUnavailable"),
     });
     return;
   }
@@ -21,10 +20,6 @@ export function revealFolderInShell(input: { path: string; onRevealed?: () => vo
     .showInFolder(input.path)
     .then(() => input.onRevealed?.())
     .catch((error) => {
-      toastManager.add({
-        type: "error",
-        title: t("workspace:revealFolderFailed"),
-        description: error instanceof Error ? error.message : t("workspace:anUnknownErrorOccurred"),
-      });
+      showFileManagerErrorToast({ kind: "folder", error });
     });
 }
