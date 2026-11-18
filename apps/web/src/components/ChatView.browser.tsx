@@ -11878,9 +11878,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForLayout();
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
-      let frameRequestCount = 0;
+      const frameRequestStacks: string[] = [];
       window.requestAnimationFrame = (callback) => {
-        frameRequestCount += 1;
+        frameRequestStacks.push(new Error("rAF caller").stack ?? "unavailable");
         return originalRequestAnimationFrame(callback);
       };
       try {
@@ -11900,7 +11900,10 @@ describe("ChatView transcript geometry (full app)", () => {
         window.requestAnimationFrame = originalRequestAnimationFrame;
       }
 
-      expect(frameRequestCount).toBe(0);
+      expect(
+        frameRequestStacks,
+        `detaching a draft scheduled ${frameRequestStacks.length} rAF(s):\n${frameRequestStacks.join("\n---\n")}`,
+      ).toHaveLength(0);
       expect(document.activeElement).toBe(settledComposerEditor);
       await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();

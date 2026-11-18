@@ -51,6 +51,7 @@ import {
 import { HubWorkItemCards } from "./group/HubWorkItemCard";
 import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import {
   SubagentBriefCard,
   SubagentDeliveredNote,
@@ -3095,9 +3096,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          <span aria-hidden="true" className="flex shrink-0">
-            {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
-          </span>
+          {workingLabel === "Thinking" ? (
+            <SynaraWorkingLoader />
+          ) : (
+            <span aria-hidden="true" className="flex shrink-0">
+              {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+            </span>
+          )}
           <span>{workingLabel}</span>
         </div>
       )}
@@ -3141,10 +3146,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
+      normalizedChatFontSizePx,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     }),
     [
       renderRowContent,
@@ -3163,10 +3170,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
+      normalizedChatFontSizePx,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     ],
   );
   // Transient rows (for example failed first-send worktree setup) must be able
@@ -3654,6 +3663,14 @@ function applySettledTurnCollapseTransitions(params: {
   for (const transition of startedTransitions) {
     scheduleTransitionClose(transition.messageId);
   }
+}
+
+function SynaraWorkingLoader() {
+  return (
+    <span className="synara-working-loader" data-synara-working-loader="true" aria-hidden="true">
+      <SynaraLogo className="synara-working-loader__mark text-current" />
+    </span>
+  );
 }
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
