@@ -15,7 +15,6 @@ vi.mock("@pierre/diffs", () => ({
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
-  useResolvedTheme: () => "light",
 }));
 
 const HEAVY_MODULE_TEST_TIMEOUT_MS = 30_000;

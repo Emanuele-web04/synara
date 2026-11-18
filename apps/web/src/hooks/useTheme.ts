@@ -317,25 +317,12 @@ export function readProfileThemeAccent() {
   return resolveProfileThemeAccent(readStoredThemeState());
 }
 
-const getServerSnapshot = () => ({
-  state: DEFAULT_THEME_STATE,
-  systemDark: false,
-  desktopBlurUnavailable: false,
-});
-
-/**
- * Only the resolved light/dark variant. For components mounted many times (every
- * transcript markdown block): `useTheme` resolves four theme packs per render and its
- * DOM-sync effect rebuilds and re-applies every theme variable on each mount. The app
- * root's `useTheme` already keeps the DOM in sync.
- */
-export function useResolvedTheme(): ThemeVariant {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  return resolveThemeVariant(snapshot.state.mode, snapshot.systemDark);
-}
-
 export function useTheme() {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
+    state: DEFAULT_THEME_STATE,
+    systemDark: false,
+    desktopBlurUnavailable: false,
+  }));
   const theme = snapshot.state.mode;
   const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
   const activeTheme = resolveThemePack(snapshot.state, resolvedTheme);
