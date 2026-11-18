@@ -333,6 +333,20 @@ daylight-saving transitions. A Mac mini replay launched in UTC reproduced
 the failure in threads. All 17 cases passed in forks. Web Unit uses Vitest's
 default fork pool. [Hosted Web Unit trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109/job/134811090010)
 
+### Web Unit compiler scheduling
+
+The Web Unit lane starts the 49-case chat compiler guard in its first worker
+wave. The same worker pool runs all files, and the other files and individual
+cases still use Vitest's seeded shuffle. The full Mac mini suite under seed
+`1795006867144` took 64.41 s with its original schedule and 54.85 s with the
+guard first. The guard started at 37.21 s and 0.14 s, respectively. Both
+runs matched all 6,279 case outcomes and multiplicities across 503 files.
+An earlier seed (`2198`) had nearly identical wall times (54.85 s and
+54.52 s). The scheduling change targets the late-start tail. The hosted unit
+job using seed `1795006867144` passed and the compiler guard finished last,
+after 147.48 s of execution. The hosted effect of the new schedule remains
+unmeasured. [Hosted run](https://github.com/Emanuele-web04/synara/actions/runs/44309338095)
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall

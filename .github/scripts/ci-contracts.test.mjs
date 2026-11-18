@@ -177,7 +177,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
       {
         pkg: "web",
         filters: "--filter=@synara/web",
-        "test-args": "",
+        "test-args": "--config=vitest.unit.ci.config.ts",
         scope: "web",
         "save-modules": "true",
       },
