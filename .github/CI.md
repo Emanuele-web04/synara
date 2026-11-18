@@ -642,12 +642,18 @@ cache through `SYNARA_WEB_TRANSFORM_CACHE_DIR`. React Compiler runs in
 the client environment, so the node unit lanes have nothing to reuse.
 
 Each stable browser lane owns one archive. Pull requests restore the newest
-matching archive and save on a miss. Pushes to `main` save one entry per commit.
+matching archive and save on a miss after a successful job. If `chat-workflows`
+has no matching archive, it can seed its own cache from `chat-follow` on the
+same platform and compiler fingerprint. Pushes to `main` save one entry per commit.
 The archive and per-module salt use the same fingerprint. For Bun lockfile v3,
 the fingerprint omits only each workspace's declared release version. It
 retains all dependency resolutions, catalogs, overrides and integrity strings.
-Unrecognized lockfile syntax is hashed byte for byte. The first run under the
-new archive keys seeds fresh caches.
+Unrecognized lockfile syntax is hashed byte for byte.
+
+On the Mac mini, the two CI browser groups for `chat-workflows` passed all
+131 selected cases with an empty cache in 76.04 s and with the `chat-follow`
+cache in 48.52 s. The 1,499 transform results present in both runs were
+byte-identical. The timing excludes archive download.
 
 Replaying the 1.5.4 to 1.6.2 metadata bump on the Mac mini kept the fingerprint
 stable. The bumped Web production build took 35.10 s with an empty compiler

@@ -266,6 +266,7 @@ jobs:
         with:
           scope: "web"
           web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
+          web-transform-fallback: ${{ github.event_name == 'pull_request' && matrix.project == 'chat-workflows' && 'browser-chat-follow-0' || '' }}
 
       - name: Wait for Chromium cache
         wait: chromium-cache

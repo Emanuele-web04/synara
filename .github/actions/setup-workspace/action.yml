@@ -17,6 +17,9 @@ inputs:
   web-transform-cache:
     description: CI lane name that owns a React Compiler transform cache; empty disables it.
     default: ""
+  web-transform-fallback:
+    description: Browser lane to borrow compiler transforms from when the primary lane archive is missing.
+    default: ""
 
 runs:
   using: composite
@@ -112,8 +115,8 @@ runs:
     # unchanged modules; a changed module is always recompiled. The key prefix
     # hashes the dependency graph, toolchain, config and patches. Workspace
     # release-version metadata does not change the graph. Pull requests
-    # restore main's newest archive for their lane and save only when nothing
-    # matched; pushes to main save one entry per commit.
+    # restore the newest accessible archive for their lane and seed that lane
+    # on a miss. Pushes to main save one entry per commit.
     - name: Restore web transform cache
       id: web-transform
       if: ${{ inputs.web-transform-cache != '' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
@@ -124,6 +127,7 @@ runs:
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
 
+    # A fallback archive can warm a cold lane before it saves to its own key.
     - name: Cache web transform results (main or first branch run)
       if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
       uses: actions/cache@v5
@@ -132,6 +136,7 @@ runs:
         key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
+          ${{ inputs.web-transform-fallback != '' && format('{0}-{1}-web-transform-v2-{2}-{3}-', runner.os, runner.arch, inputs.web-transform-fallback, steps.web-transform-key.outputs.fingerprint) || '' }}
 
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}

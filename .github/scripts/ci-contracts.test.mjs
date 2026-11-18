@@ -375,6 +375,7 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   const save = steps["Cache web transform results (main or first branch run)"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
   assert.ok(restore.includes(`inputs.web-transform-cache != '' && !(${main})`));
+  assert.ok(setup.indexOf(restore) < setup.indexOf(save));
   // A branch saves only when no archive matched; main saves one entry per commit.
   assert.ok(
     save.includes(
@@ -386,6 +387,10 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(step.includes(`restore-keys: |\n          ${prefix}\n`));
     assert.ok(step.includes("path: ${{ runner.temp }}/web-transform-cache"));
   }
+  const fallback =
+    "${{ inputs.web-transform-fallback != '' && format('{0}-{1}-web-transform-v2-{2}-{3}-', runner.os, runner.arch, inputs.web-transform-fallback, steps.web-transform-key.outputs.fingerprint) || '' }}";
+  assert.ok(save.includes(`restore-keys: |\n          ${prefix}\n          ${fallback}\n`));
+  assert.ok(!restore.includes(fallback));
   // The Vite salt and the archive key begin with the same input fingerprint.
   const viteConfig = read("../../apps/web/vite.config.ts");
   assert.ok(viteConfig.includes(".update(compilerCacheFingerprint("));
@@ -401,10 +406,17 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   assert.ok(viteConfig.includes('process.env.VITEST === "true"'));
   assert.ok(viteConfig.includes("transformCacheSalt(productionBuild)"));
   assert.equal(workflow.match(/web-transform-cache:/g)?.length, 2);
+  assert.equal(workflow.match(/web-transform-fallback:/g)?.length, 1);
+  const browserSetup = jobs.browser.steps.find((step) => step.name === "Setup workspace").with;
   assert.equal(
-    jobs.browser.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
+    browserSetup["web-transform-cache"],
     "browser-${{ matrix.project }}-${{ strategy.job-index }}",
   );
+  assert.equal(
+    browserSetup["web-transform-fallback"],
+    "${{ github.event_name == 'pull_request' && matrix.project == 'chat-workflows' && 'browser-chat-follow-0' || '' }}",
+  );
+  assert.equal(jobs.browser.strategy.matrix.include[0].project, "chat-follow");
   assert.equal(
     jobs.build.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
     "desktop-production",
@@ -427,6 +439,7 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   ]) {
     const text = read(other);
     assert.ok(!text.includes("web-transform-cache"), other);
+    assert.ok(!text.includes("web-transform-fallback"), other);
     assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
     assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
