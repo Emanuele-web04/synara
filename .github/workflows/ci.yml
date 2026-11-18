@@ -21,6 +21,8 @@ concurrency:
 # instead of per job so a future bump cannot miss a lane.
 env:
   NODE_OPTIONS: --max-old-space-size=4096
+  # Runner images can ship different Node patches. Use one compiler cache namespace.
+  SYNARA_CI_NODE_VERSION: "24.22.3"
 
 jobs:
   # Docs-only filter: PRs touching only prose, doc images, or marketing content
@@ -38,6 +40,8 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
+        # PRs use the changed-files API and the filter is defined inline below.
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@v6
 
       - name: Filter docs-only changes
@@ -93,7 +97,7 @@ jobs:
             run: bun run windows-runtime:check
 
           - name: Verify localization catalogs and report UI coverage
-            run: bun run i18n:check && bun run i18n:extract
+            run: bun run i18n:coverage
 
           - name: Format
             run: bun run fmt:check
@@ -113,6 +117,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        # The lineage check needs release tags and their migration manifests.
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # The single saver for the shared full Linux node_modules key: every other
       # full lane restores only, so a miss is archived once instead of per lane.
@@ -121,17 +129,20 @@ jobs:
         with:
           save-modules: "true"
 
-      # `bun check` type-checks every project in one pass. Only the patched
-      # TypeScript 7 compiler reports the Effect language-service diagnostics,
-      # so they run next, in their own step: running both at once made them
-      # compete for the runner's cores. `bun run typecheck` runs both.
-      - name: Typecheck
-        run: node scripts/typecheck.ts --only=types
+      - parallel:
+          # The two compilers compete for cores, so run their checks in order.
+          - name: Typecheck and Effect diagnostics
+            shell: bash
+            run: |
+              node scripts/typecheck.ts --only=types
+              node scripts/typecheck.ts --only=effect
 
-      - name: Effect diagnostics
-        run: node scripts/typecheck.ts --only=effect
+          - name: Verify released migration lineage
+            run: |
+              test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+              node scripts/check-migration-lineage.ts
 
-  # Keep each server shard serial internally, but use three independent runners.
+  # Use three independent server runners, each with one Vitest worker per CPU.
   # The measured native 3-way split lowers the slowest shard without changing
   # collected tests. Tests import @synara/contracts from source (its ESM export),
   # so no package build precedes them; every lane starts at the test files.
@@ -152,34 +163,55 @@ jobs:
             test-args: ""
           - pkg: web
             filters: "--filter=@synara/web"
-            test-args: ""
+            test-args: "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time"
+            scope: "web"
+            save-modules: "true"
           # Server lane tests the CLI package (package name @synara/cli).
           - pkg: server 1/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=1/3"
+            scope: "server"
+            save-modules: "true"
           - pkg: server 2/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=2/3"
+            scope: "server"
           - pkg: server 3/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=3/3"
+            scope: "server"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          scope: ${{ matrix.scope || 'full' }}
+          save-modules: ${{ matrix.save-modules || 'false' }}
 
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
         run: node scripts/node-pty-smoke.mjs
 
-      - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+      # Core already installs the Web dependencies and can run the long
+      # compiler check alongside its own tests on the same runner. ChatView
+      # and the other hot-path modules are two files, one worker each.
+      - parallel:
+          - name: Test (${{ matrix.pkg }})
+            run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+
+          - name: Verify chat hot-path compiler
+            if: matrix.pkg == 'core'
+            run: >-
+              bun run --cwd apps/web test --
+              --config=vitest.unit.ci.config.ts --project=web-compiler
+              --no-passWithNoTests --maxWorkers=2
 
   # ChatView is one large file, so split it by complementary test-name groups.
-  # Other browser files use native 3-way file sharding. Every runner keeps serial
-  # execution and the stable geometry quarantine; only distribution changes.
+  # Each ChatView job runs two name groups on one runner. The component jobs
+  # each run two Vitest file shards.
+  # Each browser process still executes files serially.
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
@@ -194,19 +226,40 @@ jobs:
         include:
           - project: chat-follow
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: chat-projects
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: chat-workflows
             shard: 1/1
+            shardA: 1/1
+            shardB: 1/1
           - project: components
             shard: 1/3
+            shardA: 1/6
+            shardB: 2/6
           - project: components
             shard: 2/3
+            shardA: 3/6
+            shardB: 4/6
           - project: components
             shard: 3/3
+            shardA: 5/6
+            shardB: 6/6
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Chromium restores to its own directory while the workspace installs.
+      - name: Restore Chromium headless shell
+        id: chromium-cache
+        uses: actions/cache/restore@v5
+        background: true
+        with:
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-${{ hashFiles('bun.lock') }}
 
       # React Compiler only compiles the browser (client) environment, so the
       # node unit lanes have nothing to reuse. Each browser lane loads a
@@ -214,28 +267,55 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
+          scope: "web"
           web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
+          web-transform-fallback: ${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+      - name: Wait for Chromium cache
+        wait: chromium-cache
 
       # GitHub's pinned Ubuntu image already provides the Chromium shared-library
       # dependencies used by this stable suite. Avoid a redundant apt/font pass on
       # every shard; nightly geometry still uses --with-deps for rendering coverage.
       - name: Install browser test runtime
         timeout-minutes: 15
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-headless"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           cd apps/web
-          ./node_modules/.bin/playwright install chromium
+          ./node_modules/.bin/playwright install chromium --only-shell
 
-      - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
-        timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
+      # One lane saves the shared key after Playwright has installed the shell.
+      - name: Save Chromium headless shell
+        if: >-
+          matrix.project == 'chat-follow' &&
+          steps.chromium-cache.outputs.cache-hit != 'true' &&
+          steps.chromium-cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
+
+      # Share cold compiler work by cache key. Vite's optimizer cache and the
+      # browser API listener still need a separate directory and port.
+      - parallel:
+          - name: Browser test (${{ matrix.project }} ${{ matrix.shardA }} A)
+            timeout-minutes: 20
+            env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
+              VITEST_BROWSER_API_PORT: "51101"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-a
+              VITEST_BROWSER_CHAT_SLICE: a
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardA }}
+
+          - name: Browser test (${{ matrix.project }} ${{ matrix.shardB }} B)
+            timeout-minutes: 20
+            env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
+              VITEST_BROWSER_API_PORT: "51102"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-b
+              VITEST_BROWSER_CHAT_SLICE: b
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardB }}
 
   build:
     name: Desktop Build
@@ -250,19 +330,10 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
+          scope: "server"
           electron: "true"
           turbo: "true"
-          # Sole consumer of the electron:true node_modules key.
-          save-modules: "true"
-
-      - name: Build desktop pipeline
-        run: bun run build:desktop
-
-      - name: Build analytics dashboard and bundle Worker
-        run: |
-          bun run --cwd apps/analytics build
-          cd apps/analytics
-          bunx wrangler deploy --dry-run
+          web-transform-cache: desktop-production
 
       - name: Configure Electron sandbox helper
         run: |
@@ -270,8 +341,25 @@ jobs:
           sudo chown root:root "$sandbox_helper"
           sudo chmod 4755 "$sandbox_helper"
 
+      - name: Build desktop pipeline
+        id: desktop-build
+        env:
+          SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR: ${{ runner.temp }}/web-transform-cache
+        run: bun run build:desktop
+        background: true
+
+      # The lifecycle smoke bundles its own fixture and can run during the build.
       - name: Verify live Electron browser lifecycle
         run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
+
+      - name: Wait for the desktop build
+        wait: desktop-build
+
+      - name: Build analytics dashboard and bundle Worker
+        run: |
+          bun run --cwd apps/analytics build
+          cd apps/analytics
+          bunx wrangler deploy --dry-run
 
       - name: Verify browser navigation preserves composer focus
         run: xvfb-run -a bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'preserves composer keyboard ownership'
@@ -299,7 +387,6 @@ jobs:
       - browser
       - build
       - windows_process
-      - migration_lineage
     if: always()
     steps:
       - name: Aggregate lane results
@@ -312,7 +399,6 @@ jobs:
           BROWSER: ${{ needs.browser.result }}
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
-          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
         run: |
           fail=0
           # The docs-only filter itself must have run: without it a skip proves nothing.
@@ -329,7 +415,7 @@ jobs:
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
+          for lane in "typecheck-and-lineage=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS"; do
             name="${lane%%=*}"
             result="${lane#*=}"
             if [ "$CODE" != "true" ]; then
@@ -409,31 +495,3 @@ jobs:
           bun run --cwd apps/desktop test
           src/backendShutdown.windows.integration.test.ts
           src/desktopMigrationRecovery.test.ts
-
-  # Released (id, name) migration pairs are recorded in every user's
-  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
-  # installs. This job needs the release tags, hence the unshallow checkout; the
-  # dependency-free guard needs a real tag history, never a missing-history skip.
-  migration_lineage:
-    name: Migration Lineage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      # Reads history: a blobless full clone (commits and trees, blobs on demand).
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          filter: blob:none
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Verify released migration lineage
-        run: |
-          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
-          node scripts/check-migration-lineage.ts

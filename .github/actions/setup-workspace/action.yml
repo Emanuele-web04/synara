@@ -6,7 +6,7 @@ inputs:
     description: Install the Electron runtime binary.
     default: "false"
   scope:
-    description: "Install scope: full, static (root and scripts), or runtime (all except marketing)."
+    description: "Install scope: full, static (root and scripts), runtime (all except marketing), web (root and web), or server (root, CLI, Desktop and analytics)."
     default: "full"
   turbo:
     description: Restore Turbo build artifacts for jobs that use Turbo; pushes to main also save them.
@@ -15,7 +15,10 @@ inputs:
     description: Save the node_modules archive after a miss. Only one job per cache key sets this.
     default: "false"
   web-transform-cache:
-    description: Browser lane name that owns a React Compiler transform cache; empty disables it.
+    description: CI lane name that owns a React Compiler transform cache; empty disables it.
+    default: ""
+  web-transform-fallback:
+    description: Browser lane to borrow compiler transforms from when the primary lane archive is missing.
     default: ""
 
 runs:
@@ -28,11 +31,11 @@ runs:
         ELECTRON: ${{ inputs.electron }}
       run: |
         case "$WORKSPACE_SCOPE" in
-          full|static|runtime) ;;
+          full|static|runtime|web|server) ;;
           *) echo "::error::Unknown workspace scope: $WORKSPACE_SCOPE"; exit 1 ;;
         esac
-        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" = "static" ]; then
-          echo "::error::Electron requires a full or runtime install."
+        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" != "full" ] && [ "$WORKSPACE_SCOPE" != "runtime" ] && [ "$WORKSPACE_SCOPE" != "server" ]; then
+          echo "::error::Electron requires a full, runtime, or server install."
           exit 1
         fi
 
@@ -44,16 +47,33 @@ runs:
     - name: Setup Node
       uses: actions/setup-node@v6
       with:
-        node-version-file: package.json
+        node-version: ${{ env.SYNARA_CI_NODE_VERSION }}
+        node-version-file: ${{ env.SYNARA_CI_NODE_VERSION == '' && 'package.json' || '' }}
 
-    # Small filtered installs cost less than archive transfer/extraction. Never
-    # restore a full tree into a filtered lane or save it under the full key.
-    # Windows isolated links are rebuilt by Bun, not restored from an archive.
-    # Every full lane restores; only the job that sets save-modules writes the
-    # archive after a miss, so parallel lanes never race to upload the same key.
+    - name: Fingerprint dependency inputs
+      id: modules-key
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') }}
+      shell: bash
+      run: |
+        fingerprint="$(node scripts/ci-install-key.ts)"
+        test -n "$fingerprint" || { echo "::error::The dependency fingerprint is empty."; exit 1; }
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
+    - name: Fingerprint web compiler inputs
+      id: web-transform-key
+      if: inputs.web-transform-cache != ''
+      shell: bash
+      run: |
+        fingerprint="$(node apps/web/scripts/compiler-cache-key.ts)"
+        test -n "$fingerprint" || { echo "::error::The web compiler fingerprint is empty."; exit 1; }
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
+    # Reuse the existing dependency-only keys, including in jobs that install
+    # the Electron runtime later. Static, runtime, and Windows install directly.
+    # One job per exact key sets save-modules to seed the archive after a miss.
     - name: Restore node_modules
       id: modules
-      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') }}
       uses: actions/cache/restore@v5
       with:
         path: |
@@ -61,7 +81,7 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-false-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}
 
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
@@ -92,44 +112,66 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
 
-    # Browser test lanes recompile every web module with React Compiler on a
-    # cold Vite server. apps/web/scripts/transform-cache.ts keys each result by
+    # Browser tests and Desktop CI use separate cache namespaces.
+    # apps/web/scripts/transform-cache.ts keys each result by
     # the exact module source, so an archive only ever supplies output for
     # unchanged modules; a changed module is always recompiled. The key prefix
-    # hashes everything else that shapes the output (lockfile, Vite config,
-    # cache code), so a dependency or config change starts empty. Pull requests
-    # restore main's newest archive for their lane and save only when nothing
-    # matched; pushes to main save one entry per commit.
+    # hashes the dependency graph, toolchain, config and patches. Workspace
+    # release-version metadata does not change the graph. Pull requests
+    # restore the newest accessible archive for their lane and seed that lane
+    # on a miss. Pushes to main save one entry per commit.
     - name: Restore web transform cache
       id: web-transform
       if: ${{ inputs.web-transform-cache != '' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
       uses: actions/cache/restore@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
 
+    # A fallback archive can warm a cold lane before it saves to its own key.
     - name: Cache web transform results (main or first branch run)
       if: ${{ inputs.web-transform-cache != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || steps.web-transform.outputs.cache-matched-key == '') }}
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/web-transform-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-web-transform-v1-${{ inputs.web-transform-cache }}-${{ hashFiles('bun.lock', 'apps/web/vite.config.ts', 'apps/web/scripts/react-compiler-plugin.mjs', 'apps/web/scripts/transform-cache.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-web-transform-v2-${{ inputs.web-transform-cache }}-${{ steps.web-transform-key.outputs.fingerprint }}-
+          ${{ inputs.web-transform-fallback != '' && format('{0}-{1}-web-transform-v2-{2}-{3}-', runner.os, runner.arch, inputs.web-transform-fallback, steps.web-transform-key.outputs.fingerprint) || '' }}
 
+    # A browser process that exits mid-compile leaves its claim directory or
+    # staging file behind, and a later save would archive it. Drop both so no
+    # run waits on a claim whose owner is gone.
     - name: Enable web transform cache
       if: ${{ inputs.web-transform-cache != '' }}
       shell: bash
-      run: echo "SYNARA_WEB_TRANSFORM_CACHE_DIR=$RUNNER_TEMP/web-transform-cache" >> "$GITHUB_ENV"
+      run: |
+        cache="$RUNNER_TEMP/web-transform-cache"
+        if [ -d "$cache" ]; then
+          find "$cache" -type d -name '*.lock' -prune -exec rm -rf {} +
+          find "$cache" -type f -name '*.tmp' -delete
+        fi
+        echo "SYNARA_WEB_TRANSFORM_CACHE_DIR=$cache" >> "$GITHUB_ENV"
+
+    # Keyed by the Electron resolution alone, so release version bumps that
+    # rewrite bun.lock keep the downloaded runtime.
+    - name: Fingerprint Electron runtime
+      id: electron-key
+      if: ${{ inputs.electron == 'true' }}
+      shell: bash
+      run: |
+        fingerprint="$(node .github/scripts/lockfile-package-key.mjs electron)"
+        test -n "$fingerprint" || { echo "::error::The Electron runtime fingerprint is empty."; exit 1; }
+        printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
 
     - name: Cache Electron runtime
       if: ${{ inputs.electron == 'true' }}
       uses: actions/cache@v5
       with:
         path: ~/.cache/electron
-        key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-electron-v2-${{ steps.electron-key.outputs.fingerprint }}
 
     - name: Install dependencies
       shell: bash
@@ -149,7 +191,23 @@ runs:
           full) bun install --frozen-lockfile --concurrent-scripts=1 ;;
           static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' --concurrent-scripts=1 ;;
           runtime) bun install --frozen-lockfile --filter '!@synara/marketing' --concurrent-scripts=1 ;;
+          web) bun install --frozen-lockfile --filter './' --filter '@synara/web' --concurrent-scripts=1 ;;
+          # The server host-usage tests import the Desktop relay and analytics Worker.
+          server) bun install --frozen-lockfile --filter './' --filter '@synara/cli' --filter '@synara/desktop' --filter '@synara/analytics' --concurrent-scripts=1 ;;
         esac
+
+    # The packed Electron runtime has a separate cache. Save dependencies
+    # before extracting it so Server and Desktop can share the same archive.
+    - name: Save node_modules
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+          scripts/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}
 
     - name: Install Electron test runtime
       if: ${{ inputs.electron == 'true' }}
@@ -164,16 +222,3 @@ runs:
           fi
           sleep $((attempt * 5))
         done
-
-    # Saved after the Electron runtime so an electron:true archive keeps the
-    # same contents as before. Restore misses fall back to a cold frozen install.
-    - name: Save node_modules
-      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v5
-      with:
-        path: |
-          node_modules
-          apps/*/node_modules
-          packages/*/node_modules
-          scripts/node_modules
-        key: ${{ steps.modules.outputs.cache-primary-key }}
