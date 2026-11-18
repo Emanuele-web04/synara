@@ -68,9 +68,8 @@ reader's filtered compilation test and native Bun PTY probe remain separate.
 
 ## Install scopes and caches
 
-The shared setup action defaults to `full`. Typecheck, core and server unit
-tests, and Desktop Build install the entire workspace. Other jobs select the
-dependencies they use.
+The shared setup action defaults to `full`. Typecheck, Core Unit, and Desktop
+Build install the entire workspace. Other jobs select the dependencies they use.
 
 - `static`: root and `@synara/scripts`, including its workspace dependencies.
   Identity, Windows boundary, formatting, lint, release smoke and CI contract
@@ -79,6 +78,10 @@ dependencies they use.
   PTY/process/filesystem/shutdown/recovery test with lifecycle scripts enabled.
 - The `web` scope installs the root and `@synara/web`, including its workspace
   dependencies, for Web Unit and the six stable Browser jobs.
+- The `server` scope installs the root, `@synara/cli`, `@synara/desktop` and
+  `@synara/analytics`, including their Web and other workspace dependencies,
+  for the three server unit shards. The server host-usage tests import the
+  Desktop relay and analytics Worker.
 - Native release artifact builders exclude marketing with `--ignore-scripts`
   exactly as before. macOS device jobs select `@synara/scripts`, retaining their
   existing `--ignore-scripts`, Xcode pairs, probe, simulator smoke and diagnostics.
@@ -86,20 +89,27 @@ dependencies they use.
   `@synara/cli` with `--ignore-scripts`. The smoke also imports the server's
   supervised process teardown, so `@synara/scripts` alone cannot resolve `effect`.
 
-The `full` and `web` scopes use separate exact `node_modules` keys. Static,
-runtime, and Windows jobs install directly. On Windows, `RUNNER_TEMP` puts the
+The `full`, `web`, and `server` scopes use separate exact `node_modules` keys.
+Static, runtime, and Windows jobs install directly. On Windows, `RUNNER_TEMP` puts the
 Bun package cache on the hosted checkout's drive so Bun can hardlink package
 files. Each archive has one writer after a miss. Typecheck and Desktop Build
-own the two full Linux keys, Web Unit owns the Web key, and the macOS editor
-integration job owns its macOS key. Frozen installation and lifecycle patches
-run on cache hits. Every scope uses `--concurrent-scripts=1` to serialize the
-workspace `prepare` hooks that patch the same TypeScript files. The September
-measurements below predate this serialization.
+own the two full Linux keys, Web Unit owns the Web key, server shard 1/3 owns
+the server key, and the macOS editor integration job owns its macOS key.
+Frozen installation and lifecycle patches run on cache hits. Every scope uses
+`--concurrent-scripts=1` to serialize the workspace `prepare` hooks that patch
+the same TypeScript files. The September measurements below predate this
+serialization.
 Turbo persistence is opt-in (Desktop Build). Pull requests restore the newest
 main entry and never save; only pushes to `main` save a per-commit entry, so PR
 runs stop adding PR-scoped archives that no other branch can read.
 OS, architecture and lockfile boundaries prevent incompatible archive reuse.
 Test and typecheck task results remain uncached.
+
+On the Mac mini, a frozen install into a fresh dependency tree with a warm Bun
+package cache took 17.41 s for the full workspace and 11.69 s for the server
+scope. The compressed archive fell from 692 MB to 502 MB. On the latest closed
+GitHub sample, the three server runners each restored the 933 MB full Linux
+archive in 16–24 s. The scoped Linux restore remains unmeasured.
 
 Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner

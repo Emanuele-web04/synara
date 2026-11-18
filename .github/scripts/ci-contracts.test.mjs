@@ -151,11 +151,16 @@ test("caches restore in every consumer and save from one owner per key", () => {
       .map((step) => [step.split("\n")[0], step]),
   );
   const modulesKey =
-    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope == 'web' && 'web-' || '' }}${{ hashFiles('bun.lock', 'package.json') }}";
+    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ hashFiles('bun.lock', 'package.json') }}";
   const modulesConsumers =
-    "runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web')";
+    "runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server')";
   // The Bun package archive shared the modules hash, so it missed whenever it was needed.
   assert.ok(!setup.includes("~/.bun/install/cache"));
+  assert.ok(
+    steps["Install dependencies"].includes(
+      "server) bun install --frozen-lockfile --filter './' --filter '@synara/cli' --filter '@synara/desktop' --filter '@synara/analytics' --concurrent-scripts=1",
+    ),
+  );
   const restore = steps["Restore node_modules"];
   assert.ok(restore.includes("uses: actions/cache/restore@v5"));
   assert.ok(restore.includes(`if: \${{ ${modulesConsumers} }}`));
@@ -173,7 +178,8 @@ test("caches restore in every consumer and save from one owner per key", () => {
   assert.equal(setup.match(/actions\/cache\/save@/g)?.length, 1);
   const actionDefault = setup.split("  save-modules:\n")[1].split("\n\n")[0];
   assert.ok(actionDefault.includes('default: "false"'), "restore-only unless a job opts in");
-  // Typecheck and Desktop Build own the two full keys. Web Unit owns the web key.
+  // Typecheck and Desktop Build own the full keys. The Web and Server matrix
+  // entries below each nominate one owner for their own key.
   const savers = Object.entries(jobs)
     .filter(([, job]) => job.steps.some((step) => step.with?.["save-modules"] === "true"))
     .map(([name]) => name);
@@ -194,6 +200,25 @@ test("caches restore in every consumer and save from one owner per key", () => {
         "test-args": "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time",
         scope: "web",
         "save-modules": "true",
+      },
+      {
+        pkg: "server 1/3",
+        filters: "--filter=@synara/cli",
+        "test-args": "--shard=1/3",
+        scope: "server",
+        "save-modules": "true",
+      },
+      {
+        pkg: "server 2/3",
+        filters: "--filter=@synara/cli",
+        "test-args": "--shard=2/3",
+        scope: "server",
+      },
+      {
+        pkg: "server 3/3",
+        filters: "--filter=@synara/cli",
+        "test-args": "--shard=3/3",
+        scope: "server",
       },
     ],
   );
