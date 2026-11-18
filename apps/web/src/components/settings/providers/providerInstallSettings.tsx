@@ -416,6 +416,13 @@ export const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
       },
     ],
   },
+  {
+    provider: "acp",
+    docs: [{ label: "settings:reference", href: "https://agentclientprotocol.com" }],
+    // An ACP agent carries its command, argv, and models in its own instance config;
+    // there is no provider-wide launch setting.
+    fields: [],
+  },
 ];
 
 function isProviderInstallFieldDirty(

@@ -404,6 +404,48 @@ it("adds an account from a dialog that derives its id from the label", async () 
   );
 });
 
+it("adds an ACP agent whose command and argv land in its instance config", async () => {
+  const { props: panelProps, updateSettings } = accountProps({
+    // ACP is disabled until a first agent is registered; an existing agent keeps
+    // its card on the page even so.
+    disabledProviders: ["acp"],
+    providerInstances: {
+      acp_omp: {
+        driver: "acp",
+        displayName: "OMP",
+        enabled: true,
+        config: { command: "omp", args: ["acp"] },
+      },
+    },
+  });
+  await render(<AccountsHarness {...panelProps} />);
+
+  // The last "Add account" belongs to the ACP Agent card (last install config).
+  await page.getByRole("button", { name: "Add account", exact: true }).last().click();
+  const dialog = page.getByRole("dialog", { name: "Add account" });
+  await expect.element(dialog).toBeVisible();
+
+  // An ACP agent cannot launch without its command, so the field is required.
+  await dialog.getByRole("textbox", { name: "Label" }).fill("Gemini ACP");
+  await dialog.getByRole("button", { name: "Add account", exact: true }).click();
+  await expect.element(dialog.getByText("Agent command is required.")).toBeVisible();
+  expect(updateSettings).not.toHaveBeenCalled();
+
+  await dialog.getByRole("textbox", { name: "Agent command" }).fill("gemini");
+  await dialog.getByRole("textbox", { name: "Arguments" }).fill("--experimental-acp --verbose");
+  await dialog.getByRole("button", { name: "Add account", exact: true }).click();
+
+  const added = updateSettings.mock.lastCall?.[0] as typeof defaults;
+  expect(added.providerInstances.acp_gemini_acp).toEqual({
+    driver: "acp",
+    displayName: "Gemini ACP",
+    enabled: true,
+    config: { command: "gemini", args: ["--experimental-acp", "--verbose"] },
+  });
+  // Registering an agent enables the provider so it is usable in the picker.
+  expect(added.disabledProviders).toEqual([]);
+});
+
 it("goes straight on to sign-in after adding an account without its own folder", async () => {
   const { props: panelProps, updateSettings } = accountProps();
   const save = vi.fn(async () => {});

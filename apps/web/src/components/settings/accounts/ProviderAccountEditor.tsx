@@ -51,7 +51,11 @@ import {
   providerInstanceUpdater,
   useProviderAccountSignIn,
 } from "./providerAccountShared";
-import { ProviderAccountRuntimeFields } from "./ProviderAccountRuntimeFields";
+import {
+  AcpAgentAdvancedFields,
+  AcpAgentLaunchFields,
+  ProviderAccountRuntimeFields,
+} from "./ProviderAccountRuntimeFields";
 import { ProviderInstanceEnvironmentEditor } from "./ProviderInstanceEnvironmentEditor";
 
 export function ProviderAccountEditor(props: {
@@ -277,9 +281,28 @@ export function ProviderAccountEditor(props: {
                   updateSettings={props.updateSettings}
                 />
               ))}
-              <span className="block text-ui-sm text-muted-foreground">
-                {t("settings:accounts_providerOptionsInProviders", { value0: providerLabel })}
-              </span>
+              {/* The "acp" template is a real agent only once it carries a command;
+                  the default account edits the same instance-config fields as any other. */}
+              {provider === "acp" ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <AcpAgentLaunchFields
+                    config={explicit?.config}
+                    onCommit={(key, value) =>
+                      updateInstance(instanceId, { config: { [key]: value } })
+                    }
+                  />
+                  <AcpAgentAdvancedFields
+                    config={explicit?.config}
+                    onCommit={(key, value) =>
+                      updateInstance(instanceId, { config: { [key]: value } })
+                    }
+                  />
+                </div>
+              ) : (
+                <span className="block text-ui-sm text-muted-foreground">
+                  {t("settings:accounts_providerOptionsInProviders", { value0: providerLabel })}
+                </span>
+              )}
               {provider === "codex" && props.settings.codexAccounts.length > 0 ? (
                 <CodexDefaultAccountControl
                   settings={props.settings}

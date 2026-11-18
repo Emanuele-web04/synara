@@ -308,6 +308,24 @@ Expand **Disabled providers** in the same section to turn it back on. Its saved
 preferences return, including its position and whether it was hidden from the
 provider picker. Enabling a provider does not install its CLI or sign it in.
 
+## ACP agents
+
+Any command line agent that speaks the
+[Agent Client Protocol](https://agentclientprotocol.com) can run as a provider
+instance, the same model OpenCode and Oh My Pi use internally. Each registered
+agent is an account: it gets its own tab in the model picker, its own models,
+environment variables, and sign-in state, and a terminal command of its own
+(`acp-<slug>` for an account named `acp_<slug>`).
+
+Register an agent in **Settings → Accounts → ACP → Add account** with its
+**Agent command** (the executable that starts its ACP server, for example `omp`
+or `gemini`) and **Arguments** (the flags that put it in ACP mode, for example
+`acp` or `--experimental-acp`). The working directory and the model list it
+offers live under **Advanced** in the account's editor. Registering the first
+agent turns the ACP provider on; its shared toggle in Providers still hides
+every ACP account from pickers while each account keeps working on its own
+enabled switch.
+
 ## Models and effort options
 
 Providers expose different selection models:

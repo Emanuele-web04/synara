@@ -98,7 +98,11 @@ function binaryPathForProvider(
   config: Readonly<Record<string, unknown>>,
   baseEnv: NodeJS.ProcessEnv,
 ): string | null {
-  const configured = readConfigString(config, "binaryPath");
+  // ACP agents keep their executable in `command`; `binaryPath` stays a legacy override.
+  const configured =
+    provider === "acp"
+      ? (readConfigString(config, "command") ?? readConfigString(config, "binaryPath"))
+      : readConfigString(config, "binaryPath");
   return resolveExecutable(configured ?? PROVIDER_CLI_COMMAND_BY_KIND[provider], { env: baseEnv });
 }
 

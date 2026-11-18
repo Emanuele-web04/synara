@@ -49,6 +49,9 @@ export function isProviderListedOnAccounts(
   statusByInstance: ReadonlyMap<string, ServerProviderStatus>,
   accounts: ReadonlyArray<ProviderInstanceOption>,
 ): boolean {
+  // ACP has no CLI to detect: the card is the only way to register the first agent,
+  // so once the provider is on the page it is always listed.
+  if (provider === "acp") return true;
   return (
     statusByInstance.get(provider)?.available !== false ||
     accounts.some((account) => account.provider === provider && !account.isDefault)

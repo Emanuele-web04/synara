@@ -36,6 +36,8 @@ export type AddProviderAccountConfigField = {
   readonly label: string;
   readonly placeholder: string;
   readonly description?: string;
+  /** The account cannot be added while this field is empty. */
+  readonly required?: boolean;
 };
 
 export type AddProviderAccountInput = {
@@ -92,6 +94,13 @@ export function AddProviderAccountDialog(props: {
     event.preventDefault();
     setSubmitAttempted(true);
     if (idError !== null) return;
+    if (
+      configFields.some(
+        (field) => field.required === true && (config[field.key] ?? "").trim().length === 0,
+      )
+    ) {
+      return;
+    }
     const filledConfig: Record<string, string> = {};
     for (const field of configFields) {
       const value = config[field.key]?.trim();
@@ -192,25 +201,34 @@ export function AddProviderAccountDialog(props: {
                 {t("settings:optionalShowsAsADotOnTheAccountS")}
               </span>
             </div>
-            {configFields.map((field) => (
-              <label key={`${provider}:${field.key}`} className="block space-y-1">
-                <span className={dialogFieldLabelClassName}>{field.label}</span>
-                <Input
-                  size="sm"
-                  value={config[field.key] ?? ""}
-                  onChange={(event) =>
-                    setConfig((current) => ({ ...current, [field.key]: event.target.value }))
-                  }
-                  placeholder={field.placeholder}
-                  spellCheck={false}
-                />
-                {field.description ? (
-                  <span className="block text-ui-sm text-muted-foreground">
-                    {field.description}
-                  </span>
-                ) : null}
-              </label>
-            ))}
+            {configFields.map((field) => {
+              const fieldEmpty = (config[field.key] ?? "").trim().length === 0;
+              const fieldInvalid = submitAttempted && field.required === true && fieldEmpty;
+              return (
+                <label key={`${provider}:${field.key}`} className="block space-y-1">
+                  <span className={dialogFieldLabelClassName}>{field.label}</span>
+                  <Input
+                    size="sm"
+                    value={config[field.key] ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) => ({ ...current, [field.key]: event.target.value }))
+                    }
+                    placeholder={field.placeholder}
+                    spellCheck={false}
+                    aria-invalid={fieldInvalid}
+                  />
+                  {fieldInvalid ? (
+                    <span className="block text-ui-sm text-destructive">
+                      {t("settings:fieldRequired", { field: field.label })}
+                    </span>
+                  ) : field.description ? (
+                    <span className="block text-ui-sm text-muted-foreground">
+                      {field.description}
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
           </form>
         </DialogPanel>
         <DialogFooter>
