@@ -2001,6 +2001,14 @@ async function checkForUpdatesFromMenu(): Promise<void> {
   }
 }
 
+function syncAlwaysOnTopMenuItem(window: BrowserWindow | null = mainWindow): void {
+  const menuItem = Menu.getApplicationMenu()?.getMenuItemById("always-on-top");
+  if (!menuItem) return;
+  const liveWindow = window && !window.isDestroyed() ? window : null;
+  menuItem.enabled = liveWindow !== null;
+  menuItem.checked = liveWindow?.isAlwaysOnTop() ?? false;
+}
+
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
@@ -2101,6 +2109,17 @@ function configureApplicationMenu(): void {
         { type: "separator" },
         ...zoomMenuItems,
         { type: "separator" },
+        {
+          id: "always-on-top",
+          label: "Always on Top",
+          type: "checkbox",
+          enabled: false,
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            mainWindow.setAlwaysOnTop(!mainWindow.isAlwaysOnTop());
+            syncAlwaysOnTopMenuItem();
+          },
+        },
         { role: "togglefullscreen" },
       ],
     },
@@ -2123,6 +2142,7 @@ function configureApplicationMenu(): void {
   );
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  syncAlwaysOnTopMenuItem();
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -6117,6 +6137,8 @@ function createWindow(): BrowserWindow {
     },
   });
   browserManager.setWindow(window);
+  syncAlwaysOnTopMenuItem(window);
+  window.on("always-on-top-changed", () => syncAlwaysOnTopMenuItem(window));
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
@@ -6277,6 +6299,7 @@ function createWindow(): BrowserWindow {
     runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
+      syncAlwaysOnTopMenuItem();
     }
     browserManager.setWindow(null);
   });
