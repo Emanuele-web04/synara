@@ -4641,17 +4641,25 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => expect(header.parentElement?.textContent).toContain(projectName), {
         timeout: 2_000,
       });
+      const projectRow = page.getByRole("button", {
+        name: `${projectName}, Remote test computer`,
+      });
       const actions = page.getByRole("button", {
         name: `Project actions for ${projectName} on Remote test computer`,
       });
       const remove = page.getByRole("menuitem", { name: "Remove project", exact: true });
-      await actions.click();
+      const openProjectActions = async () => {
+        await projectRow.hover();
+        await actions.click();
+      };
+      await openProjectActions();
       await remove.click();
       await expect.poll(() => confirm.mock.calls.length).toBe(1);
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining("folder and files stay on disk"),
       );
       expect(removeEmptyProject).not.toHaveBeenCalled();
+      await expect.element(remove).not.toBeInTheDocument();
 
       // Archived chats are reported by the owning frame even though no rows are visible.
       updateWorkspaceSession(hostId, {
@@ -4662,7 +4670,7 @@ describe("ChatView transcript geometry (full app)", () => {
           threads: [],
         },
       });
-      await actions.click();
+      await openProjectActions();
       await expect.element(page.getByRole("menuitem", { name: "Rename project" })).toBeVisible();
       await expect.element(remove).not.toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
@@ -4671,7 +4679,7 @@ describe("ChatView transcript geometry (full app)", () => {
         summary: { state: "open", path: "/", projects, threads: [] },
       });
       confirm.mockResolvedValue(true);
-      await actions.click();
+      await openProjectActions();
       await remove.click();
       await expect.poll(() => removeEmptyProject.mock.calls.length).toBe(1);
       expect(removeEmptyProject).toHaveBeenCalledWith(projectId);

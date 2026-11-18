@@ -11,7 +11,9 @@ which reads changed files from the GitHub API. Pushes retain a Git checkout
 for commit comparisons. Across 12 archived hosted runs, the PR checkout step
 took 4–10 s with a median of 7.5 s. A local replay of the action verified
 docs-only changes, code changes, renames, API failure, and push detection.
-[Filter implementation](https://github.com/dorny/paths-filter/blob/0e4a8c6effa4802afeda77dc8d303f8176d7dfad/src/main.ts#L69)
+The combined hosted trial completed change detection in 3 s with checkout
+skipped. [Filter implementation](https://github.com/dorny/paths-filter/blob/0e4a8c6effa4802afeda77dc8d303f8176d7dfad/src/main.ts#L69),
+[Hosted trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
 
 After workspace setup and CI contract validation, `static-fast` uses GitHub
 Actions' native `parallel` group for identity, Windows boundary, formatting,
@@ -241,7 +243,9 @@ contract verifies that each file has exactly one owner.
 On the Mac mini, the pair took 89.55 s with native placement and 68.17 s with
 the four moves. Both runs used fresh Vite caches and copies of the same warmed
 compiler cache. All 440 cases across 84 files matched by full name, outcome and
-multiplicity. Hosted timing for the new placement is pending.
+multiplicity. The rebalanced hosted job passed in 169 s. Its preceding
+sample took 211 s. Both restored the browser caches.
+[Rebalanced hosted job](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
 
 ### Chat workflow fixture setup
 
@@ -311,12 +315,11 @@ server reporter test.
 [Cold run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1),
 [Warm run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/2)
 
-### Web Unit worker pool
+### Web Unit worker-pool trial
 
-Web Unit uses Vitest's thread pool with its default worker limit, per-file
-isolation, and shuffled order. Mac mini comparisons through Turbo used three
-workers with the Vitest result cache disabled. Each seed was run with both
-pools, and threads ran first for seed 7301.
+Mac mini comparisons through Turbo used three workers with the Vitest result
+cache disabled. Each seed was run with both pools, and threads ran first for
+seed 7301.
 
 | Shuffle seed |   Forks | Threads |
 | ------------ | ------: | ------: |
@@ -324,7 +327,11 @@ pools, and threads ran first for seed 7301.
 | 7301         | 56.89 s | 52.77 s |
 
 All 503 files and all 6,279 case names, results and multiplicities matched
-across the four runs. Hosted timing for the thread pool is pending.
+across the four runs. The Ubuntu trial then exposed a timezone failure in
+`inbox.logic.test.ts`. The test changes `process.env.TZ` to exercise the Rome
+daylight-saving transitions. A Mac mini replay launched in UTC reproduced
+the failure in threads. All 17 cases passed in forks. Web Unit uses Vitest's
+default fork pool. [Hosted Web Unit trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109/job/134811090010)
 
 ## November 2026 critical-path rebalance
 

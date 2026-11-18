@@ -177,7 +177,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
       {
         pkg: "web",
         filters: "--filter=@synara/web",
-        "test-args": "--pool=threads",
+        "test-args": "",
         scope: "web",
         "save-modules": "true",
       },
