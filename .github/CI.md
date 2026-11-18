@@ -259,7 +259,10 @@ On the Mac mini, with fresh Vite caches and warm compiler caches, the
 `chat-workflows` sample fell from 106.01 s to 58.01 s. The paired runs
 passed all 87 and 149 assigned cases respectively, matching the serial case
 names and multiplicities. The test launcher kept Vitest's environment intact
-so it reused the compiler cache in both children. Hosted timing is pending.
+so it reused the compiler cache in both children. On GitHub, projects and
+workflows ran in 181 s and 173 s with the paired processes and new Web setup.
+The preceding pilot took 254 s and 243 s respectively.
+[Paired pilot](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1)
 
 ### Desktop lifecycle smoke during the build
 
@@ -292,7 +295,29 @@ the same tar and zstd settings. With the smaller tree and a separate Playwright
 directory containing only the headless shell and FFmpeg, all six stable Browser
 jobs passed. They exercised 252 component files exactly once and matched the
 265 assigned ChatView cases. Web Unit matched all 6,279 outcomes, including its
-three existing skips. Linux cache size and cold/warm timing are pending.
+three existing skips.
+
+On Linux, GitHub saved a 341 MB Web dependency archive and a 108 MB Chromium
+archive. The first run created both caches and passed the gate in 217 s. The
+same-head repeat restored both archives in every consumer and failed in a
+server reporter test.
+[Cold run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1),
+[Warm run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/2)
+
+### Web Unit worker pool
+
+Web Unit uses Vitest's thread pool with its default worker limit, per-file
+isolation, and shuffled order. Mac mini comparisons through Turbo used three
+workers with the Vitest result cache disabled. Each seed was run with both
+pools, and threads ran first for seed 7301.
+
+| Shuffle seed |   Forks | Threads |
+| ------------ | ------: | ------: |
+| 3113         | 62.27 s | 52.21 s |
+| 7301         | 56.89 s | 52.77 s |
+
+All 503 files and all 6,279 case names, results and multiplicities matched
+across the four runs. Hosted timing for the thread pool is pending.
 
 ## November 2026 critical-path rebalance
 

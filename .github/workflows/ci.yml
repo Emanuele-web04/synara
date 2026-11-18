@@ -152,7 +152,7 @@ jobs:
             test-args: ""
           - pkg: web
             filters: "--filter=@synara/web"
-            test-args: ""
+            test-args: "--pool=threads"
             scope: "web"
             save-modules: "true"
           # Server lane tests the CLI package (package name @synara/cli).
