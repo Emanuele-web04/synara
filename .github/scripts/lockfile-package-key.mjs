@@ -1,7 +1,6 @@
 // Fingerprint the bun.lock resolutions of named packages for runtime caches.
-// Playwright's browser build and Electron's download depend only on these
-// entries, so a release bump that rewrites workspace versions keeps the key.
-// Plain JavaScript: browser jobs run it before the workspace Node is set up.
+// Electron's download depends only on its own entries, so a release bump that
+// rewrites workspace versions keeps the key.
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";

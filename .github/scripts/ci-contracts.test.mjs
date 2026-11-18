@@ -455,7 +455,7 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
 });
-test("runtime caches key on their own lockfile resolutions", () => {
+test("the Electron runtime cache keys on its own lockfile resolution", () => {
   const steps = Object.fromEntries(
     setup
       .split("\n    - name: ")
@@ -473,21 +473,6 @@ test("runtime caches key on their own lockfile resolutions", () => {
     steps["Cache Electron runtime"].includes(
       "key: ${{ runner.os }}-${{ runner.arch }}-electron-v2-${{ steps.electron-key.outputs.fingerprint }}",
     ),
-  );
-
-  const browserSteps = jobs.browser.steps;
-  const keyIndex = browserSteps.findIndex((step) => step.id === "chromium-key");
-  const cacheIndex = browserSteps.findIndex((step) => step.id === "chromium-cache");
-  assert.ok(keyIndex > 0 && keyIndex < cacheIndex, "the key exists before the background restore");
-  assert.equal(browserSteps[keyIndex].uses, undefined, "the runner's own Node computes it");
-  assert.ok(
-    browserSteps[keyIndex].run.includes(
-      'fingerprint="$(node .github/scripts/lockfile-package-key.mjs playwright playwright-core)"',
-    ),
-  );
-  assert.equal(
-    browserSteps[cacheIndex].with.key,
-    "${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-v2-${{ steps.chromium-key.outputs.fingerprint }}",
   );
 
   const lockfile = `{

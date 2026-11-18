@@ -421,17 +421,17 @@ server reporter test.
 [Cold run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/1),
 [Warm run](https://github.com/Emanuele-web04/synara/actions/runs/44200709891/attempts/2)
 
-The Chromium archive is keyed by the `playwright` and `playwright-core`
-entries in `bun.lock`, and the Electron download cache by the `electron`
-entry. `.github/scripts/lockfile-package-key.mjs` hashes those lines,
-including nested resolutions. Release version bumps rewrite `bun.lock`
-without touching them, so both archives survive a release. Keyed by the whole
-lockfile, every release forced six browser jobs to download Chromium again
-and Desktop Build to download Electron. The script is plain JavaScript because
-browser jobs compute the key with the runner's own Node, before workspace
-setup. Turbo keeps its lockfile key. Turbo task hashes include each package's
-`package.json`, so a release bump misses every task whichever archive is
-restored.
+The Electron download cache is keyed by the `electron` entry in `bun.lock`.
+`.github/scripts/lockfile-package-key.mjs` hashes that line, including nested
+resolutions, so a release version bump keeps the cache. Desktop Build computes
+the key in 40 ms after Node setup. A miss cost 1.7 s in
+[run 44383201899](https://github.com/Emanuele-web04/synara/actions/runs/44383201899).
+The Chromium archive keeps its `bun.lock` key. A trial keyed it the same way,
+but the extra step ran before workspace setup on the runner's cold Node and
+took 0–6 s in each browser job. The miss it avoids once per release cost
+2–3 s per job, because Playwright's CDN download is fast. Turbo also keeps its
+lockfile key. Turbo task hashes include each package's `package.json`, so a
+release bump misses every task whichever archive is restored.
 
 ### Web Unit worker-pool trial
 
