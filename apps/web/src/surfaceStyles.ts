@@ -69,3 +69,10 @@ export const GLASS_RAISED_SURFACE_CLASS_NAME = "app-glass-raised";
  * (see lib/glassOverlayCutout.ts), which finds overlays by this class.
  */
 export const FLOATING_OVERLAY_SURFACE_CLASS_NAME = "app-popup-surface";
+
+/**
+ * Settings selects float over the dense settings page, where the shared thin overlay
+ * tint lets the rows beneath read through. index.css gives this surface a solid
+ * popover fill on every window material, and lib/glassOverlayCutout.ts skips it.
+ */
+export const SETTINGS_POPUP_SURFACE_CLASS_NAME = "app-popup-surface--settings";

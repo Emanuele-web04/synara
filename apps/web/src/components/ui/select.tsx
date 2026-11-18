@@ -1,6 +1,9 @@
 "use client";
 
-import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import {
+  GLASS_RAISED_SURFACE_CLASS_NAME,
+  SETTINGS_POPUP_SURFACE_CLASS_NAME,
+} from "~/surfaceStyles";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { useRender } from "@base-ui/react/use-render";
@@ -16,7 +19,6 @@ import {
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME,
-  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 
 const Select = SelectPrimitive.Root;
@@ -158,8 +160,11 @@ function SelectPopup({
     surface === "settings"
       ? cn(
           APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-          "app-popup-surface--settings rounded-lg",
-          COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+          cn(SETTINGS_POPUP_SURFACE_CLASS_NAME, "rounded-lg"),
+          // Same chrome as the other opaque select popups (autocomplete/combobox):
+          // a shadow-lg drop plus a one-pixel edge highlight that keeps the solid
+          // surface lifted off the settings card behind it in both schemes.
+          "shadow-lg/5 inset-shadow-[0_1px_--theme(--color-black/4%)] dark:inset-shadow-[0_-1px_--theme(--color-white/6%)]",
         )
       : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
     shellClassName,

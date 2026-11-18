@@ -3926,13 +3926,14 @@ diffs-container {
     var(--app-overlay-backing, transparent);
 }
 
-/* Settings popups float over the dense settings page: the frosted overlay tint lets
-   the rows beneath read through, so on opaque windows they paint a solid fill and
-   skip the pointless blur. Translucent windows keep the cutout glass below. */
-:root:not([data-window-material="translucent"]) .app-popup-surface--settings {
+/* Settings popups float over the dense settings page: the shared thin overlay tint lets
+   the rows beneath read through, so they paint a solid popover fill on every window
+   material and skip the backdrop blur. glassOverlayCutout.ts excludes them: an opaque
+   overlay has no glass to show, so there is nothing to cut out from under it. */
+.app-popup-surface--settings {
   background: var(--popover);
 }
-:root:not([data-window-material="translucent"]) .app-popup-surface--settings::before {
+.app-popup-surface--settings::before {
   display: none;
 }
 

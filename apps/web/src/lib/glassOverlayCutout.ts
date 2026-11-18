@@ -12,15 +12,19 @@
 // blurred desktop remain. Paint-only: it never changes layout, hit-testing of the overlay, or
 // scroll position.
 
-import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import {
+  FLOATING_OVERLAY_SURFACE_CLASS_NAME,
+  SETTINGS_POPUP_SURFACE_CLASS_NAME,
+} from "~/surfaceStyles";
 
 // Hover cards appear on every row crossing. Re-clipping the entire app for each one
 // changes its compositing while the pointer moves; give them a dense fill in index.css
 // instead, without touching the page's clip or hit-testing.
 const HOVER_OVERLAY_SELECTOR = '[data-slot="tooltip-popup"], [data-slot="preview-card-popup"]';
 
-/** Portaled overlays (rendered outside the app root): the root is cut out from under them. */
-const OVERLAY_SELECTOR = `:is(.${FLOATING_OVERLAY_SURFACE_CLASS_NAME}, .composer-picker-menu-surface, .chat-composer-surface):not(${HOVER_OVERLAY_SELECTOR})`;
+/** Portaled overlays (rendered outside the app root): the root is cut out from under them.
+    Settings popups paint a solid fill (index.css), so there is no glass to cut out for. */
+const OVERLAY_SELECTOR = `:is(.${FLOATING_OVERLAY_SURFACE_CLASS_NAME}, .composer-picker-menu-surface, .chat-composer-surface):not(${HOVER_OVERLAY_SELECTOR}, .${SETTINGS_POPUP_SURFACE_CLASS_NAME})`;
 
 /** An overlay fading in or out is cut out only once it covers more than it reveals. */
 const MIN_OVERLAY_OPACITY = 0.5;
