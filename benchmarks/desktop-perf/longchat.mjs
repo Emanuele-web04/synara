@@ -12,6 +12,7 @@
 //   node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
 //   node benchmarks/desktop-perf/longchat.mjs --build main [--build branch] [--runs 6]
 //        [--label x] [--only small-38,agent-heavy] [--profile] [--capture] [--press-ms 80]
+//        [--no-desktop-local]
 //
 // --prepare-base  copies the seeded template and appends the realistic long threads
 //                 (seed-realistic-threads.ts) with that build, then migrates it once
@@ -21,6 +22,11 @@
 // --capture       writes each cold snapshot frame to <results>/frames/frame-<name>.json,
 //                 the input of apps/web/perf/longChatDerivations.perf.test.ts
 // --runs          samples per build (default 6: open timings are bimodal, 3 hide that)
+// --no-desktop-local  measure as a plain browser. By default the page sets the declared
+//                 local-backend switch (LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY in
+//                 apps/web/src/wsTransport.ts) before it loads, so a build that supports
+//                 it connects like the desktop app to its own backend (feature socket
+//                 without permessage-deflate). Builds without it ignore the key.
 // --press-ms      time between pointerdown and pointerup on a sidebar row (default 80, a
 //                 typical mouse click). Open timings start at pointerdown, so they include
 //                 the press; work started on pointerdown overlaps it. 0 = instant click.
@@ -55,6 +61,8 @@ const LONGCHAT_THREADS = [
   ["agent-heavy", "real-thread-agent-heavy"],
   ["synthetic-1400", "seed-thread-large-01"],
 ];
+// Mirrors LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY (apps/web/src/wsTransport.ts).
+const DESKTOP_LOCAL_STORAGE_KEY = "synara:local-backend-uncompressed";
 const PARK_THREAD = "seed-thread-small-016";
 const WARMUP_THREAD = "seed-thread-small-004";
 const SEL = {
@@ -451,6 +459,11 @@ async function oneSample(build, sampleIndex, options) {
       viewport: { width: 1440, height: 900 },
       deviceScaleFactor: 2,
     });
+    if (options.desktopLocal) {
+      await context.addInitScript((key) => {
+        window.localStorage.setItem(key, "1");
+      }, DESKTOP_LOCAL_STORAGE_KEY);
+    }
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
     for (const domain of ["Performance", "Profiler", "Network", "HeapProfiler"]) {
@@ -559,6 +572,7 @@ const options = {
   capture: args.includes("--capture"),
   only: value("only")?.split(","),
   pressMs: Number(value("press-ms", "80")),
+  desktopLocal: !args.includes("--no-desktop-local"),
 };
 const output = {
   suite: "longchat",

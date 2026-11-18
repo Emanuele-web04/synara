@@ -173,6 +173,13 @@ samples only separate large differences: an apparent +23% on 3 samples was noise
 `≈ spread` when the new median falls inside the first build's range. Treat such a
 change as no difference.
 
+The desktop app connects to the backend it spawned without permessage-deflate (the
+renderer declares it on the feature socket). The suite runs the client in a browser,
+where that condition cannot hold, so by default it sets the declared local-backend
+switch in `localStorage` before the page loads (`--no-desktop-local` turns it off). The
+switch only removes compression, only for a page on a loopback backend, and builds
+without it ignore it.
+
 Open timings start at **pointerdown**, so they include the press itself: by default
 the button is released after 80 ms (`--press-ms`, a typical mouse click), and work the
 app starts on pointerdown (subscribing a thread) overlaps it. `--press-ms 0` releases at
