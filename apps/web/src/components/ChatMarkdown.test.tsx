@@ -606,21 +606,15 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).not.toContain("[[03-Resources");
 });
 
-it("shares a settled parse only between renders with the same parse inputs", async () => {
+it("shares a settled parse only between opted-in renders with the same parse inputs", async () => {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
   const text = "Shared parse: see [[My note]] and **bold**.";
-  const first = renderWithQueryClient(
-    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" />,
-  );
-  const again = renderWithQueryClient(
-    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" />,
-  );
-  const otherRoot = renderWithQueryClient(
-    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/other" />,
-  );
-  const user = renderWithQueryClient(
-    <ChatMarkdown text={text} cwd="/vault/notes" wikiLinkRoot="/vault" variant="user" />,
-  );
+  const render = (props: { wikiLinkRoot: string; variant?: "user" }) =>
+    renderWithQueryClient(<ChatMarkdown text={text} cwd="/vault/notes" shareParse {...props} />);
+  const first = render({ wikiLinkRoot: "/vault" });
+  const again = render({ wikiLinkRoot: "/vault" });
+  const otherRoot = render({ wikiLinkRoot: "/other" });
+  const user = render({ wikiLinkRoot: "/vault", variant: "user" });
 
   expect(again).toBe(first);
   expect(first).toContain('href="/vault/My%20note.md"');
@@ -628,6 +622,23 @@ it("shares a settled parse only between renders with the same parse inputs", asy
   expect(otherRoot).not.toContain("/vault/");
   // User messages parse with their own plugins (no wiki links), never the shared tree.
   expect(user).not.toContain('href="/vault/My%20note.md"');
+});
+
+it("keeps previews, huge messages and streaming text out of the shared parse cache", async () => {
+  const { default: ChatMarkdown, getSharedParseCacheSizeForTests } = await import("./ChatMarkdown");
+  const before = getSharedParseCacheSizeForTests();
+  // Not opted in: file previews, PR bodies and dialogs change or can be huge.
+  renderWithQueryClient(<ChatMarkdown text={"# Preview\n\nbody v1"} cwd="/repo" parseHtml />);
+  renderWithQueryClient(<ChatMarkdown text={"# Preview\n\nbody v2"} cwd="/repo" />);
+  // Opted in, but one entry may not outweigh the rest of the cache.
+  renderWithQueryClient(
+    <ChatMarkdown text={`huge ${"word ".repeat(40_000)}`} cwd="/repo" shareParse />,
+  );
+  renderWithQueryClient(<ChatMarkdown text="streaming reply" cwd="/repo" shareParse isStreaming />);
+  expect(getSharedParseCacheSizeForTests()).toBe(before);
+
+  renderWithQueryClient(<ChatMarkdown text="settled transcript reply" cwd="/repo" shareParse />);
+  expect(getSharedParseCacheSizeForTests()).toBe(before + 1);
 });
 
 it.each(["\n", "\r\n"])(
