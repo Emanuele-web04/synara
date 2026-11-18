@@ -10,19 +10,17 @@ import { economyModelSlug } from "@synara/shared/bots";
 import { useMemo } from "react";
 
 import { useAppSettings } from "~/appSettings";
-import { resolveDraftFallbackModelSelection } from "~/components/ChatView.logic";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
+import { resolveDraftFallbackModelSelection } from "~/lib/draftFallbackModelSelection";
 import { buildModelSelection } from "~/providerModelOptions";
 
 export function useBotDefaultEngine(): ModelSelection {
   const { settings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const fallback = useMemo(
-    () =>
-      resolveDraftFallbackModelSelection({
-        projectDefault: null,
-        settingsDefaultProvider: settings.defaultProvider,
-      }),
-    [settings.defaultProvider],
+    () => resolveDraftFallbackModelSelection({ projectDefault: null, newChatDefault }),
+    [newChatDefault],
   );
   const prefetchProviders = useMemo(() => [fallback.provider], [fallback.provider]);
   const modelHintByProvider = useMemo(

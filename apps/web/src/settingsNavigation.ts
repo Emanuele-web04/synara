@@ -248,7 +248,7 @@ const ALL_SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "synbot",
-    group: "coding",
+    group: "agents",
     label: "synbotEditor:settingsNavLabel",
     description: "synbotEditor:settingsNavDescription",
     icon: "robot",
