@@ -5311,6 +5311,7 @@ describe("ChatView transcript geometry (full app)", () => {
         try {
           await waitForServerConfigToApply();
           const note = page.getByTestId("composer-claude-model-switch-note");
+          const send = page.getByRole("button", { name: "Send message", exact: true });
           await expect.element(note).not.toBeInTheDocument();
           const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
           useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
@@ -5324,9 +5325,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
           useComposerDraftStore.getState().setPrompt(THREAD_ID, "Continue the task");
           if (sessionStatus === "ready") {
-            await expect
-              .element(page.getByRole("button", { name: "Send message", exact: true }))
-              .toBeEnabled();
+            await expect.element(send).toBeEnabled();
           } else {
             await expect
               .element(page.getByRole("button", { name: "Stop generation", exact: true }))
@@ -5346,9 +5345,14 @@ describe("ChatView transcript geometry (full app)", () => {
           await expect.element(note).not.toBeInTheDocument();
           useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
           await expect.element(note).toBeVisible();
-          document
-            .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
-            .requestSubmit();
+          if (sessionStatus === "ready") {
+            // Use the actionable control after resizing and changing the model again.
+            await send.click();
+          } else {
+            document
+              .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
+              .requestSubmit();
+          }
           const handoffBlocked = sessionStatus === "running" && provider !== "claudeAgent";
           if (handoffBlocked) {
             await vi.waitFor(() =>
