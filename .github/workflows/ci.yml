@@ -326,11 +326,10 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
+          scope: "server"
           electron: "true"
           turbo: "true"
           web-transform-cache: desktop-production
-          # Sole consumer of the electron:true node_modules key.
-          save-modules: "true"
 
       - name: Configure Electron sandbox helper
         run: |

@@ -31,8 +31,8 @@ runs:
           full|static|runtime|web|server) ;;
           *) echo "::error::Unknown workspace scope: $WORKSPACE_SCOPE"; exit 1 ;;
         esac
-        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" != "full" ] && [ "$WORKSPACE_SCOPE" != "runtime" ]; then
-          echo "::error::Electron requires a full or runtime install."
+        if [ "$ELECTRON" = "true" ] && [ "$WORKSPACE_SCOPE" != "full" ] && [ "$WORKSPACE_SCOPE" != "runtime" ] && [ "$WORKSPACE_SCOPE" != "server" ]; then
+          echo "::error::Electron requires a full, runtime, or server install."
           exit 1
         fi
 
@@ -62,9 +62,9 @@ runs:
         fingerprint="$(node apps/web/scripts/compiler-cache-key.ts)"
         printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
 
-    # Web and server dependency trees have their own exact keys. Static and
-    # runtime scopes install directly, as do Windows jobs with Bun's isolated links.
-    # One job per key sets save-modules to seed the archive after a miss.
+    # Reuse the existing dependency-only keys, including in jobs that install
+    # the Electron runtime later. Static, runtime, and Windows install directly.
+    # One job per exact key sets save-modules to seed the archive after a miss.
     - name: Restore node_modules
       id: modules
       if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') }}
@@ -75,7 +75,7 @@ runs:
           apps/*/node_modules
           packages/*/node_modules
           scripts/node_modules
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-false-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}
 
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
@@ -168,6 +168,19 @@ runs:
           server) bun install --frozen-lockfile --filter './' --filter '@synara/cli' --filter '@synara/desktop' --filter '@synara/analytics' --concurrent-scripts=1 ;;
         esac
 
+    # The packed Electron runtime has a separate cache. Save dependencies
+    # before extracting it so Server and Desktop can share the same archive.
+    - name: Save node_modules
+      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+          scripts/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}
+
     - name: Install Electron test runtime
       if: ${{ inputs.electron == 'true' }}
       shell: bash
@@ -181,16 +194,3 @@ runs:
           fi
           sleep $((attempt * 5))
         done
-
-    # Saved after the Electron runtime so an electron:true archive keeps the
-    # same contents as before. Restore misses fall back to a cold frozen install.
-    - name: Save node_modules
-      if: ${{ runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server') && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v5
-      with:
-        path: |
-          node_modules
-          apps/*/node_modules
-          packages/*/node_modules
-          scripts/node_modules
-        key: ${{ steps.modules.outputs.cache-primary-key }}

@@ -80,8 +80,8 @@ Build install the entire workspace. Other jobs select the dependencies they use.
   dependencies, for Web Unit and the six stable Browser jobs.
 - The `server` scope installs the root, `@synara/cli`, `@synara/desktop` and
   `@synara/analytics`, including their Web and other workspace dependencies,
-  for the three server unit shards. The server host-usage tests import the
-  Desktop relay and analytics Worker.
+  for the three server unit shards and Desktop Build. The server host-usage
+  tests import the Desktop relay and analytics Worker.
 - Native release artifact builders exclude marketing with `--ignore-scripts`
   exactly as before. macOS device jobs select `@synara/scripts`, retaining their
   existing `--ignore-scripts`, Xcode pairs, probe, simulator smoke and diagnostics.
@@ -103,9 +103,11 @@ within each scope. These times exclude archive transfer and extraction.
 
 Static, runtime, and Windows jobs install directly. On Windows, `RUNNER_TEMP` puts the
 Bun package cache on the hosted checkout's drive so Bun can hardlink package
-files. Each archive has one writer after a miss. Typecheck and Desktop Build
-own the two full Linux keys, Web Unit owns the Web key, server shard 1/3 owns
-the server key, and the macOS editor integration job owns its macOS key.
+files. Each archive has one writer after a miss. Typecheck owns the full
+Linux key, Web Unit owns the Web key, server shard 1/3 owns the server key,
+and the macOS editor integration job owns its macOS key. Desktop Build
+restores the server archive and extracts Electron from its separate runtime
+cache after the frozen install. A cache miss still installs dependencies.
 Frozen installation and lifecycle patches run on cache hits. Every scope uses
 `--concurrent-scripts=1` to serialize the workspace `prepare` hooks that patch
 the same TypeScript files. The September measurements below predate this
@@ -118,9 +120,17 @@ Test and typecheck task results remain uncached.
 
 On the Mac mini, a frozen install into a fresh dependency tree with a warm Bun
 package cache took 17.41 s for the full workspace and 11.69 s for the server
-scope. The compressed archive fell from 692 MB to 502 MB. On the latest closed
-GitHub sample, the three server runners each restored the 933 MB full Linux
-archive in 16–24 s. The scoped Linux restore remains unmeasured.
+scope. The compressed archive fell from 692 MB to 502 MB. Before the scoped
+key, the three server runners each restored the 933 MB full Linux archive
+in 16–24 s. The scoped Linux restore remains unmeasured.
+
+The former Desktop dependency archive was 1,058 MB and took 14.8 s to
+save in the same run that seeded the 697 MB Server archive. On the Mac
+mini with empty dependency trees and warm Bun download caches, Desktop's
+frozen install went from 6.93 s to 4.40 s with the shared scope. Both
+scopes passed the Desktop build, Worker dry-run and live Electron lifecycle
+smoke. The native focus cases were collected and their fixtures built.
+[Hosted archive measurements](https://github.com/Emanuele-web04/synara/actions/runs/44353945319)
 
 Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner

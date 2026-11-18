@@ -156,7 +156,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
       .map((step) => [step.split("\n")[0], step]),
   );
   const modulesKey =
-    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-${{ inputs.electron }}-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}";
+    "${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-false-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}";
   const modulesConsumers =
     "runner.os != 'Windows' && (inputs.scope == 'full' || inputs.scope == 'web' || inputs.scope == 'server')";
   // The Bun package archive shared the modules hash, so it missed whenever it was needed.
@@ -185,14 +185,26 @@ test("caches restore in every consumer and save from one owner per key", () => {
     assert.ok(save.includes(condition), condition);
   assert.ok(save.includes("key: ${{ steps.modules.outputs.cache-primary-key }}"));
   assert.equal(setup.match(/actions\/cache\/save@/g)?.length, 1);
+  assert.ok(steps["Install dependencies"].includes('ELECTRON_SKIP_BINARY_DOWNLOAD: "1"'));
+  assert.ok(
+    setup.indexOf("- name: Save node_modules") <
+      setup.indexOf("- name: Install Electron test runtime"),
+    "shared dependency archives must exclude the extracted Electron runtime",
+  );
   const actionDefault = setup.split("  save-modules:\n")[1].split("\n\n")[0];
   assert.ok(actionDefault.includes('default: "false"'), "restore-only unless a job opts in");
-  // Typecheck and Desktop Build own the full keys. The Web and Server matrix
+  // Typecheck owns the full key. The Web and Server matrix
   // entries below each nominate one owner for their own key.
   const savers = Object.entries(jobs)
     .filter(([, job]) => job.steps.some((step) => step.with?.["save-modules"] === "true"))
     .map(([name]) => name);
-  assert.deepEqual(savers, ["static-typecheck", "build"]);
+  assert.deepEqual(savers, ["static-typecheck"]);
+  const desktopSetup = jobs.build.steps.find(
+    (step) => step.uses === "./.github/actions/setup-workspace",
+  );
+  assert.equal(desktopSetup.with.scope, "server");
+  assert.equal(desktopSetup.with.electron, "true");
+  assert.equal(desktopSetup.with["save-modules"], undefined);
   const unitSetup = jobs.unit.steps.find(
     (step) => step.uses === "./.github/actions/setup-workspace",
   );
@@ -433,6 +445,7 @@ test("Windows uses the runner-volume cache and Web installs only its dependency 
     ["Linux", "runtime", ["!@synara/marketing"]],
     ["macOS", "runtime", ["!@synara/marketing"]],
     ["Linux", "web", ["./", "@synara/web"]],
+    ["Linux", "server", ["./", "@synara/cli", "@synara/desktop", "@synara/analytics"]],
   ]) {
     const result = spawnSync(
       "bash",
