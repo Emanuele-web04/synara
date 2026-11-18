@@ -626,6 +626,17 @@ holds a runner, which also shortens the queue behind it.
 
 ### React Compiler transform cache
 
+`ci.yml` pins Node to a single patch across its jobs. The compiler fingerprint
+includes the full Node version. In [run 44364860754](https://github.com/Emanuele-web04/synara/actions/runs/44364860754),
+the runner for Components 3/3 picked 24.22.3 while other runners picked
+24.22.2 from the range in `package.json`. The shard missed its existing
+compiler archive and spent 123.31 s on imports in its slower half.
+Node 24.22.3 includes security fixes and already has archives for
+Components 3/3 and Desktop. Bumping the pin gives each lane a fresh key.
+On the Mac mini, Components 3/3 with Node 24.22.3 took 98.58 s with an empty
+compiler cache and 67.78 s with its own cache. Both runs passed the same 441
+cases with fresh Vite optimizer directories.
+
 Each browser lane starts a cold Vite server and compiles every module it loads
 with React Compiler. In [run 43857434725](https://github.com/Emanuele-web04/synara/actions/runs/43857434725)
 Vitest reported 81 s of import time for `chat-follow` (285 s total) and 146 s
@@ -642,18 +653,20 @@ cache through `SYNARA_WEB_TRANSFORM_CACHE_DIR`. React Compiler runs in
 the client environment, so the node unit lanes have nothing to reuse.
 
 Each stable browser lane owns one archive. Pull requests restore the newest
-matching archive and save on a miss after a successful job. If `chat-workflows`
-has no matching archive, it can seed its own cache from `chat-follow` on the
-same platform and compiler fingerprint. Pushes to `main` save one entry per commit.
+matching archive and save on a miss after a successful job. A lane missing
+its own archive can seed from Components 3/3 on the same platform and compiler
+fingerprint. That shard mounts the full chat app in EventRouter's tests and
+has a broad set of compiled modules. Pushes to `main` save one entry per commit.
 The archive and per-module salt use the same fingerprint. For Bun lockfile v3,
 the fingerprint omits only each workspace's declared release version. It
 retains all dependency resolutions, catalogs, overrides and integrity strings.
 Unrecognized lockfile syntax is hashed byte for byte.
 
-On the Mac mini, the two CI browser groups for `chat-workflows` passed all
-131 selected cases with an empty cache in 76.04 s and with the `chat-follow`
-cache in 48.52 s. The 1,499 transform results present in both runs were
-byte-identical. The timing excludes archive download.
+On the Mac mini with Node 24.22.3, the two `chat-workflows` groups passed the
+same 131 cases in 75.89 s with an empty cache and 48.98 s starting from the
+Components 3/3 archive. It already contained 1,421 of the 1,500 cold
+transforms. All 1,499 results present in both outputs were byte-identical.
+The timing excludes archive download.
 
 Replaying the 1.5.4 to 1.6.2 metadata bump on the Mac mini kept the fingerprint
 stable. The bumped Web production build took 35.10 s with an empty compiler

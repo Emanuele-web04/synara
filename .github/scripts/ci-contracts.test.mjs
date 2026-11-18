@@ -12,7 +12,7 @@ import { workspaceInstallFingerprint } from "../../scripts/ci-install-key.ts";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = read("../workflows/ci.yml");
 const requireFromScripts = createRequire(new URL("../../scripts/package.json", import.meta.url));
-const { jobs } = requireFromScripts("yaml").parse(workflow);
+const { env: workflowEnv, jobs } = requireFromScripts("yaml").parse(workflow);
 const setup = read("../actions/setup-workspace/action.yml");
 const gate = workflow.match(
   /- name: Aggregate lane results[\s\S]*?        run: \|\n([\s\S]*?)(?=\n  [a-z_]+:|$)/,
@@ -357,6 +357,14 @@ test("dependency archives survive release metadata bumps and invalidate install 
 });
 
 test("browser tests and Desktop CI use separate compiler cache namespaces", () => {
+  assert.match(workflowEnv.SYNARA_CI_NODE_VERSION, /^\d+\.\d+\.\d+$/);
+  const setupSteps = requireFromScripts("yaml").parse(setup).runs.steps;
+  const nodeIndex = setupSteps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
+  assert.deepEqual(setupSteps[nodeIndex]?.with, {
+    "node-version": "${{ env.SYNARA_CI_NODE_VERSION }}",
+    "node-version-file": "${{ env.SYNARA_CI_NODE_VERSION == '' && 'package.json' || '' }}",
+  });
+  assert.ok(nodeIndex < setupSteps.findIndex((step) => step.id === "web-transform-key"));
   const steps = Object.fromEntries(
     setup
       .split("\n    - name: ")
@@ -414,9 +422,11 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   );
   assert.equal(
     browserSetup["web-transform-fallback"],
-    "${{ github.event_name == 'pull_request' && matrix.project == 'chat-workflows' && 'browser-chat-follow-0' || '' }}",
+    "${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}",
   );
-  assert.equal(jobs.browser.strategy.matrix.include[0].project, "chat-follow");
+  const donor = jobs.browser.strategy.matrix.include[5];
+  assert.equal(donor.project, "components");
+  assert.equal(donor.shard, "3/3");
   assert.equal(
     jobs.build.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
     "desktop-production",

@@ -21,6 +21,8 @@ concurrency:
 # instead of per job so a future bump cannot miss a lane.
 env:
   NODE_OPTIONS: --max-old-space-size=4096
+  # Runner images can ship different Node patches. Use one compiler cache namespace.
+  SYNARA_CI_NODE_VERSION: "24.22.3"
 
 jobs:
   # Docs-only filter: PRs touching only prose, doc images, or marketing content
@@ -266,7 +268,7 @@ jobs:
         with:
           scope: "web"
           web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
-          web-transform-fallback: ${{ github.event_name == 'pull_request' && matrix.project == 'chat-workflows' && 'browser-chat-follow-0' || '' }}
+          web-transform-fallback: ${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}
 
       - name: Wait for Chromium cache
         wait: chromium-cache

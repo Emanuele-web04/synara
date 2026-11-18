@@ -47,7 +47,8 @@ runs:
     - name: Setup Node
       uses: actions/setup-node@v6
       with:
-        node-version-file: package.json
+        node-version: ${{ env.SYNARA_CI_NODE_VERSION }}
+        node-version-file: ${{ env.SYNARA_CI_NODE_VERSION == '' && 'package.json' || '' }}
 
     - name: Fingerprint dependency inputs
       id: modules-key
