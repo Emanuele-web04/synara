@@ -23,6 +23,7 @@ import {
 } from "~/appSettings";
 import { resolveProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { t, useTranslation } from "~/i18n";
+import { acpArgsFromText } from "~/lib/acpAgentConfigText";
 import { ChevronRightIcon, FolderOpenIcon, PlusIcon } from "~/lib/icons";
 import { providerAccountIdentityLabel } from "~/lib/providerInstancePresentation";
 import {
@@ -89,6 +90,23 @@ function providerAccountIdentityFields(
       },
     ];
   }
+  if (provider === "acp") {
+    return [
+      {
+        key: "command",
+        label: t("settings:acpAgentCommand"),
+        placeholder: "omp",
+        required: true,
+        description: t("settings:acpAgentCommandDescription"),
+      },
+      {
+        key: "args",
+        label: t("settings:acpAgentArguments"),
+        placeholder: "acp",
+        description: t("settings:acpAgentArgumentsDescription"),
+      },
+    ];
+  }
   if (provider === "pi" || provider === "omp") return [];
   return [
     {
@@ -128,20 +146,39 @@ export function ProviderAccountsList(props: {
     props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
   };
   const addAccount = (input: AddProviderAccountInput) => {
-    updateInstances({
+    const config: Record<string, unknown> = {
+      // A new account starts from the provider's own binary and endpoint settings.
+      ...providerInstanceLaunchConfigFor(input.provider, props.settings),
+      ...input.config,
+    };
+    // The dialog collects argv as one line; the instance config carries an
+    // array. An empty list stays `[]`: deleting the key would make the spawn
+    // helper substitute its `["acp"]` default for a standalone executable.
+    if (input.provider === "acp" && !Array.isArray(config.args)) {
+      config.args = acpArgsFromText(typeof config.args === "string" ? config.args : "");
+    }
+    const nextInstances = {
       ...props.settings.providerInstances,
       [input.instanceId]: {
         driver: input.provider,
         ...(input.displayName ? { displayName: input.displayName } : {}),
         ...(input.accentColor ? { accentColor: input.accentColor } : {}),
         enabled: true,
-        config: {
-          // A new account starts from the provider's own binary and endpoint settings.
-          ...providerInstanceLaunchConfigFor(input.provider, props.settings),
-          ...input.config,
-        },
+        config,
       },
-    });
+    };
+    if (input.provider === "acp") {
+      // ACP ships disabled (the default instance has no command to launch);
+      // registering an agent is the intent to use it, so turn the provider on.
+      props.updateSettings({
+        providerInstances: nextInstances as ProviderInstanceConfigMap,
+        disabledProviders: props.settings.disabledProviders.filter(
+          (candidate) => candidate !== "acp",
+        ),
+      });
+    } else {
+      updateInstances(nextInstances);
+    }
     toastManager.add({
       type: "success",
       title: t("settings:accountAdded"),
@@ -285,23 +322,27 @@ export function ProviderAccountsList(props: {
       translateTitle={false}
       action={
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={importInstance}
-            disabled={typeof window === "undefined" || !window.desktopBridge}
-            title={
-              typeof window === "undefined" || !window.desktopBridge
-                ? t("settings:directoryImportIsAvailableInTheSynaraDesktopApp")
-                : t("settings:useAnExistingDirectoryAsANewAccountWithout", {
-                    value0: providerLabel,
-                  })
-            }
-          >
-            <FolderOpenIcon className="size-3.5" />
-            {t("settings:importDirectory")}
-          </Button>
+          {/* ACP agents have no profile directory to import; their launch lives in
+              the instance's command/args config. */}
+          {provider !== "acp" ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={importInstance}
+              disabled={typeof window === "undefined" || !window.desktopBridge}
+              title={
+                typeof window === "undefined" || !window.desktopBridge
+                  ? t("settings:directoryImportIsAvailableInTheSynaraDesktopApp")
+                  : t("settings:useAnExistingDirectoryAsANewAccountWithout", {
+                      value0: providerLabel,
+                    })
+              }
+            >
+              <FolderOpenIcon className="size-3.5" />
+              {t("settings:importDirectory")}
+            </Button>
+          ) : null}
           <Button type="button" size="xs" variant="outline" onClick={() => setAddDialogOpen(true)}>
             <PlusIcon className="size-3.5" />
             {t("settings:addAccount")}
@@ -322,7 +363,11 @@ export function ProviderAccountsList(props: {
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
         providers={PROVIDER_VISIBILITY_OPTIONS.filter(
-          (option) => !props.settings.disabledProviders.includes(option.provider),
+          // The card this dialog opened from stays selectable even when its shared
+          // provider toggle is off (ACP agents outlive the ACP provider flag).
+          (option) =>
+            option.provider === provider ||
+            !props.settings.disabledProviders.includes(option.provider),
         ).map((option) => ({
           provider: option.provider,
           label: option.title,

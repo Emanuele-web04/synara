@@ -317,6 +317,15 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "omp" }>["options"] }
           : {}),
       };
+    case "acp":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "acp" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -993,7 +1002,9 @@ export function resolvePreferredComposerModelSelection(input: {
 
   // Pi and OMP have no static default model, so an empty draft falls back to Codex.
   const fallbackProvider =
-    preferredProvider === "pi" || preferredProvider === "omp" ? "codex" : preferredProvider;
+    preferredProvider === "pi" || preferredProvider === "omp" || preferredProvider === "acp"
+      ? "codex"
+      : preferredProvider;
   const fallbackInstanceId =
     fallbackProvider === preferredProvider ? preferredInstanceId : fallbackProvider;
 

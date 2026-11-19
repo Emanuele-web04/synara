@@ -257,6 +257,19 @@ export const OmpIcon: ProviderGlyph = (props) => {
   );
 };
 
+export const AcpIcon: ProviderGlyph = (props) => (
+  <svg {...props} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="10" width="44" height="44" rx="10" stroke="currentColor" strokeWidth="6" />
+    <path
+      d="M21 34l7 7 15-15"
+      stroke="currentColor"
+      strokeWidth="6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export const PROVIDER_GLYPHS = {
   codex: OpenAIIcon,
   claudeAgent: ClaudeIcon,
@@ -268,6 +281,7 @@ export const PROVIDER_GLYPHS = {
   opencode: OpenCodeIcon,
   pi: PiIcon,
   omp: OmpIcon,
+  acp: AcpIcon,
 } satisfies Record<string, ProviderGlyph>;
 
 export type ProviderGlyphKey = keyof typeof PROVIDER_GLYPHS;
@@ -284,6 +298,7 @@ export const PROVIDER_LABELS: Record<ProviderGlyphKey, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   omp: "Oh My Pi",
+  acp: "ACP Agent",
 };
 
 export function providerLabel(provider: string): string {

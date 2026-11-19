@@ -287,6 +287,15 @@ export function providerModelsPrefetchQueryOptions(input: {
         agentDir: optionString("agentDir"),
         priority,
       });
+    case "acp":
+      // ACP agent catalogs come from the configured instance command; the
+      // binary path slot carries `command` for this driver.
+      return providerModelsQueryOptions({
+        provider: "acp",
+        instanceId,
+        binaryPath: optionString("command"),
+        priority,
+      });
   }
 }
 

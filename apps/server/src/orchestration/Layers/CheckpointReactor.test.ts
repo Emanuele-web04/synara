@@ -89,6 +89,7 @@ import { CursorAdapter } from "../../provider/Services/CursorAdapter.ts";
 import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
 import { DroidAdapter } from "../../provider/Services/DroidAdapter.ts";
 import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
+import { AcpAdapter } from "../../provider/Services/AcpAdapter.ts";
 import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
@@ -333,6 +334,7 @@ function createRetainingPiProviderServiceLayer(options?: {
         Layer.succeed(DroidAdapter, adapterFor("droid")),
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(AcpAdapter, adapterFor("acp")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
         settingsLayer,
       ),

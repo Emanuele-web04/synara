@@ -43,6 +43,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
   omp: new Set<ModelSlug>(),
+  acp: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -78,7 +79,7 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi" && provider !== "omp";
+  return provider !== "pi" && provider !== "omp" && provider !== "acp";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -723,7 +724,7 @@ export function resolveModelSlug(
     provider === "claudeAgent" && normalizedModel
       ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
       : normalizedModel;
-  if (provider === "devin" || provider === "pi" || provider === "omp") {
+  if (provider === "devin" || provider === "pi" || provider === "omp" || provider === "acp") {
     return normalized;
   }
   if (!normalized) {

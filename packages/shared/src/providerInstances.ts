@@ -4,6 +4,7 @@
 // Exports: provider instance derivation and start-option helpers
 
 import type {
+  AcpAgentInstanceConfig,
   ModelSelection,
   ProviderDriverKind,
   ProviderInstanceConfig,
@@ -13,6 +14,7 @@ import type {
   ProviderStartOptions,
   ServerSettings,
 } from "@synara/contracts";
+import { AcpAgentInstanceConfig as AcpAgentInstanceConfigSchema } from "@synara/contracts";
 import { ProviderKind as ProviderKindSchema } from "@synara/contracts";
 import { Schema } from "effect";
 
@@ -27,6 +29,7 @@ export const BUILT_IN_PROVIDER_KINDS = [
   "opencode",
   "pi",
   "omp",
+  "acp",
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 export interface ResolvedProviderInstance {
@@ -125,6 +128,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "pi" ? "" : trimmed;
     case "omp":
       return trimmed === "omp" ? "" : trimmed;
+    case "acp":
+      return trimmed;
   }
 }
 
@@ -145,7 +150,8 @@ export function providerProfileDirectoryEnvironment(
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "pi" ||
-    provider === "omp"
+    provider === "omp" ||
+    provider === "acp"
   ) {
     return {};
   }
@@ -161,6 +167,7 @@ export function providerImportedDirectoryConfig(
   if (provider === "codex") return { homePath: directory };
   if (provider === "claudeAgent") return { configDir: directory };
   if (provider === "pi" || provider === "omp") return { agentDir: directory };
+  if (provider === "acp") return {};
   return { profileDir: directory };
 }
 
@@ -171,6 +178,7 @@ export function inferLegacyProviderKindFromInstanceId(
   if (isProviderKind(instanceId)) return instanceId;
 
   const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId === "acp" || lowerInstanceId.startsWith("acp_")) return "acp";
   if (lowerInstanceId.startsWith("claude")) return "claudeAgent";
   if (lowerInstanceId.startsWith("codex")) return "codex";
   if (lowerInstanceId.startsWith("cursor")) return "cursor";
@@ -379,6 +387,15 @@ export function deriveProviderInstanceConfigMap(
 
   for (const provider of BUILT_IN_PROVIDER_KINDS) {
     merged[defaultInstanceIdForProvider(provider)] = legacyProviderConfig(settings, provider);
+  }
+
+  // The canonical "acp" instance is only a template for user-registered ACP
+  // agents (driver "acp" entries in `providerInstances`): it carries no command
+  // of its own and stays out of the derived map while the provider is disabled
+  // and no explicit entry overrides it, so a default install surfaces no bare
+  // disabled "acp" provider.
+  if (settings.providers.acp?.enabled !== true && settings.providerInstances.acp === undefined) {
+    delete merged.acp;
   }
 
   Object.assign(merged, deriveLegacyCodexAccountInstances(settings));
@@ -653,6 +670,31 @@ export function providerStartOptionsFromInstance(
           }
         : undefined;
     }
+    case "acp": {
+      const agent = decodeAcpAgentConfig(config);
+      const command = trimString(config.command ?? agent?.command);
+      return command || environment.environment
+        ? {
+            acp: {
+              ...environment,
+              ...(agent ?? {}),
+              // A configured binaryPath overrides the agent command for
+              // operator-managed installs.
+              ...(binaryPath ? { command: binaryPath } : {}),
+            },
+          }
+        : undefined;
+    }
+  }
+}
+
+// Decodes an `acp` driver's opaque instance config. Malformed entries fail
+// closed: without a valid command there is nothing to launch.
+function decodeAcpAgentConfig(config: Record<string, unknown>): AcpAgentInstanceConfig | undefined {
+  try {
+    return Schema.decodeUnknownSync(AcpAgentInstanceConfigSchema)(config);
+  } catch {
+    return undefined;
   }
 }
 

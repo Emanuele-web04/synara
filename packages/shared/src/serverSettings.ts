@@ -14,7 +14,7 @@ import { defaultInstanceIdForProvider, deriveProviderInstances } from "./provide
 function defaultModelForProvider(provider: ProviderKind): string | undefined {
   // OMP resolves its model through role config, so a provider switch keeps the
   // current model rather than inventing a default.
-  if (provider === "omp") return undefined;
+  if (provider === "omp" || provider === "acp") return undefined;
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
@@ -163,5 +163,8 @@ export function providerStartOptionsFromServerSettings(
       ...(providers.omp.binaryPath ? { binaryPath: providers.omp.binaryPath } : {}),
       ...(providers.omp.agentDir ? { agentDir: providers.omp.agentDir } : {}),
     },
+    // Generic ACP agents resolve their launch config per instance, so the
+    // provider-level start options stay empty.
+    acp: {},
   };
 }

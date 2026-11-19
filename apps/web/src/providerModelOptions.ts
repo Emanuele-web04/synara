@@ -17,6 +17,7 @@ import {
   type CursorModelOptions,
   type CursorModelSelection,
   type DroidModelOptions,
+  type AcpModelOptions,
   type DroidModelSelection,
   type DevinModelOptions,
   type DevinModelSelection,
@@ -621,6 +622,11 @@ export function buildModelSelection(
     case "omp":
       return attachModelSelectionMetadata(
         options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
+        metadata,
+      );
+    case "acp":
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as AcpModelOptions } : { provider, model },
         metadata,
       );
   }

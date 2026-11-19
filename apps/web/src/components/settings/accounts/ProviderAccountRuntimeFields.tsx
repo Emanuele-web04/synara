@@ -11,6 +11,12 @@ import { useState, type ReactNode } from "react";
 import type { ManageableProviderInstance } from "~/appSettings";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useTranslation } from "~/i18n";
+import {
+  acpArgsFromText,
+  acpArgsToText,
+  acpModelSlugsFromText,
+  acpModelSlugsToText,
+} from "~/lib/acpAgentConfigText";
 import { CopyIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -210,7 +216,13 @@ export function ProviderAccountRuntimeFields(props: {
                 "Set a directory to use a Claude config folder you already signed in to."}
           </span>
         ) : null}
-        {!isAccountProvider && provider !== "pi" && provider !== "omp" ? (
+        {provider === "acp" ? (
+          <AcpAgentLaunchFields
+            config={instance.config}
+            onCommit={(key, value) => updateInstance(instanceId, { config: { [key]: value } })}
+          />
+        ) : null}
+        {!isAccountProvider && provider !== "pi" && provider !== "omp" && provider !== "acp" ? (
           <label className="block sm:col-span-2">
             <span className="block text-ui-sm font-medium text-foreground">
               {t("settings:profileDirectory")}
@@ -260,6 +272,12 @@ export function ProviderAccountRuntimeFields(props: {
           </span>
         </label>
         {props.config.fields.filter(isAdvancedField).map((field) => renderField(field, entry))}
+        {provider === "acp" ? (
+          <AcpAgentAdvancedFields
+            config={instance.config}
+            onCommit={(key, value) => updateInstance(instanceId, { config: { [key]: value } })}
+          />
+        ) : null}
         {provider === "claudeAgent" ? (
           <label className="block">
             <span className="block text-ui-sm font-medium text-foreground">
@@ -304,5 +322,125 @@ function ProviderInstanceAdvancedSection(props: { children: ReactNode }) {
         <div className="mt-2 grid gap-2 sm:grid-cols-2">{props.children}</div>
       </CollapsiblePanel>
     </Collapsible>
+  );
+}
+
+function readConfigArray(config: unknown, key: string): ReadonlyArray<unknown> {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return [];
+  const value = (config as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value : [];
+}
+
+type AcpInstanceConfigFieldsProps = {
+  readonly config: unknown;
+  readonly onCommit: (key: string, value: unknown) => void;
+};
+
+/** An ACP agent's launch line: the executable plus the argv that starts its ACP server. */
+export function AcpAgentLaunchFields({ config, onCommit }: AcpInstanceConfigFieldsProps) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <label className="block">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentCommand")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={readConfigString(config, "command")}
+          onCommit={(command) => onCommit("command", command)}
+          placeholder="omp"
+          spellCheck={false}
+        />
+        <span className="mt-1 block text-ui-sm text-muted-foreground">
+          {t("settings:acpAgentCommandDescription")}
+        </span>
+      </label>
+      <label className="block">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentArguments")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={acpArgsToText(readConfigArray(config, "args"))}
+          onCommit={(text) => {
+            const args = acpArgsFromText(text);
+            // `[]` is a real value (no arguments); clearing the key entirely
+            // would restore the `["acp"]` spawn default for standalone agents.
+            onCommit("args", args);
+          }}
+          placeholder="acp"
+          spellCheck={false}
+        />
+        <span className="mt-1 block text-ui-sm text-muted-foreground">
+          {t("settings:acpAgentArgumentsDescription")}
+        </span>
+      </label>
+    </>
+  );
+}
+
+/** ACP launch details most agents never touch: cwd and the models its picker tab offers. */
+export function AcpAgentAdvancedFields({ config, onCommit }: AcpInstanceConfigFieldsProps) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <label className="block">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentWorkingDirectory")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={readConfigString(config, "cwd")}
+          onCommit={(cwd) => onCommit("cwd", cwd)}
+          placeholder="~/project"
+          spellCheck={false}
+        />
+      </label>
+      <label className="block sm:col-span-2">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentAuthMethodId")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={readConfigString(config, "authMethodId")}
+          onCommit={(authMethodId) => onCommit("authMethodId", authMethodId || undefined)}
+          placeholder="claude-api-key"
+          spellCheck={false}
+        />
+        <span className="mt-1 block text-ui-sm text-muted-foreground">
+          {t("settings:acpAgentAuthMethodIdDescription")}
+        </span>
+      </label>
+      <label className="block sm:col-span-2">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {t("settings:acpAgentModels")}
+        </span>
+        <DebouncedSettingTextInput
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={acpModelSlugsToText(readConfigArray(config, "models"))}
+          onCommit={(text) => {
+            const models = acpModelSlugsFromText(text);
+            // Undefined clears the key on write so the schema never sees a string list.
+            onCommit("models", models.length > 0 ? models : undefined);
+          }}
+          placeholder="provider/model, provider/other-model"
+          spellCheck={false}
+        />
+        <span className="mt-1 block text-ui-sm text-muted-foreground">
+          {t("settings:acpAgentModelsDescription")}
+        </span>
+      </label>
+    </>
   );
 }

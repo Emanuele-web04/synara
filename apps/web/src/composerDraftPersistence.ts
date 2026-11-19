@@ -687,7 +687,7 @@ function normalizePersistedQueuedTurns(
     const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
       candidate.providerOptionsForDispatch,
     )
-      ? candidate.providerOptionsForDispatch
+      ? (candidate.providerOptionsForDispatch as DeepMutable<ProviderStartOptions>)
       : undefined;
     const sourceProposedPlan = Schema.is(PersistedSourceProposedPlanReference)(
       candidate.sourceProposedPlan,
@@ -1126,7 +1126,7 @@ function normalizePersistedDraftsByThreadId(
     const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
       draftCandidate.providerOptionsForDispatch,
     )
-      ? draftCandidate.providerOptionsForDispatch
+      ? (draftCandidate.providerOptionsForDispatch as DeepMutable<ProviderStartOptions>)
       : undefined;
     const normalizedQueuedTurns = queuedTurns ?? [];
     const restoredSourceProposedPlan = Schema.is(PersistedRestoredSourceProposedPlan)(
@@ -1288,7 +1288,10 @@ export function partializeComposerDraftStoreState(
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
           modelSelection: queuedTurn.modelSelection,
           ...(queuedTurn.providerOptionsForDispatch
-            ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+            ? {
+                providerOptionsForDispatch:
+                  queuedTurn.providerOptionsForDispatch as DeepMutable<ProviderStartOptions>,
+              }
             : {}),
           enableComputerControl:
             resolveComputerControlMode(
@@ -1323,7 +1326,10 @@ export function partializeComposerDraftStoreState(
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
         modelSelection: queuedTurn.modelSelection,
         ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+          ? {
+              providerOptionsForDispatch:
+                queuedTurn.providerOptionsForDispatch as DeepMutable<ProviderStartOptions>,
+            }
           : {}),
         enableComputerControl:
           resolveComputerControlMode(
@@ -1519,7 +1525,10 @@ export function partializeComposerDraftStoreState(
           }
         : {}),
       ...(draft.providerOptionsForDispatch
-        ? { providerOptionsForDispatch: draft.providerOptionsForDispatch }
+        ? {
+            providerOptionsForDispatch:
+              draft.providerOptionsForDispatch as DeepMutable<ProviderStartOptions>,
+          }
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),

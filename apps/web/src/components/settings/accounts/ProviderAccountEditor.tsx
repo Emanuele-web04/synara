@@ -23,6 +23,7 @@ import {
 } from "~/appSettings";
 import { useTranslation } from "~/i18n";
 import { Loader2Icon, PlayIcon, XIcon } from "~/lib/icons";
+import { ensureNativeApi } from "~/nativeApi";
 import { providerAccountIdentityLabel } from "~/lib/providerInstancePresentation";
 import { providerAccountStatusSummary } from "~/lib/providerSetupStatus";
 import { cn } from "~/lib/utils";
@@ -51,7 +52,11 @@ import {
   providerInstanceUpdater,
   useProviderAccountSignIn,
 } from "./providerAccountShared";
-import { ProviderAccountRuntimeFields } from "./ProviderAccountRuntimeFields";
+import {
+  AcpAgentAdvancedFields,
+  AcpAgentLaunchFields,
+  ProviderAccountRuntimeFields,
+} from "./ProviderAccountRuntimeFields";
 import { ProviderInstanceEnvironmentEditor } from "./ProviderInstanceEnvironmentEditor";
 
 export function ProviderAccountEditor(props: {
@@ -206,8 +211,26 @@ export function ProviderAccountEditor(props: {
               size="xs"
               variant="ghost"
               onClick={() => {
+                const removedConfig = manageable?.instance.config;
+                const removedCommand =
+                  removedConfig &&
+                  typeof removedConfig === "object" &&
+                  !Array.isArray(removedConfig) &&
+                  typeof (removedConfig as { command?: unknown }).command === "string"
+                    ? (removedConfig as { command: string }).command
+                    : null;
                 props.updateSettings(removeManageableProviderInstance(props.settings, instanceId));
                 props.onAccountRemoved();
+                // Clean up a managed `acp-agents` install the account launched.
+                // Non-managed commands are a server-side no-op.
+                if (provider === "acp" && removedCommand !== null) {
+                  void ensureNativeApi()
+                    .provider.uninstallAcpAgent({
+                      command: removedCommand,
+                      instanceId,
+                    })
+                    .catch(() => {});
+                }
               }}
             >
               <XIcon className="size-3.5" />
@@ -277,9 +300,28 @@ export function ProviderAccountEditor(props: {
                   updateSettings={props.updateSettings}
                 />
               ))}
-              <span className="block text-ui-sm text-muted-foreground">
-                {t("settings:accounts_providerOptionsInProviders", { value0: providerLabel })}
-              </span>
+              {/* The "acp" template is a real agent only once it carries a command;
+                  the default account edits the same instance-config fields as any other. */}
+              {provider === "acp" ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <AcpAgentLaunchFields
+                    config={explicit?.config}
+                    onCommit={(key, value) =>
+                      updateInstance(instanceId, { config: { [key]: value } })
+                    }
+                  />
+                  <AcpAgentAdvancedFields
+                    config={explicit?.config}
+                    onCommit={(key, value) =>
+                      updateInstance(instanceId, { config: { [key]: value } })
+                    }
+                  />
+                </div>
+              ) : (
+                <span className="block text-ui-sm text-muted-foreground">
+                  {t("settings:accounts_providerOptionsInProviders", { value0: providerLabel })}
+                </span>
+              )}
               {provider === "codex" && props.settings.codexAccounts.length > 0 ? (
                 <CodexDefaultAccountControl
                   settings={props.settings}

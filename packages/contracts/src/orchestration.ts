@@ -8,6 +8,7 @@ import {
   ListProjectImportsResult,
 } from "./projectImport";
 import {
+  AcpModelOptions,
   AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
@@ -20,7 +21,7 @@ import {
   PiModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
 } from "./model";
-import { ProviderInstanceId } from "./providerInstance";
+import { AcpAgentModel, ProviderInstanceId } from "./providerInstance";
 import {
   UsageLimitRecovery,
   UsageLimitRecoveryFields,
@@ -95,6 +96,7 @@ export const ProviderKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "acp",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -149,6 +151,9 @@ function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefin
   }
 
   const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId === "acp" || lowerInstanceId.startsWith("acp_")) {
+    return "acp";
+  }
   if (lowerInstanceId.startsWith("claude")) {
     return "claudeAgent";
   }
@@ -245,7 +250,7 @@ function inferProviderForModelSelection(input: {
 function defaultModelForProvider(provider: ProviderKind): string {
   // OMP has no static default model; an empty model fails the per-provider
   // schema below instead of inventing one.
-  if (provider === "omp") return "";
+  if (provider === "omp" || provider === "acp") return "";
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
@@ -329,6 +334,14 @@ export const DevinModelSelection = Schema.Struct({
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
 
+export const AcpModelSelection = Schema.Struct({
+  provider: Schema.Literal("acp"),
+  instanceId: ProviderInstanceIdForDriver("acp"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(AcpModelOptions),
+});
+export type AcpModelSelection = typeof AcpModelSelection.Type;
+
 const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
@@ -340,6 +353,7 @@ const ModelSelectionByProvider = Schema.Union([
   OpenCodeModelSelection,
   PiModelSelection,
   OmpModelSelection,
+  AcpModelSelection,
 ]);
 
 // Keep persisted inputs loose so malformed or mixed legacy drafts reach the
@@ -458,6 +472,18 @@ export const DevinProviderStartOptions = Schema.Struct({
   environment: Schema.optional(ProcessEnvRecord),
 });
 
+export const AcpProviderStartOptions = Schema.Struct({
+  // Resolved agent launch config from the provider instance (driver "acp").
+  command: Schema.optional(TrimmedNonEmptyString),
+  args: Schema.optional(Schema.Array(Schema.String)),
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
+  models: Schema.optional(Schema.Array(AcpAgentModel)),
+  authMethodId: Schema.optional(TrimmedNonEmptyString),
+  modelConfigId: Schema.optional(TrimmedNonEmptyString),
+  effortConfigId: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
@@ -469,6 +495,7 @@ export const ProviderStartOptions = Schema.Struct({
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
   omp: Schema.optional(OmpProviderStartOptions),
+  acp: Schema.optional(AcpProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

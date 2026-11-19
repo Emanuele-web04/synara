@@ -231,6 +231,9 @@ import {
   ProviderListPluginsInput,
   ProviderListModelsInput,
   ProviderListAgentsInput,
+  ProviderInstallAcpRegistryAgentInput,
+  ProviderResolveExecutableInput,
+  ProviderUninstallAcpAgentInput,
   ProviderReadPluginInput,
   ProviderListSkillsInput,
   ProviderSkillsCatalogInput,
@@ -431,6 +434,10 @@ export const WS_METHODS = {
   providerReadPlugin: "provider.readPlugin",
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
+  providerListAcpRegistryAgents: "provider.listAcpRegistryAgents",
+  providerInstallAcpRegistryAgent: "provider.installAcpRegistryAgent",
+  providerUninstallAcpAgent: "provider.uninstallAcpAgent",
+  providerResolveExecutable: "provider.resolveExecutable",
 
   // Account (Synara account session brokered by the server)
   accountStatus: "account.status",
@@ -769,6 +776,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
+  tagRequestBody(WS_METHODS.providerListAcpRegistryAgents, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.providerInstallAcpRegistryAgent, ProviderInstallAcpRegistryAgentInput),
+  tagRequestBody(WS_METHODS.providerUninstallAcpAgent, ProviderUninstallAcpAgentInput),
+  tagRequestBody(WS_METHODS.providerResolveExecutable, ProviderResolveExecutableInput),
 
   // Account
   tagRequestBody(WS_METHODS.accountStatus, Schema.Struct({})),

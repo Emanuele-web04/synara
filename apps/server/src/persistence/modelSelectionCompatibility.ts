@@ -21,7 +21,8 @@ type ModelProviderKind =
   | "opencode"
   | "pi"
   | "devin"
-  | "omp";
+  | "omp"
+  | "acp";
 
 const NON_DROID_MODEL_SLUGS = new Set(
   Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>

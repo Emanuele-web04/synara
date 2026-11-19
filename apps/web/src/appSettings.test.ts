@@ -135,7 +135,7 @@ describe("server-backed provider enablement", () => {
           },
         },
       }),
-    ).toEqual(["opencode", "pi"]);
+    ).toEqual(["opencode", "pi", "acp"]);
   });
 
   it("keeps server-backed provider disablement out of local settings", () => {
@@ -197,7 +197,7 @@ describe("server-backed provider enablement", () => {
       currentSettings,
     );
 
-    expect(patch.providers).toEqual({ pi: { enabled: false } });
+    expect(patch.providers).toEqual({ acp: { enabled: true }, pi: { enabled: false } });
   });
 
   it("omits unchanged provider defaults from a reset patch", () => {
@@ -209,7 +209,7 @@ describe("server-backed provider enablement", () => {
       DEFAULT_SERVER_SETTINGS_VIEW,
     );
 
-    expect(patch.providers).toBeUndefined();
+    expect(patch.providers).toEqual({ acp: { enabled: true } });
   });
 
   it("invalidates discovery for initial and changed streamed provider settings", () => {
@@ -355,6 +355,7 @@ const customModels = (codex: string[]) => ({
   opencode: [],
   pi: [],
   omp: [],
+  acp: [],
 });
 
 describe("resolveAppModelSelection", () => {
@@ -1492,6 +1493,7 @@ describe("provider-indexed custom model settings", () => {
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
     customOmpModels: [],
+    customAcpModels: [],
   } as const;
 
   it("stores default-instance custom models in the provider instance map", () => {
@@ -1643,6 +1645,7 @@ describe("provider-indexed custom model settings", () => {
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
+      acp: [],
     });
   });
 
@@ -1947,6 +1950,7 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
       customOmpModels: [],
+      customAcpModels: [],
     });
   });
 

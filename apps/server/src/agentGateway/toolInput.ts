@@ -192,7 +192,9 @@ export function buildModelSelection(
   const effectiveModel =
     model ??
     inherited?.model ??
-    (provider === "pi" || provider === "omp" ? undefined : DEFAULT_MODEL_BY_PROVIDER[provider]);
+    (provider === "pi" || provider === "omp" || provider === "acp"
+      ? undefined
+      : DEFAULT_MODEL_BY_PROVIDER[provider]);
   if (!effectiveModel) {
     throw new ToolInputError(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,

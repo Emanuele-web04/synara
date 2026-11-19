@@ -58,7 +58,13 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
+/**
+ * Generic ACP agents (Beta only): the "acp" provider driver, its registry-fed
+ * agent picker, and every provider instance that launches over ACP.
+ */
+export const GENERIC_ACP_BETA_FEATURE = "acp";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GENERIC_ACP_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

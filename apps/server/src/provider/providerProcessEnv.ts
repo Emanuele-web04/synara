@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import NodePath from "node:path";
 
 export type ProviderProcessEnvDriver =
+  | "acp"
   | "cursor"
   | "gemini"
   | "grok"
@@ -358,6 +359,10 @@ function isModelProviderAccountEnvKey(key: string): boolean {
 function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: string): boolean {
   const key = rawKey.toUpperCase();
   switch (driver) {
+    case "acp":
+      // A generic ACP agent may multiplex arbitrary upstream providers through
+      // its model list; treat upstream credential keys as account-scoped.
+      return isModelProviderAccountEnvKey(key) || key.startsWith("ACP_");
     case "cursor":
       return CURSOR_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("CURSOR_");
     case "gemini":

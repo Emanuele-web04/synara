@@ -14,10 +14,12 @@ import {
   FileSystem,
   Layer,
   Path,
+  Queue,
   Ref,
   Sink,
   Stream,
 } from "effect";
+import * as OfficialAcp from "@agentclientprotocol/sdk";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -35,6 +37,7 @@ import {
   writeProviderStatusCache,
 } from "../providerStatusCache";
 import {
+  checkAcpProviderStatus,
   checkClaudeProviderStatus,
   checkAntigravityProviderStatus,
   checkCodexProviderStatus,
@@ -194,6 +197,71 @@ function hangingSpawnerLayer(input: {
   );
 }
 
+/**
+ * In-memory ACP agent bridged through a fake ChildProcessSpawner: `--version`
+ * invocations answer the CLI probe, other spawns run an OfficialAcp.agent() on
+ * queue-bridged stdio so the session probe exercises the real runtime path.
+ */
+function mockAcpAgentSpawnerLayer(handlers: {
+  readonly version?: string;
+  readonly onSessionNew: () => OfficialAcp.NewSessionResponse;
+}) {
+  const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+  const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+
+  const agentInput = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      return Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => {
+        controller.enqueue(chunk);
+      });
+    },
+  });
+  const agentOutput = new WritableStream<Uint8Array>({
+    write(chunk) {
+      return Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined);
+    },
+  });
+
+  const agentApp = OfficialAcp.agent({ name: "acp-health-fixture" })
+    .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: [],
+    }))
+    .onRequest(OfficialAcp.methods.agent.session.new, () => handlers.onSessionNew());
+
+  return Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      const cmd = command as unknown as { args: ReadonlyArray<string> };
+      if (cmd.args.includes("--version")) {
+        return Effect.succeed(
+          mockHandle({
+            stdout: `${handlers.version ?? "acp-fixture 9.9.9"}\n`,
+            stderr: "",
+            code: 0,
+          }),
+        );
+      }
+      return Effect.sync(() => {
+        agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+          stdout: Stream.fromQueue(agentToClient),
+          stderr: Stream.never,
+          all: Stream.never,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.never,
+        });
+      });
+    }),
+  );
+}
+
 function withProcessPlatform<T, E, R>(
   platform: NodeJS.Platform,
   effect: Effect.Effect<T, E, R>,
@@ -248,6 +316,7 @@ const allProvidersDisabledSettings = {
     opencode: { enabled: false },
     pi: { enabled: false },
     omp: { enabled: false },
+    acp: { enabled: false },
   },
 } as const;
 
@@ -264,6 +333,7 @@ const allProvidersDisabledServerSettings = {
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
     omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: false },
+    acp: { ...DEFAULT_SERVER_SETTINGS.providers.acp, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 
@@ -3075,6 +3145,105 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "omp 0.5.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+  });
+
+  describe("checkAcpProviderStatus", () => {
+    const acpProbePaths = (root: string) => ({
+      homeDir: root,
+      isolationRootDir: join(root, "state"),
+    });
+
+    it.effect("reports ready when the command answers --version", () => {
+      const root = mkdtempSync(join(OS.tmpdir(), "synara-acp-health-"));
+      mkdirSync(join(root, "state"), { recursive: true });
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkAcpProviderStatus(
+            "/opt/acp-fixture",
+            undefined,
+            "acp_fixture",
+            acpProbePaths(root),
+            { args: ["acp"] },
+          );
+          assert.strictEqual(status.provider, "acp");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.available, true);
+          assert.strictEqual(status.authStatus, "unknown");
+          assert.strictEqual(status.version, "9.9.9");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          // A session/new throwing proves the probe never starts a session.
+          mockAcpAgentSpawnerLayer({
+            onSessionNew: () => {
+              throw OfficialAcp.RequestError.internalError(undefined, "Connection closed");
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("never spawns package-runner commands", () => {
+      const root = mkdtempSync(join(OS.tmpdir(), "synara-acp-health-"));
+      mkdirSync(join(root, "state"), { recursive: true });
+      return Effect.gen(function* () {
+        try {
+          for (const executable of ["npx", "uvx", "npx.cmd"]) {
+            const status = yield* checkAcpProviderStatus(
+              executable,
+              undefined,
+              `acp_${executable}`,
+              acpProbePaths(root),
+            );
+            assert.strictEqual(status.provider, "acp");
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.available, true);
+            assert.include(status.message ?? "", "does not probe");
+          }
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          // Any spawn — including `npx --version` — fails the probe outright.
+          mockSpawnerLayer(() => {
+            throw new Error("The health probe must not spawn package runners.");
+          }),
+        ),
+      );
+    });
+
+    it.effect("reports error when the command fails the version probe", () => {
+      const root = mkdtempSync(join(OS.tmpdir(), "synara-acp-health-"));
+      mkdirSync(join(root, "state"), { recursive: true });
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkAcpProviderStatus(
+            "/opt/crow-cli",
+            undefined,
+            "acp_crow",
+            acpProbePaths(root),
+            { args: ["acp"] },
+          );
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.available, false);
+          assert.include(status.message ?? "", "health check failed");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            if (args.includes("--version")) {
+              return { stdout: "", stderr: "segfault", code: 1 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
           }),
         ),
       );
