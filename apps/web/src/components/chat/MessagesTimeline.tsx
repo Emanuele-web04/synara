@@ -56,7 +56,7 @@ import {
   SubagentDeliveredNote,
   type SubagentThreadPresentation,
 } from "./SubagentThreadIntro";
-import type { WorkingLabel } from "../ChatView.logic";
+import { isWaitingOnUserWorkingLabel, type WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
   ActivityLoadingIcon,
@@ -72,7 +72,6 @@ import {
   NewThreadIcon,
   PinIcon,
   SteerIcon,
-  ThinkingIcon,
   Undo2Icon,
   WorktreeIcon,
 } from "~/lib/icons";
@@ -131,13 +130,13 @@ import {
   capOpenWorkEntryRenderChunks,
   collapsibleHiddenRowCount,
   isFoldedWorkEntryChunk,
-  resolveWorkEntryChunkFold,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   formatTurnHeaderLabel,
-  findLastLiveWorkGroupId,
+  inlineWorkGroupListEntries,
   isPinnedSubagentRunEntry,
+  isWorkRowYieldedToLiveToolCall,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   planWorkEntryRenderChunks,
   type CollapsedTurnChunk,
@@ -147,12 +146,15 @@ import {
   resolveAssistantMessageDisplayText,
   resolveThreadFindJumpTarget,
   resolveWorkEntryJumpTarget,
+  resolveLiveTailClaim,
+  standaloneWorkGroupListEntries,
   type StableMessagesTimelineRowsState,
   type TurnTiming,
+  withoutLiveToolCallRun,
 } from "./MessagesTimeline.logic";
 import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
-import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
+import { LiveToolCallLine, ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
 import { TurnHeaderLine } from "./TurnHeaderLine";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
 import { useTimelineRowOverlapGuard } from "./useTimelineRowOverlapGuard";
@@ -682,9 +684,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // entire component (silently, since `panicThreshold` is unset), which would drop
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
   const workingLabel = workingLabelProp ?? t("chat:timeline_thinking");
+  // "Thinking" reads as plain shimmering text, and gives way to the call of the
+  // moment; loading, delivery checks and provider startup keep their icon. A
+  // turn waiting on the user is stopped: its label neither shimmers nor wears
+  // an icon.
+  const workingIsThinking = workingLabelProp === undefined || workingLabelProp === "Thinking";
+  const workingIsWaitingOnUser = isWaitingOnUserWorkingLabel(workingLabelProp);
   const workingIcon =
-    workingLabel === "Thinking"
-      ? ThinkingIcon
+    workingIsThinking || workingIsWaitingOnUser
+      ? null
       : workingLabel === "Checking message delivery…"
         ? MessageDeliveryCheckIcon
         : ActivityLoadingIcon;
@@ -1019,9 +1027,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
     });
   }, [resolvedListRef]);
-  // The newest work group renders its rows inline while the turn is live; every
-  // older run of tool calls folds into a "Ran N commands..." summary row.
-  const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);
+  // Every run of tool calls folds into a "Ran N commands..." summary row, except
+  // the live run the working row claims: it leaves its group until it settles.
+  // Only "Thinking" claims it: under any other label the run stays in history,
+  // so a call is never hidden. Rows read just the two ids, stable while the run
+  // grows; the call itself rides on the working row, which alone re-renders.
+  const liveTailClaim = resolveLiveTailClaim(rows, workingIsThinking);
+  const liveToolCallGroupId = liveTailClaim?.groupId ?? null;
+  const liveToolCallChunkId = liveTailClaim?.chunkId ?? null;
+  const liveToolCallClaim = useMemo(
+    () =>
+      liveToolCallGroupId !== null && liveToolCallChunkId !== null
+        ? { groupId: liveToolCallGroupId, chunkId: liveToolCallChunkId }
+        : null,
+    [liveToolCallGroupId, liveToolCallChunkId],
+  );
   const firstUserMessageId = useMemo(() => {
     for (const row of rows) {
       if (row.kind === "message" && row.message.role === "user") {
@@ -1239,10 +1259,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
-      if (row.kind !== "working" && row.kind !== "worktree-setup") return row.id;
+      if (row.kind === "working" || row.kind === "worktree-setup") continue;
+      // A work row emptied by the indicator's run is not content: the row above
+      // keeps the live-tail spacing it had before the run started.
+      if (isWorkRowYieldedToLiveToolCall(row, liveToolCallClaim)) continue;
+      return row.id;
     }
     return null;
-  }, [rows]);
+  }, [rows, liveToolCallClaim]);
   const tailScrollFrameRef = useRef<number | null>(null);
   const tailScrollTimeoutsRef = useRef<number[]>([]);
   const tailExpansionScrollSuppressedRef = useRef(false);
@@ -1720,18 +1744,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // assistant body's 2px bottom padding), the same rhythm tool rows keep.
         row.kind === "working"
           ? "pb-1"
-          : row.kind === "message" &&
-              row.message.role === "assistant" &&
-              row.assistantTurnInProgress &&
-              row.id === tailContentRowId
-            ? "pb-3"
-            : row.kind === "work" || row.kind === "message-segment"
-              ? "pb-3.5"
-              : row.kind === "working-header" ||
-                  (row.kind === "message" && row.message.role === "assistant") ||
-                  row.kind === "inline-visual"
-                ? "pb-2"
-                : "pb-4",
+          : isWorkRowYieldedToLiveToolCall(row, liveToolCallClaim)
+            ? null
+            : row.kind === "message" &&
+                row.message.role === "assistant" &&
+                row.assistantTurnInProgress &&
+                row.id === tailContentRowId
+              ? "pb-3"
+              : row.kind === "work" || row.kind === "message-segment"
+                ? "pb-3.5"
+                : row.kind === "working-header" ||
+                    (row.kind === "message" && row.message.role === "assistant") ||
+                    row.kind === "inline-visual"
+                  ? "pb-2"
+                  : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
         (row.kind === "message" || row.kind === "message-segment") &&
           row.message.id === highlightedMessageId
@@ -1801,11 +1827,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // Creation milestones are reserved for the end-of-turn recap card.
           // The provider's actual Synara MCP tool rows remain visible here.
           // Handoff boundaries render as the divider above, not as work rows.
-          const groupedEntries = row.groupedEntries.filter(
-            (workEntry) =>
-              !workEntry.synaraThreadCreation &&
-              !workEntry.providerHandoff &&
-              !workEntry.turnFailure,
+          // The run the working indicator wears is left to it until it settles.
+          const groupedEntries = withoutLiveToolCallRun(
+            standaloneWorkGroupListEntries(row.groupedEntries),
+            groupId === liveToolCallGroupId ? liveToolCallChunkId : null,
           );
           if (groupedEntries.length === 0) {
             return null;
@@ -1830,12 +1855,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           if (groupedEntries.every((entry) => entry.subagentRun)) {
             return renderEntryRow(mergeSubagentRunEntries(groupedEntries));
           }
-          const isLiveGroup =
-            groupId === lastLiveWorkGroupId && (activeTurnInProgress || isWorking);
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
-          const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries, {
-            tailIsLive: isLiveGroup,
-          });
+          const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries);
           const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
             expanded: isExpanded,
             maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
@@ -1855,20 +1876,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className={WORK_ROW_STACK_CLASS_NAME}>
                 <div className={WORK_ROW_STACK_CLASS_NAME}>
                   {renderChunks.map((chunk) => {
-                    const fold = resolveWorkEntryChunkFold(chunk);
-                    if (!fold) return chunk.entries.map(renderEntryRow);
-                    const summaryKey = `${groupId}:${chunk.id}${fold.keySuffix}`;
+                    const summary = chunk.summary;
+                    if (!summary) return chunk.entries.map(renderEntryRow);
+                    const summaryKey = `${groupId}:${chunk.id}`;
                     return (
                       <ToolCallGroupSummaryRow
-                        key={`tool-summary:${groupId}:${chunk.id}`}
-                        summary={fold.summary}
-                        liveEntry={chunk.liveEntry}
+                        key={`tool-summary:${summaryKey}`}
+                        summary={summary}
                         open={toolGroupSummaryOverrides[summaryKey] ?? false}
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
                           <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>
-                            {fold.entries.map(renderEntryRow)}
+                            {chunk.entries.map(renderEntryRow)}
                           </div>
                         )}
                       />
@@ -1944,7 +1964,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5">
               {notices.map(({ entry, notice }) => (
                 <WorkerMonitorNoticePill
                   key={`worker-monitor:${entry.id}`}
@@ -1966,11 +1986,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           }
           return (
             <div
-              className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]"
+              className="chat-message-segment flex flex-col gap-1.5"
               data-chat-find-document-id={row.message.id}
               data-chat-find-segment-index={row.segmentIndex}
             >
-              {/* Interleaved slices are the assistant's own text: same tone as its reply. */}
+              {/* Interleaved slices are the assistant's own text: same tone and
+                  left edge as its reply, so no inset of their own. */}
               <InlineVisualEmbedContext.Provider value={resolveInlineVisualEmbed(row.message.id)}>
                 <ChatMarkdown
                   text={segmentText}
@@ -2299,7 +2320,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = resolveAssistantMessageDisplayText(row);
-          const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
+          const buildWorkDisplay = (allWorkEntries: WorkLogEntry[], workGroupId: string | null) => {
+            // The run the working indicator wears is left to it until it settles.
+            const workEntries = withoutLiveToolCallRun(
+              allWorkEntries,
+              workGroupId !== null && workGroupId === liveToolCallGroupId
+                ? liveToolCallChunkId
+                : null,
+            );
             const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
             const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
             const statusEntries = displayEntries.filter((entry) => entry.tone !== "tool");
@@ -2333,7 +2361,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               toolExpanded,
               // Ordered (tool + narration interleaved) so chunking sees the
               // thinking/info boundaries that split tool runs mid-turn.
-              orderedRenderableEntries: displayEntries.filter(isRenderableToolEntry),
+              orderedRenderableEntries: inlineWorkGroupListEntries(workEntries),
               renderableToolEntries: toolEntries.filter(isRenderableToolEntry),
               visibleRenderableToolEntries: visibleToolEntries.filter(isRenderableToolEntry),
               hiddenToolCount: toolEntries.length - visibleToolEntries.length,
@@ -2480,18 +2508,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
-            const isLiveGroup =
-              display.toolGroupId !== null &&
-              display.toolGroupId === lastLiveWorkGroupId &&
-              (activeTurnInProgress || isWorking);
-            // Leading groups are never a live tail: the message's own text
-            // already follows them, so their last tool run collapses too.
-            const plannedRenderChunks = planWorkEntryRenderChunks(
-              display.orderedRenderableEntries,
-              {
-                tailIsLive: placement === "inline" && isLiveGroup,
-              },
-            );
+            const plannedRenderChunks = planWorkEntryRenderChunks(display.orderedRenderableEntries);
             const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
               expanded: display.toolExpanded,
               maxVisibleEntries: MAX_VISIBLE_INLINE_TOOL_ENTRIES,
@@ -2521,8 +2538,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <div className={WORK_ROW_STACK_CLASS_NAME}>
                     <div className={WORK_ROW_STACK_CLASS_NAME}>
                       {renderChunks.map((chunk) => {
-                        const fold = resolveWorkEntryChunkFold(chunk);
-                        if (!fold) {
+                        const summary = chunk.summary;
+                        if (!summary) {
                           // Narration-tone entries render in the status block
                           // below; here they only serve as run boundaries.
                           return chunk.entries
@@ -2531,18 +2548,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         }
                         // Message ids stay stable while a live group's first-entry id can drift.
                         const summaryRowKey = `${placement}:${row.message.id}:${chunk.id}`;
-                        const summaryOverrideKey = `${summaryRowKey}${fold.keySuffix}`;
                         return (
                           <ToolCallGroupSummaryRow
                             key={`inline-tool-summary:${summaryRowKey}`}
-                            summary={fold.summary}
-                            liveEntry={chunk.liveEntry}
-                            open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
-                            onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
+                            summary={summary}
+                            open={toolGroupSummaryOverrides[summaryRowKey] ?? false}
+                            onToggle={(open) => setToolGroupSummaryOpen(summaryRowKey, open)}
                             fontSizePx={normalizedChatFontSizePx}
                             renderChildren={() => (
                               <div className={WORK_ROW_DISCLOSED_CLASS_NAME}>
-                                {fold.entries.map(renderInlineToolRow)}
+                                {chunk.entries.map(renderInlineToolRow)}
                               </div>
                             )}
                           />
@@ -3085,22 +3100,57 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         />
       )}
 
-      {row.kind === "working" && (
-        <div
-          ref={syncAnimationsToTimelineOrigin}
-          className={cn(
-            // The 24px tool row shape (py-0.5 + leading-5), so it stacks like one.
-            "shimmer-group flex w-fit items-center gap-1.5 py-0.5 leading-5 font-system-ui",
-            MUTED_LABEL_TEXT_CLASS_NAME,
-          )}
-          style={{ fontSize: `${appTypographyScale.chatPx}px` }}
-        >
-          <span aria-hidden="true" className="flex shrink-0">
-            {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
-          </span>
-          <span>{workingLabel}</span>
-        </div>
-      )}
+      {row.kind === "working" &&
+        (() => {
+          // The claimed run's line, shown only while the indicator reads "Thinking".
+          const liveToolCallDisplay = liveToolCallClaim
+            ? (row.liveToolCall?.display ?? null)
+            : null;
+          const workingState = liveToolCallDisplay
+            ? liveToolCallDisplay.tone === "failed"
+              ? "tool-call-failed"
+              : "tool-call"
+            : workingIsWaitingOnUser
+              ? "waiting"
+              : workingIsThinking
+                ? "thinking"
+                : "label";
+          // A failed call and a turn waiting on the user describe a stopped
+          // state: they hold still instead of shimmering.
+          const shimmers = workingState !== "tool-call-failed" && workingState !== "waiting";
+          return (
+            <div
+              ref={syncAnimationsToTimelineOrigin}
+              className={cn(
+                // The 24px tool row shape (py-0.5 + leading-5), so it stacks like one
+                // and keeps its height whichever line it wears.
+                "flex w-fit max-w-full items-center gap-1.5 py-0.5 leading-5 font-system-ui",
+                shimmers ? "shimmer-group" : null,
+                // A failed call stays muted; only its "Failed" word is red.
+                MUTED_LABEL_TEXT_CLASS_NAME,
+              )}
+              style={{ fontSize: `${appTypographyScale.chatPx}px` }}
+              data-working-indicator="true"
+              data-working-state={workingState}
+            >
+              {liveToolCallDisplay ? (
+                <LiveToolCallLine
+                  entry={liveToolCallDisplay.entry}
+                  failed={liveToolCallDisplay.tone === "failed"}
+                />
+              ) : (
+                <>
+                  {workingIcon ? (
+                    <span aria-hidden="true" className="flex shrink-0">
+                      {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+                    </span>
+                  ) : null}
+                  <span>{workingLabel}</span>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
       {row.kind === "worktree-setup" && (
         <DisclosureRegion open={row.open}>
@@ -3140,7 +3190,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       findHighlight,
       firstUserMessageId,
       highlightedMessageId,
-      lastLiveWorkGroupId,
+      liveToolCallChunkId,
+      liveToolCallGroupId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
@@ -3162,7 +3213,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       findHighlight,
       firstUserMessageId,
       highlightedMessageId,
-      lastLiveWorkGroupId,
+      liveToolCallChunkId,
+      liveToolCallGroupId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
