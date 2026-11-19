@@ -257,11 +257,11 @@ async function ignoredTargets(
 type StagedClone = DependencyClonePair & { readonly stagingPath: string };
 
 // Inspect the snapshot, but compare each link at its original and final location.
-async function findTreesWithUnsafeLinks(
+async function inspectStagedLinks(
   roots: { sourceRoot: string; worktreeRoot: string; stagingRoot: string },
   trees: ReadonlyArray<StagedClone>,
   signal: AbortSignal,
-): Promise<ReadonlySet<string>> {
+) {
   const result = await runProcess(
     "/usr/bin/find",
     ["-P", ...trees.map((tree) => tree.stagingPath), "-type", "l", "-print0"],
@@ -269,6 +269,7 @@ async function findTreesWithUnsafeLinks(
   );
   const byStageName = new Map(trees.map((tree) => [nodePath.basename(tree.stagingPath), tree]));
   const unsafe = new Set<string>();
+  const requiredTrees = new Map(trees.map((tree) => [tree.target, new Set<string>()]));
   const links = result.stdout.split("\0").filter(Boolean);
   const readConcurrency = 64;
   for (let offset = 0; offset < links.length; offset += readConcurrency) {
@@ -291,11 +292,24 @@ async function findTreesWithUnsafeLinks(
         const expected = isContainedPath(roots.sourceRoot, original)
           ? nodePath.resolve(roots.worktreeRoot, nodePath.relative(roots.sourceRoot, original))
           : original;
-        if (relocated !== expected) unsafe.add(tree.stagingPath);
+        if (relocated !== expected) {
+          unsafe.add(tree.stagingPath);
+          return;
+        }
+
+        if (!isContainedPath(roots.worktreeRoot, relocated)) return;
+        const parts = nodePath.relative(roots.worktreeRoot, relocated).split(nodePath.sep);
+        const dependencyDirectory = parts.indexOf(DEPENDENCY_DIRECTORY_NAME);
+        if (dependencyDirectory < 0) return;
+        const required = nodePath.join(
+          roots.worktreeRoot,
+          ...parts.slice(0, dependencyDirectory + 1),
+        );
+        if (required !== tree.target) requiredTrees.get(tree.target)!.add(required);
       }),
     );
   }
-  return unsafe;
+  return { unsafe, requiredTrees };
 }
 
 /** Stage and validate privately, then publish without replacing any existing target. */
@@ -340,13 +354,13 @@ export async function cloneWorktreeDependencies(input: {
     }
     if (complete.length === 0) return { kind: "cloned", cloned: 0, failed: pairs.length };
 
-    const unsafeTrees = await findTreesWithUnsafeLinks(
+    const { unsafe, requiredTrees } = await inspectStagedLinks(
       { sourceRoot, worktreeRoot, stagingRoot },
       complete,
       signal,
     );
     const publish = complete
-      .filter((tree) => !unsafeTrees.has(tree.stagingPath))
+      .filter((tree) => !unsafe.has(tree.stagingPath))
       .map((tree) => ({ source: tree.stagingPath, target: tree.target }));
     // Drop path-keyed caches in staging, where cleanup can only touch our own clone.
     await Promise.all(
@@ -359,10 +373,24 @@ export async function cloneWorktreeDependencies(input: {
     // The worktree's ignore rules can change while the clone is being prepared.
     const stillIgnored =
       publish.length > 0 ? await ignoredTargets(worktreeRoot, publish, signal) : [];
-    const published =
-      stillIgnored.length > 0 ? await runFileOperation("renamex_np", stillIgnored, signal) : [];
-    const cloned = published.filter(Boolean).length;
-    return { kind: "cloned", cloned, failed: pairs.length - cloned };
+    const published = new Set<string>();
+    let pending = stillIgnored;
+    // Publish shared stores first. A failed rename, omitted store, or cycle leaves
+    // its dependent trees private, so an ordinary install can populate them.
+    while (pending.length > 0) {
+      signal.throwIfAborted();
+      const ready = pending.filter((pair) =>
+        [...requiredTrees.get(pair.target)!].every((required) => published.has(required)),
+      );
+      if (ready.length === 0) break;
+      const results = await runFileOperation("renamex_np", ready, signal);
+      const attempted = new Set(ready.map((pair) => pair.target));
+      for (const [index, pair] of ready.entries()) {
+        if (results[index]) published.add(pair.target);
+      }
+      pending = pending.filter((pair) => !attempted.has(pair.target));
+    }
+    return { kind: "cloned", cloned: published.size, failed: pairs.length - published.size };
   } finally {
     await nodeFs.rm(stagingRoot, { recursive: true, force: true });
   }

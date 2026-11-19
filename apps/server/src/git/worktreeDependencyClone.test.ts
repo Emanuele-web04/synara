@@ -296,6 +296,60 @@ describe.runIf(process.platform === "darwin")("cloneWorktreeDependencies", () =>
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each(["published", "rejected", "occupied"] as const)(
+    "publishes a pnpm workspace dependency only when its shared store is %s",
+    async (storeState) => {
+      const roots = await makeGitCheckouts();
+      const trackedPaths = ["package.json", "pnpm-lock.yaml", "apps/web/package.json"];
+      for (const file of trackedPaths) await writeToBoth(roots, file);
+      const dependency = "node_modules/.pnpm/foo@1.0.0/node_modules/foo/index.js";
+      const workspaceModule = "apps/web/node_modules/foo";
+      await writeFile(path.join(roots.sourceRoot, dependency), "shared package\n");
+      const workspaceLink = path.join(roots.sourceRoot, workspaceModule);
+      await fs.mkdir(path.dirname(workspaceLink), { recursive: true });
+      await fs.symlink("../../../node_modules/.pnpm/foo@1.0.0/node_modules/foo", workspaceLink);
+      expect(await fs.readFile(path.join(workspaceLink, "index.js"), "utf8")).toBe(
+        "shared package\n",
+      );
+      if (storeState === "rejected") {
+        await fs.symlink(
+          path.join(roots.sourceRoot, dependency),
+          path.join(roots.sourceRoot, "node_modules/absolute-link"),
+        );
+      }
+      const result = await cloneWorktreeDependencies({
+        ...roots,
+        trackedPaths,
+        cloneDirectories: async (pairs, signal) => {
+          const outcomes = await cloneDirectoriesWithClonefile(pairs, signal);
+          if (storeState === "occupied") {
+            await writeFile(path.join(roots.worktreeRoot, "node_modules/installing"), "owned\n");
+          }
+          return outcomes;
+        },
+      });
+
+      const cloned = storeState === "published" ? 2 : 0;
+      expect(result).toEqual({ kind: "cloned", cloned, failed: 2 - cloned });
+      if (storeState === "published") {
+        expect(
+          await fs.readFile(path.join(roots.worktreeRoot, workspaceModule, "index.js"), "utf8"),
+        ).toBe("shared package\n");
+      } else {
+        await expect(
+          fs.lstat(path.join(roots.worktreeRoot, workspaceModule)),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      if (storeState === "occupied") {
+        expect(
+          await fs.readFile(path.join(roots.worktreeRoot, "node_modules/installing"), "utf8"),
+        ).toBe("owned\n");
+      }
+    },
+  );
+
   it("does not clone a directory Git would report as untracked", async () => {
     const roots = await makeGitCheckouts(false);
     await writeToBoth(roots, "package.json");
