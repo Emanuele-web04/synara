@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.6.3 — 2026-11-19
+
+**Faster long chats, live tool activity, and dependency seeding for macOS worktrees.**
+
+### Added
+
+- The chat working indicator shows the current tool call, recent failure, or a request for approval or an answer. Tool runs fold into summaries that distinguish actions such as code search and web search. ([#2220](https://github.com/Emanuele-web04/synara/pull/2220))
+- On macOS, newly created worktrees can inherit eligible `node_modules` directories through APFS cloning when the tracked lockfiles match. Cloning is best effort and project setup scripts still run. In one Synara checkout benchmark, cloning 13 directories took 1.9–3.2 s, compared with 6.5 s for a warm Bun install in a fresh worktree. ([#2219](https://github.com/Emanuele-web04/synara/pull/2219))
+
+### Changed
+
+- Chats start loading on a sidebar press and reuse settled Markdown when transcript rows come back into view. In a headless Chromium A/B benchmark with seeded conversations, median first opens took 16–20% less time, and repeat scroll flings used 19–29% less scripting time across the four measured examples. Desktop connections to their own local backend also skip compression on the feature socket. ([#2215](https://github.com/Emanuele-web04/synara/pull/2215))
+- The model picker marks the active Codex Ultrafast setting with a badge. ([5975b52](https://github.com/Emanuele-web04/synara/commit/5975b5238114bea4f8e607ccd003569b92c361d9))
+- Updated Bun to 1.4.5 and Electron to 43.8.12. For contributors, two warm-cache PR CI runs averaged 3.4 minutes to the required gate, versus a 6.3-minute baseline median. ([#2222](https://github.com/Emanuele-web04/synara/pull/2222), [#2212](https://github.com/Emanuele-web04/synara/pull/2212))
+
+### Fixed
+
+- OAuth reauthentication notices for user-configured Codex MCP servers stay in diagnostics. Failed MCP calls, Synara-managed connector warnings and other startup failures remain visible. ([#2213](https://github.com/Emanuele-web04/synara/pull/2213))
+- Integrated Zsh follows changes to `ZDOTDIR` across startup files, including the fallback to `HOME`, and keeps Synara's managed CLI wrapper on `PATH` after user shell setup. ([#2221](https://github.com/Emanuele-web04/synara/pull/2221))
+
+### Verification
+
+The release workflow gates publication on workspace checks, server tests, native packaging, provenance and packaged startup. macOS requires signing and notarization. Windows x64 uses the version-scoped unsigned exception and still requires Microsoft Defender scanning. Manual installs, installed-app upgrades and live provider sessions are outside these automated checks.
+
 ## 1.6.2 — 2026-11-17
 
 **Local video playback, Codex Ultrafast and more reliable worktrees.**

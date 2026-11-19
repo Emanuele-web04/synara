@@ -22,6 +22,46 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.3",
+    date: "Nov 19",
+    features: [
+      {
+        id: "live-tool-activity",
+        title: "See what your agent is doing",
+        description:
+          "The chat's working indicator shows the current tool call or tells you when the agent needs approval or an answer. Completed tool runs fold into readable summaries.",
+      },
+      {
+        id: "long-chat-performance",
+        title: "Open long chats faster",
+        description:
+          "Chats begin loading when you press a sidebar row, and the transcript reuses parsed Markdown as you scroll back.",
+        details:
+          "In headless Chromium benchmarks with seeded conversations, median first-open time fell 16–20%. Scripting time on a repeat scroll fling fell 19–29% in the four cases that measured it.",
+      },
+      {
+        id: "mac-worktree-dependencies",
+        title: "Start macOS worktrees with dependencies",
+        description:
+          "New worktrees can inherit installed dependencies through APFS clones when the lockfiles match. Project setup scripts still run as configured.",
+        details:
+          "On the Synara checkout used for the benchmark, cloning 13 dependency directories took 1.9–3.2 seconds. A warm Bun install in a fresh worktree took 6.5 seconds.",
+      },
+      {
+        id: "codex-clarity",
+        title: "Clearer Codex speed and startup",
+        description:
+          "The model picker shows when Ultrafast is selected. OAuth notices for your own MCP servers stay in diagnostics, while tool failures and Synara connector warnings remain visible.",
+      },
+      {
+        id: "shell-and-runtime",
+        title: "Integrated Zsh and runtime fixes",
+        description:
+          "The terminal respects changes to ZDOTDIR during Zsh startup and keeps Synara's managed CLI available after shell setup. This release also updates Bun and Electron.",
+      },
+    ],
+  },
+  {
     version: "1.6.2",
     date: "Nov 17",
     features: [
