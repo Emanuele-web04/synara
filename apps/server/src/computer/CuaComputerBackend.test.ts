@@ -71,6 +71,10 @@ function fixture(options?: {
   header.write("IHDR", 12);
   header.writeUInt32BE(400, 16);
   header.writeUInt32BE(200, 20);
+  // Minimal JPEG: SOI, then an SOF0 segment carrying 400x200 dimensions.
+  const jpegHeader = Buffer.from([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0xc8, 0x01, 0x90,
+  ]);
   const respond = async (
     _endpoint: unknown,
     request: (typeof calls)[number] & { method?: string },
@@ -156,6 +160,8 @@ function fixture(options?: {
     if (request.name === "get_desktop_state") {
       if (overviewFailure) throw new Error("Capture denied before permission recovery");
       await overviewWait;
+      const jpeg =
+        (request.args as Record<string, unknown> | undefined)?.screenshot_format === "jpeg";
       return {
         ok: true,
         desktopEpoch: responseEpoch,
@@ -164,8 +170,8 @@ function fixture(options?: {
           content: [
             {
               type: "image",
-              mimeType: "image/png",
-              data: header.toString("base64"),
+              mimeType: jpeg ? "image/jpeg" : "image/png",
+              data: (jpeg ? jpegHeader : header).toString("base64"),
             },
           ],
         },
@@ -1896,6 +1902,23 @@ describe("Cua native boundary", () => {
     await f.backend.checkInputReady("cua:10:20");
     finish();
     await failure;
+  });
+  it("asks the driver for a JPEG overview and returns it labelled image/jpeg", async () => {
+    vi.stubEnv("SYNARA_CUA_SCREENSHOT_FORMAT", "jpeg");
+    vi.stubEnv("SYNARA_CUA_SCREENSHOT_QUALITY", "80");
+    const f = fixture();
+    try {
+      const state = await f.backend.getState({ includeScreenshot: true });
+      expect(state.screenshot?.mimeType).toBe("image/jpeg");
+      expect(state.screenshot).toMatchObject({ width: 400, height: 200, scale: 2 });
+      expect(f.calls.find((call) => call.name === "get_desktop_state")?.args).toMatchObject({
+        screenshot_format: "jpeg",
+        screenshot_quality: 80,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await f.backend.dispose();
+    }
   });
   it("checks exact native input readiness without capturing or dispatching input", async () => {
     const f = fixture();

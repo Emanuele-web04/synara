@@ -102,6 +102,19 @@ export class CuaActionError extends ComputerBackendError {
     });
   }
 }
+/** Driver screenshot encoding for the model's desktop observation. PNG is
+ * the default; `SYNARA_CUA_SCREENSHOT_FORMAT=jpeg` shrinks the payload ~70%
+ * at a small text-sharpness cost — the operator picks per deployment. */
+function desktopScreenshotFormatArgs(): Record<string, unknown> {
+  const format = process.env.SYNARA_CUA_SCREENSHOT_FORMAT?.trim().toLowerCase();
+  const args: Record<string, unknown> = {};
+  if (format === "png" || format === "jpeg") args.screenshot_format = format;
+  const quality = Number(process.env.SYNARA_CUA_SCREENSHOT_QUALITY);
+  if (Number.isInteger(quality) && quality >= 1 && quality <= 100)
+    args.screenshot_quality = quality;
+  return args;
+}
+
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 const text = (value: unknown, max = 1024): string =>
@@ -1112,7 +1125,8 @@ export class CuaComputerBackend implements ComputerBackend {
         "off_space_capture_unverified",
       );
     const image = result.content?.find(
-      (c) => c.type === "image" && c.mimeType === "image/png" && c.data,
+      (c) =>
+        c.type === "image" && (c.mimeType === "image/png" || c.mimeType === "image/jpeg") && c.data,
     );
     if (!image?.data || data.screenshot_frame_valid === false)
       throw new CuaActionError(
@@ -1120,9 +1134,16 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "capture_unavailable",
       );
-    // The PNG header contains the dimensions; do not decode the full image
-    // until its bytes are needed by the preview transport.
-    const dimensions = pngDimensions(Buffer.from(image.data.slice(0, 32), "base64"));
+    // The image headers contain the dimensions; do not decode the full
+    // image until its bytes are needed by the preview transport. A JPEG's
+    // start-of-frame marker sits after variable-length APP segments, so its
+    // bound is looser than PNG's fixed 24-byte IHDR — still a small prefix.
+    const headerBytes =
+      image.mimeType === "image/jpeg"
+        ? Buffer.from(image.data.slice(0, 87_384), "base64")
+        : Buffer.from(image.data.slice(0, 32), "base64");
+    const dimensions =
+      image.mimeType === "image/jpeg" ? jpegDimensions(headerBytes) : pngDimensions(headerBytes);
     const region = data.window_bounds ? rect(data.window_bounds) : fallback;
     if (!dimensions || !region) throw new Error("Cua screenshot is missing its coordinate frame.");
     const scale = dimensions.width / region.width;
@@ -1140,7 +1161,7 @@ export class CuaComputerBackend implements ComputerBackend {
       });
     }
     return {
-      mimeType: "image/png",
+      mimeType: image.mimeType as "image/png" | "image/jpeg",
       ...dimensions,
       sizeBytes: Buffer.byteLength(image.data, "base64"),
       bytesBase64: image.data,
@@ -1177,7 +1198,12 @@ export class CuaComputerBackend implements ComputerBackend {
    */
   private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
     try {
-      const result = await this.call("get_desktop_state", {}, false, allowModelObservation);
+      const result = await this.call(
+        "get_desktop_state",
+        desktopScreenshotFormatArgs(),
+        false,
+        allowModelObservation,
+      );
       const data = result.structuredContent ?? {};
       const image = this.screenshot(result, {
         x: 0,
