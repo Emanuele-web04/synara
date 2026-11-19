@@ -4,13 +4,14 @@
 //! GTK is single-threaded and `gtk::init` must run before any wry call, so a
 //! dedicated thread owns the GTK main loop and every web view operation is
 //! posted to it. The component's own child window stays the tracked native
-//! view; wry creates its container inside it. A 250 ms poll keeps the web
+//! view; wry creates its container inside it. A short poll keeps the web
 //! view's bounds in sync with the child window's geometry, which the
 //! compositor moves and resizes with the surface.
 //!
 //! Hardening: WebKitGTK sandboxes its web processes through bubblewrap when
 //! available; devtools are off, navigation is limited to http/https/about,
-//! `window.open` and downloads are denied, and sensor permissions
+//! `window.open` goes to the system browser, downloads are denied, and sensor
+//! permissions
 //! (microphone, camera, geolocation) are refused.
 
 use std::{
@@ -43,7 +44,7 @@ use x11rb::{
 
 /// How often the GTK thread reconciles each web view's bounds with its
 /// window's geometry and drops views whose window is gone.
-const POLL: Duration = Duration::from_millis(250);
+const POLL: Duration = Duration::from_millis(60);
 
 /// A web view living on the GTK thread, keyed by the child window id that
 /// hosts it.
@@ -196,10 +197,12 @@ fn ensure_gtk() -> Result<()> {
         if let Err(e) = thread::Builder::new()
             .name("synara-webview-gtk".into())
             .spawn(move || {
-                // Software compositing: no GPU driver, GBM or DMA-BUF buffers
-                // are touched, which keeps the web view working (and less
-                // exposed) on VMs and systems without working EGL.
-                if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+                // Software compositing only where there is no DRM render node:
+                // on VMs without a GPU the web view must not touch GPU driver,
+                // GBM or DMA-BUF paths, but on real hardware forcing them off
+                // leaves rendering (and input latency) on llvmpipe.
+                let no_gpu = !std::path::Path::new("/dev/dri").exists();
+                if no_gpu && std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
                     unsafe {
                         libc::setenv(
                             c"WEBKIT_DISABLE_COMPOSITING_MODE".as_ptr(),
@@ -208,9 +211,20 @@ fn ensure_gtk() -> Result<()> {
                         )
                     };
                 }
-                if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+                if no_gpu && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
                     unsafe {
                         libc::setenv(c"WEBKIT_DISABLE_DMABUF_RENDERER".as_ptr(), c"1".as_ptr(), 0)
+                    };
+                }
+                // Skia CPU raster beats llvmpipe's GL paths for simple pages:
+                // it skips the GL context setup that adds per-frame latency.
+                if no_gpu && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+                    unsafe {
+                        libc::setenv(
+                            c"WEBKIT_SKIA_ENABLE_CPU_RENDERING".as_ptr(),
+                            c"1".as_ptr(),
+                            0,
+                        )
                     };
                 }
                 let init = gtk::init().map_err(|e| Error::msg(format!("gtk::init: {e}")));
@@ -264,7 +278,22 @@ fn build_view_on_gtk(surface: u32, window: u32, url: &str, width: u32, height: u
         .with_navigation_handler(|uri| {
             uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("about:")
         })
-        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        .with_new_window_req_handler(|uri, _| {
+            // window.open / target=_blank goes to the system browser instead of
+            // a web view popup we would have to manage.
+            if uri.starts_with("http://") || uri.starts_with("https://") {
+                // Detached: xdg-open resolves the default browser itself;
+                // gio::AppInfo::launch_default_for_uri can have no handler on
+                // minimal desktops, so do not rely on it.
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&uri)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+            NewWindowResponse::Deny
+        })
         .with_download_started_handler(|_, _| false)
         .with_permission_handler(|kind| match kind {
             PermissionKind::Microphone

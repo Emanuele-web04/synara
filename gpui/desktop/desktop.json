@@ -13,6 +13,7 @@
   "icon": "assets/icon.png",
   "window": {
     "titleBar": "transparent",
+    "menuBar": false,
     "trafficLightPosition": {
       "x": 16,
       "y": 15
