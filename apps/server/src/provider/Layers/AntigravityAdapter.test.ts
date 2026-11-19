@@ -2810,6 +2810,12 @@ describe("Antigravity background task helpers (#752)", () => {
           `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall: calls[1], toolOutput: "Task id 'task-other' is running in the background" })}`,
           `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall: calls[0], toolOutput: "Command sent to the background" })}`,
         );
+        // Establish both starts before the independently polled transcript reports completion.
+        yield* io.waitUntil(() =>
+          io.taskEvents.some(
+            (event) => event.type === "task.started" && event.taskId === "task-other",
+          ),
+        );
         io.transcript(agyCompletionStep(999), agyText(1000, "The build is still running."));
         io.hooks('stop\t{"stepIdx":1000}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 2);

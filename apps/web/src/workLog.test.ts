@@ -21,6 +21,8 @@ const diagnostic = (
   fields: Record<string, unknown>,
   target = "codex_skills::interface",
 ) => JSON.stringify({ timestamp: "2026-10-15T20:05:38.509122Z", level, fields, target });
+const mcpOAuthStartupError = (name: string) =>
+  `The ${name} MCP server requires OAuth reauthentication. Run \`codex mcp login ${name}\`.`;
 
 describe("deriveSubagentTaskEnds", () => {
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
@@ -771,6 +773,43 @@ describe("deriveWorkLogEntries", () => {
       "codex-structured-error",
       "other-plain",
       "other-provider",
+    ]);
+  });
+
+  it("hides stored Codex user MCP OAuth startup warnings while keeping actionable failures", () => {
+    const startupWarning = (name: string, error: string) =>
+      makeActivity({
+        id: name,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: {
+          message: `MCP server "${name}" failed to start: ${error}`,
+          data: { name, status: "failed", error },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        startupWarning("stripe", mcpOAuthStartupError("stripe")),
+        startupWarning("polar", mcpOAuthStartupError("polar")),
+        startupWarning("stripe_connector", mcpOAuthStartupError("stripe_connector")),
+        startupWarning("other", "MCP connection failed: Workspace access denied"),
+        makeActivity({
+          id: "stripe-tool",
+          kind: "tool.completed",
+          summary: "MCP tool call failed",
+          payload: {
+            itemType: "mcp_tool_call",
+            status: "failed",
+            detail: mcpOAuthStartupError("stripe"),
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "other",
+      "stripe-tool",
+      "stripe_connector",
     ]);
   });
 

@@ -4844,6 +4844,8 @@ describe("ChatView transcript geometry (full app)", () => {
         "Remote destination Space header missing",
       );
       header.querySelector<HTMLButtonElement>('button[aria-label="Add project"]')!.click();
+      // The dialog focuses the name field on the next frame, which closes an open picker.
+      await expect.element(page.getByRole("textbox", { name: "Project name" })).toHaveFocus();
       await page.getByRole("button", { name: "Project computer: This computer" }).click();
       await page.getByRole("menuitem", { name: /Remote test computer/ }).click();
       await page.getByLabelText("Project folder path").fill(workspaceRoot);
@@ -4864,17 +4866,26 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => expect(header.parentElement?.textContent).toContain(projectName), {
         timeout: 2_000,
       });
+      const projectRow = page.getByRole("button", {
+        name: `${projectName}, Remote test computer`,
+      });
       const actions = page.getByRole("button", {
         name: `Project actions for ${projectName} on Remote test computer`,
       });
       const remove = page.getByRole("menuitem", { name: "Remove project", exact: true });
-      await actions.click();
+      const rename = page.getByRole("menuitem", { name: "Rename project", exact: true });
+      const openProjectActions = async () => {
+        await projectRow.hover();
+        await actions.click();
+      };
+      await openProjectActions();
       await remove.click();
       await expect.poll(() => confirm.mock.calls.length).toBe(1);
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining("folder and files stay on disk"),
       );
       expect(removeEmptyProject).not.toHaveBeenCalled();
+      await expect.element(remove).not.toBeInTheDocument();
 
       // Archived chats are reported by the owning frame even though no rows are visible.
       updateWorkspaceSession(hostId, {
@@ -4885,16 +4896,17 @@ describe("ChatView transcript geometry (full app)", () => {
           threads: [],
         },
       });
-      await actions.click();
-      await expect.element(page.getByRole("menuitem", { name: "Rename project" })).toBeVisible();
+      await openProjectActions();
+      await expect.element(rename).toBeVisible();
       await expect.element(remove).not.toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
+      await expect.element(rename).not.toBeInTheDocument();
 
       updateWorkspaceSession(hostId, {
         summary: { state: "open", path: "/", projects, threads: [] },
       });
       confirm.mockResolvedValue(true);
-      await actions.click();
+      await openProjectActions();
       await remove.click();
       await expect.poll(() => removeEmptyProject.mock.calls.length).toBe(1);
       expect(removeEmptyProject).toHaveBeenCalledWith(projectId);
@@ -5527,6 +5539,7 @@ describe("ChatView transcript geometry (full app)", () => {
         try {
           await waitForServerConfigToApply();
           const note = page.getByTestId("composer-claude-model-switch-note");
+          const send = page.getByRole("button", { name: "Send message", exact: true });
           await expect.element(note).not.toBeInTheDocument();
           const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
           useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
@@ -5540,9 +5553,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
           useComposerDraftStore.getState().setPrompt(THREAD_ID, "Continue the task");
           if (sessionStatus === "ready") {
-            await expect
-              .element(page.getByRole("button", { name: "Send message", exact: true }))
-              .toBeEnabled();
+            await expect.element(send).toBeEnabled();
           } else {
             await expect
               .element(page.getByRole("button", { name: "Stop generation", exact: true }))
@@ -5562,9 +5573,14 @@ describe("ChatView transcript geometry (full app)", () => {
           await expect.element(note).not.toBeInTheDocument();
           useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
           await expect.element(note).toBeVisible();
-          document
-            .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
-            .requestSubmit();
+          if (sessionStatus === "ready") {
+            // Use the actionable control after resizing and changing the model again.
+            await send.click();
+          } else {
+            document
+              .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
+              .requestSubmit();
+          }
           const handoffBlocked = sessionStatus === "running" && provider !== "claudeAgent";
           if (handoffBlocked) {
             await vi.waitFor(() =>
@@ -9347,16 +9363,19 @@ describe("ChatView transcript geometry (full app)", () => {
         );
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
       const searchbox = page.getByRole("searchbox", { name: "Search models" });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       pressShortcut();
       await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
       await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
       shortcutTarget = searchbox.element() as HTMLElement;
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      await vi.advanceTimersByTimeAsync(900);
       pressShortcut();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      // Cross the original deadline, then reach the renewed deadline.
+      await vi.advanceTimersByTimeAsync(900);
       await expect.element(slider).toBeVisible();
+      await vi.advanceTimersByTimeAsync(600);
       await vi.waitFor(
         () => {
           expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
@@ -9365,6 +9384,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       await vi.waitFor(() => expect(document.activeElement).toBe(composerEditor));
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9391,6 +9411,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       composerEditor.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -9407,11 +9428,12 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
       dispatchComposerPickerShortcut(searchbox.element(), "m");
       await waitForComposerPickerSurfaceOpen();
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await vi.advanceTimersByTimeAsync(1_700);
       await expect
         .element(page.getByRole("searchbox", { name: "Search models" }), { timeout: 1_000 })
         .toBeVisible();
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9438,6 +9460,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       composerEditor.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -9470,10 +9493,11 @@ describe("ChatView transcript geometry (full app)", () => {
         useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
           .codex,
       ).toMatchObject({ model: "gpt-5.5", options: { reasoningEffort: "medium" } });
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await vi.advanceTimersByTimeAsync(1_700);
       await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
       await expect.element(slider, { timeout: 1_000 }).toBeVisible();
     } finally {
+      vi.useRealTimers();
       await mounted.cleanup();
     }
   });
@@ -9580,14 +9604,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const editor = await waitForComposerEditor();
       await userEvent.click(editor);
-      const phrase = "Keep this unsent draft while moving the caret. ";
-      const draft = phrase.repeat(8);
-      // Exercise caret/history behavior while allowing React to finish a frame between
-      // typing bursts, rather than hundreds of automation keys in one update batch.
-      for (let index = 0; index < 8; index += 1) {
-        await userEvent.keyboard(phrase);
-        await nextFrame();
-      }
+      const draft = "Keep this unsent draft while moving the caret. ".repeat(8);
+      // Set up the draft in one input action. Use real keys for the caret and history.
+      await userEvent.fill(editor, draft);
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
       const prompt = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt;
       await userEvent.keyboard("{ArrowUp>10/}");

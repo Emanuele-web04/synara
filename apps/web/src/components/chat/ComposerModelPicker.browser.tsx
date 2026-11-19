@@ -609,6 +609,26 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("shows the Ultrafast badge on the trigger when Ultrafast is selected", async () => {
+    const screen = await mountPicker(
+      {
+        runtimeModelsByProviderInstance: {
+          codex: [
+            { slug: GPT_5_5, name: "GPT-5.5", supportsFastMode: true, supportsUltrafastMode: true },
+          ],
+        },
+      },
+      { serviceTier: "ultrafast" },
+    );
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Change model and reasoning" }))
+        .toHaveTextContent(/Ultrafast/u);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("restores a Standard preset when the model offers Ultrafast without Fast", async () => {
     const onProviderModelChange = vi.fn();
     const screen = await mountPicker({

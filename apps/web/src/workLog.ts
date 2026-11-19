@@ -1,6 +1,7 @@
 import {
   classifyCodexStderr,
   CODEX_STDERR_NATIVE_EVENT_TYPE,
+  isCodexUserMcpOAuthStartupError,
   normalizeCodexUserVisibleErrorMessage,
 } from "@synara/shared/codexStderr";
 import {
@@ -586,6 +587,12 @@ export function deriveWorkLogEntries(
       // text normalized: judging that text again could hide a structured ERROR
       // whose level the normalization removed.
       if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
+      const startup = asRecord(payload?.data);
+      if (startup?.status === "failed") {
+        const name = asTrimmedString(startup.name);
+        const error = asTrimmedString(startup.error);
+        if (name && error && isCodexUserMcpOAuthStartupError(name, error)) return false;
+      }
       const message = asTrimmedString(payload?.message);
       return !message || classifyCodexStderr(message)?.kind === "notice";
     })

@@ -43,6 +43,8 @@ const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
+const mcpOAuthStartupError = (name: string) =>
+  `The ${name} MCP server requires OAuth reauthentication. Run \`codex mcp login ${name}\`.`;
 
 class FakeCodexManager extends CodexAppServerManager {
   public sessionSnapshots: ProviderSession[] = [];
@@ -1072,7 +1074,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("reports named MCP startup failures without hiding other transport errors", () =>
+  it.effect("keeps user MCP OAuth startup failures out of runtime warnings", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const sentinel = "MCP fixture complete";
@@ -1080,12 +1082,25 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         adapter.streamEvents,
         (event) => event.type === "runtime.warning" && event.payload.message === sentinel,
       ).pipe(Stream.runCollect, Effect.forkChild);
-      const failures = [
+      const httpFailures = [
         ["billing-a", "subscription_inactive: Subscription status: canceled"],
         ["billing-b", "subscription_required: The SuperX API requires an active subscription"],
         ["other", "permission_denied: Workspace access denied"],
-      ];
-      for (const [name, error] of failures) {
+      ] as const;
+      const managedOAuthFailure = [
+        "stripe_connector",
+        mcpOAuthStartupError("stripe_connector"),
+      ] as const;
+      const startupFailures = [
+        ...httpFailures.map(
+          ([name, error]) =>
+            [name, `MCP startup failed: HTTP 403: ${JSON.stringify({ error })}`] as const,
+        ),
+        ["stripe", mcpOAuthStartupError("stripe")],
+        ["polar", mcpOAuthStartupError("polar")],
+        managedOAuthFailure,
+      ] as const;
+      for (const [name, error] of startupFailures) {
         for (const status of ["starting", "failed"]) {
           lifecycleManager.emit("event", {
             id: asEventId(`${name}-${status}`),
@@ -1097,10 +1112,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             payload: {
               name,
               status,
-              error:
-                status === "failed"
-                  ? `MCP startup failed: HTTP 403: ${JSON.stringify({ error })}`
-                  : null,
+              error: status === "failed" ? error : null,
             },
           } satisfies ProviderEvent);
         }
@@ -1117,12 +1129,14 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       const events = Array.from(yield* Fiber.join(eventsFiber))
         .slice(0, -1)
         .filter((event) => event.type === "runtime.warning");
-      assert.equal(events.length, 3);
+      const reportedFailures = [...httpFailures, managedOAuthFailure];
+      assert.equal(events.length, reportedFailures.length);
       for (const [index, event] of events.entries()) {
+        const [name, error] = reportedFailures[index]!;
         assert.equal(event.type, "runtime.warning");
         if (event.type !== "runtime.warning") continue;
-        assert.ok(event.payload.message.includes(failures[index]![0]!));
-        assert.ok(event.payload.message.includes(failures[index]![1]!));
+        assert.ok(event.payload.message.startsWith(`MCP server "${name}" failed to start`));
+        assert.ok(event.payload.message.includes(error));
         const [activity] = projectProviderRuntimeActivities(event);
         assert.equal(activity?.kind, "runtime.warning");
         assert.match(JSON.stringify(activity?.payload), /failed/);
