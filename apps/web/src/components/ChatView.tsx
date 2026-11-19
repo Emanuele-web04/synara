@@ -1135,14 +1135,14 @@ export default function ChatView({
     () => deriveCumulativeCostUsd(threadActivities),
     [threadActivities],
   );
-  const quotaProvider = activeThread?.session?.provider ?? activeThread?.modelSelection.provider;
+  const threadProvider = activeThread?.session?.provider ?? activeThread?.modelSelection.provider;
   const quotaInstanceId =
     activeThread?.session?.providerInstanceId ??
     activeThread?.modelSelection.instanceId ??
-    quotaProvider;
+    threadProvider;
   const activeRateLimitStatus = useRateLimitStatus(
     threadActivities,
-    quotaProvider,
+    threadProvider,
     quotaInstanceId,
   );
   const enabledRateLimitStatus =
@@ -1679,8 +1679,8 @@ export default function ChatView({
   );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
-    () => deriveAgentActivityTimelineState(workLogEntries),
-    [workLogEntries],
+    () => deriveAgentActivityTimelineState(workLogEntries, threadProvider),
+    [workLogEntries, threadProvider],
   );
   const openAgentActivityDetail = openAgentActivityId
     ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
@@ -6575,7 +6575,7 @@ export default function ChatView({
               <div className="pb-2">
                 <ComposerUsageLimitCard
                   {...usageLimitInputs}
-                  provider={quotaProvider}
+                  provider={threadProvider}
                   instanceId={quotaInstanceId}
                   onCollapse={() => setCollapsedUsageLimitCardKey(activeUsageLimitCardKey)}
                   onCancelRecovery={onInterruptFromStopControl}

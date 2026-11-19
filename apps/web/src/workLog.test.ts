@@ -749,7 +749,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
   });
 
-  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
+  it("keeps Codex stderr out of the transcript and preserves other providers' warnings", () => {
     const stderr = (id: string, message: string, nativeEventType?: string) =>
       makeActivity({
         id,
@@ -759,8 +759,6 @@ describe("deriveWorkLogEntries", () => {
       });
     const entries = deriveWorkLogEntries(
       [
-        // Stored only because ingestion kept it: a structured ERROR whose level
-        // the message normalization removed must not be judged again.
         stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
         stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
         stderr("other-provider", "Bash was denied: outside workspace"),
@@ -768,15 +766,10 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
-      "codex-error",
-      "codex-structured-error",
-      "other-plain",
-      "other-provider",
-    ]);
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["other-plain", "other-provider"]);
   });
 
-  it("hides stored Codex user MCP OAuth startup warnings while keeping actionable failures", () => {
+  it("hides saved Codex MCP startup warnings while keeping failed tool calls", () => {
     const startupWarning = (name: string, error: string) =>
       makeActivity({
         id: name,
@@ -792,7 +785,10 @@ describe("deriveWorkLogEntries", () => {
         startupWarning("stripe", mcpOAuthStartupError("stripe")),
         startupWarning("polar", mcpOAuthStartupError("polar")),
         startupWarning("stripe_connector", mcpOAuthStartupError("stripe_connector")),
-        startupWarning("other", "MCP connection failed: Workspace access denied"),
+        startupWarning(
+          "superx",
+          'HTTP 403: {"error":"subscription_required: An active subscription is required"}',
+        ),
         makeActivity({
           id: "stripe-tool",
           kind: "tool.completed",
@@ -806,11 +802,7 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
-      "other",
-      "stripe-tool",
-      "stripe_connector",
-    ]);
+    expect(entries.map((entry) => entry.id)).toEqual(["stripe-tool"]);
   });
 
   it("hides stored Claude warnings the adapter now only logs", () => {
