@@ -10,8 +10,8 @@
 //!
 //! Hardening: WebKitGTK sandboxes its web processes through bubblewrap when
 //! available; devtools are off, navigation is limited to http/https/about,
-//! `window.open` goes to the system browser, downloads are denied, and sensor
-//! permissions
+//! `window.open` goes to the system browser, downloads are denied, the
+//! browser context menu is suppressed, and sensor permissions
 //! (microphone, camera, geolocation) are refused.
 
 use std::{
@@ -29,9 +29,11 @@ use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle,
 };
 use react_native_gpui::native_surface::{Error, NativeViewHandle, NativeViewParent, Result};
+use webkit2gtk::WebViewExt;
 use wry::{
     dpi::{LogicalPosition, LogicalSize},
     NewWindowResponse, PermissionKind, PermissionResponse, Rect, WebView, WebViewBuilder,
+    WebViewExtUnix,
 };
 use x11rb::{
     connection::Connection,
@@ -312,6 +314,12 @@ fn build_view_on_gtk(surface: u32, window: u32, url: &str, width: u32, height: u
         })
         .build_as_child(&parent)
         .map_err(|e| Error::msg(format!("web view: {e}")))?;
+    // No browser context menu: the app draws its own menus in JS (those
+    // preventDefault, so this only suppresses stray right-clicks), matching
+    // Electron which shows no default menu at all.
+    webview
+        .webview()
+        .connect_context_menu(|_, _, _, _| true);
     VIEWS.with(|views| {
         views.borrow_mut().insert(
             window,
