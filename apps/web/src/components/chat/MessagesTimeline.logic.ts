@@ -276,6 +276,24 @@ function trailingToolRunTarget(
   groupId: string,
   entries: ReadonlyArray<WorkLogEntry>,
 ): LiveToolCallTarget | null {
+  // Codex announces a command before requesting approval and does not start it
+  // again after a grant. Claim that command while keeping the approval visible.
+  const latest = entries.at(-1);
+  if (latest?.grantedCommandApproval) {
+    const requestIndex = latest.activityKind === "approval.resolved" ? -2 : -1;
+    const request = entries.at(requestIndex);
+    const command = entries.at(requestIndex - 1);
+    const requestedCommand = request?.rawCommand ?? request?.command;
+    return request?.activityKind === "approval.requested" &&
+      request.grantedCommandApproval &&
+      command?.itemType === "command_execution" &&
+      command.toolStatus === "running" &&
+      requestedCommand &&
+      (command.rawCommand ?? command.command) === requestedCommand
+      ? { groupId, chunkId: command.id, display: { entry: command, tone: "running" } }
+      : null;
+  }
+
   const tail = chunkWorkEntries(entries).at(-1);
   if (!tail) return null;
   if (tail.kind === "tool-group") {
@@ -321,15 +339,18 @@ export function findLiveToolCallTarget(
   return null;
 }
 
-// The entries a work group still lists while the working indicator wears its
-// trailing run: everything before the run's first entry.
+// A normal live run takes the tail. A command claimed after approval leaves
+// the intervening approval rows in history.
 export function withoutLiveToolCallRun(
   entries: WorkLogEntry[],
   chunkId: string | null,
 ): WorkLogEntry[] {
   if (chunkId === null) return entries;
   const runStart = entries.findIndex((entry) => entry.id === chunkId);
-  return runStart < 0 ? entries : entries.slice(0, runStart);
+  if (runStart < 0) return entries;
+  return entries.at(-1)?.grantedCommandApproval
+    ? entries.toSpliced(runStart, 1)
+    : entries.slice(0, runStart);
 }
 
 // The one "live tail" signal both work-group render sites read: the run the
@@ -2276,6 +2297,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.tone === b.tone &&
     a.itemType === b.itemType &&
     a.requestKind === b.requestKind &&
+    a.grantedCommandApproval === b.grantedCommandApproval &&
     a.activityKind === b.activityKind &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
