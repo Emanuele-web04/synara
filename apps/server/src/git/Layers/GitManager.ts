@@ -32,6 +32,8 @@ import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
 import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { appendCommitAttribution, appendPullRequestAttribution } from "../gitAttribution.ts";
 
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
@@ -693,6 +695,7 @@ export const makeGitManager = Effect.gen(function* () {
   const gitCore = yield* GitCore;
   const gitHubCli = yield* GitHubCli;
   const textGeneration = yield* TextGeneration;
+  const serverSettings = yield* ServerSettingsService;
 
   const createProgressEmitter = (
     input: { cwd: string; action: GitStackedAction },
@@ -1127,6 +1130,7 @@ export const makeGitManager = Effect.gen(function* () {
     textGenerationParams?: GitTextGenerationParams,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    attribution = false,
   ) =>
     Effect.gen(function* () {
       const emit = (event: GitActionProgressPayload) =>
@@ -1211,10 +1215,12 @@ export const makeGitManager = Effect.gen(function* () {
               },
             }
           : null;
+      // Attribution touches only the body handed to git, never the subject or the
+      // suggestion that branch names and PR titles derive from.
       const { commitSha } = yield* gitCore.commit(
         cwd,
         suggestion.subject,
-        suggestion.body,
+        attribution ? appendCommitAttribution(suggestion.body) : suggestion.body,
         commitProgress ? { progress: commitProgress } : undefined,
       );
       if (currentHookName !== null) {
@@ -1242,6 +1248,7 @@ export const makeGitManager = Effect.gen(function* () {
       readonly body?: string | undefined;
       readonly draft?: boolean | undefined;
     },
+    attribution = false,
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1319,9 +1326,10 @@ export const makeGitManager = Effect.gen(function* () {
         prBody ??= generated.body;
       }
 
+      const finalPrBody = attribution ? appendPullRequestAttribution(prBody) : prBody;
       const bodyFile = path.join(tempDir, `synara-pr-body-${process.pid}-${randomUUID()}.md`);
       yield* fileSystem
-        .writeFileString(bodyFile, prBody)
+        .writeFileString(bodyFile, finalPrBody)
         .pipe(
           Effect.mapError((cause) =>
             gitManagerError("runPrStep", "Failed to write pull request body temp file.", cause),
@@ -2666,6 +2674,20 @@ The local stash entry was kept for recovery.`,
       );
     });
 
+  // A per-run choice wins; otherwise the server setting decides. Attribution never blocks a
+  // git action, so an unreadable setting is logged and treated as off.
+  const resolveAttribution = (override: boolean | undefined) =>
+    override !== undefined
+      ? Effect.succeed(override)
+      : serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.gitAttributionEnabled),
+          Effect.catch((error) =>
+            Effect.logWarning("Failed to read the git attribution setting; skipping attribution.", {
+              error: error.message,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+
   const runStackedAction: GitManagerShape["runStackedAction"] = Effect.fnUntraced(
     function* (input, options) {
       const progress = createProgressEmitter(input, options);
@@ -2688,6 +2710,8 @@ The local stash entry was kept for recovery.`,
           (input.action === "create_pr" &&
             (input.featureBranch || !initialStatus.hasUpstream || initialStatus.aheadCount > 0));
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
+        const attribution =
+          wantsCommit || wantsPr ? yield* resolveAttribution(input.attribution) : false;
         const phases: GitActionProgressPhase[] = [
           ...(input.featureBranch ? (["branch"] as const) : []),
           ...(wantsCommit ? (["commit"] as const) : []),
@@ -2782,6 +2806,7 @@ The local stash entry was kept for recovery.`,
                 textGenerationParams,
                 options?.progressReporter,
                 progress.actionId,
+                attribution,
               );
             })
           : { status: "skipped_not_requested" as const };
@@ -2814,11 +2839,17 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams, {
-                      title: input.prTitle,
-                      body: input.prBody,
-                      draft: input.prDraft,
-                    });
+                    return yield* runPrStep(
+                      input.cwd,
+                      currentBranch,
+                      textGenerationParams,
+                      {
+                        title: input.prTitle,
+                        body: input.prBody,
+                        draft: input.prDraft,
+                      },
+                      attribution,
+                    );
                   }),
                 ),
               )

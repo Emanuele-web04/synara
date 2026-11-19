@@ -4,12 +4,12 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
-import { afterAll, expect, vi } from "vitest";
+import { afterAll, describe, expect, vi } from "vitest";
 import os from "node:os";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
-import { WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
+import { ServerSettingsError, WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
 import { makeGitActionRunner } from "../gitActionRunner";
 import type {
   GitPullRequestCheck,
@@ -41,6 +41,8 @@ import { GitCore } from "../Services/GitCore.ts";
 import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeGitHubCli.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { COMMIT_ATTRIBUTION_TRAILER, PULL_REQUEST_ATTRIBUTION_FOOTER } from "../gitAttribution.ts";
 
 interface FakeGitTextGeneration {
   generateCommitMessage: (input: {
@@ -310,6 +312,7 @@ function runStackedAction(
     prBody?: string;
     prDraft?: boolean;
     allowDirtyWorkingTree?: boolean;
+    attribution?: boolean;
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
 ) {
@@ -355,8 +358,14 @@ function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
+  settings?: Parameters<typeof ServerSettingsService.layerTest>[0];
+  settingsLayer?: Layer.Layer<ServerSettingsService, ServerSettingsError>;
 }) {
-  const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const {
+    service: gitHubCli,
+    ghCalls,
+    createdPrBodies,
+  } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-git-manager-test-",
@@ -370,12 +379,13 @@ function makeManager(input?: {
   const managerLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
     Layer.succeed(TextGeneration, textGeneration),
+    input?.settingsLayer ?? ServerSettingsService.layerTest(input?.settings),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 
   return makeGitManager.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, createdPrBodies })),
   );
 }
 
@@ -2719,4 +2729,209 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
     }),
   );
+
+  describe("Synara attribution", () => {
+    const GENERATED_PR_BODY = "## Summary\n- Add stacked git workflow\n\n## Testing\n- Not run";
+
+    /** A feature branch with one uncommitted file and an empty bare remote. */
+    const setupDirtyFeatureRepo = (branch: string) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-attribution-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", branch]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "attributed.txt"), "attributed\n");
+        return repoDir;
+      });
+
+    /** Runs commit_push_pr on a fresh repo and returns the commit message and PR body. */
+    const runCommitPushPr = (input: {
+      branch: string;
+      settings?: Parameters<typeof ServerSettingsService.layerTest>[0];
+      settingsLayer?: Layer.Layer<ServerSettingsService, ServerSettingsError>;
+      attribution?: boolean;
+      commitMessage?: string;
+      prBody?: string;
+    }) =>
+      Effect.gen(function* () {
+        const repoDir = yield* setupDirtyFeatureRepo(input.branch);
+        const { manager, createdPrBodies } = yield* makeManager({
+          ...(input.settings ? { settings: input.settings } : {}),
+          ...(input.settingsLayer ? { settingsLayer: input.settingsLayer } : {}),
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([prEntry(77, "Add stacked git actions", input.branch)]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          ...(input.attribution !== undefined ? { attribution: input.attribution } : {}),
+          ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
+          ...(input.prBody ? { prBody: input.prBody } : {}),
+        });
+        expect(result.commit.status).toBe("created");
+        expect(result.pr.status).toBe("created");
+        expect(createdPrBodies).toHaveLength(1);
+        return {
+          result,
+          commitMessage: yield* gitOut(repoDir, ["log", "-1", "--pretty=%B"]),
+          prBody: createdPrBodies[0]!,
+        };
+      });
+
+    it.effect("adds the trailer to a new commit and the footer to a new PR by default", () =>
+      Effect.gen(function* () {
+        const { result, commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-default",
+        });
+        expect(commitMessage).toBe(
+          `Implement stacked git actions\n\n${COMMIT_ATTRIBUTION_TRAILER}`,
+        );
+        expect(result.commit).toMatchObject({ subject: "Implement stacked git actions" });
+        expect(result.pr.title).toBe("Add stacked git actions");
+        expect(prBody).toBe(`${GENERATED_PR_BODY}\n\n${PULL_REQUEST_ATTRIBUTION_FOOTER}`);
+      }),
+    );
+
+    it.effect("joins a user-written trailer block and keeps the user's subject", () =>
+      Effect.gen(function* () {
+        const { result, commitMessage } = yield* runCommitPushPr({
+          branch: "feature/attribution-trailers",
+          commitMessage: "Fix the parser\n\nExplain why.\n\nCo-authored-by: Ada <ada@example.com>",
+        });
+        expect(result.commit).toMatchObject({ subject: "Fix the parser" });
+        expect(commitMessage).toBe(
+          `Fix the parser\n\nExplain why.\n\nCo-authored-by: Ada <ada@example.com>\n${COMMIT_ATTRIBUTION_TRAILER}`,
+        );
+      }),
+    );
+
+    it.effect("skips attribution when the action opts out of an enabled setting", () =>
+      Effect.gen(function* () {
+        const { commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-opt-out",
+          attribution: false,
+        });
+        expect(commitMessage).toBe("Implement stacked git actions");
+        expect(prBody).toBe(GENERATED_PR_BODY);
+      }),
+    );
+
+    it.effect("skips attribution when the setting is off and the action does not choose", () =>
+      Effect.gen(function* () {
+        const { commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-setting-off",
+          settings: { gitAttributionEnabled: false },
+        });
+        expect(commitMessage).toBe("Implement stacked git actions");
+        expect(prBody).toBe(GENERATED_PR_BODY);
+      }),
+    );
+
+    it.effect("adds attribution when the action opts in over a disabled setting", () =>
+      Effect.gen(function* () {
+        const { commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-opt-in",
+          settings: { gitAttributionEnabled: false },
+          attribution: true,
+        });
+        expect(commitMessage).toBe(
+          `Implement stacked git actions\n\n${COMMIT_ATTRIBUTION_TRAILER}`,
+        );
+        expect(prBody).toBe(`${GENERATED_PR_BODY}\n\n${PULL_REQUEST_ATTRIBUTION_FOOTER}`);
+      }),
+    );
+
+    it.effect("treats an unreadable setting as off without failing the action", () =>
+      Effect.gen(function* () {
+        const failingSettingsLayer = Layer.effect(
+          ServerSettingsService,
+          Effect.gen(function* () {
+            const base = yield* ServerSettingsService;
+            return {
+              ...base,
+              getSettings: Effect.fail(
+                new ServerSettingsError({ settingsPath: "<memory>", detail: "unreadable" }),
+              ),
+            };
+          }),
+        ).pipe(Layer.provide(ServerSettingsService.layerTest()));
+        const { commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-unreadable",
+          settingsLayer: failingSettingsLayer,
+        });
+        expect(commitMessage).toBe("Implement stacked git actions");
+        expect(prBody).toBe(GENERATED_PR_BODY);
+      }),
+    );
+
+    it.effect("does not duplicate a footer or trailer the user already wrote", () =>
+      Effect.gen(function* () {
+        const userBody = `Hand-written description.\n\n${PULL_REQUEST_ATTRIBUTION_FOOTER}`;
+        const { commitMessage, prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-user-text",
+          commitMessage: `Fix the parser\n\n${COMMIT_ATTRIBUTION_TRAILER}`,
+          prBody: userBody,
+        });
+        expect(commitMessage).toBe(`Fix the parser\n\n${COMMIT_ATTRIBUTION_TRAILER}`);
+        expect(prBody).toBe(userBody);
+      }),
+    );
+
+    it.effect("leaves an existing commit untouched on a push-only action", () =>
+      Effect.gen(function* () {
+        const repoDir = yield* setupDirtyFeatureRepo("feature/attribution-push-only");
+        yield* runGit(repoDir, ["add", "attributed.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "User commit"]);
+        const headBefore = yield* gitOut(repoDir, ["rev-parse", "HEAD"]);
+        const { manager } = yield* makeManager();
+
+        const result = yield* runStackedAction(manager, { cwd: repoDir, action: "push" });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(yield* gitOut(repoDir, ["rev-parse", "HEAD"])).toBe(headBefore);
+        expect(yield* gitOut(repoDir, ["log", "-1", "--pretty=%B"])).toBe("User commit");
+        expect(yield* gitOut(repoDir, ["branch", "--show-current"])).toBe(
+          "feature/attribution-push-only",
+        );
+      }),
+    );
+
+    it.effect("returns an already-open PR without creating or editing one", () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-attribution-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/attribution-existing"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/attribution-existing"]);
+        const { manager, ghCalls, createdPrBodies } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              JSON.stringify([prEntry(43, "Existing PR", "feature/attribution-existing")]),
+            ],
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          attribution: true,
+        });
+
+        expect(result.pr.status).toBe("opened_existing");
+        expect(result.pr.number).toBe(43);
+        expect(createdPrBodies).toHaveLength(0);
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+        expect(ghCalls.some((call) => call.startsWith("pr edit "))).toBe(false);
+      }),
+    );
+  });
 });

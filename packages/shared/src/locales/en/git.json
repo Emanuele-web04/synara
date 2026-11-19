@@ -232,6 +232,7 @@
   "merge2": "Merge {{value0}} {{value1}}?",
   "unableToOpenComparePage2": "Unable to open compare page.",
   "commitAndPushLocalChanges": "Commit and push local changes",
+  "addSynaraAttribution": "Add Synara attribution",
   "couldNotRefreshCodeReview": "Could not refresh code review",
   "runActionOnDefaultBranch": "Run action on default branch?",
   "sendToAgentChooseProject": "Send to agent: choose project",

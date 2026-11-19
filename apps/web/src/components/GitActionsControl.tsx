@@ -136,6 +136,7 @@ interface PendingDefaultBranchAction {
   forcePushOnlyProgress: boolean;
   onConfirmed?: () => void;
   filePaths?: string[];
+  attribution?: boolean;
 }
 
 type GitActionToastId = ReturnType<typeof toastManager.add>;
@@ -168,6 +169,8 @@ interface RunGitActionWithToastInput {
   prBody?: string;
   prDraft?: boolean;
   allowDirtyWorkingTree?: boolean;
+  /** Per-action attribution choice from a dialog; omitted follows the server setting. */
+  attribution?: boolean;
   afterSuccess?: (result: GitRunStackedActionResult) => void;
 }
 
@@ -690,6 +693,7 @@ export default function GitActionsControl({
       prBody,
       prDraft,
       allowDirtyWorkingTree,
+      attribution,
       afterSuccess,
     }: RunGitActionWithToastInput) {
       const forcePushOnlyProgress = forcePushOnlyProgressProp ?? false;
@@ -720,6 +724,7 @@ export default function GitActionsControl({
           forcePushOnlyProgress,
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
+          ...(attribution !== undefined ? { attribution } : {}),
         });
         return;
       }
@@ -795,6 +800,7 @@ export default function GitActionsControl({
         ...(prBody ? { prBody } : {}),
         ...(prDraft ? { prDraft } : {}),
         ...(allowDirtyWorkingTree ? { allowDirtyWorkingTree } : {}),
+        ...(attribution !== undefined ? { attribution } : {}),
         ...(activeThreadId ? { threadId: activeThreadId } : {}),
       });
 
@@ -962,6 +968,7 @@ export default function GitActionsControl({
         ...(submission.body ? { prBody: submission.body } : {}),
         ...(submission.draft ? { prDraft: true } : {}),
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
+        attribution: submission.attribution,
       });
     },
     [createPrDialogRuntimeStatus, runGitActionWithToast],
@@ -1004,6 +1011,7 @@ export default function GitActionsControl({
         ...(actionIsDefaultBranch ? { featureBranch: true } : {}),
         skipDefaultBranchPrompt: true,
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
+        attribution: request.attribution,
         afterSuccess: (result) => {
           void openComparePage(
             result.push.branch ?? result.branch.name ?? actionStatus?.branch ?? null,
@@ -1049,7 +1057,7 @@ export default function GitActionsControl({
 
   const continuePendingDefaultBranchAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths } =
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths, attribution } =
       pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
@@ -1058,6 +1066,7 @@ export default function GitActionsControl({
       forcePushOnlyProgress,
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(attribution !== undefined ? { attribution } : {}),
       ...(requiresFeatureBranchForDefaultBranchAction(action) ? { featureBranch: true } : {}),
       skipDefaultBranchPrompt: true,
     });
@@ -1065,7 +1074,7 @@ export default function GitActionsControl({
 
   const checkoutFeatureBranchAndContinuePendingAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths } =
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths, attribution } =
       pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
@@ -1074,6 +1083,7 @@ export default function GitActionsControl({
       forcePushOnlyProgress,
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(attribution !== undefined ? { attribution } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
@@ -1093,6 +1103,7 @@ export default function GitActionsControl({
         ...(submission.message ? { commitMessage: submission.message } : {}),
         ...(submission.filePaths ? { filePaths: submission.filePaths } : {}),
         ...(submission.featureBranch ? { featureBranch: true, skipDefaultBranchPrompt: true } : {}),
+        attribution: submission.attribution,
       });
     },
     [openCreatePrDialog, runGitActionWithToast],
@@ -1564,6 +1575,7 @@ export default function GitActionsControl({
           if (!open) setCreatePrDialog(null);
         }}
         context={createPrDialogContext}
+        defaultAttribution={settings.gitAttributionEnabled}
         onSubmit={handleCreatePrDialogSubmit}
         onOpenInBrowser={handleCreatePrDialogBrowser}
       />
@@ -1574,6 +1586,7 @@ export default function GitActionsControl({
           if (!open) setIsCommitDialogOpen(false);
         }}
         context={commitDialogContext}
+        defaultAttribution={settings.gitAttributionEnabled}
         onSubmit={handleCommitDialogSubmit}
         onOpenFile={openChangedFileInEditor}
       />

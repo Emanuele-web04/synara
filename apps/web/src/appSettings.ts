@@ -618,6 +618,9 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => "repository" as const),
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
+  // Server-backed: end commit messages and new PR descriptions Synara writes with a
+  // "Created with Synara" line. The git dialogs can override it per action.
+  gitAttributionEnabled: Schema.Boolean.pipe(withDefaults(() => true)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only: the account (provider instance) of `defaultProvider` that new chats
@@ -1709,6 +1712,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     textGenerationModel: settings.textGenerationModelSelection.model,
     sourceControlWritingStyle: settings.sourceControlWritingStyle,
     sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
+    gitAttributionEnabled: settings.gitAttributionEnabled,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -1847,6 +1851,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (patch.sourceControlCustomInstructions !== undefined) {
     serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
+  }
+  if (hasOwn(patch, "gitAttributionEnabled")) {
+    serverPatch.gitAttributionEnabled = Boolean(patch.gitAttributionEnabled);
   }
   if (
     hasOwn(patch, "textGenerationModel") ||

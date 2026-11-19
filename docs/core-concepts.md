@@ -507,6 +507,12 @@ Create PR can include uncommitted changes and create a feature branch from the d
 When you supply a PR title, Synara also uses it as the commit message unless a separate commit
 message was supplied. Providing both the title and description skips text generation for this flow.
 
+By default, a commit Synara creates ends with a `Created-with: Synara` trailer, and a new pull
+request description ends with a "Created with Synara" link. Turn this off with **Add Synara
+attribution** in Settings, or clear the checkbox in the Commit or Create PR dialog for a single
+action. Synara never adds it twice, never edits an existing pull request or commit, and never
+changes branch names; pushing existing commits adds nothing.
+
 Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
 Each action keeps its own error details when you switch workspaces and start another action.
 Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport

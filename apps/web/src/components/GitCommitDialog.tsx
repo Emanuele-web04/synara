@@ -5,7 +5,7 @@
 // Layer: Header action control
 // Depends on: GitActionsControl.logic resolvers and the shared git dialog chrome.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
@@ -22,6 +22,7 @@ import {
   GitDialogActionList,
   GitDialogActionRow,
   GitDialogBody,
+  GitDialogCheckboxRow,
   GitDialogHeading,
   GitDialogShell,
 } from "./GitDialogChrome";
@@ -34,6 +35,8 @@ export interface GitCommitDialogSubmission {
   message: string | null;
   /** null commits every changed file; otherwise only the listed paths. */
   filePaths: string[] | null;
+  /** Add the "Created with Synara" trailer (and PR footer) to this action only. */
+  attribution: boolean;
 }
 
 interface ChangedFile {
@@ -46,6 +49,8 @@ interface GitCommitDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   context: GitDialogContext;
+  /** Attribution checkbox state each time the dialog opens (the app setting). */
+  defaultAttribution: boolean;
   onSubmit: (submission: GitCommitDialogSubmission) => void;
   onOpenFile: (filePath: string) => void;
 }
@@ -54,6 +59,7 @@ export function GitCommitDialog({
   open,
   onOpenChange,
   context,
+  defaultAttribution,
   onSubmit,
   onOpenFile,
 }: GitCommitDialogProps) {
@@ -62,12 +68,16 @@ export function GitCommitDialog({
   const [message, setMessage] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
+  const [attribution, setAttribution] = useState(defaultAttribution);
+  // Seeded only when the dialog opens, so a setting change mid-dialog keeps the user's choice.
+  const readDefaultAttribution = useEffectEvent(() => defaultAttribution);
 
   useEffect(() => {
     if (!open) return;
     setMessage("");
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
+    setAttribution(readDefaultAttribution());
   }, [open]);
 
   const gitStatus = context.gitStatus;
@@ -93,6 +103,7 @@ export function GitCommitDialog({
       featureBranch: action.featureBranch,
       message: message.trim() || null,
       filePaths: allSelected ? null : selectedFiles.map((file) => file.path),
+      attribution,
     });
   };
 
@@ -184,6 +195,14 @@ export function GitCommitDialog({
             </ScrollArea>
           ) : null}
         </div>
+        {/* A pure push only sends existing commits, so there is nothing to attribute. */}
+        {allFiles.length > 0 ? (
+          <GitDialogCheckboxRow
+            checked={attribution}
+            onCheckedChange={setAttribution}
+            label={t("git:addSynaraAttribution")}
+          />
+        ) : null}
       </GitDialogBody>
       <GitDialogActionList>
         {actions.map((action) => (

@@ -1,7 +1,7 @@
 import { MutationObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-const { readWorkingTreeDiff, createDetachedWorktree } = vi.hoisted(() => ({
+const { readWorkingTreeDiff, createDetachedWorktree, runStackedAction } = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
     truncated: false,
@@ -9,9 +9,12 @@ const { readWorkingTreeDiff, createDetachedWorktree } = vi.hoisted(() => ({
   createDetachedWorktree: vi.fn(async (input: { cwd: string; ref: string }) => ({
     worktree: { path: `${input.cwd}-worktree`, branch: null, ref: input.ref },
   })),
+  runStackedAction: vi.fn(async (_input: Record<string, unknown>) => ({ action: "commit" })),
 }));
 vi.mock("../nativeApi", () => ({
-  ensureNativeApi: () => ({ git: { readWorkingTreeDiff, createDetachedWorktree } }),
+  ensureNativeApi: () => ({
+    git: { readWorkingTreeDiff, createDetachedWorktree, runStackedAction },
+  }),
 }));
 import {
   gitQueryKeys,
@@ -74,6 +77,37 @@ describe("git mutation options", () => {
   it("attaches cwd-scoped mutation key for runStackedAction", () => {
     const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
     expect(options.mutationKey).toEqual(gitMutationKeys.runStackedAction("/repo/a"));
+  });
+
+  it.each([true, false])(
+    "forwards an explicit attribution choice (%s) to the server",
+    async (attribution) => {
+      runStackedAction.mockClear();
+      const queryClient = new QueryClient();
+      const mutation = new MutationObserver(
+        queryClient,
+        gitRunStackedActionMutationOptions({ cwd: "/repo/attribution", queryClient }),
+      );
+
+      await mutation.mutate({ actionId: "action-1", action: "commit", attribution });
+
+      expect(runStackedAction).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "/repo/attribution", action: "commit", attribution }),
+      );
+    },
+  );
+
+  it("omits attribution when the caller does not choose, so the server setting applies", async () => {
+    runStackedAction.mockClear();
+    const queryClient = new QueryClient();
+    const mutation = new MutationObserver(
+      queryClient,
+      gitRunStackedActionMutationOptions({ cwd: "/repo/attribution", queryClient }),
+    );
+
+    await mutation.mutate({ actionId: "action-2", action: "commit" });
+
+    expect(runStackedAction.mock.calls[0]?.[0]).not.toHaveProperty("attribution");
   });
 
   it("does not keep a completed stacked action pending while Git queries refresh", async () => {
