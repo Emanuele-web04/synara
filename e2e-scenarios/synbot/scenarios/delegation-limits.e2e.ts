@@ -74,10 +74,12 @@ test("Delegation refuses self, a fifth hand-off in one turn, and a cycle", async
   });
   const five = delegateResults(synbot.log()).slice(1, 6);
   expect(five.map((e) => e.failed)).toEqual([false, false, false, false, true]);
-  await expect(browser.locator("article.baton").filter({ hasText: /LIMITS five-/ })).toHaveCount(
-    4,
-    { timeout: 30_000 },
-  );
+  // A finished baton folds and hides its brief, so count the batons by their target's name.
+  await expect(
+    browser
+      .locator("article.baton")
+      .filter({ hasText: new RegExp(`(Alpha|Beta|Gamma|Delta) ${stamp}`) }),
+  ).toHaveCount(4, { timeout: 30_000 });
   const fiveReport = browser.locator("article.report").filter({ hasText: delta!.name }).last();
   await expect(fiveReport).toBeVisible({ timeout: 90_000 });
   await expect(fiveReport).toContainText("4 delegations");

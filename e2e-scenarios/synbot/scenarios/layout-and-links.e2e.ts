@@ -30,7 +30,14 @@ test("SynBot at phone width has no horizontal scroll and keeps the composer usab
   expect(overflow).toBeLessThanOrEqual(0);
   await expect(screen.getByTestId("composer-editor")).toBeVisible();
   await synbot.open(bot);
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
   await app.screenshot("phone-bot");
+  // The chat's controls (approval, engine) sit whole beside the name pill, not clipped.
+  const clipped = await browser.evaluate(() => {
+    const controls = document.querySelector(".thread-controls");
+    return controls ? controls.scrollWidth - controls.clientWidth : -1;
+  });
+  expect(clipped).toBeLessThanOrEqual(0);
   await browser.setViewport({ width: 1440, height: 900 });
 });
 
