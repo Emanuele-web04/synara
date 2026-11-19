@@ -432,7 +432,6 @@ export function AppearanceSettingsView(binding: AppSettingsBinding) {
         <SettingsRow
           id="setting-chat-width"
           title="settings:chatWidth"
-          description="settings:controlHowWideTheChatColumnGrowsWideAnd"
           resetAction={
             settings.chatWidth !== defaults.chatWidth ? (
               <SettingResetButton

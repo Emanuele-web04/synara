@@ -34,6 +34,7 @@ const settingsSelectOptionClassName = `[&>svg]:-mx-0.5 flex cursor-default selec
 const SelectPopupSurfaceContext = React.createContext<SelectPopupSurface>("composer");
 
 // Keep neutral select chrome on the same token families Codex uses for menus and list hover.
+// Exported at the bottom so menu-based pickers (e.g. the theme flyout) reuse identical trigger chrome.
 const selectTriggerVariants = cva(
   "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-md text-left text-ui outline-none transition-[color,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-ui [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
   {
@@ -161,10 +162,6 @@ function SelectPopup({
       ? cn(
           APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
           cn(SETTINGS_POPUP_SURFACE_CLASS_NAME, "rounded-lg"),
-          // Same chrome as the other opaque select popups (autocomplete/combobox):
-          // a shadow-lg drop plus a one-pixel edge highlight that keeps the solid
-          // surface lifted off the settings card behind it in both schemes.
-          "shadow-lg/5 inset-shadow-[0_1px_--theme(--color-black/4%)] dark:inset-shadow-[0_-1px_--theme(--color-white/6%)]",
         )
       : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
     shellClassName,

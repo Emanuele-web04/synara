@@ -133,7 +133,6 @@ export function AboutSettingsSection(props: { onOpenReleaseHistory: () => void }
       <SettingsRow
         id="setting-version"
         title="settings:advanced_version"
-        description="settings:advanced_versionDescription"
         control={
           <code className="text-ui leading-snug font-medium text-muted-foreground">
             {APP_VERSION}

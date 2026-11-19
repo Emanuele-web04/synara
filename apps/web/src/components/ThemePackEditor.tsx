@@ -186,6 +186,7 @@ export function ThemePackEditor({
           >
             <SelectTrigger
               size="sm"
+              variant="ghost"
               className={cn(
                 SETTINGS_CONTROL_RADIUS_CLASS_NAME,
                 "ml-1 min-w-0 flex-1 gap-2 sm:min-w-52 sm:flex-none",

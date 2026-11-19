@@ -34,13 +34,13 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     target: "setting-project-order",
     section: "layout",
     title: "settings:general_projectOrder",
-    description: "settings:controlsHowProjectsAreArrangedInTheMainSidebar",
+    description: "",
   },
   {
     target: "setting-thread-order",
     section: "layout",
     title: "settings:general_threadOrder",
-    description: "settings:controlsHowThreadsAreArrangedInsideEachProjectIn",
+    description: "",
   },
   {
     target: "setting-working-and-unread-on-top",
@@ -208,7 +208,7 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     target: "setting-chat-width",
     section: "appearance",
     title: "settings:chatWidth",
-    description: "settings:controlHowWideTheChatColumnGrowsWideAnd",
+    description: "",
   },
   {
     target: "setting-base-font-size",
@@ -418,7 +418,7 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     target: "setting-version",
     section: "about",
     title: "settings:advanced_version",
-    description: "settings:advanced_versionDescription",
+    description: "",
   },
   {
     target: "setting-release-history",

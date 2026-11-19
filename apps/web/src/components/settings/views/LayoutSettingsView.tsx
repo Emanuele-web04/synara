@@ -36,7 +36,6 @@ export function LayoutSettingsView(binding: AppSettingsBinding) {
         <SettingsRow
           id="setting-project-order"
           title="settings:general_projectOrder"
-          description="settings:controlsHowProjectsAreArrangedInTheMainSidebar"
           resetAction={
             settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
               <SettingResetButton
@@ -77,7 +76,6 @@ export function LayoutSettingsView(binding: AppSettingsBinding) {
         <SettingsRow
           id="setting-thread-order"
           title="settings:general_threadOrder"
-          description="settings:controlsHowThreadsAreArrangedInsideEachProjectIn"
           resetAction={
             settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
               <SettingResetButton

@@ -517,6 +517,7 @@
   "userInputRequested": "User input requested.",
   "working2": "Working · {{elapsed}}",
   "codeTheme": "{{value0}} code theme",
+  "codeThemes": "Code themes",
   "symbol7": "{{value0}}.{{value1}}",
   "backgroundTaskFailed": "Background task failed",
   "branchTagOrCommit": "Branch, tag, or commit",

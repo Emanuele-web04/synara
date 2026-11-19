@@ -372,8 +372,6 @@ export function ProviderUsageSettingsPanel() {
 
   return (
     <>
-      {/* Presentation preferences belong to the controlling app, not the selected host. */}
-      {!readWorkspaceFrame() ? appUsageSettings : null}
       <SettingsSectionShell
         title="settings:providerUsage"
         action={
@@ -420,6 +418,8 @@ export function ProviderUsageSettingsPanel() {
           {t("settings:usageIsReadLocallyFromEachProviderCLIS")}
         </p>
       </SettingsSectionShell>
+      {/* Presentation preferences belong to the controlling app, not the selected host. */}
+      {!readWorkspaceFrame() ? appUsageSettings : null}
     </>
   );
 }

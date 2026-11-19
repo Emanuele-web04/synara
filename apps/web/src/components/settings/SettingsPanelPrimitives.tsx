@@ -293,7 +293,7 @@ export function SettingsRow({
   title: ReactNode;
   /** Stable navigation target, independent of display copy and locale. */
   id?: string;
-  description: string;
+  description?: string;
   status?: ReactNode;
   resetAction?: ReactNode;
   control?: ReactNode;
@@ -323,7 +323,9 @@ export function SettingsRow({
               {resetAction}
             </span>
           </div>
-          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{t(description)}</p>
+          {description != null ? (
+            <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{t(description)}</p>
+          ) : null}
           {status ? <div className="pt-1 text-ui-sm text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (

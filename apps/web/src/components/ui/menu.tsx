@@ -1,12 +1,14 @@
 "use client";
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { SETTINGS_POPUP_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { ChevronRightIcon } from "~/lib/icons";
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
 import { observeNativeSurfaceOverlay } from "~/lib/nativeSurfaceOcclusion";
 import {
+  APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
   APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
@@ -86,7 +88,8 @@ function MenuPopupBase({
    *  a side-placed menu); pass `{ fallbackAxisSide: "end" }` for side-placed root menus so
    *  they drop below the anchor when neither side fits. */
   collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
-  surface?: "default" | "composer";
+  /** `settings` matches the settings select popup (solid surface, settings radius chrome). */
+  surface?: "default" | "composer" | "settings";
   pickerSize?: "small" | "normal" | undefined;
 }) {
   const surface = surfaceProp ?? "default";
@@ -96,7 +99,13 @@ function MenuPopupBase({
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
-      : APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME;
+      : surface === "settings"
+        ? cn(
+            APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+            cn(SETTINGS_POPUP_SURFACE_CLASS_NAME, "rounded-lg"),
+            "shadow-lg/5 inset-shadow-[0_1px_--theme(--color-black/4%)] dark:inset-shadow-[0_-1px_--theme(--color-white/6%)]",
+          )
+        : APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME;
 
   const isComposerSurface = surface === "composer";
 
@@ -487,7 +496,7 @@ function MenuSubPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   /** Cascade direction; `inline-start` when the parent menu already opened toward the start. */
   side?: "inline-end" | "inline-start";
-  surface?: "default" | "composer";
+  surface?: "default" | "composer" | "settings";
   pickerSize?: "small" | "normal";
 }) {
   const surface = surfaceProp ?? "default";
