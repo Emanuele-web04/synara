@@ -63,9 +63,15 @@ export interface AcpAgentRuntimeSettings extends AcpAgentBoundary {
   readonly models?: ReadonlyArray<AcpAgentModel>;
 }
 
-export function acpAgentIsolatesInstance(boundary: AcpAgentBoundary): boolean {
+export function acpAgentIsolatesInstance(
+  boundary: AcpAgentBoundary,
+  defaultInstanceId = "acp",
+): boolean {
   const instanceId = boundary.instanceId?.trim();
-  return boundary.environment !== undefined || (instanceId !== undefined && instanceId !== "acp");
+  return (
+    boundary.environment !== undefined ||
+    (instanceId !== undefined && instanceId !== defaultInstanceId)
+  );
 }
 
 function acpInstanceProcessEnv(boundary: AcpAgentBoundary): NodeJS.ProcessEnv {
@@ -90,14 +96,17 @@ export function buildAcpAgentProcessEnv(boundary: AcpAgentBoundary): NodeJS.Proc
 }
 
 /** Stable discovery-cache scope for one ACP instance. */
-export function acpInstanceCacheScope(boundary: AcpAgentBoundary): string {
-  if (!acpAgentIsolatesInstance(boundary)) return "";
+export function acpInstanceCacheScope(
+  boundary: AcpAgentBoundary,
+  defaultInstanceId = "acp",
+): string {
+  if (!acpAgentIsolatesInstance(boundary, defaultInstanceId)) return "";
   const environment = Object.entries(boundary.environment ?? {}).toSorted(([left], [right]) =>
     left.localeCompare(right),
   );
   // Hashed: selected environments can carry credentials and cache keys are logged.
   return createHash("sha256")
-    .update(JSON.stringify([boundary.instanceId?.trim() ?? "acp", environment]))
+    .update(JSON.stringify([boundary.instanceId?.trim() ?? defaultInstanceId, environment]))
     .digest("hex");
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveAcpPromptImageMode } from "./AcpAdapter.ts";
+import { resolveAcpPromptImageMode } from "./AcpAdapterCore.ts";
 
 describe("resolveAcpPromptImageMode", () => {
   it("sends image blocks only when the agent advertises image prompt support", () => {
