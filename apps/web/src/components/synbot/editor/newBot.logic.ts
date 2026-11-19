@@ -4,11 +4,52 @@
 //          row's value, and how picking a project changes where the bot starts.
 // Layer: Web domain logic (no React, no I/O)
 // Exports: NewBotStep, newBotSteps, newBotStepIssue, projectsSummary, toggleBotProject,
-//          chooseAllProjects
+//          chooseAllProjects, newBotEngineProvider
 
-import type { ProjectId } from "@synara/contracts";
+import type { ProjectId, ProviderKind } from "@synara/contracts";
+
+import { compareProvidersByOrder, isProviderKind } from "~/providerOrdering";
 
 import { botEditorIssue, type BotEditorForm, type BotEditorIssue } from "./botEditor.logic";
+
+/**
+ * The provider a new bot starts on. The preferred one (the new-chat default) stays while this
+ * Synara can run it, or while its status is not known yet. Otherwise it is the first provider in
+ * the user's order that is available, not hidden, and has a default model, so Create never
+ * defaults to an engine the server refuses. With none, the preferred one stays.
+ */
+export function newBotEngineProvider(input: {
+  readonly preferred: ProviderKind;
+  readonly statuses: ReadonlyArray<{
+    readonly provider: string;
+    readonly driver?: string | undefined;
+    readonly available: boolean;
+  }>;
+  readonly hiddenProviders: ReadonlyArray<string>;
+  readonly providerOrder: ReadonlyArray<ProviderKind>;
+  readonly hasDefaultModel: (provider: ProviderKind) => boolean;
+}): ProviderKind {
+  const hidden = new Set(input.hiddenProviders);
+  const kindOf = (status: (typeof input.statuses)[number]) => status.driver ?? status.provider;
+  const preferred = input.statuses.filter((status) => kindOf(status) === input.preferred);
+  if (
+    preferred.length === 0 ||
+    (!hidden.has(input.preferred) && preferred.some((status) => status.available))
+  ) {
+    return input.preferred;
+  }
+  const available = new Set<ProviderKind>();
+  for (const status of input.statuses) {
+    const kind = kindOf(status);
+    if (!isProviderKind(kind) || hidden.has(kind) || !status.available) continue;
+    if (input.hasDefaultModel(kind)) available.add(kind);
+  }
+  return (
+    [...available].toSorted((left, right) =>
+      compareProvidersByOrder(input.providerOrder, left, right),
+    )[0] ?? input.preferred
+  );
+}
 
 export type NewBotStep = "computer" | "bot" | "start";
 

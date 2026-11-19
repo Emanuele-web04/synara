@@ -33,7 +33,8 @@ The SynBot page takes HoloBot's layout inside Synara's window:
 - **Sidebar panel.** SynBot (with its star) and pinned bots as tiles, then **My bots**: one row
   per bot with its last message and time, amber while it waits on you, blue while it works.
   Right-click a bot for **Open**, **Edit**, **Pin**/**Unpin**, **Stop** (while it works or waits)
-  and **Remove** (asks first); the desktop app shows its native menu. **New bot** and **Stop
+  and **Remove** (asks first; owner sessions only, since it deletes the bot's Hub); the desktop
+  app shows its native menu. **New bot** and **Stop
   all** sit at the bottom.
 - **Thread.** The selected bot's chat as a messaging thread: your words on the right (in the
   bot's color in a bot's chat), the bot's replies on the left, a date over each new stretch, and
@@ -68,9 +69,10 @@ A window closed on the SynBot page reopens there, on the same bot.
    asked again, a turn hands out at most 4 pieces of work, each bot runs one task at a time, and
    at most 3 tasks run at once across all bots (Settings → SynBot → Parallel tasks, 1–8).
 3. Bot chats are read-only: edits happen in tasks, which run in their own worktree.
-4. When the work settles, the bot that asked gets a report and gives you one recap. Settings →
-   SynBot → Recap chooses one recap per request (default) or one line per task. Failures are
-   reported at once.
+4. When the work settles, the bot that asked gets a report and gives you one recap. Work a bot
+   handed on is part of its own: it reports back to that bot first, so the asker hears the end
+   of the chain. Settings → SynBot → Recap chooses one recap per request (default) or one line
+   per task. Failures are reported at once; removing a bot fails the work handed to it.
 
 Bots remember facts and preferences in their memory. SynBot's memory is global, and SynBot reads
 every bot's memory index to route work.
@@ -90,7 +92,7 @@ messages authorize merges, new bots or scope changes.
 
 Off by default (Settings → SynBot → **Merge proof**). When on, a task with a pull request shows
 **Merge it?** in its side panel. Merge is enabled only when the required checks are green on the
-current head and the branch is up to date with its base; **Update branch** brings it up to date
+current head, the branch is up to date with its base and the whole diff could be read; **Update branch** brings it up to date
 first. Red flags from the diff (tests removed or skipped, assertions removed, failures ignored,
 CI test steps removed) are always shown. A bot never merges: only your press does.
 

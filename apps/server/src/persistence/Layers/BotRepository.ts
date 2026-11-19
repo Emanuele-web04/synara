@@ -280,6 +280,12 @@ export const makeBotRepository = Effect.gen(function* () {
             WHERE from_thread_id = ${input.fromThreadId} AND from_turn_id = ${input.fromTurnId}
             ORDER BY created_at`
       ).pipe(Effect.flatMap(delegations), Effect.mapError(storageError)),
+    listDelegationsFromThread: (input) =>
+      sql<DelegationRow>`
+        SELECT ${delegationColumns} FROM bot_delegations
+        WHERE from_thread_id = ${input.fromThreadId} AND created_at >= ${input.since}
+        ORDER BY created_at
+      `.pipe(Effect.flatMap(delegations), Effect.mapError(storageError)),
     listDelegationsByReportMessage: (messageId) =>
       sql<DelegationRow>`
         SELECT ${delegationColumns} FROM bot_delegations

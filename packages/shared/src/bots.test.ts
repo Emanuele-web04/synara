@@ -64,6 +64,11 @@ describe("bot scope paths", () => {
     expect(botScopePathMatches("a.test.ts", ["**/*.test.ts"])).toBe(true);
     expect(botScopePathMatches("src/deep/a.ts", ["src/*.ts"])).toBe(false);
     expect(botScopePathMatches("anything", [])).toBe(true);
+    // A leading "./" on either side names the same place.
+    expect(botScopePathMatches("apps/web/a.ts", ["./apps/web"])).toBe(true);
+    expect(botScopePathMatches("apps/web/a.ts", ["./apps/web/**"])).toBe(true);
+    expect(botScopePathMatches("./apps/web/a.ts", ["apps/web"])).toBe(true);
+    expect(botScopePathMatches("apps/server/a.ts", ["./apps/web"])).toBe(false);
   });
 
   it("lists the files outside the scope", () => {

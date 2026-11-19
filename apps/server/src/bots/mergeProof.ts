@@ -108,12 +108,15 @@ const FAILING_CHECK_STATES = new Set(["failure", "cancelled"]);
  * Builds the proof from a fresh PR detail and its patch. `ready` requires: open and not a draft,
  * at least one check, every check settled with none failing (GitHub's UNSTABLE — non-required
  * checks failing — still blocks: the rule is green on the current head), not behind its base,
- * no conflicts.
+ * no conflicts, a known head commit (Merge pins the head the user saw), and the whole patch
+ * read (red flags cannot be ruled out in a patch that failed to load or was cut short).
  */
 export function evaluateMergeProof(input: {
   readonly threadId: ThreadId;
   readonly detail: PullRequestDetail;
   readonly patch: string;
+  /** False when the patch could not be read or was truncated. */
+  readonly patchComplete: boolean;
   readonly checkedAt: string;
 }): BotMergeProof {
   const { detail } = input;
@@ -134,7 +137,10 @@ export function evaluateMergeProof(input: {
   const conflicts = mergeState === "DIRTY" || detail.mergeability === "conflicting";
   const state: BotMergeProof["state"] =
     detail.state === "merged" ? "merged" : detail.state === "closed" ? "closed" : "open";
+  const headSha = detail.commits.at(-1)?.oid;
   const ready =
+    headSha !== undefined &&
+    input.patchComplete &&
     state === "open" &&
     !detail.isDraft &&
     checks === "passing" &&
@@ -146,7 +152,7 @@ export function evaluateMergeProof(input: {
     threadId: input.threadId,
     prNumber: detail.number,
     prUrl: detail.url,
-    headSha: detail.commits.at(-1)?.oid ?? "unknown",
+    headSha: headSha ?? "unknown",
     baseBranch: detail.baseBranch,
     state,
     checks,

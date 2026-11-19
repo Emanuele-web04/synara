@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   BOT_DELEGATION_MESSAGE_PREFIX,
+  BotCard,
   BOT_REPORT_MESSAGE_PREFIX,
   DEFAULT_PROJECT_AGENT_LIMITS,
   DEFAULT_SERVER_SETTINGS,
@@ -9,11 +10,13 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type HubWorkRecord,
   type ModelSelection,
   type OrchestrationCommand,
   type ProjectAgentConfig,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -24,6 +27,7 @@ import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepositor
 import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BotRepository } from "../../persistence/Services/BotRepository.ts";
+import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -82,7 +86,33 @@ function makeWorld() {
     turns.set(fixture.threadId, []);
     messages.set(fixture.threadId, []);
   }
-  return { dispatched, turns, messages, shells };
+  /** Holds the settle sweep inside its read of one thread's turns, to order it against Stop. */
+  const gate: {
+    current: {
+      readonly threadId: ThreadId;
+      readonly reached: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    } | null;
+  } = { current: null };
+  /** Turn starts fail while set, as when the engine cannot take the command. */
+  const failTurnStarts = { current: false };
+  /**
+   * The projection's pending turn start per thread: one slot, as in ProjectionTurns. Dispatched
+   * turn starts fill it only while `projectPendingStarts` is set; a test clears it the way a
+   * provider turn that starts running does.
+   */
+  const pendingStarts = new Map<string, string>();
+  const projectPendingStarts = { current: false };
+  return {
+    dispatched,
+    turns,
+    messages,
+    shells,
+    gate,
+    failTurnStarts,
+    pendingStarts,
+    projectPendingStarts,
+  };
 }
 
 type World = ReturnType<typeof makeWorld>;
@@ -100,7 +130,12 @@ function makeLayer(world: World) {
         Option.some({
           id: threadId,
           messages: world.messages.get(threadId) ?? [],
-          activities: [],
+          // The activities the service appended to this thread, as the projection would hold them.
+          activities: world.dispatched.flatMap((command) =>
+            command.type === "thread.activity.append" && command.threadId === threadId
+              ? [command.activity]
+              : [],
+          ),
         }) as never,
       ),
     getProjectShellById: () => Effect.succeed(Option.none()),
@@ -109,7 +144,21 @@ function makeLayer(world: World) {
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turnsLayer = Layer.succeed(ProjectionTurnRepository, {
     listByThreadId: (input: { threadId: string }) =>
-      Effect.succeed(world.turns.get(input.threadId) ?? []),
+      Effect.gen(function* () {
+        const gate = world.gate.current;
+        if (gate && gate.threadId === input.threadId) {
+          yield* Deferred.succeed(gate.reached, undefined);
+          yield* Deferred.await(gate.release);
+        }
+        return world.turns.get(input.threadId) ?? [];
+      }),
+    getPendingTurnStartByThreadId: (input: { threadId: string }) =>
+      Effect.sync(() => {
+        const messageId = world.pendingStarts.get(input.threadId);
+        return messageId === undefined
+          ? Option.none()
+          : Option.some({ threadId: input.threadId, messageId } as never);
+      }),
     getByTurnId: (input: { threadId: string; turnId: string }) =>
       Effect.succeed(
         Option.fromNullishOr(
@@ -121,10 +170,15 @@ function makeLayer(world: World) {
   } as unknown as ProjectionTurnRepository["Service"]);
   const engine = Layer.succeed(OrchestrationEngineService, {
     dispatch: (command: OrchestrationCommand) =>
-      Effect.sync(() => {
-        world.dispatched.push(command);
-        return { sequence: world.dispatched.length };
-      }),
+      command.type === "thread.turn.start" && world.failTurnStarts.current
+        ? Effect.fail({ _tag: "EngineUnavailable", message: "The engine is busy." })
+        : Effect.sync(() => {
+            world.dispatched.push(command);
+            if (command.type === "thread.turn.start" && world.projectPendingStarts.current) {
+              world.pendingStarts.set(command.threadId, command.message.messageId);
+            }
+            return { sequence: world.dispatched.length };
+          }),
   } as unknown as OrchestrationEngineService["Service"]);
   const projectAgent = Layer.succeed(ProjectAgentService, {
     streamWorkItemEvents: () => Stream.never,
@@ -145,6 +199,7 @@ function makeLayer(world: World) {
     Layer.provide(
       Layer.succeed(ProviderHealth, {
         getStatuses: Effect.succeed([]),
+        refresh: Effect.succeed([]),
       } as unknown as ProviderHealth["Service"]),
     ),
     Layer.provide(Layer.succeed(GitCore, {} as unknown as GitCore["Service"])),
@@ -296,6 +351,49 @@ it.effect("delegates from a user request with provenance, then settles and repor
   }).pipe(Effect.provide(makeLayer(world)));
 });
 
+it.effect("starts a second hand-off to one bot only after the first turn start is taken", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    world.projectPendingStarts.current = true;
+    const bots = yield* BotService;
+    const caller = yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" });
+    assert.ok(caller);
+
+    const first = yield* bots.delegate({
+      caller,
+      targetBotId: FRONTEND.projectId,
+      brief: "Part one",
+      requestId: "part-1",
+    });
+    const firstMessageId = `${BOT_DELEGATION_MESSAGE_PREFIX}${first.id}`;
+    assert.strictEqual(world.pendingStarts.get(FRONTEND.threadId), firstMessageId);
+
+    // While the first start still holds the thread's pending slot, starting the second would
+    // replace it and attribute the first turn to the second message: the second waits.
+    const second = yield* Effect.forkChild(
+      bots.delegate({
+        caller,
+        targetBotId: FRONTEND.projectId,
+        brief: "Part two",
+        requestId: "part-2",
+      }),
+    );
+    yield* TestClock.adjust("500 millis");
+    assert.strictEqual(turnStarts(world, FRONTEND.threadId).length, 1);
+
+    // The first turn starts running, which clears the slot; the second start goes out.
+    world.pendingStarts.delete(FRONTEND.threadId);
+    yield* TestClock.adjust("100 millis");
+    const secondDelegation = yield* Fiber.join(second);
+    assert.deepStrictEqual(
+      turnStarts(world, FRONTEND.threadId).map((start) => start.message.messageId as string),
+      [firstMessageId, `${BOT_DELEGATION_MESSAGE_PREFIX}${secondDelegation.id}`],
+    );
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
 it.effect("enforces the chain rules and asks before starting when the bot says so", () => {
   const world = makeWorld();
   return Effect.gen(function* () {
@@ -423,5 +521,434 @@ it.effect("stops one bot's turn and the work handed to it, or every bot", () => 
     const all = yield* bots.stopAll();
     assert.deepStrictEqual(all.cancelledDelegationIds, [toQa.id]);
     assert.include(all.interruptedThreadIds, MAIN.threadId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+/** A task of Frontend's as its Hub stores it. */
+function frontendTask(
+  id: string,
+  taskIndex: number,
+  state: HubWorkRecord["state"],
+  workerThreadId: ThreadId | null,
+): HubWorkRecord {
+  return {
+    id,
+    projectId: FRONTEND.projectId,
+    targetProjectId: FRONTEND.projectId,
+    sourceThreadId: FRONTEND.threadId,
+    sourceMessageId: null,
+    title: `Task ${id}`,
+    workerThreadId,
+    state,
+    queueReason: null,
+    resultSummary: null,
+    progress: null,
+    requestId: "frontend-work",
+    scopeKey: "frontend-source",
+    fingerprint: "frontend-plan",
+    taskIndex,
+    creationSpec: { prompt: `Task ${id}`, target: model },
+    sourceMessages: [],
+    slotHeld: workerThreadId !== null,
+    admittedAt: workerThreadId === null ? null : now,
+    admissionCommandId: null,
+    admissionMessageId: null,
+    admissionPreviousState: null,
+    admissionPreviousSlotHeld: false,
+    revision: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+const interruptedThreads = (world: World) =>
+  world.dispatched.flatMap((command) =>
+    command.type === "thread.turn.interrupt" ? [command.threadId] : [],
+  );
+
+it.effect("stops a bot's tasks, the one waiting on the user included", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    const waitingWorker = ThreadId.makeUnsafe("worker-waiting");
+    const workingWorker = ThreadId.makeUnsafe("worker-working");
+    yield* (yield* HubWorkRepository).submit({
+      projectId: FRONTEND.projectId,
+      requestId: "frontend-work",
+      scopeKey: "frontend-source",
+      fingerprint: "frontend-plan",
+      records: [
+        frontendTask("work-waiting", 0, "waiting", waitingWorker),
+        frontendTask("work-working", 1, "working", workingWorker),
+        frontendTask("work-done", 2, "completed", ThreadId.makeUnsafe("worker-done")),
+      ],
+    });
+    const bots = yield* BotService;
+    // A task waiting on an approval makes the bot wait on the user: the UI offers Stop.
+    const before = yield* bots.snapshot();
+    assert.strictEqual(before.bots.find((bot) => bot.id === FRONTEND.projectId)?.status, "waiting");
+
+    const stopped = yield* bots.stopAll({ botId: FRONTEND.projectId });
+    assert.sameMembers([...stopped.interruptedThreadIds], [waitingWorker, workingWorker]);
+    assert.sameMembers(interruptedThreads(world), [waitingWorker, workingWorker]);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("cancelling a hand-off stops its task even while it waits on the user", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const waitingWorker = ThreadId.makeUnsafe("worker-waiting");
+    yield* (yield* HubWorkRepository).submit({
+      projectId: FRONTEND.projectId,
+      requestId: "frontend-work",
+      scopeKey: "frontend-source",
+      fingerprint: "frontend-plan",
+      records: [frontendTask("work-waiting", 0, "waiting", waitingWorker)],
+    });
+    const bots = yield* BotService;
+    const caller = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const delegation = yield* bots.delegate({
+      caller,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply()",
+      requestId: "frontend",
+    });
+    // Frontend started the task for this hand-off; the task now waits on an approval.
+    const repository = yield* BotRepository;
+    const record = (yield* repository.getDelegation(delegation.id))!;
+    yield* repository.saveDelegation({ ...record, state: "waiting", taskIds: ["work-waiting"] });
+
+    const cancelled = yield* bots.cancelDelegation({ delegationId: delegation.id });
+    assert.strictEqual(cancelled.state, "cancelled");
+    assert.include(interruptedThreads(world), waitingWorker);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+/** A turn in a bot's thread, started by `pendingMessageId`; a reply when it has completed. */
+function putTurn(
+  world: World,
+  threadId: ThreadId,
+  turnId: string,
+  pendingMessageId: string,
+  reply: string | null,
+) {
+  const turns = world.turns.get(threadId)!;
+  const index = turns.findIndex((turn) => turn.turnId === turnId);
+  const assistantMessageId = reply === null ? null : MessageId.makeUnsafe(`reply-${turnId}`);
+  if (reply !== null) {
+    world.messages.get(threadId)!.push({
+      id: assistantMessageId,
+      role: "assistant",
+      text: reply,
+      turnId: TurnId.makeUnsafe(turnId),
+      streaming: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const next = {
+    threadId,
+    turnId: TurnId.makeUnsafe(turnId),
+    pendingMessageId: MessageId.makeUnsafe(pendingMessageId),
+    state: reply === null ? "running" : "completed",
+    requestedAt: now,
+    completedAt: reply === null ? null : now,
+    assistantMessageId,
+  };
+  if (index === -1) turns.push(next);
+  else turns[index] = next;
+}
+
+const delegationMessage = (delegationId: string) =>
+  `${BOT_DELEGATION_MESSAGE_PREFIX}${delegationId}`;
+
+const reportsTo = (world: World, threadId: ThreadId) =>
+  turnStarts(world, threadId).filter((command) =>
+    command.message.messageId.startsWith(BOT_REPORT_MESSAGE_PREFIX),
+  );
+
+it.effect("reports a hand-off only once the work its bot handed on has come back", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply() and have it tested",
+      requestId: "frontend",
+    });
+    // Frontend's turn hands the testing on to QA, then ends.
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(toFrontend.id), null);
+    const frontend = (yield* bots.resolveCaller({
+      threadId: FRONTEND.threadId,
+      turnId: "turn-frontend",
+    }))!;
+    const toQa = yield* bots.delegate({
+      caller: frontend,
+      targetBotId: QA.projectId,
+      brief: "Test multiply()",
+      requestId: "qa",
+    });
+    assert.strictEqual(toQa.depth, 2);
+    putTurn(
+      world,
+      FRONTEND.threadId,
+      "turn-frontend",
+      delegationMessage(toFrontend.id),
+      "QA is on it.",
+    );
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0, "Frontend only handed the work on");
+
+    // QA finishes: its report wakes Frontend, and SynBot still waits.
+    putTurn(world, QA.threadId, "turn-qa", delegationMessage(toQa.id), "3 of 3 tests pass.");
+    yield* bots.evaluateDelegations({});
+    const toFrontendReport = reportsTo(world, FRONTEND.threadId);
+    assert.lengthOf(toFrontendReport, 1);
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0, "the report has not woken Frontend yet");
+
+    // Frontend answers QA's report: SynBot gets one report, with that answer.
+    putTurn(
+      world,
+      FRONTEND.threadId,
+      "turn-frontend-report",
+      toFrontendReport[0]!.message.messageId,
+      "multiply() is in, and QA passed it.",
+    );
+    yield* bots.evaluateDelegations({});
+    yield* bots.evaluateDelegations({});
+    const toMain = reportsTo(world, MAIN.threadId);
+    assert.lengthOf(toMain, 1);
+    assert.include(toMain[0]!.message.text, "multiply() is in, and QA passed it.");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("a Stop pressed while the settle sweep reads the hand-off stays stopped", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const delegation = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply()",
+      requestId: "frontend",
+    });
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(delegation.id), null);
+    world.shells.set(FRONTEND.threadId, {
+      ...world.shells.get(FRONTEND.threadId),
+      session: { activeTurnId: TurnId.makeUnsafe("turn-frontend") },
+    });
+
+    // The sweep reads the hand-off as running, and is held there.
+    const reached = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    world.gate.current = { threadId: FRONTEND.threadId, reached, release };
+    const sweep = yield* Effect.forkChild(bots.evaluateDelegations({}));
+    yield* Deferred.await(reached);
+    world.gate.current = null;
+    // The user presses Stop meanwhile; the sweep then finishes with what it read.
+    const stop = yield* Effect.forkChild(bots.cancelDelegation({ delegationId: delegation.id }));
+    for (let step = 0; step < 20; step += 1) yield* Effect.yieldNow;
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(sweep);
+    const stopped = yield* Fiber.join(stop);
+
+    assert.strictEqual(stopped.state, "cancelled");
+    const snapshot = yield* bots.snapshot();
+    assert.strictEqual(
+      snapshot.delegations.find((entry) => entry.id === delegation.id)?.state,
+      "cancelled",
+    );
+    assert.include(interruptedThreads(world), FRONTEND.threadId);
+    // Stopped by the user: SynBot is not woken.
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("a hand-off whose delivery failed is delivered when the bot asks again", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const ask = bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply()",
+      requestId: "frontend",
+    });
+    world.failTurnStarts.current = true;
+    yield* Effect.flip(ask);
+    assert.lengthOf(turnStarts(world, FRONTEND.threadId), 0);
+
+    world.failTurnStarts.current = false;
+    const retried = yield* ask;
+    assert.lengthOf(turnStarts(world, FRONTEND.threadId), 1);
+    assert.strictEqual(retried.state, "sent");
+    assert.isNotNull(retried.startedAt);
+    // Once delivered, asking again changes nothing.
+    yield* ask;
+    assert.lengthOf(turnStarts(world, FRONTEND.threadId), 1);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("removing a bot fails the work handed to it back to the asker", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    // QA asks before starting, so this hand-off waits for a Start that will never come.
+    const toQa = yield* bots.delegate({
+      caller: main,
+      targetBotId: QA.projectId,
+      brief: "Review the change",
+      requestId: "qa",
+    });
+    assert.strictEqual(toQa.state, "awaiting-start");
+
+    yield* bots.remove({ id: QA.projectId });
+    const snapshot = yield* bots.snapshot();
+    const ended = snapshot.delegations.find((entry) => entry.id === toQa.id);
+    assert.strictEqual(ended?.state, "failed");
+    assert.strictEqual(ended?.resultSummary, "QA was removed.");
+    const reports = reportsTo(world, MAIN.threadId);
+    assert.lengthOf(reports, 1, "SynBot is told");
+    assert.notOk(snapshot.bots.some((bot) => bot.id === QA.projectId));
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("stopping a hand-off leaves the target's unrelated turn running", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const delegation = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply()",
+      requestId: "frontend",
+    });
+    // The user chats with Frontend directly; the hand-off's message waits in its queue.
+    putTurn(world, FRONTEND.threadId, "turn-own", "msg-own", null);
+    world.shells.set(FRONTEND.threadId, {
+      ...world.shells.get(FRONTEND.threadId),
+      session: { activeTurnId: TurnId.makeUnsafe("turn-own") },
+    });
+
+    const stopped = yield* bots.cancelDelegation({ delegationId: delegation.id });
+    assert.strictEqual(stopped.state, "cancelled");
+    assert.notInclude(interruptedThreads(world), FRONTEND.threadId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("a Start card stays answerable however long the names and the brief", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const longName = { ...main, bot: { ...main.bot, name: "N".repeat(200) } };
+    const asked = yield* bots.delegate({
+      caller: longName,
+      targetBotId: QA.projectId,
+      brief: "Review ".repeat(100),
+      requestId: "qa",
+    });
+    const cardId = `synbot:card:start:${asked.id}`;
+    const posted = world.dispatched.find(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        (command.activity.payload as { id?: string }).id === cardId,
+    );
+    assert.ok(posted?.type === "thread.activity.append");
+    const card = Schema.decodeUnknownSync(BotCard)(posted.activity.payload);
+    assert.isAtMost(card.title.length, 400);
+
+    const answer = yield* bots.cardAction({ threadId: QA.threadId, cardId, optionId: "start" });
+    assert.strictEqual(answer.optionId, "start");
+    assert.lengthOf(turnStarts(world, QA.threadId), 1, "Start delivers the hand-off");
+    world.dispatched.push({
+      type: "thread.activity.append",
+      threadId: QA.threadId,
+      activity: {
+        id: `${cardId}:resolved`,
+        kind: "synbot.card.resolved",
+        payload: { cardId },
+      },
+    } as unknown as OrchestrationCommand);
+    const again = yield* Effect.flip(
+      bots.cardAction({ threadId: QA.threadId, cardId, optionId: "not-now" }),
+    );
+    assert.strictEqual(again.code, "conflict");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("Not now on a Start card stops the hand-off without waking the asker", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const asked = yield* bots.delegate({
+      caller: main,
+      targetBotId: QA.projectId,
+      brief: "Review the change",
+      requestId: "qa",
+    });
+    const cardId = `synbot:card:start:${asked.id}`;
+    const unknown = yield* Effect.flip(
+      bots.cardAction({ threadId: QA.threadId, cardId, optionId: "maybe" }),
+    );
+    assert.strictEqual(unknown.code, "invalid");
+
+    yield* bots.cardAction({ threadId: QA.threadId, cardId, optionId: "not-now" });
+    const snapshot = yield* bots.snapshot();
+    assert.strictEqual(
+      snapshot.delegations.find((entry) => entry.id === asked.id)?.state,
+      "cancelled",
+    );
+    assert.lengthOf(turnStarts(world, QA.threadId), 0);
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("allows four hand-offs per turn and refuses a fifth", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    for (const requestId of ["a", "b", "c", "d"]) {
+      yield* bots.delegate({
+        caller: main,
+        targetBotId: FRONTEND.projectId,
+        brief: `Part ${requestId}`,
+        requestId,
+      });
+    }
+    const fifth = yield* Effect.flip(
+      bots.delegate({ caller: main, targetBotId: QA.projectId, brief: "Part e", requestId: "e" }),
+    );
+    assert.strictEqual(fifth.code, "limit");
   }).pipe(Effect.provide(makeLayer(world)));
 });

@@ -90,6 +90,7 @@ import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { PullRequestService } from "../../pullRequests/Services/PullRequestService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
+  clip,
   describeBotScope,
   renderBotContextSection,
   renderDelegationMessage,
@@ -97,6 +98,7 @@ import {
   summarizeDelegationResult,
   type DelegationReportEntry,
 } from "../botPrompts.ts";
+import { rankBotProviders } from "../botEngines.ts";
 import { evaluateDelegationSettlement } from "../delegationSettle.ts";
 import { evaluateMergeProof } from "../mergeProof.ts";
 import {
@@ -108,14 +110,25 @@ import {
 import { SYNBOT_UNAVAILABLE_MESSAGE, isServerSynbotEnabled } from "../synbotGate.ts";
 
 const USER = { kind: "user" } as const;
+// BotCard's limits (packages/contracts/src/bots.ts).
+const BOT_CARD_TITLE_MAX_LENGTH = 400;
+const BOT_CARD_BODY_MAX_LENGTH = 4_000;
 const MAIN_ROLE = "Routes work to the right bot";
 const MAIN_MASCOT: BotMascot = { shape: "synara", color: "#1a80fa" };
 const RECENT_DELEGATIONS = 60;
 const TASKS_PER_BOT = 40;
 const RECENT_TASK_MS = 7 * 24 * 60 * 60 * 1000;
-const STRONG_PROVIDER_ORDER: readonly ProviderKind[] = ["codex", "claudeAgent"];
+const PENDING_TURN_START_POLL_MS = 100;
+const PENDING_TURN_START_MAX_POLLS = 100;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
 const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
+/** A task whose worker these states hold is stopped by interrupting that worker's turn; a
+ * worker waiting on the user (an approval or a question) is mid-turn too. */
+const INTERRUPTIBLE_ITEM_STATES = new Set([...ACTIVE_ITEM_STATES, "waiting"]);
+/** Saved but never delivered: sent without a start, or still waiting for the user's Start. */
+const isUndelivered = (record: BotDelegationRecord) =>
+  record.settledAt === null &&
+  ((record.state === "sent" && record.startedAt === null) || record.state === "awaiting-start");
 const decodeModelSelection = Schema.decodeUnknownSync(ModelSelection);
 const decodeCard = Schema.decodeUnknownOption(BotCard);
 
@@ -386,6 +399,23 @@ const make = Effect.gen(function* () {
       );
   };
 
+  // A thread keeps one pending turn start until the provider turn it asked for is running. A
+  // second start in that window replaces it, so the first turn is attributed to the second
+  // message and the first message never gets a turn. Two hand-offs to one bot in a single turn
+  // hit that window, so a bot's turn start waits until the slot clears (bounded: a start that
+  // never runs must not block the bot forever).
+  const awaitPendingTurnStartCleared = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < PENDING_TURN_START_MAX_POLLS; attempt += 1) {
+        const pending = yield* projectionTurns
+          .getPendingTurnStartByThreadId({ threadId })
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isNone(pending)) return;
+        yield* Effect.sleep(PENDING_TURN_START_POLL_MS);
+      }
+      yield* Effect.logWarning("synbot.turn_start.pending_slot_timeout", { threadId });
+    });
+
   const startTurn = (input: {
     readonly threadId: ThreadId;
     readonly commandId: string;
@@ -393,6 +423,7 @@ const make = Effect.gen(function* () {
     readonly text: string;
   }) =>
     Effect.gen(function* () {
+      yield* awaitPendingTurnStartCleared(input.threadId);
       const shell = yield* snapshotQuery
         .getThreadShellById(input.threadId)
         .pipe(Effect.mapError(toServiceError("Could not load the bot thread.")));
@@ -432,6 +463,7 @@ const make = Effect.gen(function* () {
       } as OrchestrationCommand)
       .pipe(Effect.asVoid, Effect.mapError(toServiceError("Could not stop the thread.")));
 
+  /** Posts a card; its title and body are clipped to the card schema, which the answer decodes. */
   const postCard = (input: {
     readonly threadId: ThreadId;
     readonly card: BotCard;
@@ -442,7 +474,13 @@ const make = Effect.gen(function* () {
       id: input.card.id,
       kind: BOT_CARD_ACTIVITY_KIND,
       summary: input.summary,
-      payload: input.card,
+      payload: {
+        ...input.card,
+        title: clip(input.card.title, BOT_CARD_TITLE_MAX_LENGTH),
+        ...(input.card.body === undefined
+          ? {}
+          : { body: clip(input.card.body, BOT_CARD_BODY_MAX_LENGTH) }),
+      } satisfies BotCard,
       tone: "approval",
     });
 
@@ -542,12 +580,20 @@ const make = Effect.gen(function* () {
   const availableProviders = () =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
-      const statuses = yield* providerHealth.getStatuses;
-      return STRONG_PROVIDER_ORDER.filter((provider) => {
-        const enabled = settings?.providers?.[provider]?.enabled ?? true;
-        const status = statuses.find((entry) => entry.provider === provider);
-        return enabled && (status === undefined || status.available);
-      });
+      const isEnabled = (provider: ProviderKind) =>
+        settings?.providers?.[provider]?.enabled ?? true;
+      let statuses = yield* providerHealth.getStatuses;
+      // Right after launch the health probe may not have reported yet. Only bot creation picks
+      // an engine, so probe once in the foreground rather than guess an engine that cannot run.
+      if (
+        (Object.keys(DEFAULT_MODEL_BY_PROVIDER) as ProviderKind[]).some(
+          (provider) =>
+            isEnabled(provider) && !statuses.some((entry) => entry.provider === provider),
+        )
+      ) {
+        statuses = yield* providerHealth.refresh;
+      }
+      return rankBotProviders({ isEnabled, statuses });
     });
 
   const defaultModel = (kind: "strong" | "economy", near?: ModelSelection) =>
@@ -836,6 +882,28 @@ const make = Effect.gen(function* () {
       if (!profile) return;
       if (profile.kind === "main")
         return yield* Effect.fail(fail("SynBot cannot be removed.", "forbidden"));
+      // Its hand-offs end with it: what it handed on stops, and work handed to it fails back to
+      // the asker, who is told. Otherwise they stay open and hold their whole request's recap.
+      const name = (yield* loadBot(input.id))?.name ?? "The bot";
+      yield* settleLock.withPermits(1)(
+        Effect.gen(function* () {
+          const open = (yield* repository
+            .listActiveDelegations()
+            .pipe(Effect.mapError(toServiceError("Could not load delegations.")))).filter(
+            (record) =>
+              record.settledAt === null &&
+              (record.fromBotId === input.id || record.toBotId === input.id),
+          );
+          for (const record of open) {
+            yield* endDelegation(
+              record,
+              record.toBotId === input.id
+                ? { state: "failed", resultSummary: `${name} was removed.` }
+                : { state: "cancelled" },
+            );
+          }
+        }),
+      );
       const project = yield* snapshotQuery
         .getProjectShellById(input.id)
         .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
@@ -856,6 +924,8 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Could not remove the bot.")));
       lastPublishedStatus.delete(input.id);
       yield* publish({ type: "bot-removed", botId: input.id });
+      // Report the hand-offs that failed with it.
+      yield* evaluateDelegations({});
     });
 
   const updateSettings: BotServiceShape["updateSettings"] = (input) =>
@@ -1149,10 +1219,62 @@ const make = Effect.gen(function* () {
         },
         24,
       )}`;
+      /**
+       * Tells both bots and starts the target, or asks the user first. Every step has a fixed id,
+       * so a retry repeats only what did not happen: a delegation whose first delivery failed
+       * after it was saved is delivered when the bot asks again.
+       */
+      const deliver = (record: BotDelegationRecord) =>
+        Effect.gen(function* () {
+          const notice: BotDelegationNotice = {
+            delegationId: record.id,
+            fromBotId: caller.bot.id,
+            toBotId: target.id,
+            brief: record.brief,
+            createdAt: record.createdAt,
+          };
+          yield* appendActivity({
+            threadId: caller.bot.threadId,
+            id: `synbot:delegation:${record.id}:from`,
+            kind: BOT_DELEGATION_ACTIVITY_KIND,
+            summary: `${target.name} is on it`,
+            payload: notice,
+          });
+          yield* appendActivity({
+            threadId: target.threadId,
+            id: `synbot:delegation:${record.id}:to`,
+            kind: BOT_DELEGATION_ACTIVITY_KIND,
+            summary: `Message from ${caller.bot.name}`,
+            payload: notice,
+          });
+          if (record.state === "awaiting-start") {
+            yield* postCard({
+              threadId: target.threadId,
+              summary: `${caller.bot.name} asks ${target.name} to start`,
+              card: {
+                id: `synbot:card:start:${record.id}`,
+                kind: "delegation-start",
+                botId: target.id,
+                title: `${caller.bot.name} asks ${target.name}: ${record.brief.slice(0, 300)}`,
+                options: [
+                  { id: "start", label: "Start", tone: "primary" },
+                  { id: "not-now", label: "Not now", tone: "dismiss" },
+                ],
+                delegationId: record.id,
+                createdAt: record.createdAt,
+              },
+            });
+            yield* publishDelegation(record);
+            return record;
+          }
+          return yield* dispatchDelegation(record);
+        });
       const existing = yield* repository
         .getDelegation(id)
         .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
-      if (existing) return toDelegation(existing);
+      if (existing) {
+        return toDelegation(isUndelivered(existing) ? yield* deliver(existing) : existing);
+      }
       const siblings = yield* repository
         .listDelegationsByRequesterTurn({
           fromThreadId: caller.bot.threadId,
@@ -1198,49 +1320,10 @@ const make = Effect.gen(function* () {
       const inserted = yield* repository
         .insertDelegation(record)
         .pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
-      if (!inserted.inserted) return toDelegation(inserted.record);
-      const notice: BotDelegationNotice = {
-        delegationId: id,
-        fromBotId: caller.bot.id,
-        toBotId: target.id,
-        brief: record.brief,
-        createdAt: now,
-      };
-      yield* appendActivity({
-        threadId: caller.bot.threadId,
-        id: `synbot:delegation:${id}:from`,
-        kind: BOT_DELEGATION_ACTIVITY_KIND,
-        summary: `${target.name} is on it`,
-        payload: notice,
-      });
-      yield* appendActivity({
-        threadId: target.threadId,
-        id: `synbot:delegation:${id}:to`,
-        kind: BOT_DELEGATION_ACTIVITY_KIND,
-        summary: `Message from ${caller.bot.name}`,
-        payload: notice,
-      });
-      if (record.state === "awaiting-start") {
-        yield* postCard({
-          threadId: target.threadId,
-          summary: `${caller.bot.name} asks ${target.name} to start`,
-          card: {
-            id: `synbot:card:start:${id}`,
-            kind: "delegation-start",
-            botId: target.id,
-            title: `${caller.bot.name} asks ${target.name}: ${record.brief.slice(0, 300)}`,
-            options: [
-              { id: "start", label: "Start", tone: "primary" },
-              { id: "not-now", label: "Not now", tone: "dismiss" },
-            ],
-            delegationId: id,
-            createdAt: now,
-          },
-        });
-        yield* publishDelegation(record);
-        return toDelegation(record);
+      if (!inserted.inserted && !isUndelivered(inserted.record)) {
+        return toDelegation(inserted.record);
       }
-      return toDelegation(yield* dispatchDelegation(record));
+      return toDelegation(yield* deliver(inserted.record));
     });
 
   const listDelegationsFor: BotServiceShape["listDelegationsFor"] = (caller) =>
@@ -1361,24 +1444,13 @@ const make = Effect.gen(function* () {
       );
     });
 
-  const settleOne = (record: BotDelegationRecord, nowMs: number) =>
+  /** Where a delegation stands in the target bot's thread; `null` when that thread is gone. */
+  const assessDelegation = (record: BotDelegationRecord, nowMs: number) =>
     Effect.gen(function* () {
-      if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state))
-        return record;
       const shell = yield* snapshotQuery
         .getThreadShellById(record.toThreadId)
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
-      if (Option.isNone(shell)) {
-        const failed: BotDelegationRecord = {
-          ...record,
-          state: "failed",
-          resultSummary: "The bot's thread no longer exists.",
-          settledAt: isoNow(),
-          updatedAt: isoNow(),
-        };
-        yield* repository.saveDelegation(failed);
-        return failed;
-      }
+      if (Option.isNone(shell)) return null;
       const turns = yield* projectionTurns
         .listByThreadId({ threadId: record.toThreadId })
         .pipe(Effect.orElseSucceed(() => []));
@@ -1389,6 +1461,10 @@ const make = Effect.gen(function* () {
           .map((message) => message.id as string),
       );
       const items = yield* listItems(record.toBotId);
+      // Work the target handed on counts as part of this delegation until it is reported back.
+      const onward = yield* repository
+        .listDelegationsFromThread({ fromThreadId: record.toThreadId, since: record.createdAt })
+        .pipe(Effect.orElseSucceed(() => [] as readonly BotDelegationRecord[]));
       const result = evaluateDelegationSettlement({
         messageId: record.messageId,
         turns: turns.map((turn) => ({
@@ -1408,9 +1484,37 @@ const make = Effect.gen(function* () {
             delegationTurnId: item.delegationTurnId ?? null,
             updatedAt: item.updatedAt,
           })),
+        onward: onward
+          .filter((child) => child.id !== record.id)
+          .map((child) => ({
+            fromTurnId: child.fromTurnId,
+            reportMessageId: child.reportMessageId,
+            reportedAt: child.reportedAt,
+          })),
         sessionActiveTurnId: shell.value.session?.activeTurnId ?? null,
         nowMs,
       });
+      return { shell: shell.value, messages, items, result };
+    });
+
+  const settleOne = (record: BotDelegationRecord, nowMs: number) =>
+    Effect.gen(function* () {
+      if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state))
+        return record;
+      const assessed = yield* assessDelegation(record, nowMs);
+      if (assessed === null) {
+        const failed: BotDelegationRecord = {
+          ...record,
+          state: "failed",
+          resultSummary: "The bot's thread no longer exists.",
+          settledAt: isoNow(),
+          updatedAt: isoNow(),
+        };
+        yield* repository.saveDelegation(failed);
+        yield* publishDelegation(failed);
+        return failed;
+      }
+      const { messages, items, result } = assessed;
       const state: BotDelegationRecord["state"] =
         result.state === "settled" ? (result.outcome ?? "completed") : result.state;
       const taskIds = result.itemIds.length > 0 ? result.itemIds : record.taskIds;
@@ -1499,27 +1603,37 @@ const make = Effect.gen(function* () {
         ),
       );
 
-  const cancelDelegation: BotServiceShape["cancelDelegation"] = (input) =>
+  /**
+   * Ends an open delegation: stops the target's turns for it and its tasks, then records the
+   * end. `cancelled` is the user's Stop (nothing is reported, nobody is woken); `failed` is
+   * reported to the asker like any failure. Callers hold `settleLock`, so a settle sweep that
+   * read the record earlier cannot write it back over the end.
+   */
+  const endDelegation = (
+    record: BotDelegationRecord,
+    end:
+      | { readonly state: "cancelled" }
+      | { readonly state: "failed"; readonly resultSummary: string },
+  ) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
-      const record = yield* repository
-        .getDelegation(input.delegationId)
-        .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
-      if (!record) return yield* Effect.fail(fail("Delegation was not found.", "not-found"));
-      if (BOT_DELEGATION_TERMINAL_STATES.has(record.state)) return toDelegation(record);
+      let taskIds = record.taskIds;
       if (record.state !== "awaiting-start") {
-        const shell = yield* snapshotQuery
-          .getThreadShellById(record.toThreadId)
-          .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
-        if (Option.isSome(shell) && shell.value.session?.activeTurnId) {
-          yield* interruptThread(record.toThreadId, "cancel-delegation").pipe(
-            Effect.catch(() => Effect.void),
-          );
+        const assessed = yield* assessDelegation(record, Date.now());
+        if (assessed !== null) {
+          // Only a turn of this delegation: the target may be busy with something else.
+          const activeTurnId = assessed.shell.session?.activeTurnId ?? null;
+          if (activeTurnId !== null && assessed.result.turnIds.includes(activeTurnId)) {
+            yield* interruptThread(record.toThreadId, "cancel-delegation").pipe(
+              Effect.catch(() => Effect.void),
+            );
+          }
+          // The sweep fills task ids late: read them now, so a task started a moment ago stops.
+          taskIds = [...new Set([...record.taskIds, ...assessed.result.itemIds])];
         }
-        for (const taskId of record.taskIds) {
+        for (const taskId of taskIds) {
           const item = yield* hubWorkRepository.get(taskId).pipe(Effect.orElseSucceed(() => null));
           if (!item) continue;
-          if (item.workerThreadId && ACTIVE_ITEM_STATES.has(item.state)) {
+          if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
             yield* interruptThread(item.workerThreadId, "cancel-delegation").pipe(
               Effect.catch(() => Effect.void),
             );
@@ -1533,10 +1647,12 @@ const make = Effect.gen(function* () {
       const now = isoNow();
       const next: BotDelegationRecord = {
         ...record,
-        state: "cancelled",
+        state: end.state,
+        taskIds,
+        resultSummary: end.state === "failed" ? end.resultSummary : record.resultSummary,
         settledAt: now,
         // The user stopped it: nothing is reported back and nobody is woken.
-        reportedAt: now,
+        reportedAt: end.state === "cancelled" ? now : null,
         updatedAt: now,
       };
       yield* repository
@@ -1549,7 +1665,22 @@ const make = Effect.gen(function* () {
         "Not now",
       );
       yield* publishDelegation(next);
-      return toDelegation(next);
+      return next;
+    });
+
+  const cancelDelegation: BotServiceShape["cancelDelegation"] = (input) =>
+    Effect.gen(function* () {
+      yield* requireEnabled;
+      return yield* settleLock.withPermits(1)(
+        Effect.gen(function* () {
+          const record = yield* repository
+            .getDelegation(input.delegationId)
+            .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
+          if (!record) return yield* Effect.fail(fail("Delegation was not found.", "not-found"));
+          if (BOT_DELEGATION_TERMINAL_STATES.has(record.state)) return toDelegation(record);
+          return toDelegation(yield* endDelegation(record, { state: "cancelled" }));
+        }),
+      );
     });
 
   // ── Cards ──────────────────────────────────────────────────────────
@@ -1987,14 +2118,18 @@ const make = Effect.gen(function* () {
       const detail = yield* service
         .detail({ ...input, forceRefresh: true })
         .pipe(Effect.mapError(toServiceError("Could not read the pull request.", "unavailable")));
-      const diff = yield* service
-        .diff(input)
-        .pipe(Effect.orElseSucceed(() => ({ patch: "", truncated: false })));
+      const diff = yield* service.diff(input).pipe(Effect.orElseSucceed(() => null));
       return {
         service,
         input,
         detail,
-        proof: evaluateMergeProof({ threadId, detail, patch: diff.patch, checkedAt: isoNow() }),
+        proof: evaluateMergeProof({
+          threadId,
+          detail,
+          patch: diff?.patch ?? "",
+          patchComplete: diff !== null && !diff.truncated,
+          checkedAt: isoNow(),
+        }),
       };
     });
 
@@ -2078,7 +2213,7 @@ const make = Effect.gen(function* () {
           interruptedThreadIds.push(bot.threadId);
         }
         for (const item of yield* listItems(bot.id)) {
-          if (item.workerThreadId && ACTIVE_ITEM_STATES.has(item.state)) {
+          if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
             yield* interruptThread(item.workerThreadId, "stop-all").pipe(
               Effect.catch(() => Effect.void),
             );
