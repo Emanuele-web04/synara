@@ -1,7 +1,6 @@
 import {
   classifyCodexStderr,
   CODEX_STDERR_NATIVE_EVENT_TYPE,
-  isCodexUserMcpOAuthStartupError,
   normalizeCodexUserVisibleErrorMessage,
 } from "@synara/shared/codexStderr";
 import {
@@ -229,6 +228,8 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
+  // Codex sends reasoning as its own item between tool calls in one work run.
+  codexReasoning?: true;
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
@@ -573,29 +574,32 @@ export function deriveWorkLogEntries(
   const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => !isLogOnlyPiWarning(activity))
-    // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
+    // App-server startup and stderr belong to diagnostics, including saved turns.
     .filter((activity) => {
-      if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
+      if (activity.kind !== "runtime.warning") return true;
       const payload = asRecord(activity.payload);
+      const message = asTrimmedString(payload?.message);
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return false;
+      const startup = asRecord(payload?.data);
+      const server = asTrimmedString(startup?.name);
       if (
+        startup?.status === "failed" &&
+        server &&
+        message?.startsWith(`MCP server "${server}" failed to start`)
+      ) {
+        return false;
+      }
+      if (
+        activity.tone === "error" ||
         payload?.willRetry === true ||
         asRecord(payload?.data)?.willRetry === true ||
         payload?.nativeEventType === "monitor_event" ||
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
-      // Ingestion already judged the Codex stderr rows it marks, and stored their
-      // text normalized: judging that text again could hide a structured ERROR
-      // whose level the normalization removed.
-      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
-      const startup = asRecord(payload?.data);
-      if (startup?.status === "failed") {
-        const name = asTrimmedString(startup.name);
-        const error = asTrimmedString(startup.error);
-        if (name && error && isCodexUserMcpOAuthStartupError(name, error)) return false;
-      }
-      const message = asTrimmedString(payload?.message);
-      return !message || classifyCodexStderr(message)?.kind === "notice";
+      if (!message) return true;
+      const diagnostic = classifyCodexStderr(message);
+      return diagnostic?.kind === "notice" && !diagnostic.mcpSubscriptionError;
     })
     .filter((activity) => !isLogOnlyClaudeWarning(activity))
     .filter((activity) => !isTurnFailureActivity(activity))

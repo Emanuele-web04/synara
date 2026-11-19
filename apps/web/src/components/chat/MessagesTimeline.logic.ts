@@ -66,8 +66,8 @@ export type CollapsedTurnItem =
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
-// summarizable tool rows fold into one "Ran N commands..." disclosure while
-// narration and rich rows pass through individually.
+// tool runs fold into one disclosure. Codex reasoning stays in order inside
+// the run while assistant messages and rich rows remain boundaries.
 export type CollapsedTurnChunk =
   | { kind: "item"; item: CollapsedTurnItem }
   | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
@@ -85,7 +85,7 @@ export function chunkCollapsedTurnItems(
   const flushPendingRun = () => {
     if (pendingRun.length === 0) return;
     const pendingRowCount = pendingRun.reduce(
-      (total, item) => total + workEntryRowCount(item.entry),
+      (total, item) => total + (item.entry.codexReasoning ? 0 : workEntryRowCount(item.entry)),
       0,
     );
     if (pendingRowCount >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
@@ -103,7 +103,10 @@ export function chunkCollapsedTurnItems(
   };
 
   for (const item of items) {
-    if (item.kind === "work" && isSummarizableToolCallEntry(item.entry)) {
+    if (
+      item.kind === "work" &&
+      (item.entry.codexReasoning || isSummarizableToolCallEntry(item.entry))
+    ) {
       pendingRun.push(item);
       continue;
     }
@@ -136,10 +139,8 @@ export interface WorkEntryRenderPlanChunk {
 
 // Plans a work group's entries block by block. Boundaries are the entries a
 // summary can never absorb — thinking/info narration, errors, rich cards — so
-// each tool run between boundaries folds independently into its summary, even
-// with calls still running (the summary counts them). The live run of the
-// moment never reaches this plan: the working indicator claims it (see
-// findLiveToolCallTarget) until narration or text settles it.
+// each tool run between boundaries folds independently into its summary.
+// Codex reasoning travels with the calls without contributing to tool counts.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
 ): WorkEntryRenderPlanChunk[] {
@@ -245,14 +246,13 @@ export interface LiveToolCallDisplay {
   tone: LiveToolCallTone;
 }
 
-// The run that closes the live transcript tail, claimed by the working row.
-// `chunkId` is the run's first entry: the group it belongs to lists everything
-// before it and leaves the run out of history until narration or text settles
-// it, so calls never pop in and out of the transcript between flushes.
+// The work claimed by the working row. `chunkId` identifies either the start
+// of the run or a single entry when the rest stays visible in history.
 // `display` is what the indicator shows for the run; null reads "Thinking".
 export interface LiveToolCallTarget {
   groupId: string;
   chunkId: string;
+  entryOnly?: true | undefined;
   display: LiveToolCallDisplay | null;
 }
 
@@ -290,19 +290,29 @@ function trailingToolRunTarget(
       command.toolStatus === "running" &&
       requestedCommand &&
       (command.rawCommand ?? command.command) === requestedCommand
-      ? { groupId, chunkId: command.id, display: { entry: command, tone: "running" } }
+      ? {
+          groupId,
+          chunkId: command.id,
+          entryOnly: true,
+          display: { entry: command, tone: "running" },
+        }
       : null;
   }
 
-  const tail = chunkWorkEntries(entries).at(-1);
-  if (!tail) return null;
-  if (tail.kind === "tool-group") {
-    return { groupId, chunkId: tail.id, display: pickLiveToolCallDisplay(tail.entries) };
+  let start = entries.length;
+  let hasCodexReasoning = false;
+  while (start > 0) {
+    const entry = entries[start - 1]!;
+    if (!entry.codexReasoning && !isSummarizableToolCallEntry(entry)) break;
+    hasCodexReasoning ||= entry.codexReasoning === true;
+    start -= 1;
   }
-  // A lone call never folds into a summary, but it is still the call of the moment.
-  return isSummarizableToolCallEntry(tail.entry)
-    ? { groupId, chunkId: tail.id, display: pickLiveToolCallDisplay([tail.entry]) }
-    : null;
+  if (start === entries.length) return null;
+  const display = pickLiveToolCallDisplay(entries.slice(start));
+  if (hasCodexReasoning) {
+    return display ? { groupId, chunkId: display.entry.id, entryOnly: true, display } : null;
+  }
+  return { groupId, chunkId: entries[start]!.id, display };
 }
 
 // Resolves the run the working row claims, or null when there is none. Only a
@@ -344,13 +354,12 @@ export function findLiveToolCallTarget(
 export function withoutLiveToolCallRun(
   entries: WorkLogEntry[],
   chunkId: string | null,
+  entryOnly = false,
 ): WorkLogEntry[] {
   if (chunkId === null) return entries;
   const runStart = entries.findIndex((entry) => entry.id === chunkId);
   if (runStart < 0) return entries;
-  return entries.at(-1)?.grantedCommandApproval
-    ? entries.toSpliced(runStart, 1)
-    : entries.slice(0, runStart);
+  return entryOnly ? entries.toSpliced(runStart, 1) : entries.slice(0, runStart);
 }
 
 // The one "live tail" signal both work-group render sites read: the run the
@@ -371,15 +380,18 @@ export function resolveLiveTailClaim(
 // working indicator wears its only run: it must not leave an empty padded gap.
 export function isWorkRowYieldedToLiveToolCall(
   row: MessagesTimelineRow,
-  liveToolCall: Pick<LiveToolCallTarget, "groupId" | "chunkId"> | null,
+  liveToolCall: Pick<LiveToolCallTarget, "groupId" | "chunkId" | "entryOnly"> | null,
 ): boolean {
   return (
     row.kind === "work" &&
     liveToolCall !== null &&
     row.id === liveToolCall.groupId &&
     row.groupedEntries.every((entry) => !entry.providerHandoff && !entry.turnFailure) &&
-    withoutLiveToolCallRun(standaloneWorkGroupListEntries(row.groupedEntries), liveToolCall.chunkId)
-      .length === 0
+    withoutLiveToolCallRun(
+      standaloneWorkGroupListEntries(row.groupedEntries),
+      liveToolCall.chunkId,
+      liveToolCall.entryOnly,
+    ).length === 0
   );
 }
 
@@ -2299,6 +2311,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.requestKind === b.requestKind &&
     a.grantedCommandApproval === b.grantedCommandApproval &&
     a.activityKind === b.activityKind &&
+    a.codexReasoning === b.codexReasoning &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
     a.toolStatus === b.toolStatus &&
@@ -2416,6 +2429,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.createdAt === bw.createdAt &&
         a.liveToolCall?.groupId === bw.liveToolCall?.groupId &&
         a.liveToolCall?.chunkId === bw.liveToolCall?.chunkId &&
+        a.liveToolCall?.entryOnly === bw.liveToolCall?.entryOnly &&
         aDisplay?.tone === bDisplay?.tone &&
         (aDisplay === bDisplay ||
           (aDisplay !== null &&

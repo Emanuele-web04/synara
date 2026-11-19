@@ -1027,20 +1027,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
     });
   }, [resolvedListRef]);
-  // Every run of tool calls folds into a "Ran N commands..." summary row, except
-  // the live run the working row claims: it leaves its group until it settles.
-  // Only "Thinking" claims it: under any other label the run stays in history,
-  // so a call is never hidden. Rows read just the two ids, stable while the run
-  // grows; the call itself rides on the working row, which alone re-renders.
+  // Only the Thinking indicator claims tool work. The group reads the claim's
+  // IDs and scope, and the working row alone renders the live entry.
   const liveTailClaim = resolveLiveTailClaim(rows, workingIsThinking);
   const liveToolCallGroupId = liveTailClaim?.groupId ?? null;
   const liveToolCallChunkId = liveTailClaim?.chunkId ?? null;
+  const liveToolCallEntryOnly = liveTailClaim?.entryOnly;
   const liveToolCallClaim = useMemo(
     () =>
       liveToolCallGroupId !== null && liveToolCallChunkId !== null
-        ? { groupId: liveToolCallGroupId, chunkId: liveToolCallChunkId }
+        ? {
+            groupId: liveToolCallGroupId,
+            chunkId: liveToolCallChunkId,
+            entryOnly: liveToolCallEntryOnly,
+          }
         : null,
-    [liveToolCallGroupId, liveToolCallChunkId],
+    [liveToolCallGroupId, liveToolCallChunkId, liveToolCallEntryOnly],
   );
   const firstUserMessageId = useMemo(() => {
     for (const row of rows) {
@@ -1832,6 +1834,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const groupedEntries = withoutLiveToolCallRun(
             standaloneWorkGroupListEntries(row.groupedEntries),
             groupId === liveToolCallGroupId ? liveToolCallChunkId : null,
+            liveToolCallEntryOnly,
           );
           if (groupedEntries.length === 0) {
             return null;
@@ -2329,6 +2332,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               workGroupId !== null && workGroupId === liveToolCallGroupId
                 ? liveToolCallChunkId
                 : null,
+              liveToolCallEntryOnly,
             );
             const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
             const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
@@ -3194,6 +3198,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       liveToolCallChunkId,
+      liveToolCallEntryOnly,
       liveToolCallGroupId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -3217,6 +3222,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       liveToolCallChunkId,
+      liveToolCallEntryOnly,
       liveToolCallGroupId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,

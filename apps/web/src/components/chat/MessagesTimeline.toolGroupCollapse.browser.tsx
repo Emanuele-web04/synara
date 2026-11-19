@@ -37,7 +37,7 @@ function commandEntry(
   id: string,
   command: string,
   toolStatus: "running" | "completed" | "failed" = "completed",
-): TimelineEntry {
+): Extract<TimelineEntry, { kind: "work" }> {
   return {
     id: `entry-${id}`,
     kind: "work",
@@ -175,6 +175,57 @@ async function expectTailRunSettled(label = "Ran 2 commands"): Promise<HTMLButto
 describe("MessagesTimeline tool group collapse", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps one Codex tool summary across reasoning updates while a command runs", async () => {
+    const reasoning = (id: string): Extract<TimelineEntry, { kind: "work" }>["entry"] => ({
+      id,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      activityKind: "task.progress",
+      label: "Reasoning trace",
+      detail: "Checking the provider boundary.",
+      tone: "tool",
+      toolCallId: id,
+    });
+    const workEntries = deriveAgentActivityTimelineState(
+      [
+        commandEntry("first", "bun run lint").entry,
+        commandEntry("second", "bun run typecheck").entry,
+        reasoning("reasoned"),
+        commandEntry("third", "node scripts/check.mjs").entry,
+        commandEntry("fourth", "node scripts/tail.mjs", "running").entry,
+        reasoning("latest-reasoning"),
+      ],
+      "codex",
+    ).timelineWorkEntries;
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        isWorking
+        timelineEntries={[
+          assistantEntry("preamble", "I’ll check the provider boundary.", false),
+          ...workEntries.map((entry) => ({
+            kind: "work" as const,
+            id: entry.id,
+            createdAt: entry.createdAt,
+            entry,
+          })),
+        ]}
+      />,
+      { container: createTimelineHost() },
+    );
+    try {
+      const summary = screen.getByRole("button", { name: "Ran 3 commands", exact: true });
+      await expect.element(summary).toBeVisible();
+      await expect.poll(workingToolCallText).toContain("node scripts/tail.mjs");
+      await summary.click();
+      await expect.element(screen.getByText("bun run lint", { exact: true })).toBeVisible();
+      await expect
+        .element(screen.getByText("node scripts/check.mjs", { exact: true }))
+        .toBeVisible();
+      expect(document.body.textContent?.split("node scripts/tail.mjs")).toHaveLength(2);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("folds background work with its turn, preserves both answers and reveals the command on demand", async () => {
