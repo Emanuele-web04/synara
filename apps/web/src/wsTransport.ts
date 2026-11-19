@@ -22,6 +22,7 @@ import {
   WS_CLIENT_REQUIRED_CAPABILITIES,
   WS_COMPATIBILITY_QUERY,
   WS_FEATURE_PATH,
+  WS_FEATURE_UNCOMPRESSED_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
   WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
@@ -374,6 +375,54 @@ export function rawSocketUrl(explicitUrl: string | null): string {
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Declared switch for measuring the desktop condition from a browser (the long-chat
+ * benchmark runs the client in web mode): with it, a web page served by a backend on
+ * this machine's loopback skips compression like the desktop does. It can only remove
+ * compression from this browser's own socket.
+ */
+export const LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY = "synara:local-backend-uncompressed";
+
+function readLocalBackendUncompressedOverride(): boolean {
+  try {
+    return window.localStorage?.getItem(LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the app's own transport (`new WsTransport()` without an explicit URL) talks
+ * to a backend next to it, so permessage-deflate only adds latency. True for the
+ * desktop renderer on the backend its main process spawned (`desktopBridge.getWsUrl`,
+ * a loopback URL). False for every other route: remote hosts and execution
+ * transports (explicit URL), workspace frames (their controller URL comes from the
+ * embedding page), remote paths and non-loopback hosts. Loopback alone is not enough —
+ * an SSH tunnel or a local proxy also looks like 127.0.0.1 — so a browser needs the
+ * declared override above. When unsure, keep compression.
+ */
+export function shouldDeclineCompressionForLocalBackend(input: {
+  readonly constructedWithUrl: boolean;
+  readonly socketUrl: string;
+  readonly inWorkspaceFrame: boolean;
+  readonly desktopWsUrl: string | null | undefined;
+  readonly browserOverride: boolean;
+}): boolean {
+  if (input.constructedWithUrl || input.inWorkspaceFrame) return false;
+  let url: URL;
+  try {
+    url = new URL(input.socketUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "ws:" || !LOOPBACK_HOSTNAMES.has(url.hostname)) return false;
+  if (url.pathname.startsWith("/ws/remote/")) return false;
+  if (input.desktopWsUrl) return input.desktopWsUrl === input.socketUrl;
+  return input.browserOverride;
+}
+
 export function makeSocketUrl(explicitUrl: string | null, path: string): string {
   return resolveRpcUrl(rawSocketUrl(explicitUrl), path);
 }
@@ -381,6 +430,7 @@ export function makeSocketUrl(explicitUrl: string | null, path: string): string 
 export function makeFeatureSocketUrl(
   explicitUrl: string | null,
   compatibility: WsBootstrapNegotiateResult,
+  options: { readonly declineCompression?: boolean } = {},
 ): string {
   const url = new URL(makeSocketUrl(explicitUrl, WS_FEATURE_PATH));
   url.searchParams.set(WS_COMPATIBILITY_QUERY.clientBuild, APP_VERSION);
@@ -392,6 +442,8 @@ export function makeFeatureSocketUrl(
   url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
   if (compatibility.remoteAttachmentId)
     url.searchParams.set("remoteAttachment", compatibility.remoteAttachmentId);
+  else if (options.declineCompression)
+    url.searchParams.set(WS_FEATURE_UNCOMPRESSED_QUERY.name, WS_FEATURE_UNCOMPRESSED_QUERY.value);
   return url.toString();
 }
 
@@ -1091,6 +1143,8 @@ export class WsTransport {
   private featureSessionCounter = 0;
   private currentFeatureSession: FeatureSession | null = null;
   private readonly protocolOpenTimeoutMs: number | undefined;
+  /** See shouldDeclineCompressionForLocalBackend; fixed for the transport's lifetime. */
+  private readonly declineCompression: boolean;
   private readonly recovery: RecoveryState = createInitialRecoveryState();
   private recoveryEscalationTimer: number | null = null;
 
@@ -1102,6 +1156,14 @@ export class WsTransport {
     } = {},
   ) {
     this.explicitUrl = rawSocketUrl(url ?? null);
+    this.declineCompression = shouldDeclineCompressionForLocalBackend({
+      constructedWithUrl: url !== undefined,
+      socketUrl: this.explicitUrl,
+      // readWorkspaceFrame() is undefined outside a frame (never null).
+      inWorkspaceFrame: readWorkspaceFrame() !== undefined,
+      desktopWsUrl: window.desktopBridge?.getWsUrl?.(),
+      browserOverride: readLocalBackendUncompressedOverride(),
+    });
     this.analyticsMode = new URL(this.explicitUrl).pathname.startsWith("/ws/remote/")
       ? "remote"
       : "local";
@@ -1761,16 +1823,21 @@ export class WsTransport {
 
       this.currentFeatureSession = featureSession;
       const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility), {
-          ...(this.protocolOpenTimeoutMs !== undefined
-            ? { openTimeoutMs: this.protocolOpenTimeoutMs }
-            : {}),
-          onProtocolFailure: (error) => {
-            if (this.sessionVersion === sessionVersion) {
-              this.noteProtocolFailure(featureSession, error);
-            }
+        makeProtocolLayer(
+          makeFeatureSocketUrl(this.explicitUrl, compatibility, {
+            declineCompression: this.declineCompression,
+          }),
+          {
+            ...(this.protocolOpenTimeoutMs !== undefined
+              ? { openTimeoutMs: this.protocolOpenTimeoutMs }
+              : {}),
+            onProtocolFailure: (error) => {
+              if (this.sessionVersion === sessionVersion) {
+                this.noteProtocolFailure(featureSession, error);
+              }
+            },
           },
-        }),
+        ),
       );
       this.runtime = featureRuntime;
       const featureScope = featureRuntime.runSync(Scope.make());

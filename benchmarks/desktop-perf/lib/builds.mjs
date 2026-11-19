@@ -251,10 +251,16 @@ async function launchOnce(build, home, profile, drive) {
   }
 }
 
-function seed(build, home, shape) {
+/**
+ * Writes threads into `home` with the server code of `build`. `mode: "append-realistic"`
+ * only adds the long threads of seed-realistic-threads.ts to an already seeded home.
+ */
+export function seed(build, home, shape, { mode } = {}) {
   const benchDir = join(build.dir, "apps/server/.bench");
   mkdirSync(benchDir, { recursive: true });
-  cpSync(join(HERE, "../seed-home.ts"), join(benchDir, "seed-home.ts"));
+  for (const file of ["seed-home.ts", "seed-realistic-threads.ts"]) {
+    cpSync(join(HERE, "..", file), join(benchDir, file));
+  }
   const output = run("bun", [".bench/seed-home.ts"], {
     cwd: join(build.dir, "apps/server"),
     env: {
@@ -263,6 +269,7 @@ function seed(build, home, shape) {
       BENCH_SEED_HOME: home,
       BENCH_SEED_WORKSPACES: WORKSPACES_DIR,
       ...(shape ? { BENCH_SEED_SHAPE: JSON.stringify(shape) } : {}),
+      ...(mode ? { BENCH_SEED_MODE: mode } : {}),
     },
   });
   return JSON.parse(output.split("\n").at(-1));

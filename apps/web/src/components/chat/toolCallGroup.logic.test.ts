@@ -66,7 +66,7 @@ describe("classifyToolCallSummaryCategory", () => {
     ).toBe("edit");
   });
 
-  it("classifies search commands, structured search actions, and web searches", () => {
+  it("classifies search commands and structured search actions apart from web searches", () => {
     expect(classifyToolCallSummaryCategory(command("s1", 'rg -n "foo" src'))).toBe("search");
     expect(
       classifyToolCallSummaryCategory(
@@ -74,8 +74,13 @@ describe("classifyToolCallSummaryCategory", () => {
       ),
     ).toBe("search");
     expect(classifyToolCallSummaryCategory(workEntry({ id: "s3", itemType: "web_search" }))).toBe(
-      "search",
+      "web-search",
     );
+    expect(
+      classifyToolCallSummaryCategory(
+        workEntry({ id: "s4", itemType: "dynamic_tool_call", toolName: "WebSearch" }),
+      ),
+    ).toBe("web-search");
   });
 
   it("classifies ACP native read and search tool names", () => {
@@ -255,14 +260,36 @@ describe("summarizeToolCallGroup", () => {
     ]);
     expect(summary?.label).toBe("Ran 1 command, 2 in background");
     expect(summary?.failedLabel).toBe("1 failed");
-    // A task still running must not keep the line open as live work.
-    expect(summary?.hasRunningEntry).toBe(false);
+    // A task still running is not a call in flight: its live state lives in
+    // the Environment panel.
+    expect(summary?.runningCount).toBe(0);
+    expect(summary?.runningLabel).toBeNull();
     expect(
       summarizeToolCallGroup([background("b3", "running"), background("b4", "running")]),
     ).toMatchObject({ label: "2 in background", iconCategory: "background" });
   });
 
-  it("names at most three kinds and folds the rest into other actions", () => {
+  it("counts calls still running next to the failed count", () => {
+    const summary = summarizeToolCallGroup([
+      claudeRead("r1", "/repo/a.ts"),
+      { ...command("c1", "bun run lint"), toolStatus: "running" },
+      { ...command("c2", "bun run test"), toolStatus: "failed" },
+    ]);
+    expect(summary).toMatchObject({
+      label: "Read 1 file, ran 2 commands",
+      failedLabel: "1 failed",
+      runningCount: 1,
+      runningLabel: "1 running",
+    });
+    expect(
+      summarizeToolCallGroup([
+        { ...command("c1", "bun run lint"), toolStatus: "running" },
+        { ...command("c2", "bun run test"), toolStatus: "running" },
+      ])?.runningLabel,
+    ).toBe("2 running");
+  });
+
+  it("names every kind up to five", () => {
     const summary = summarizeToolCallGroup([
       claudeRead("r1", "/repo/a.ts"),
       command("c1", "bun run lint"),
@@ -270,7 +297,51 @@ describe("summarizeToolCallGroup", () => {
       command("s1", "rg foo src"),
       workEntry({ id: "m1", itemType: "mcp_tool_call", toolName: "linear_get_issue" }),
     ]);
-    expect(summary?.label).toBe("Read 1 file, ran 1 command, 3 other actions");
+    expect(summary?.label).toBe(
+      "Read 1 file, ran 1 command, edited 1 file, searched once, used 1 tool",
+    );
+  });
+
+  it("folds only the kinds past the fourth when a run has more than five", () => {
+    const summary = summarizeToolCallGroup([
+      claudeRead("r1", "/repo/a.ts"),
+      command("c1", "bun run lint"),
+      edit("e1", ["a.ts"]),
+      command("s1", "rg foo src"),
+      workEntry({ id: "w1", itemType: "web_search" }),
+      workEntry({ id: "m1", itemType: "mcp_tool_call", toolName: "linear_get_issue" }),
+      workEntry({ id: "o1", itemType: "image_view" }),
+    ]);
+    expect(summary?.label).toBe(
+      "Read 1 file, ran 1 command, edited 1 file, searched once, 3 other actions",
+    );
+  });
+
+  it("tells web searches apart from code searches", () => {
+    const summary = summarizeToolCallGroup([
+      command("s1", "rg foo src"),
+      workEntry({ id: "w1", itemType: "web_search" }),
+      command("s2", "grep bar lib"),
+      workEntry({ id: "w2", itemType: "dynamic_tool_call", toolName: "WebSearch" }),
+      command("s3", "rg baz docs"),
+      workEntry({ id: "w3", itemType: "web_search" }),
+    ]);
+    expect(summary?.label).toBe("Searched 3 times, searched the web 3 times");
+    expect(
+      summarizeToolCallGroup([
+        workEntry({ id: "w4", itemType: "web_search" }),
+        workEntry({ id: "w5", itemType: "web_search" }),
+      ]),
+    ).toMatchObject({ label: "Searched the web twice", iconCategory: "web-search" });
+  });
+
+  it("keeps the uncategorized wording for a trailing other kind", () => {
+    const summary = summarizeToolCallGroup([
+      command("c1"),
+      workEntry({ id: "o1", itemType: "image_view" }),
+      workEntry({ id: "o2", itemType: "image_generation" }),
+    ]);
+    expect(summary?.label).toBe("Ran 1 command, 2 other actions");
   });
 
   it("wears the kind's glyph when every call is the same kind", () => {

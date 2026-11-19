@@ -1554,14 +1554,30 @@ export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | WaitingOnUserWorkingLabel;
 
+/** Labels for a turn stopped until the user acts; they never shimmer. */
+export type WaitingOnUserWorkingLabel = "Waiting for approval" | "Waiting for your answer";
+
+export function isWaitingOnUserWorkingLabel(
+  label: WorkingLabel | undefined,
+): label is WaitingOnUserWorkingLabel {
+  return label === "Waiting for approval" || label === "Waiting for your answer";
+}
+
+// Delivery checks, the local send and provider startup come first: the turn is
+// not running yet, so nothing can be waiting on the user. Once it runs, a
+// pending approval or question stops it, and the indicator says so instead of
+// "Thinking".
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
+  awaitingApproval?: boolean;
+  awaitingUserInput?: boolean;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
@@ -1570,6 +1586,8 @@ export function resolveWorkingLabel(input: {
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }
+  if (input.awaitingApproval) return "Waiting for approval";
+  if (input.awaitingUserInput) return "Waiting for your answer";
   return "Thinking";
 }
 
