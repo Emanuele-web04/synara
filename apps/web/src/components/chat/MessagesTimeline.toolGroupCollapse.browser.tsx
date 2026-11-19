@@ -1,19 +1,20 @@
 // FILE: MessagesTimeline.toolGroupCollapse.browser.tsx
-// Purpose: Browser regressions for collapsing settled tool-call runs into
-//          summary rows ("Ran 4 commands") once a newer narration block starts,
-//          and for folding the live run to one line wearing its newest call.
+// Purpose: Browser regressions for collapsing tool-call runs into summary rows
+//          ("Ran 4 commands") and for the working indicator claiming the live
+//          run: it wears the running call, a failed call or a Codex status in
+//          place of "Thinking", at one fixed height, until text settles the run.
 // Layer: Vitest browser tests
 
 import "../../index.css";
 
-import { MessageId, TurnId } from "@synara/contracts";
-import { useState } from "react";
+import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
+import { useState, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
 import type { TimelineEntry } from "../../session-logic";
-import { deriveTimelineEntries } from "../../workLog";
+import { deriveTimelineEntries, deriveWorkLogEntries } from "../../workLog";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import { deriveAgentActivityTimelineState } from "./agentActivity.logic";
 
@@ -32,7 +33,11 @@ function assistantEntry(id: string, text: string, streaming: boolean): TimelineE
   };
 }
 
-function commandEntry(id: string, command: string): TimelineEntry {
+function commandEntry(
+  id: string,
+  command: string,
+  toolStatus: "running" | "completed" | "failed" = "completed",
+): TimelineEntry {
   return {
     id: `entry-${id}`,
     kind: "work",
@@ -43,7 +48,7 @@ function commandEntry(id: string, command: string): TimelineEntry {
       label: "Ran command",
       tone: "tool",
       itemType: "command_execution",
-      toolStatus: "completed",
+      toolStatus,
       command,
     },
   };
@@ -76,11 +81,13 @@ function ToolGroupCollapseTimeline(props: {
   timelineEntries: TimelineEntry[];
   onOpenAgentActivity?: (id: string) => void;
   settled?: boolean;
+  isWorking?: boolean;
+  workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
 }) {
   return (
     <MessagesTimeline
       hasMessages
-      isWorking={false}
+      isWorking={props.isWorking ?? false}
       activeTurnInProgress={!props.settled}
       activeTurnStartedAt="2026-03-17T19:12:20.000Z"
       timelineEntries={props.timelineEntries}
@@ -98,6 +105,7 @@ function ToolGroupCollapseTimeline(props: {
       timestampFormat="locale"
       workspaceRoot={undefined}
       {...(props.onOpenAgentActivity ? { onOpenAgentActivity: props.onOpenAgentActivity } : {})}
+      {...(props.workingLabel ? { workingLabel: props.workingLabel } : {})}
     />
   );
 }
@@ -134,16 +142,34 @@ function isVisibleOutsideClosedDisclosure(text: string): boolean {
   return match !== undefined && match.closest("[aria-hidden='true']") === null;
 }
 
-// The live run is one disclosure line wearing its newest call; the earlier
-// calls stay unmounted until that line is opened.
-async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
+function workingIndicator(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-working-indicator='true']");
+}
+
+function workingToolCallText(): string | null | undefined {
+  return workingIndicator()?.querySelector("[data-working-tool-call='true']")?.textContent;
+}
+
+// With the indicator showing, the live run leaves the transcript: the indicator
+// wears its running call, and the earlier calls wait until the run settles.
+async function expectIndicatorWearingNewestCall(): Promise<void> {
   const [earlierCommand, newestCommand] = LIVE_COMMANDS as [string, string];
-  await expect.poll(() => findSummaryTrigger(newestCommand) !== null).toBe(true);
-  const liveTrigger = findSummaryTrigger(newestCommand)!;
-  expect(liveTrigger.getAttribute("aria-expanded")).toBe("false");
-  expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+  await expect.poll(workingToolCallText).toContain(newestCommand);
+  expect(workingIndicator()?.dataset.workingState).toBe("tool-call");
+  expect(document.body.textContent?.split(newestCommand)).toHaveLength(2);
   expect(document.body.textContent ?? "").not.toContain(earlierCommand);
-  return liveTrigger;
+}
+
+// Without a working row nothing is live: the tail run folds to its summary like
+// any other run, and its calls stay unmounted until the summary is opened.
+async function expectTailRunSettled(label = "Ran 2 commands"): Promise<HTMLButtonElement> {
+  await expect.poll(() => findSummaryTrigger(label) !== null).toBe(true);
+  const trigger = findSummaryTrigger(label)!;
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  for (const command of LIVE_COMMANDS) {
+    expect(document.body.textContent ?? "").not.toContain(command);
+  }
+  return trigger;
 }
 
 describe("MessagesTimeline tool group collapse", () => {
@@ -454,7 +480,7 @@ describe("MessagesTimeline tool group collapse", () => {
 
       try {
         await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
-        await expectLiveRunFoldedToNewestCall();
+        await expectTailRunSettled();
         expect(isVisibleOutsideClosedDisclosure("First inspect the")).toBe(true);
         expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
         const prose = host.querySelector<HTMLElement>("[data-work-entry-prose='true']");
@@ -463,7 +489,6 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(prose!.querySelector("code")?.textContent).toBe("provider");
         expect(prose!.textContent).not.toContain("`");
         expect(prose!.closest("button")).toBeNull();
-        expect(prose!.closest("[data-tool-group-live='true']")).toBeNull();
         expect(prose!.querySelector("[data-work-entry-icon='true']")).toBeNull();
         expect(onOpenAgentActivity).not.toHaveBeenCalled();
       } finally {
@@ -473,7 +498,7 @@ describe("MessagesTimeline tool group collapse", () => {
     },
   );
 
-  it("keeps the latest status above tool calls and reveals the other entries on expansion", async () => {
+  it("wears a Codex status only while it is the newest entry, and a running call over it", async () => {
     const host = createTimelineHost();
     const statusEntry = (id: string, preview: string): TimelineEntry => ({
       id,
@@ -487,44 +512,51 @@ describe("MessagesTimeline tool group collapse", () => {
         preview,
       },
     });
+    const [firstCommand, lastCommand] = LIVE_COMMANDS as [string, string];
     const entries = [
       assistantEntry("narration", "Checking the integrations.", true),
-      commandEntry("first-command", LIVE_COMMANDS[0]!),
+      commandEntry("first-command", firstCommand),
       statusEntry("first-status", "Inspecting integrations"),
     ];
-    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} isWorking />, {
       container: host,
     });
 
     try {
-      await expect.poll(() => findSummaryTrigger("Inspecting integrations") !== null).toBe(true);
-      entries.push(commandEntry("last-command", LIVE_COMMANDS[1]!));
-      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
-      expect(findSummaryTrigger("Inspecting integrations")?.getAttribute("aria-expanded")).toBe(
-        "false",
-      );
-      for (const command of LIVE_COMMANDS) {
-        expect(document.body.textContent).not.toContain(command);
+      await expect.poll(workingToolCallText).toContain("Inspecting integrations");
+      expect(workingIndicator()?.className).toContain("shimmer-group");
+
+      // A finished call after the status: the agent is between calls.
+      entries.push(commandEntry("last-command", lastCommand));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} isWorking />);
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+
+      // A running call beats a newer status.
+      entries.push(commandEntry("running-command", "node scripts/running.mjs", "running"));
+      entries.push(statusEntry("last-status", "Verifying the adapter"));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} isWorking />);
+      await expect.poll(workingToolCallText).toContain("node scripts/running.mjs");
+      for (const text of [...LIVE_COMMANDS, "Inspecting integrations", "Verifying the adapter"]) {
+        expect(document.body.textContent).not.toContain(text);
       }
 
-      entries.push(statusEntry("last-status", "Verifying the adapter"));
-      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
-      await expect.poll(() => findSummaryTrigger("Verifying the adapter") !== null).toBe(true);
-      expect(document.body.textContent).not.toContain("Inspecting integrations");
-      expect(document.querySelectorAll('[data-tool-group-live="true"]')).toHaveLength(1);
-
-      findSummaryTrigger("Verifying the adapter")!.click();
-      for (const text of [...LIVE_COMMANDS, "Inspecting integrations"]) {
+      // Text settles the run: its summary reveals every entry on expansion.
+      entries.push(assistantEntry("answer", "The adapter checks out.", true));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} isWorking />);
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+      const trigger = findSummaryTrigger("1 running")!;
+      expect(trigger).not.toBeNull();
+      trigger.click();
+      for (const text of [...LIVE_COMMANDS, "Inspecting integrations", "Verifying the adapter"]) {
         await expect.poll(() => isVisibleOutsideClosedDisclosure(text)).toBe(true);
       }
-      expect(document.body.textContent?.match(/Verifying the adapter/g)).toHaveLength(1);
     } finally {
       await screen.unmount();
       host.remove();
     }
   });
 
-  it("keeps calls made after steering reachable from the live tool line", async () => {
+  it("keeps calls made after steering reachable from the run's summary", async () => {
     const host = createTimelineHost();
     const turnId = TurnId.makeUnsafe("steered-turn");
     const timelineEntries = deriveTimelineEntries(
@@ -579,11 +611,12 @@ describe("MessagesTimeline tool group collapse", () => {
     });
 
     try {
-      const liveTrigger = await expectLiveRunFoldedToNewestCall();
+      // No working row: the running run folds to a summary that counts it.
+      const trigger = await expectTailRunSettled("Ran 2 commands, 2 running");
 
-      liveTrigger.click();
+      trigger.click();
 
-      await expect.poll(() => liveTrigger.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
       await expect.poll(() => isVisibleOutsideClosedDisclosure(LIVE_COMMANDS[0]!)).toBe(true);
     } finally {
       await screen.unmount();
@@ -591,7 +624,7 @@ describe("MessagesTimeline tool group collapse", () => {
     }
   });
 
-  it("collapses the settled run behind a summary and folds the live run to one line", async () => {
+  it("collapses every run behind a summary when no working row claims the tail", async () => {
     const host = createTimelineHost();
     const screen = await render(
       <ToolGroupCollapseTimeline
@@ -616,7 +649,7 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
 
-      await expectLiveRunFoldedToNewestCall();
+      await expectTailRunSettled();
 
       trigger.click();
 
@@ -649,8 +682,11 @@ describe("MessagesTimeline tool group collapse", () => {
           assistantEntry("narration-1", "Looking at the failing checks first.", true),
           ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
           thinkingEntry("think-1", "Weighing the next verification step"),
-          ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
+          ...LIVE_COMMANDS.map((command, index) =>
+            commandEntry(`live-${index}`, command, "running"),
+          ),
         ]}
+        isWorking
       />,
       { container: host },
     );
@@ -662,8 +698,245 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
 
-      // The run after the thinking boundary is the live tail.
-      await expectLiveRunFoldedToNewestCall();
+      // The run after the thinking boundary is the live tail the indicator claims.
+      await expectIndicatorWearingNewestCall();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+  it("wears the live run's newest call in the working indicator, then settles it into history", async () => {
+    const host = createTimelineHost();
+    const entries = (liveStatus: "running" | "completed") => [
+      assistantEntry("narration-1", "Looking at the failing checks first.", false),
+      ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
+      assistantEntry("narration-2", "Now inspecting the working tree.", true),
+      ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command, liveStatus)),
+    ];
+    const screen = await render(
+      <ToolGroupCollapseTimeline timelineEntries={entries("running")} isWorking />,
+      { container: host },
+    );
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+      await expectIndicatorWearingNewestCall();
+      const toolLineHeight = workingIndicator()!.getBoundingClientRect().height;
+
+      // Finished calls stay claimed: no row pops into history between calls.
+      await screen.rerender(
+        <ToolGroupCollapseTimeline timelineEntries={entries("completed")} isWorking />,
+      );
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+
+      // New text settles the run behind its summary; the indicator keeps reading
+      // a plain "Thinking", without an icon.
+      await screen.rerender(
+        <ToolGroupCollapseTimeline
+          timelineEntries={[
+            ...entries("completed"),
+            assistantEntry("narration-3", "Both checks pass now.", true),
+          ]}
+          isWorking
+        />,
+      );
+      await expect.poll(() => findSummaryTrigger("Ran 2 commands") !== null).toBe(true);
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+      expect(workingIndicator()!.querySelector("svg")).toBeNull();
+      expect(workingIndicator()!.getBoundingClientRect().height).toBe(toolLineHeight);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("wears a lone call in the working indicator and returns it as a plain row", async () => {
+    const host = createTimelineHost();
+    const [command] = LIVE_COMMANDS as [string];
+    const entries = [
+      assistantEntry("narration-1", "Checking the tree.", true),
+      commandEntry("lone", command, "running"),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} isWorking />, {
+      container: host,
+    });
+
+    try {
+      await expect.poll(workingToolCallText).toContain(command);
+      expect(document.body.textContent?.split(command)).toHaveLength(2);
+
+      await screen.rerender(
+        <ToolGroupCollapseTimeline
+          timelineEntries={[
+            assistantEntry("narration-1", "Checking the tree.", true),
+            commandEntry("lone", command),
+            assistantEntry("narration-2", "Clean.", true),
+          ]}
+          isWorking
+        />,
+      );
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+      expect(isVisibleOutsideClosedDisclosure(command)).toBe(true);
+      expect(findSummaryTrigger(command)).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("shows the same command running after Codex approval and preserves the request in history", async () => {
+    const host = createTimelineHost();
+    const turnId = TurnId.makeUnsafe("approval-turn");
+    const createdAt = "2026-03-17T19:12:28.000Z";
+    const command = 'python3 -c "import time; time.sleep(8)"';
+    const rawCommand = `/bin/zsh -lc ${JSON.stringify(command)}`;
+    const request = { requestId: "command-approval", requestType: "command_execution_approval" };
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("cmd-start"),
+        turnId,
+        createdAt,
+        sequence: 1,
+        kind: "tool.started",
+        tone: "tool",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          detail: rawCommand,
+          data: {
+            item: {
+              id: "cmd",
+              command: rawCommand,
+              commandActions: [{ type: "unknown", command }],
+            },
+          },
+        },
+      },
+      {
+        id: EventId.makeUnsafe("cmd-approval"),
+        turnId,
+        createdAt,
+        sequence: 2,
+        kind: "approval.requested",
+        tone: "approval",
+        summary: "Command approval requested",
+        payload: { ...request, detail: rawCommand },
+      },
+    ];
+    const timeline = (decision?: "accept" | "acceptForSession" | "decline") =>
+      deriveTimelineEntries(
+        [],
+        [],
+        deriveWorkLogEntries(
+          decision
+            ? [
+                ...activities,
+                {
+                  id: EventId.makeUnsafe("cmd-approved"),
+                  turnId,
+                  createdAt,
+                  sequence: 3,
+                  kind: "approval.resolved",
+                  tone: "approval",
+                  summary: "Approval resolved",
+                  payload: { ...request, decision },
+                },
+              ]
+            : activities,
+          turnId,
+          { activeTurnId: turnId },
+        ),
+      );
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={timeline()}
+        isWorking
+        workingLabel="Waiting for approval"
+      />,
+      { container: host },
+    );
+
+    try {
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Waiting for approval");
+      for (const decision of ["accept", "acceptForSession"] as const) {
+        await screen.rerender(
+          <ToolGroupCollapseTimeline timelineEntries={timeline(decision)} isWorking />,
+        );
+        await expect.poll(() => workingToolCallText() ?? "").toContain("time.sleep(8)");
+        expect(isVisibleOutsideClosedDisclosure("Running python script")).toBe(true);
+        expect(host.textContent?.split("time.sleep(8)")).toHaveLength(2);
+      }
+
+      await screen.rerender(
+        <ToolGroupCollapseTimeline timelineEntries={timeline("decline")} isWorking />,
+      );
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps one height whichever line the working indicator wears", async () => {
+    const host = createTimelineHost();
+    const [command] = LIVE_COMMANDS as [string];
+    const entriesWith = (toolStatus: "running" | "completed" | "failed") => [
+      assistantEntry("narration-1", "Checking the tree.", true),
+      commandEntry("lone", command, toolStatus),
+    ];
+    const screen = await render(
+      <ToolGroupCollapseTimeline timelineEntries={entriesWith("running")} isWorking />,
+      { container: host },
+    );
+    const heightAndState = () => ({
+      height: workingIndicator()!.getBoundingClientRect().height,
+      state: workingIndicator()!.dataset.workingState,
+      shimmers: workingIndicator()!.classList.contains("shimmer-group"),
+    });
+
+    try {
+      await expect.poll(workingToolCallText).toContain(command);
+      const toolLine = heightAndState();
+      expect(toolLine).toMatchObject({ state: "tool-call", shimmers: true });
+
+      await screen.rerender(
+        <ToolGroupCollapseTimeline timelineEntries={entriesWith("failed")} isWorking />,
+      );
+      await expect.poll(() => workingIndicator()?.dataset.workingState).toBe("tool-call-failed");
+      expect(heightAndState()).toEqual({ ...toolLine, state: "tool-call-failed", shimmers: false });
+      // The line stays muted; only the failure word is red.
+      expect(workingIndicator()!.classList.contains("text-destructive")).toBe(false);
+      expect(
+        workingIndicator()!
+          .querySelector("[data-tool-failure-meta='true']")
+          ?.classList.contains("text-destructive"),
+      ).toBe(true);
+      expect(
+        workingIndicator()!.querySelector("[data-tool-failure-meta='true']")?.textContent,
+      ).toBe("Failed");
+
+      await screen.rerender(
+        <ToolGroupCollapseTimeline timelineEntries={entriesWith("completed")} isWorking />,
+      );
+      await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
+      expect(heightAndState()).toEqual({ ...toolLine, state: "thinking" });
+
+      for (const workingLabel of ["Waiting for approval", "Waiting for your answer"] as const) {
+        await screen.rerender(
+          <ToolGroupCollapseTimeline
+            timelineEntries={entriesWith("running")}
+            isWorking
+            workingLabel={workingLabel}
+          />,
+        );
+        await expect.poll(() => workingIndicator()?.textContent).toBe(workingLabel);
+        expect(heightAndState()).toEqual({ ...toolLine, state: "waiting", shimmers: false });
+        expect(workingIndicator()!.querySelector("svg")).toBeNull();
+        // Waiting claims nothing: the call is back in history as a plain row.
+        expect(isVisibleOutsideClosedDisclosure(command)).toBe(true);
+      }
     } finally {
       await screen.unmount();
       host.remove();

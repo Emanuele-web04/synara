@@ -7227,6 +7227,8 @@ export default function ChatView({
                       turnTakenOver,
                       isConnecting,
                       providerName: providerDisplayName,
+                      awaitingApproval: activePendingApproval !== null,
+                      awaitingUserInput: pendingUserInputs.length > 0,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}

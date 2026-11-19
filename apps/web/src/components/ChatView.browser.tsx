@@ -8022,13 +8022,15 @@ describe("ChatView transcript geometry (full app)", () => {
       }));
       await waitForTranscriptLayoutToSettle(container);
       expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
-      const beforeWorkHeight = container.scrollHeight;
       for (let index = 0; index < 4; index += 1) {
         appendWork(index);
         await waitForLayout();
       }
       await waitForTranscriptLayoutToSettle(container);
-      expect(container.scrollHeight).toBeGreaterThan(beforeWorkHeight + 20);
+      // The run of the moment rides in the working indicator, not the history.
+      expect(
+        document.querySelector("[data-working-tool-call='true']")?.textContent ?? "",
+      ).toContain("transcript-layout-3");
       expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
 
       // Reading earlier output releases follow even between text messages.
