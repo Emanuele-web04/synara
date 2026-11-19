@@ -29,9 +29,9 @@ async function makeCheckouts() {
   );
   temporaryDirectories.push(root);
   const sourceRoot = path.join(root, "source");
-  const worktreeRoot = path.join(root, "worktree");
+  const worktreeRoot = path.join(root, "managed", "worktree");
   await fs.mkdir(sourceRoot);
-  await fs.mkdir(worktreeRoot);
+  await fs.mkdir(worktreeRoot, { recursive: true });
   return { sourceRoot, worktreeRoot };
 }
 
@@ -253,28 +253,46 @@ describe.runIf(process.platform === "darwin")("cloneWorktreeDependencies", () =>
     ).toEqual([]);
   });
 
-  it("keeps relative links and skips an APFS clone containing an absolute link", async () => {
+  it("keeps portable links and skips trees with absolute or relocated external links", async () => {
     const roots = await makeGitCheckouts();
-    for (const file of ["package.json", "bun.lock", "Linked package/package.json"]) {
+    for (const file of [
+      "package.json",
+      "bun.lock",
+      "Linked package/package.json",
+      "External package/package.json",
+    ]) {
       await writeToBoth(roots, file);
     }
     const portable = path.join(roots.sourceRoot, "node_modules");
     const linked = path.join(roots.sourceRoot, "Linked package/node_modules");
+    const external = path.join(roots.sourceRoot, "External package/node_modules");
+    await fs.mkdir(external, { recursive: true });
+    await writeFile(path.join(path.dirname(roots.sourceRoot), "local-package/index.js"), "local\n");
     await writeFile(path.join(portable, "a/index.js"), "a\n");
     await writeFile(path.join(linked, "b/index.js"), "b\n");
     await fs.symlink("a/index.js", path.join(portable, "entry.js"));
     await fs.symlink(path.join(linked, "b/index.js"), path.join(linked, "entry.js"));
+    await fs.symlink("../../../local-package/index.js", path.join(external, "entry.js"));
+    expect(await fs.readFile(path.join(external, "entry.js"), "utf8")).toBe("local\n");
     const result = await cloneWorktreeDependencies({
       ...roots,
-      trackedPaths: ["package.json", "bun.lock", "Linked package/package.json"],
+      trackedPaths: [
+        "package.json",
+        "bun.lock",
+        "Linked package/package.json",
+        "External package/package.json",
+      ],
     });
-    expect(result).toEqual({ kind: "cloned", cloned: 1, failed: 1 });
+    expect(result).toEqual({ kind: "cloned", cloned: 1, failed: 2 });
     const published = path.join(roots.worktreeRoot, "node_modules");
     expect(await fs.readlink(path.join(published, "entry.js"))).toBe("a/index.js");
     await fs.writeFile(path.join(published, "a/index.js"), "changed\n");
     expect(await fs.readFile(path.join(portable, "a/index.js"), "utf8")).toBe("a\n");
     await expect(
       fs.stat(path.join(roots.worktreeRoot, "Linked package/node_modules")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(roots.worktreeRoot, "External package/node_modules")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 

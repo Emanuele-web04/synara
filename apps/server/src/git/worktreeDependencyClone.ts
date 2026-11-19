@@ -5,6 +5,7 @@ import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 
 import { runProcess } from "../processRunner.ts";
+import { isContainedPath } from "../workspace/realPathContainment.ts";
 
 /**
  * Copy-on-write dependency seeding for new worktrees.
@@ -20,7 +21,7 @@ import { runProcess } from "../processRunner.ts";
  *   so the one-call directory clone runs through JXA, which ships with macOS.
  * - Only when every tracked lockfile in the new worktree is byte-identical to
  *   the source checkout's, so the cloned tree matches what the branch expects.
- * - Only publishes to Git-ignored paths. Absolute dependency links skip a tree.
+ * - Only publishes to Git-ignored paths. Links that cannot move safely skip a tree.
  * - Never replaces an existing directory, and never fails worktree creation:
  *   callers treat the result as a hint and fall back to today's behaviour.
  */
@@ -253,26 +254,48 @@ async function ignoredTargets(
   return pairs.filter((_pair, index) => ignored.has(relativePaths[index]!));
 }
 
-// Skip trees with absolute symlinks. Relative workspace links can move with the tree.
-async function findTreesWithAbsoluteLinks(
-  stagingRoot: string,
-  trees: ReadonlyArray<string>,
-  signal?: AbortSignal,
+type StagedClone = DependencyClonePair & { readonly stagingPath: string };
+
+// Inspect the snapshot, but compare each link at its original and final location.
+async function findTreesWithUnsafeLinks(
+  roots: { sourceRoot: string; worktreeRoot: string; stagingRoot: string },
+  trees: ReadonlyArray<StagedClone>,
+  signal: AbortSignal,
 ): Promise<ReadonlySet<string>> {
   const result = await runProcess(
     "/usr/bin/find",
-    ["-P", ...trees, "-type", "l", "-lname", "/*", "-print0"],
-    {
-      timeoutMs: SEED_TIMEOUT_MS,
-      signal,
-    },
+    ["-P", ...trees.map((tree) => tree.stagingPath), "-type", "l", "-print0"],
+    { timeoutMs: SEED_TIMEOUT_MS, signal },
   );
-  return new Set(
-    result.stdout
-      .split("\0")
-      .filter(Boolean)
-      .map((link) => nodePath.relative(stagingRoot, link).split(nodePath.sep, 1)[0]!),
-  );
+  const byStageName = new Map(trees.map((tree) => [nodePath.basename(tree.stagingPath), tree]));
+  const unsafe = new Set<string>();
+  const links = result.stdout.split("\0").filter(Boolean);
+  const readConcurrency = 64;
+  for (let offset = 0; offset < links.length; offset += readConcurrency) {
+    signal.throwIfAborted();
+    await Promise.all(
+      links.slice(offset, offset + readConcurrency).map(async (link) => {
+        const stageName = nodePath.relative(roots.stagingRoot, link).split(nodePath.sep, 1)[0]!;
+        const tree = byStageName.get(stageName);
+        if (!tree || unsafe.has(tree.stagingPath)) return;
+
+        const contents = await nodeFs.readlink(link).catch(() => null);
+        if (contents === null || nodePath.isAbsolute(contents)) {
+          unsafe.add(tree.stagingPath);
+          return;
+        }
+
+        const directory = nodePath.dirname(nodePath.relative(tree.stagingPath, link));
+        const original = nodePath.resolve(tree.source, directory, contents);
+        const relocated = nodePath.resolve(tree.target, directory, contents);
+        const expected = isContainedPath(roots.sourceRoot, original)
+          ? nodePath.resolve(roots.worktreeRoot, nodePath.relative(roots.sourceRoot, original))
+          : original;
+        if (relocated !== expected) unsafe.add(tree.stagingPath);
+      }),
+    );
+  }
+  return unsafe;
 }
 
 /** Stage and validate privately, then publish without replacing any existing target. */
@@ -288,7 +311,10 @@ export async function cloneWorktreeDependencies(input: {
   const plan = await planDependencyClones({ ...input, signal });
   if (plan.kind === "skip") return { kind: "skipped", reason: plan.reason };
 
-  const worktreeRoot = await nodeFs.realpath(input.worktreeRoot);
+  const [sourceRoot, worktreeRoot] = await Promise.all([
+    nodeFs.realpath(input.sourceRoot),
+    nodeFs.realpath(input.worktreeRoot),
+  ]);
   const pairs = await ignoredTargets(worktreeRoot, plan.pairs, signal);
   if (pairs.length === 0) return { kind: "skipped", reason: "target-not-ignored" };
 
@@ -297,28 +323,31 @@ export async function cloneWorktreeDependencies(input: {
     nodePath.join(nodePath.dirname(worktreeRoot), ".synara-deps-"),
   );
   try {
-    const stagingPairs = pairs.map((pair, index) => ({
-      source: pair.source,
-      target: nodePath.join(stagingRoot, String(index)),
+    const staged = pairs.map((pair, index) => ({
+      ...pair,
+      stagingPath: nodePath.join(stagingRoot, String(index)),
     }));
     const cloneDirectories = input.cloneDirectories ?? cloneDirectoriesWithClonefile;
-    const outcomes = await cloneDirectories(stagingPairs, signal);
-    const complete: DependencyClonePair[] = [];
-    for (const [index, pair] of stagingPairs.entries()) {
-      if (outcomes[index] && (await lstatOrNull(pair.target))?.isDirectory()) {
-        complete.push({ source: pair.target, target: pairs[index]!.target });
+    const outcomes = await cloneDirectories(
+      staged.map((tree) => ({ source: tree.source, target: tree.stagingPath })),
+      signal,
+    );
+    const complete: StagedClone[] = [];
+    for (const [index, tree] of staged.entries()) {
+      if (outcomes[index] && (await lstatOrNull(tree.stagingPath))?.isDirectory()) {
+        complete.push(tree);
       }
     }
     if (complete.length === 0) return { kind: "cloned", cloned: 0, failed: pairs.length };
 
-    const treesWithAbsoluteLinks = await findTreesWithAbsoluteLinks(
-      stagingRoot,
-      complete.map((pair) => pair.source),
+    const unsafeTrees = await findTreesWithUnsafeLinks(
+      { sourceRoot, worktreeRoot, stagingRoot },
+      complete,
       signal,
     );
-    const publish = complete.filter(
-      (pair) => !treesWithAbsoluteLinks.has(nodePath.basename(pair.source)),
-    );
+    const publish = complete
+      .filter((tree) => !unsafeTrees.has(tree.stagingPath))
+      .map((tree) => ({ source: tree.stagingPath, target: tree.target }));
     // Drop path-keyed caches in staging, where cleanup can only touch our own clone.
     await Promise.all(
       publish.flatMap((pair) =>
