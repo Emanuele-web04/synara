@@ -306,7 +306,11 @@ describe("listShortcutEditorDefinitions", () => {
   it("gives each numbered family one member per number key", () => {
     const families = listShortcutEditorDefinitions().filter((definition) => definition.members);
 
-    expect(families.map((family) => family.id)).toEqual(["thread.jump", "space.jump"]);
+    expect(families.map((family) => family.id)).toEqual([
+      "thread.jump",
+      "space.jump",
+      "threadTab.jump",
+    ]);
     for (const family of families) {
       expect(family.members?.map((member) => member.commands)).toEqual(
         family.commands.map((command) => [command]),

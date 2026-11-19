@@ -31,7 +31,7 @@ Settings → Keybindings lists every built-in command with its shortcuts and wri
 - If the chord types a character on your keyboard layout (for example ⌥L types "@" on a German Mac), the recorder warns that saving stops those keys from typing it.
 - When the keys already run another command in a context that can overlap, the recorder names it and saving moves the shortcut over. If it has no other shortcuts, the other command is left unassigned. Commands for two different focused surfaces, such as `composerFocus` and `terminalFocus`, never overlap, because only one surface has focus at a time.
 - The plus adds another shortcut to a command, and the trash removes one. A command with none left shows as Unassigned.
-- "Jump to visible thread 1–9" and "Jump to space 1–9" are each rebound as one modifier combination across the number keys. Rebind a single number in the file and the list shows the nine commands separately.
+- "Jump to visible thread 1–9", "Jump to space 1–9" and "Jump to tab 1–9" are each rebound as one modifier combination across the number keys. Rebind a single number in the file and the list shows the nine commands separately.
 - "Reset to default" in the recorder restores one command. If another command has since taken one of its shipped keys, the recorder names it first, and resetting takes the key back. "Reset all to defaults" restores every built-in command. Project script shortcuts are kept.
 - If the bindings change while the recorder is open (another window, or `keybindings.json` edited by hand), it says so and won't save. The server also rejects any edit made against bindings that are no longer there.
 
@@ -243,6 +243,7 @@ The command identifiers are defined by [`STATIC_KEYBINDING_COMMANDS`](packages/c
 | `chat.visible.next`, `chat.visible.previous`             | Cycle threads currently visible in the sidebar.                                                      |
 | `chat.attention.next`                                    | Cycle through chats needing attention: waiting on you first, then unseen work.                       |
 | `threadTab.next`, `threadTab.previous`                   | Select the next or previous open thread tab.                                                         |
+| `threadTab.jump.1` … `threadTab.jump.9`                  | Select an open thread tab by its position in the tab strip; no default binding.                      |
 | `editor.openFavorite`                                    | Open the current project or worktree in the last-used editor.                                        |
 | `editor.file.save`                                       | Save the focused file editor's unsaved changes.                                                      |
 | `editor.commands`                                        | Open the editor command picker for the focused code editor.                                          |

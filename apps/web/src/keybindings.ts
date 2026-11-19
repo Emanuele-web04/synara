@@ -8,6 +8,8 @@ import {
   type SpaceJumpKeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
+  THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
+  type ThreadTabJumpKeybindingCommand,
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { isUnassignedKeybindingShortcut } from "@synara/shared/keybindingRules";
@@ -857,6 +859,13 @@ export function spaceJumpCommandForIndex(index: number): SpaceJumpKeybindingComm
 
 export function spaceJumpIndexFromCommand(command: string): number | null {
   const index = SPACE_JUMP_KEYBINDING_COMMANDS.indexOf(command as SpaceJumpKeybindingCommand);
+  return index === -1 ? null : index;
+}
+
+export function threadTabJumpIndexFromCommand(command: string): number | null {
+  const index = THREAD_TAB_JUMP_KEYBINDING_COMMANDS.indexOf(
+    command as ThreadTabJumpKeybindingCommand,
+  );
   return index === -1 ? null : index;
 }
 
