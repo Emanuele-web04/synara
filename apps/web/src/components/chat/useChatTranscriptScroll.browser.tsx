@@ -212,7 +212,7 @@ describe("transcript detach on reader gestures", () => {
     // Detached nodes have no layout, so model an overflowing viewport directly.
     const node = document.createElement("div");
     Object.defineProperties(node, {
-      scrollHeight: { value: 1_000 },
+      scrollHeight: { value: 1_000, writable: true },
       clientHeight: { value: 200 },
       scrollTop: { value: 800, writable: true },
     });
@@ -224,6 +224,63 @@ describe("transcript detach on reader gestures", () => {
       } as unknown as LegendListRef,
     };
   }
+
+  it.each([
+    { gesture: "wheel", movedUp: true },
+    { gesture: "keyboard", movedUp: true },
+    { gesture: "wheel", movedUp: false },
+    { gesture: "keyboard", movedUp: false },
+  ] as const)(
+    "retains observed $gesture ownership across row compensation (moved up: $movedUp)",
+    async ({ gesture, movedUp }) => {
+      const listRef = createOverflowingList();
+      const node = listRef.current.getScrollableNode() as HTMLElement;
+      document.body.append(node);
+      let controls: ReturnType<typeof useChatTranscriptScroll> | undefined;
+      function Harness() {
+        controls = useChatTranscriptScroll({
+          activeThreadId: ThreadId.makeUnsafe("gesture-reflow"),
+          legendListRef: listRef,
+          timelineEntries: EMPTY_TIMELINE,
+          hasStreamingAssistantText: true,
+          composerTranscriptInsetPx: 0,
+          isInactiveSplitPane: false,
+        });
+        return null;
+      }
+      const screen = await render(<Harness />);
+      try {
+        await waitForFrames();
+        vi.mocked(listRef.current.scrollToEnd).mockClear();
+        if (gesture === "wheel") {
+          controls!.onMessagesWheelBase({ ctrlKey: false, deltaY: -100 } as never);
+        } else {
+          node.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+        }
+        if (movedUp) {
+          node.scrollTop = 700;
+          controls!.onMessagesScrollBase();
+        }
+        // A row above the reader settles before the delayed gesture check:
+        // scrollTop returns to its origin, while the actual bottom moves away.
+        Object.defineProperty(node, "scrollHeight", { value: 1_400 });
+        node.scrollTop = 800;
+        controls!.onMessagesScrollBase();
+        if (gesture === "keyboard") {
+          node.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowUp", bubbles: true }));
+        }
+        // Let the keyboard no-op window and both wheel frames finish before
+        // asserting that compensation did not erase observed upward movement.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await waitForFrames();
+        expect(controls!.isUserScrollDetached).toBe(movedUp);
+        expect(listRef.current.scrollToEnd).toHaveBeenCalledTimes(movedUp ? 0 : 1);
+      } finally {
+        await screen.unmount();
+        node.remove();
+      }
+    },
+  );
 
   it("commits the detached follow state before an already queued frame runs", async () => {
     const listRef = createOverflowingList();
