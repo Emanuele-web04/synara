@@ -16,6 +16,7 @@ import {
   type ProjectAgentConfig,
 } from "@synara/contracts";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -95,7 +96,23 @@ function makeWorld() {
   } = { current: null };
   /** Turn starts fail while set, as when the engine cannot take the command. */
   const failTurnStarts = { current: false };
-  return { dispatched, turns, messages, shells, gate, failTurnStarts };
+  /**
+   * The projection's pending turn start per thread: one slot, as in ProjectionTurns. Dispatched
+   * turn starts fill it only while `projectPendingStarts` is set; a test clears it the way a
+   * provider turn that starts running does.
+   */
+  const pendingStarts = new Map<string, string>();
+  const projectPendingStarts = { current: false };
+  return {
+    dispatched,
+    turns,
+    messages,
+    shells,
+    gate,
+    failTurnStarts,
+    pendingStarts,
+    projectPendingStarts,
+  };
 }
 
 type World = ReturnType<typeof makeWorld>;
@@ -135,6 +152,13 @@ function makeLayer(world: World) {
         }
         return world.turns.get(input.threadId) ?? [];
       }),
+    getPendingTurnStartByThreadId: (input: { threadId: string }) =>
+      Effect.sync(() => {
+        const messageId = world.pendingStarts.get(input.threadId);
+        return messageId === undefined
+          ? Option.none()
+          : Option.some({ threadId: input.threadId, messageId } as never);
+      }),
     getByTurnId: (input: { threadId: string; turnId: string }) =>
       Effect.succeed(
         Option.fromNullishOr(
@@ -150,6 +174,9 @@ function makeLayer(world: World) {
         ? Effect.fail({ _tag: "EngineUnavailable", message: "The engine is busy." })
         : Effect.sync(() => {
             world.dispatched.push(command);
+            if (command.type === "thread.turn.start" && world.projectPendingStarts.current) {
+              world.pendingStarts.set(command.threadId, command.message.messageId);
+            }
             return { sequence: world.dispatched.length };
           }),
   } as unknown as OrchestrationEngineService["Service"]);
@@ -172,6 +199,7 @@ function makeLayer(world: World) {
     Layer.provide(
       Layer.succeed(ProviderHealth, {
         getStatuses: Effect.succeed([]),
+        refresh: Effect.succeed([]),
       } as unknown as ProviderHealth["Service"]),
     ),
     Layer.provide(Layer.succeed(GitCore, {} as unknown as GitCore["Service"])),
@@ -320,6 +348,49 @@ it.effect("delegates from a user request with provenance, then settles and repor
     assert.include(reports[0]!.message.text, "Added multiply() with tests; PR #7.");
     const snapshot = yield* bots.snapshot();
     assert.strictEqual(snapshot.delegations[0]?.state, "completed");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("starts a second hand-off to one bot only after the first turn start is taken", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    world.projectPendingStarts.current = true;
+    const bots = yield* BotService;
+    const caller = yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" });
+    assert.ok(caller);
+
+    const first = yield* bots.delegate({
+      caller,
+      targetBotId: FRONTEND.projectId,
+      brief: "Part one",
+      requestId: "part-1",
+    });
+    const firstMessageId = `${BOT_DELEGATION_MESSAGE_PREFIX}${first.id}`;
+    assert.strictEqual(world.pendingStarts.get(FRONTEND.threadId), firstMessageId);
+
+    // While the first start still holds the thread's pending slot, starting the second would
+    // replace it and attribute the first turn to the second message: the second waits.
+    const second = yield* Effect.forkChild(
+      bots.delegate({
+        caller,
+        targetBotId: FRONTEND.projectId,
+        brief: "Part two",
+        requestId: "part-2",
+      }),
+    );
+    yield* TestClock.adjust("500 millis");
+    assert.strictEqual(turnStarts(world, FRONTEND.threadId).length, 1);
+
+    // The first turn starts running, which clears the slot; the second start goes out.
+    world.pendingStarts.delete(FRONTEND.threadId);
+    yield* TestClock.adjust("100 millis");
+    const secondDelegation = yield* Fiber.join(second);
+    assert.deepStrictEqual(
+      turnStarts(world, FRONTEND.threadId).map((start) => start.message.messageId as string),
+      [firstMessageId, `${BOT_DELEGATION_MESSAGE_PREFIX}${secondDelegation.id}`],
+    );
   }).pipe(Effect.provide(makeLayer(world)));
 });
 

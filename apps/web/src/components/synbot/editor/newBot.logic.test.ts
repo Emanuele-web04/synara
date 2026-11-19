@@ -4,11 +4,72 @@ import { describe, expect, it } from "vitest";
 import { blankBotEditorForm } from "./botEditor.logic";
 import {
   chooseAllProjects,
+  newBotEngineProvider,
   newBotStepIssue,
   newBotSteps,
   projectsSummary,
   toggleBotProject,
 } from "./newBot.logic";
+
+describe("newBotEngineProvider", () => {
+  const base = {
+    preferred: "codex" as const,
+    hiddenProviders: [],
+    providerOrder: [],
+    hasDefaultModel: (provider: string) => provider !== "pi",
+  };
+
+  it("keeps the preferred engine while it can run or its status is still unknown", () => {
+    expect(newBotEngineProvider({ ...base, statuses: [] })).toBe("codex");
+    expect(
+      newBotEngineProvider({
+        ...base,
+        statuses: [
+          { provider: "codex", available: true },
+          { provider: "grok", available: true },
+        ],
+      }),
+    ).toBe("codex");
+  });
+
+  it("moves to the first available engine in the user's order when the preferred one cannot run", () => {
+    expect(
+      newBotEngineProvider({
+        ...base,
+        providerOrder: ["grok", "cursor"],
+        statuses: [
+          { provider: "codex", available: false },
+          { provider: "pi", available: true },
+          { provider: "cursor", available: true },
+          { provider: "grok", available: true },
+        ],
+      }),
+    ).toBe("grok");
+  });
+
+  it("skips hidden engines, and keeps the preferred one when nothing else can run", () => {
+    expect(
+      newBotEngineProvider({
+        ...base,
+        hiddenProviders: ["codex", "grok"],
+        statuses: [
+          { provider: "codex", available: true },
+          { provider: "grok", available: true },
+          { provider: "cursor", available: true },
+        ],
+      }),
+    ).toBe("cursor");
+    expect(
+      newBotEngineProvider({
+        ...base,
+        statuses: [
+          { provider: "codex", available: false },
+          { provider: "grok", available: false },
+        ],
+      }),
+    ).toBe("codex");
+  });
+});
 
 const engine = { provider: "codex", model: "gpt-5-codex" } as ModelSelection;
 const blank = blankBotEditorForm({ modelSelection: engine, mascotIndex: 0 });

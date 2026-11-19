@@ -98,6 +98,7 @@ import {
   summarizeDelegationResult,
   type DelegationReportEntry,
 } from "../botPrompts.ts";
+import { rankBotProviders } from "../botEngines.ts";
 import { evaluateDelegationSettlement } from "../delegationSettle.ts";
 import { evaluateMergeProof } from "../mergeProof.ts";
 import {
@@ -117,7 +118,8 @@ const MAIN_MASCOT: BotMascot = { shape: "synara", color: "#1a80fa" };
 const RECENT_DELEGATIONS = 60;
 const TASKS_PER_BOT = 40;
 const RECENT_TASK_MS = 7 * 24 * 60 * 60 * 1000;
-const STRONG_PROVIDER_ORDER: readonly ProviderKind[] = ["codex", "claudeAgent"];
+const PENDING_TURN_START_POLL_MS = 100;
+const PENDING_TURN_START_MAX_POLLS = 100;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
 const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
 /** A task whose worker these states hold is stopped by interrupting that worker's turn; a
@@ -397,6 +399,23 @@ const make = Effect.gen(function* () {
       );
   };
 
+  // A thread keeps one pending turn start until the provider turn it asked for is running. A
+  // second start in that window replaces it, so the first turn is attributed to the second
+  // message and the first message never gets a turn. Two hand-offs to one bot in a single turn
+  // hit that window, so a bot's turn start waits until the slot clears (bounded: a start that
+  // never runs must not block the bot forever).
+  const awaitPendingTurnStartCleared = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < PENDING_TURN_START_MAX_POLLS; attempt += 1) {
+        const pending = yield* projectionTurns
+          .getPendingTurnStartByThreadId({ threadId })
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isNone(pending)) return;
+        yield* Effect.sleep(PENDING_TURN_START_POLL_MS);
+      }
+      yield* Effect.logWarning("synbot.turn_start.pending_slot_timeout", { threadId });
+    });
+
   const startTurn = (input: {
     readonly threadId: ThreadId;
     readonly commandId: string;
@@ -404,6 +423,7 @@ const make = Effect.gen(function* () {
     readonly text: string;
   }) =>
     Effect.gen(function* () {
+      yield* awaitPendingTurnStartCleared(input.threadId);
       const shell = yield* snapshotQuery
         .getThreadShellById(input.threadId)
         .pipe(Effect.mapError(toServiceError("Could not load the bot thread.")));
@@ -560,12 +580,20 @@ const make = Effect.gen(function* () {
   const availableProviders = () =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
-      const statuses = yield* providerHealth.getStatuses;
-      return STRONG_PROVIDER_ORDER.filter((provider) => {
-        const enabled = settings?.providers?.[provider]?.enabled ?? true;
-        const status = statuses.find((entry) => entry.provider === provider);
-        return enabled && (status === undefined || status.available);
-      });
+      const isEnabled = (provider: ProviderKind) =>
+        settings?.providers?.[provider]?.enabled ?? true;
+      let statuses = yield* providerHealth.getStatuses;
+      // Right after launch the health probe may not have reported yet. Only bot creation picks
+      // an engine, so probe once in the foreground rather than guess an engine that cannot run.
+      if (
+        (Object.keys(DEFAULT_MODEL_BY_PROVIDER) as ProviderKind[]).some(
+          (provider) =>
+            isEnabled(provider) && !statuses.some((entry) => entry.provider === provider),
+        )
+      ) {
+        statuses = yield* providerHealth.refresh;
+      }
+      return rankBotProviders({ isEnabled, statuses });
     });
 
   const defaultModel = (kind: "strong" | "economy", near?: ModelSelection) =>
