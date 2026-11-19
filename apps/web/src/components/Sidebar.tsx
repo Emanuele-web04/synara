@@ -5164,8 +5164,13 @@ export default function Sidebar() {
       }),
     [visibleChatPreviewEntries, activeChatPreviewEntryId, chatPaging.previewLimit],
   );
+  // Local thread ids, not environment-qualified row keys: this feeds
+  // `visibleSidebarThreads`, which drives pull-request queries on chat rows.
   const renderedChatThreadIds = useMemo(
-    () => renderedChatEntries.map((entry) => entry.rowId),
+    () =>
+      renderedChatEntries
+        .filter((entry) => !entry.row.workspaceEntry.session)
+        .map((entry) => entry.row.thread.id),
     [renderedChatEntries],
   );
   // Active-family reveal can exceed the page cap; only offer more for genuinely hidden rows.
@@ -5909,24 +5914,45 @@ export default function Sidebar() {
     chatSectionExpanded,
     renderedChatEntries,
   ]);
-  const visibleWorkspaceThreadKeys = useMemo(
-    () => [...visibleWorkspaceThreads.keys()],
-    [visibleWorkspaceThreads],
+  // Shortcuts act on the list the selected panel actually shows: on Chats only
+  // chat rows, elsewhere project/activity rows (never hidden chat entries).
+  const actionableWorkspaceThreads = useMemo(() => {
+    if (showChatsPanel) {
+      const rows = new Map<
+        string,
+        { threadId: ThreadId; session: WorkspaceThreadEntry["session"] }
+      >();
+      for (const entry of renderedChatEntries) {
+        const session = entry.row.workspaceEntry.session;
+        if (session && (session.error || session.summary?.state !== "open" || !session.navigation))
+          continue;
+        rows.set(
+          workspaceThreadKey(
+            session?.host.executionScope.environmentId ?? localEnvironmentId,
+            entry.row.thread.id,
+          ),
+          { threadId: entry.row.thread.id, session },
+        );
+      }
+      return rows;
+    }
+    const chatKeys = new Set(
+      renderedChatEntries.map((entry) =>
+        workspaceThreadKey(
+          entry.row.workspaceEntry.session?.host.executionScope.environmentId ?? localEnvironmentId,
+          entry.row.thread.id,
+        ),
+      ),
+    );
+    const rows = new Map(visibleWorkspaceThreads);
+    for (const key of chatKeys) rows.delete(key);
+    return rows;
+  }, [showChatsPanel, renderedChatEntries, visibleWorkspaceThreads, localEnvironmentId]);
+  const actionableWorkspaceThreadKeys = useMemo(
+    () => [...actionableWorkspaceThreads.keys()],
+    [actionableWorkspaceThreads],
   );
-  // Digit shortcuts jump through visible rows: the Chats section hides project threads.
-  const visibleJumpThreadKeys = useMemo(
-    () =>
-      showChatsPanel
-        ? renderedChatEntries.map((entry) =>
-            workspaceThreadKey(
-              entry.row.workspaceEntry.session?.host.executionScope.environmentId ??
-                localEnvironmentId,
-              entry.row.thread.id,
-            ),
-          )
-        : visibleWorkspaceThreadKeys,
-    [localEnvironmentId, renderedChatEntries, showChatsPanel, visibleWorkspaceThreadKeys],
-  );
+  const visibleJumpThreadKeys = actionableWorkspaceThreadKeys;
   const activeWorkspaceThreadKey =
     pathname === "/remote"
       ? (() => {
@@ -5941,12 +5967,12 @@ export default function Sidebar() {
         : undefined;
   const activateWorkspaceThread = useCallback(
     (key: string) => {
-      const target = visibleWorkspaceThreads.get(key);
+      const target = actionableWorkspaceThreads.get(key);
       if (!target) return;
       if (target.session) openWorkspacePath(target.session, `/${target.threadId}`);
       else activateThreadFromSidebarIntent(target.threadId);
     },
-    [visibleWorkspaceThreads, activateThreadFromSidebarIntent],
+    [actionableWorkspaceThreads, activateThreadFromSidebarIntent],
   );
   // Only local IDs enter local detail subscriptions and git/PR queries.
   const visibleSidebarThreadIds = useMemo(
@@ -7479,7 +7505,7 @@ export default function Sidebar() {
       event.preventDefault();
       event.stopPropagation();
       const nextThreadId = getNextVisibleSidebarThreadId({
-        visibleThreadIds: visibleWorkspaceThreadKeys,
+        visibleThreadIds: actionableWorkspaceThreadKeys,
         activeThreadId: activeWorkspaceThreadKey,
         direction: command === "chat.visible.previous" ? "backward" : "forward",
       });
@@ -7544,7 +7570,7 @@ export default function Sidebar() {
     spaces,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
-    visibleWorkspaceThreadKeys,
+    actionableWorkspaceThreadKeys,
     activeWorkspaceThreadKey,
     activateWorkspaceThread,
   ]);

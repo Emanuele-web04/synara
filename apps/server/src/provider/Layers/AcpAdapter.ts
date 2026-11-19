@@ -401,6 +401,7 @@ export function makeAcpAdapter(
 
     // Discovery sessions are disposable and never enter the live session directory.
     const makeAcpDiscoveryRuntime = (input: {
+      readonly settings?: AcpAgentRuntimeSettings;
       readonly command?: string;
       readonly account: AcpAgentBoundary;
       readonly cwd: string;
@@ -409,6 +410,7 @@ export function makeAcpAdapter(
       makeGenericAcpRuntime({
         agentSettings: {
           ...agentSettings,
+          ...input.settings,
           ...(input.command ? { command: input.command } : {}),
           ...input.account,
         },
@@ -427,6 +429,32 @@ export function makeAcpAdapter(
       homeDir: serverConfig.homeDir,
       isolationRootDir: serverConfig.stateDir,
     });
+    // The resolved instance's ACP launch config reaches discovery as top-level
+    // keys merged by ProviderDiscoveryService; the contract types stop at
+    // `binaryPath`, so read the extras defensively.
+    const acpDiscoverySettings = (input: unknown): AcpAgentRuntimeSettings => {
+      if (!isRecord(input)) return {};
+      const command = typeof input.command === "string" ? input.command.trim() : "";
+      const args = Array.isArray(input.args)
+        ? input.args.filter((entry): entry is string => typeof entry === "string")
+        : undefined;
+      const authMethodId = typeof input.authMethodId === "string" ? input.authMethodId : undefined;
+      const modelConfigId =
+        typeof input.modelConfigId === "string" ? input.modelConfigId : undefined;
+      const effortConfigId =
+        typeof input.effortConfigId === "string" ? input.effortConfigId : undefined;
+      const models = Array.isArray(input.models)
+        ? (input.models as AcpAgentRuntimeSettings["models"])
+        : undefined;
+      return {
+        ...(command ? { command } : {}),
+        ...(args !== undefined ? { args } : {}),
+        ...(authMethodId !== undefined ? { authMethodId } : {}),
+        ...(modelConfigId !== undefined ? { modelConfigId } : {}),
+        ...(effortConfigId !== undefined ? { effortConfigId } : {}),
+        ...(models !== undefined ? { models } : {}),
+      };
+    };
     // Generic ACP agents have no shared CLI catalog convention. The model
     // list merges the instance's configured catalog with the in-band ACP
     // `model` config option, which multiplexing agents (omp, opencode, ...)
@@ -434,11 +462,14 @@ export function makeAcpAdapter(
     const runAcpModelDiscovery = (
       command: string,
       account: AcpAgentBoundary,
+      settings: AcpAgentRuntimeSettings = {},
     ): Effect.Effect<ProviderListModelsResult, ProviderAdapterRequestError> =>
       Effect.gen(function* () {
-        const configured = parseConfiguredModelList(agentSettings.models);
+        const effective = { ...agentSettings, ...settings };
+        const configured = parseConfiguredModelList(effective.models);
         const discovered: ProviderModelDescriptor[] = [];
         const runtime = yield* makeAcpDiscoveryRuntime({
+          settings: effective,
           ...(command ? { command } : {}),
           account,
           cwd: serverConfig.homeDir,
@@ -449,6 +480,21 @@ export function makeAcpAdapter(
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
                 method: "model/list",
+                detail:
+                  cause instanceof Error && cause.message
+                    ? cause.message
+                    : "ACP agent model discovery failed unexpectedly.",
+              }),
+          ),
+        );
+        // Config options (including the model selector) only exist after the
+        // initialize/session-new handshake populates the runtime state.
+        yield* runtime.start().pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/new",
                 detail:
                   cause instanceof Error && cause.message
                     ? cause.message
@@ -470,7 +516,7 @@ export function makeAcpAdapter(
           ),
         );
         const modelConfig = findSelectConfig(configOptions, {
-          id: agentSettings.modelConfigId?.trim() || "model",
+          id: effective.modelConfigId?.trim() || "model",
           category: "model",
         });
         for (const option of modelConfig ? flattenConfigOptions(modelConfig.options) : []) {
@@ -2174,9 +2220,24 @@ export function makeAcpAdapter(
     const listModels: NonNullable<AcpAdapterShape["listModels"]> = (input) =>
       discoveryLock.withPermits(1)(
         Effect.gen(function* () {
-          const command = input.binaryPath?.trim() || agentSettings.command?.trim() || "";
+          const settings = acpDiscoverySettings(input);
+          const command =
+            input.binaryPath?.trim() ||
+            settings.command?.trim() ||
+            agentSettings.command?.trim() ||
+            "";
           const account = acpBoundary(input);
-          const cacheKey = [command, acpInstanceCacheScope(account)].join("\u0000");
+          const cacheKey = [
+            command,
+            JSON.stringify([
+              settings.args,
+              settings.models,
+              settings.authMethodId,
+              settings.modelConfigId,
+              settings.effortConfigId,
+            ]),
+            acpInstanceCacheScope(account),
+          ].join("\u0000");
           const cached = modelDiscoveryCache.get(cacheKey);
           const catalogFromCache = cached !== undefined && cached.expiresAt > Date.now();
           if (catalogFromCache) {
@@ -2188,7 +2249,7 @@ export function makeAcpAdapter(
           const catalog: ProviderListModelsResult =
             cached !== undefined && catalogFromCache
               ? cached.result
-              : yield* runAcpModelDiscovery(command, account).pipe(
+              : yield* runAcpModelDiscovery(command, account, settings).pipe(
                   Effect.timeoutOption(ACP_MODEL_DISCOVERY_TIMEOUT_MS),
                   Effect.flatMap(
                     Option.match({
@@ -2238,12 +2299,19 @@ export function makeAcpAdapter(
             });
           }
           const account = acpBoundary(input);
-          const cacheKey = `${input.binaryPath?.trim() || agentSettings.command?.trim() || ""}\u0000${cwd}\u0000${acpInstanceCacheScope(account)}`;
+          const settings = acpDiscoverySettings(input);
+          const command =
+            input.binaryPath?.trim() ||
+            settings.command?.trim() ||
+            agentSettings.command?.trim() ||
+            "";
+          const cacheKey = `${command}\u0000${JSON.stringify([settings.args, settings.authMethodId])}\u0000${cwd}\u0000${acpInstanceCacheScope(account)}`;
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
           const runtime = yield* makeAcpDiscoveryRuntime({
+            settings,
             ...(input.binaryPath ? { command: input.binaryPath } : {}),
             account,
             cwd,

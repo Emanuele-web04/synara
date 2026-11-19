@@ -369,8 +369,9 @@ export function AcpAgentLaunchFields({ config, onCommit }: AcpInstanceConfigFiel
           value={acpArgsToText(readConfigArray(config, "args"))}
           onCommit={(text) => {
             const args = acpArgsFromText(text);
-            // Undefined clears the key on write so the schema never sees a string argv.
-            onCommit("args", args.length > 0 ? args : undefined);
+            // `[]` is a real value (no arguments); clearing the key entirely
+            // would restore the `["acp"]` spawn default for standalone agents.
+            onCommit("args", args);
           }}
           placeholder="acp"
           spellCheck={false}

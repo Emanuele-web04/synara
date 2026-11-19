@@ -151,11 +151,11 @@ export function ProviderAccountsList(props: {
       ...providerInstanceLaunchConfigFor(input.provider, props.settings),
       ...input.config,
     };
-    // The dialog collects argv as one line; the instance config carries an array.
-    if (input.provider === "acp") {
-      const args = acpArgsFromText(typeof config.args === "string" ? config.args : "");
-      if (args.length > 0) config.args = args;
-      else delete config.args;
+    // The dialog collects argv as one line; the instance config carries an
+    // array. An empty list stays `[]`: deleting the key would make the spawn
+    // helper substitute its `["acp"]` default for a standalone executable.
+    if (input.provider === "acp" && !Array.isArray(config.args)) {
+      config.args = acpArgsFromText(typeof config.args === "string" ? config.args : "");
     }
     const nextInstances = {
       ...props.settings.providerInstances,

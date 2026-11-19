@@ -56,6 +56,7 @@
   "newTerminalTab": "New Terminal Tab",
   "toggleSidebar": "Toggle Sidebar",
   "toggleBrowser": "Toggle Browser",
+  "alwaysOnTop": "Always on Top",
   "nav_shortcuts": "Keyboard Shortcuts",
   "appSnapDiscarded": "AppSnap discarded",
   "appSnapFailed": "AppSnap failed",

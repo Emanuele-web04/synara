@@ -2111,7 +2111,7 @@ function configureApplicationMenu(): void {
         { type: "separator" },
         {
           id: "always-on-top",
-          label: "Always on Top",
+          label: t("desktop:alwaysOnTop"),
           type: "checkbox",
           enabled: false,
           click: () => {

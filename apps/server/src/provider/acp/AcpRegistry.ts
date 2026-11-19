@@ -222,15 +222,25 @@ async function resolveAvailability(
   const target = binaryTargetFor(agent, platformKey);
   if (!id || !version || !target) return undefined;
   const relCmd = asString(target.cmd)!.replaceAll("\\", "/").replace(/^\.\//u, "");
-  const parent = nodePath.join(synaraAcpAgentsDir(synaraBaseDir), sanitizePathSegment(id));
-  const currentDir = nodePath.join(parent, sanitizePathSegment(version));
+  // Unsafe registry metadata is a hard failure on install; on the read-only
+  // availability path it simply means nothing is installed.
+  let parent: string;
+  let currentDir: string;
+  let sanitizedVersion: string;
+  try {
+    parent = nodePath.join(synaraAcpAgentsDir(synaraBaseDir), sanitizePathSegment(id, "agent id"));
+    sanitizedVersion = sanitizePathSegment(version, "version");
+    currentDir = nodePath.join(parent, sanitizedVersion);
+  } catch {
+    return undefined;
+  }
   const managedCommand = nodePath.join(currentDir, relCmd);
   if ((await hasInstallMarker(currentDir)) && (await stat(managedCommand).catch(() => null))) {
     return { state: "installed", path: managedCommand };
   }
   try {
     for (const entry of await readdir(parent)) {
-      if (entry === sanitizePathSegment(version)) continue;
+      if (entry === sanitizedVersion) continue;
       if (await hasInstallMarker(nodePath.join(parent, entry))) {
         return { state: "update-available", installedVersion: entry };
       }
@@ -289,7 +299,14 @@ export function synaraAcpAgentsDir(synaraBaseDir: string): string {
   return nodePath.join(synaraBaseDir, "acp-agents");
 }
 
-const sanitizePathSegment = (value: string): string => value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+const sanitizePathSegment = (value: string, label: string): string => {
+  const sanitized = value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  // "." and ".." survive the character filter but escape the agent directory.
+  if (sanitized === "" || sanitized === "." || sanitized === "..") {
+    throw new Error(`Registry ${label} "${value}" is not a safe path segment.`);
+  }
+  return sanitized;
+};
 
 async function downloadArchive(url: string): Promise<Buffer> {
   const response = await fetch(url, {
@@ -343,6 +360,14 @@ async function installBinaryAgent(
 ): Promise<AcpRegistryInstallResult> {
   const id = asString(agent.id)!;
   const version = asString(agent.version)!;
+  // Validate path segments before any filesystem use: "." and ".." survive the
+  // character filter but escape the agent directory during the recursive delete.
+  const agentsRoot = synaraAcpAgentsDir(synaraBaseDir);
+  const parent = nodePath.join(agentsRoot, sanitizePathSegment(id, "agent id"));
+  const installDir = nodePath.join(parent, sanitizePathSegment(version, "version"));
+  if (!installDir.startsWith(parent + nodePath.sep)) {
+    throw new Error(`Registry install path escapes the agent directory for "${id}".`);
+  }
   const target = binaryTargetFor(agent, platformKey);
   if (!target) {
     throw new Error(`"${asString(agent.name) ?? id}" has no build for ${platformKey}`);
@@ -351,11 +376,10 @@ async function installBinaryAgent(
   const expectedSha = asString(target.sha256);
   const relCmd = asString(target.cmd)!.replaceAll("\\", "/").replace(/^\.\//u, "");
   const args = asArgs(target.args);
-
-  // Only this pinned id+version directory under Synara's private state.
-  const parent = nodePath.join(synaraAcpAgentsDir(synaraBaseDir), sanitizePathSegment(id));
-  const installDir = nodePath.join(parent, sanitizePathSegment(version));
   const command = nodePath.join(installDir, relCmd);
+  if (!command.startsWith(installDir + nodePath.sep)) {
+    throw new Error(`Registry command "${relCmd}" escapes the install directory for "${id}".`);
+  }
 
   const isInstalled = async (): Promise<boolean> => {
     try {

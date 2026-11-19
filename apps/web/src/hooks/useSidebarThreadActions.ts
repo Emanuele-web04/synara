@@ -858,99 +858,107 @@ export function useSidebarThreadActions(input: {
     ],
   );
 
+  /**
+   * Shared restore lifecycle: pending guard, existence check, unarchive request,
+   * and cleanup tracking. Surfaces report the outcome with their own
+   * notifications; a `false` outcome means another restore is already in flight.
+   * The promise-based `finally` keeps the React Compiler from bailing out of the
+   * module on `try`/`finally` statements.
+   */
+  const runArchivedThreadRestore = useCallback(
+    async (threadId: ThreadId): Promise<"restored" | "missing" | { error: unknown } | false> => {
+      const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
+      if (pendingThreadIds.has(threadId)) return false;
+      pendingThreadIds.add(threadId);
+      const runRestore = async (): Promise<"restored" | "missing" | { error: unknown }> => {
+        try {
+          const currentThread = getThreadFromState(useStore.getState(), threadId);
+          if (!currentThread) return "missing";
+          await unarchiveThreadIgnoringAlreadyRestored(threadId);
+          // A restored thread must not be swept by a worktree cleanup still
+          // waiting on the archive. The thread owns its worktree again.
+          archiveCleanupSequenceByThreadIdRef.current.delete(threadId);
+          acceptedArchiveSequenceByThreadIdRef.current.delete(threadId);
+          return "restored";
+        } catch (error) {
+          return { error };
+        }
+      };
+      return runRestore().finally(() => {
+        pendingThreadIds.delete(threadId);
+      });
+    },
+    [],
+  );
+
   const restoreArchivedThreadFromToast = useCallback(
     async (restoreInput: {
       threadId: ThreadId;
       returnToThreadOnUndo: boolean;
     }): Promise<boolean> => {
-      const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
-      if (pendingThreadIds.has(restoreInput.threadId)) return false;
-      pendingThreadIds.add(restoreInput.threadId);
-      const runRestore = async (): Promise<boolean> => {
-        try {
-          const currentThread = getThreadFromState(useStore.getState(), restoreInput.threadId);
-          if (!currentThread) {
-            toastManager.add({
-              type: "error",
-              title: t("settings:archived_couldNotRestore"),
-              description: t("workspace:toast_threadNoLongerExists"),
-            });
-            return false;
-          }
-          await unarchiveThreadIgnoringAlreadyRestored(restoreInput.threadId);
-          archiveCleanupSequenceByThreadIdRef.current.delete(restoreInput.threadId);
-          acceptedArchiveSequenceByThreadIdRef.current.delete(restoreInput.threadId);
-          if (restoreInput.returnToThreadOnUndo) {
-            void navigate({
-              to: "/$threadId",
-              params: { threadId: restoreInput.threadId },
-              replace: true,
-            });
-          }
-          return true;
-        } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: t("settings:archived_couldNotRestore"),
-            description:
-              error instanceof Error ? error.message : t("settings:toast_unableToRestoreThread"),
-          });
-          return false;
-        }
-      };
-      return runRestore().finally(() => {
-        pendingThreadIds.delete(restoreInput.threadId);
-      });
+      const outcome = await runArchivedThreadRestore(restoreInput.threadId);
+      if (outcome === false) return false;
+      if (outcome === "missing") {
+        toastManager.add({
+          type: "error",
+          title: t("settings:archived_couldNotRestore"),
+          description: t("workspace:toast_threadNoLongerExists"),
+        });
+        return false;
+      }
+      if (outcome !== "restored") {
+        toastManager.add({
+          type: "error",
+          title: t("settings:archived_couldNotRestore"),
+          description:
+            outcome.error instanceof Error
+              ? outcome.error.message
+              : t("settings:toast_unableToRestoreThread"),
+        });
+        return false;
+      }
+      if (restoreInput.returnToThreadOnUndo) {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: restoreInput.threadId },
+          replace: true,
+        });
+      }
+      return true;
     },
-    [navigate, t],
+    [navigate, t, runArchivedThreadRestore],
   );
 
   /**
    * Restores an archived thread from the sidebar's Archived section. Unlike the undo
    * toast this never navigates, and success is reported the same way Settings reports
    * it, so both restore entry points read alike.
-   *
-   * Shaped like `restoreArchivedThreadFromToast`: a `try`/`finally` statement makes React
-   * Compiler bail out of this module, so the pending flag is cleared on the promise
-   * instead.
    */
-  const restoreArchivedThread = useCallback((threadId: ThreadId): Promise<void> => {
-    const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
-    if (pendingThreadIds.has(threadId)) return Promise.resolve();
-    pendingThreadIds.add(threadId);
-    const runRestore = async (): Promise<void> => {
-      try {
-        const currentThread = getThreadFromState(useStore.getState(), threadId);
-        if (!currentThread) {
-          toastManager.add({
-            type: "error",
-            title: "Could not restore thread",
-            description: "The thread no longer exists.",
-          });
-          return;
-        }
-        await unarchiveThreadIgnoringAlreadyRestored(threadId);
-        // A restored thread must not be swept by a worktree cleanup still waiting on
-        // the archive. The thread owns its worktree again from here on.
-        archiveCleanupSequenceByThreadIdRef.current.delete(threadId);
-        acceptedArchiveSequenceByThreadIdRef.current.delete(threadId);
+  const restoreArchivedThread = useCallback(
+    async (threadId: ThreadId): Promise<void> => {
+      const outcome = await runArchivedThreadRestore(threadId);
+      if (outcome === false) return;
+      if (outcome === "restored") {
         toastManager.add({
           type: "success",
-          title: "Thread restored",
-          description: "The thread has been moved back to the sidebar.",
+          title: t("settings:archived_threadRestored"),
+          description: t("settings:theThreadHasBeenMovedBackToTheSidebar"),
         });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not restore thread",
-          description: error instanceof Error ? error.message : "Unable to restore the thread.",
-        });
+        return;
       }
-    };
-    return runRestore().finally(() => {
-      pendingThreadIds.delete(threadId);
-    });
-  }, []);
+      toastManager.add({
+        type: "error",
+        title: t("settings:archived_couldNotRestore"),
+        description:
+          outcome === "missing"
+            ? t("workspace:toast_threadNoLongerExists")
+            : outcome.error instanceof Error
+              ? outcome.error.message
+              : t("settings:toast_unableToRestoreThread"),
+      });
+    },
+    [t, runArchivedThreadRestore],
+  );
 
   const showArchiveUndoToast = useCallback(
     (threadId: ThreadId, archiveSequence: number, options?: { returnToThreadOnUndo?: boolean }) => {

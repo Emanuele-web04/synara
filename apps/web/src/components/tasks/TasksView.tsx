@@ -12,7 +12,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Empty,
-  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -123,18 +122,18 @@ export default function TasksView() {
                   <EmptyTitle>{t("common:task_emptyTitle")}</EmptyTitle>
                   <EmptyDescription>{t("common:task_emptyHint")}</EmptyDescription>
                 </EmptyHeader>
-                <EmptyContent>
-                  <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
-                </EmptyContent>
               </Empty>
             ) : (
-              <div className="flex flex-col gap-0.5">
-                <div role="list" aria-label={t("common:toDo")} className="flex flex-col gap-0.5">
-                  {openRows.map(renderRow)}
-                </div>
-                <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
+              <div role="list" aria-label={t("common:toDo")} className="flex flex-col gap-0.5">
+                {openRows.map(renderRow)}
               </div>
             )}
+
+            {/* One stable instance: remounting on the first task would drop
+                focus and the rejection-restored draft. */}
+            <div className={isEmptyList ? "flex justify-center" : "flex flex-col gap-0.5"}>
+              <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
+            </div>
 
             {completed.length > 0 ? (
               <div className="flex flex-col gap-0.5 opacity-80">

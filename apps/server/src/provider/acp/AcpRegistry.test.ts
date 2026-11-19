@@ -159,6 +159,43 @@ describe("installAcpRegistryAgent", () => {
     },
   );
 
+  it("refuses registry metadata whose path segments escape the agent directory", async () => {
+    for (const [id, version] of [
+      ["evil-agent", ".."],
+      ["..", "1.0.0"],
+      ["evil-agent", "."],
+    ] as const) {
+      vi.stubGlobal(
+        "fetch",
+        async () =>
+          new Response(
+            JSON.stringify({
+              version: "1",
+              agents: [
+                {
+                  id,
+                  name: "Evil",
+                  version,
+                  distribution: {
+                    binary: {
+                      "darwin-aarch64": {
+                        archive: "https://example.test/evil.tar.gz",
+                        cmd: "./evil",
+                      },
+                    },
+                  },
+                },
+              ],
+            }),
+          ),
+      );
+      clearAcpRegistryCacheForTests();
+      await expect(installAcpRegistryAgent(id, scratch())).rejects.toThrow(
+        /not a safe path segment/u,
+      );
+    }
+  });
+
   it("rejects unknown agents and agents without a platform build", async () => {
     stubFetch(ARCHIVE_BYTES);
     await expect(installAcpRegistryAgent("nope", scratch())).rejects.toThrow(

@@ -1178,7 +1178,7 @@
   "task_allDone": "All done",
   "task_emptySummary": "Add anything you need to do",
   "task_emptyTitle": "Nothing on your list",
-  "task_emptyHint": "Type a task below, or press Tab to hand it straight to an agent.",
+  "task_emptyHint": "Type a task below, or press Tab to open its card for an agent.",
   "task_priority_urgent": "Urgent",
   "task_priority_high": "High",
   "task_priority_medium": "Medium",
