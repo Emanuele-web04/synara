@@ -16,6 +16,8 @@ import {
 import {
   workspaceActivityRows,
   workspaceThreadKey,
+  deriveActionableWorkspaceThreads,
+  isShortcutActionableSession,
   deriveWorkspaceProjectThreadRows,
   mergeSidebarProjects,
   mergeSidebarChats,
@@ -5807,9 +5809,7 @@ export default function Sidebar() {
       { threadId: ThreadId; session: WorkspaceThreadEntry["session"] }
     >();
     const add = (threadId: ThreadId, session: WorkspaceThreadEntry["session"]) => {
-      // Cached disconnected rows stay visible, but shortcuts must never activate them.
-      if (session && (session.error || session.summary?.state !== "open" || !session.navigation))
-        return;
+      if (!isShortcutActionableSession(session)) return;
       rows.set(
         workspaceThreadKey(
           session?.host.executionScope.environmentId ?? localEnvironmentId,
@@ -5916,38 +5916,19 @@ export default function Sidebar() {
   ]);
   // Shortcuts act on the list the selected panel actually shows: on Chats only
   // chat rows, elsewhere project/activity rows (never hidden chat entries).
-  const actionableWorkspaceThreads = useMemo(() => {
-    if (showChatsPanel) {
-      const rows = new Map<
-        string,
-        { threadId: ThreadId; session: WorkspaceThreadEntry["session"] }
-      >();
-      for (const entry of renderedChatEntries) {
-        const session = entry.row.workspaceEntry.session;
-        if (session && (session.error || session.summary?.state !== "open" || !session.navigation))
-          continue;
-        rows.set(
-          workspaceThreadKey(
-            session?.host.executionScope.environmentId ?? localEnvironmentId,
-            entry.row.thread.id,
-          ),
-          { threadId: entry.row.thread.id, session },
-        );
-      }
-      return rows;
-    }
-    const chatKeys = new Set(
-      renderedChatEntries.map((entry) =>
-        workspaceThreadKey(
-          entry.row.workspaceEntry.session?.host.executionScope.environmentId ?? localEnvironmentId,
-          entry.row.thread.id,
-        ),
-      ),
-    );
-    const rows = new Map(visibleWorkspaceThreads);
-    for (const key of chatKeys) rows.delete(key);
-    return rows;
-  }, [showChatsPanel, renderedChatEntries, visibleWorkspaceThreads, localEnvironmentId]);
+  const actionableWorkspaceThreads = useMemo(
+    () =>
+      deriveActionableWorkspaceThreads({
+        showChatsPanel,
+        chatRows: renderedChatEntries.map((entry) => ({
+          threadId: entry.row.thread.id,
+          session: entry.row.workspaceEntry.session,
+        })),
+        visibleWorkspaceThreads,
+        localEnvironmentId,
+      }),
+    [showChatsPanel, renderedChatEntries, visibleWorkspaceThreads, localEnvironmentId],
+  );
   const actionableWorkspaceThreadKeys = useMemo(
     () => [...actionableWorkspaceThreads.keys()],
     [actionableWorkspaceThreads],

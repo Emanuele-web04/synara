@@ -4,11 +4,14 @@ import type { Project } from "../../types";
 import type { WorkspaceSummary } from "./workspaceFrame";
 import type { WorkspaceSession } from "./workspaceSessions";
 import {
+  deriveActionableWorkspaceThreads,
   deriveWorkspaceProjectThreadRows,
   mergeSidebarChats,
   mergeSidebarProjects,
   remoteSidebarProjects,
   workspaceActivityRows,
+  workspaceThreadKey,
+  type ActionableWorkspaceThread,
 } from "./workspaceSidebar";
 
 const project = (id = "same-project"): Project => ({
@@ -238,6 +241,45 @@ describe("unified workspace sidebar", () => {
     expect(
       workspaceActivityRows([session("mini"), session("other")]).settledOverrideByThreadId.size,
     ).toBe(0);
+  });
+  it("scopes shortcut rows to the Chats panel and skips disconnected sessions", () => {
+    const connected = {
+      ...session("mini"),
+      navigation: {} as WorkspaceSession["navigation"],
+    };
+    const disconnected = {
+      ...session("other"),
+      summary: { ...session("other").summary!, state: "closed" as const },
+    };
+    const chatRows = [
+      { threadId: ThreadId.makeUnsafe("local-chat"), session: null },
+      { threadId: ThreadId.makeUnsafe("remote-chat"), session: connected },
+      { threadId: ThreadId.makeUnsafe("dead-chat"), session: disconnected },
+    ];
+    const visible = new Map<string, ActionableWorkspaceThread>([
+      [
+        workspaceThreadKey("book", "project-thread"),
+        { threadId: ThreadId.makeUnsafe("project-thread"), session: null },
+      ],
+      ...chatRows.map((row): [string, ActionableWorkspaceThread] => [
+        workspaceThreadKey(row.session?.host.executionScope.environmentId ?? "book", row.threadId),
+        row,
+      ]),
+    ]);
+    const chats = deriveActionableWorkspaceThreads({
+      showChatsPanel: true,
+      chatRows,
+      visibleWorkspaceThreads: visible,
+      localEnvironmentId: "book",
+    });
+    expect([...chats.values()].map((row) => row.threadId)).toEqual(["local-chat", "remote-chat"]);
+    const projects = deriveActionableWorkspaceThreads({
+      showChatsPanel: false,
+      chatRows,
+      visibleWorkspaceThreads: visible,
+      localEnvironmentId: "book",
+    });
+    expect([...projects.values()].map((row) => row.threadId)).toEqual(["project-thread"]);
   });
   it("qualifies Activity rows and parent references while preserving original routing identity", () => {
     let first = session("mini");

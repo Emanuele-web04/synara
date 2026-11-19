@@ -31,6 +31,54 @@ export function workspaceThreadKey(environmentId: string, threadId: string): str
   return JSON.stringify([environmentId, threadId]);
 }
 
+export interface ActionableWorkspaceThread {
+  readonly threadId: ThreadId;
+  readonly session: WorkspaceSession | null;
+}
+
+/** Cached disconnected rows stay visible, but shortcuts must never activate them. */
+export function isShortcutActionableSession(session: WorkspaceSession | null): boolean {
+  return !session || (!session.error && session.summary?.state === "open" && !!session.navigation);
+}
+
+/**
+ * Rows that keyboard shortcuts may activate, scoped to the panel the user sees:
+ * on the Chats panel only chat rows; everywhere else the visible project/activity
+ * rows minus the chat entries so hidden conversations stay unreachable.
+ */
+export function deriveActionableWorkspaceThreads(input: {
+  readonly showChatsPanel: boolean;
+  readonly chatRows: readonly { threadId: ThreadId; session: WorkspaceSession | null }[];
+  readonly visibleWorkspaceThreads: ReadonlyMap<string, ActionableWorkspaceThread>;
+  readonly localEnvironmentId: string;
+}): Map<string, ActionableWorkspaceThread> {
+  if (input.showChatsPanel) {
+    const rows = new Map<string, ActionableWorkspaceThread>();
+    for (const row of input.chatRows) {
+      if (!isShortcutActionableSession(row.session)) continue;
+      rows.set(
+        workspaceThreadKey(
+          row.session?.host.executionScope.environmentId ?? input.localEnvironmentId,
+          row.threadId,
+        ),
+        { threadId: row.threadId, session: row.session },
+      );
+    }
+    return rows;
+  }
+  const chatKeys = new Set(
+    input.chatRows.map((row) =>
+      workspaceThreadKey(
+        row.session?.host.executionScope.environmentId ?? input.localEnvironmentId,
+        row.threadId,
+      ),
+    ),
+  );
+  const rows = new Map(input.visibleWorkspaceThreads);
+  for (const key of chatKeys) rows.delete(key);
+  return rows;
+}
+
 /** Shared paging keeps remote project rows and keyboard destinations in the same order. */
 export function deriveWorkspaceProjectThreadRows(input: {
   entry: WorkspaceProjectEntry;
