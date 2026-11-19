@@ -24,6 +24,41 @@ export interface ProviderAuthenticationLaunch {
   readonly cwd: string;
 }
 
+// Subcommands and flags that switch an agent CLI into ACP daemon mode. Sign-in
+// launches the agent's normal interactive CLI instead, so these tokens are
+// stripped from the configured argv while the executable or package spec is
+// kept. Tokens seen in the official ACP registry launch definitions.
+const ACP_MODE_ARG_TOKENS = new Set([
+  "acp",
+  "acp-daemon",
+  "serve",
+  "agent",
+  "exec",
+  "stdio",
+  "daemon",
+  "-x",
+]);
+// Flags that consume a separate value token (skipped together with it); the
+// `=`-joined forms are dropped by the same entries.
+const ACP_MODE_VALUE_FLAGS = new Set(["--mode", "--output-format", "--agent-engine", "--uid"]);
+
+export function acpAuthenticationArgs(args: readonly string[]): readonly string[] {
+  const launch: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    const normalized = arg.trim().toLowerCase();
+    const flag = normalized.split("=")[0]!;
+    if (ACP_MODE_VALUE_FLAGS.has(flag)) {
+      if (!normalized.includes("=")) index += 1;
+      continue;
+    }
+    if (normalized.startsWith("--acp") || normalized === "--experimental-acp") continue;
+    if (ACP_MODE_ARG_TOKENS.has(normalized)) continue;
+    launch.push(arg);
+  }
+  return launch;
+}
+
 export function prepareProviderAuthenticationSettings(input: {
   readonly settings: ServerSettings;
   readonly instanceId: string;
@@ -131,6 +166,17 @@ export async function resolveProviderAuthenticationLaunch(input: {
     baseEnv: buildProviderProfileProcessEnv(profile, input.baseEnv),
   });
   let args: readonly string[] = PROVIDER_AUTHENTICATION[instance.driver].args;
+  if (instance.driver === "acp") {
+    // ACP instances carry the agent's daemon argv in config; sign-in drops the
+    // ACP-mode tokens so the agent's own interactive CLI (and its native
+    // login) starts instead of the protocol server.
+    const configured = instance.config.args;
+    args = acpAuthenticationArgs(
+      Array.isArray(configured)
+        ? configured.filter((arg): arg is string => typeof arg === "string")
+        : [],
+    );
+  }
   if (instance.driver === "opencode") {
     const help = await runProcess(profile.targetPath, [...args, "--help"], {
       env,

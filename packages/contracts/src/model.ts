@@ -148,6 +148,13 @@ export const OmpModelOptions = Schema.Struct({
 });
 export type OmpModelOptions = typeof OmpModelOptions.Type;
 
+export const AcpModelOptions = Schema.Struct({
+  // Generic ACP agents advertise their own effort values; keep the option
+  // free-form instead of pinning it to one agent's vocabulary.
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type AcpModelOptions = typeof AcpModelOptions.Type;
+
 export const CursorModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
@@ -189,6 +196,7 @@ export const ProviderModelOptions = Schema.Struct({
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
   omp: Schema.optional(OmpModelOptions),
+  acp: Schema.optional(AcpModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -1170,13 +1178,14 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   omp: [],
+  acp: [],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
-export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi" | "omp">;
+export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi" | "omp" | "acp">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-6-astra",
@@ -1369,6 +1378,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     fable: "claude-fable-5",
   },
   omp: {},
+  acp: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1412,4 +1422,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   omp: "Oh My Pi",
+  acp: "ACP",
 };

@@ -124,6 +124,17 @@ export const DevinServerProviderSettings = Schema.Struct({
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 
+// Generic ACP agents: each instance carries its own command/argv in
+// `providerInstances` (driver "acp"), so no shared binaryPath default exists.
+// Disabled by default: the canonical "acp" instance has no command to launch
+// until the user configures one, while real agent instances carry their own
+// enabled flag and are not gated on this.
+export const AcpServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+});
+export type AcpServerProviderSettings = typeof AcpServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -194,6 +205,7 @@ export const ServerSettings = Schema.Struct({
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     omp: OmpServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    acp: AcpServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   providerInstances: ProviderInstanceConfigMap.pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -285,6 +297,7 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      acp: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       omp: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

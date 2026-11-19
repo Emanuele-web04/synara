@@ -286,6 +286,7 @@ export function useProviderModelCatalog(input: {
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
   const ompModelDiscoveryEnabled = shouldDiscoverProvider("omp");
+  const acpModelDiscoveryEnabled = shouldDiscoverProvider("acp");
 
   const queryOptionsForProvider = (provider: ProviderKind, enabled: boolean) => {
     const selectedInstanceId =
@@ -319,6 +320,7 @@ export function useProviderModelCatalog(input: {
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
     devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
     omp: queryOptionsForProvider("omp", ompModelDiscoveryEnabled),
+    acp: queryOptionsForProvider("acp", acpModelDiscoveryEnabled),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -370,6 +372,7 @@ export function useProviderModelCatalog(input: {
     ],
   );
   const ompDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.omp);
+  const acpDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.acp);
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
 
@@ -472,6 +475,7 @@ export function useProviderModelCatalog(input: {
     ompModelDiscoveryEnabled &&
     !hasResolvedOmpModelDiscovery &&
     !isInitialModelDiscoveryPending(ompDynamicModelsQuery);
+  const acpModelDiscoveryPending = isInitialModelDiscoveryPending(acpDynamicModelsQuery);
   const ompModelDiscoveryPending =
     ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && !ompDiscoveryFailed;
   const antigravityModelDiscoveryPending =
@@ -516,6 +520,7 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.omp,
         modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
       ),
+      acp: getAppModelOptions("acp", customModelsByProvider.acp, modelHintByProvider?.acp),
     };
     const result: Record<
       ProviderKind,
@@ -535,6 +540,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
       omp: ompDynamicModelsQuery.data,
+      acp: acpDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -547,6 +553,7 @@ export function useProviderModelCatalog(input: {
       "pi",
       "devin",
       "omp",
+      "acp",
     ] as const) {
       const discovery = dynamicSources[provider];
       const dynamicModels = discovery?.models;
@@ -639,6 +646,7 @@ export function useProviderModelCatalog(input: {
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
     () => ({
+      acp: acpModelDiscoveryPending,
       antigravity: antigravityModelDiscoveryPending,
       cursor: cursorModelDiscoveryPending,
       droid: droidModelDiscoveryPending,
@@ -672,6 +680,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
       omp: ompDynamicModelsQuery.data?.models ?? [],
+      acp: acpDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -684,6 +693,7 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
       ompDynamicModelsQuery.data?.models,
+      acpDynamicModelsQuery.data?.models,
     ],
   );
 

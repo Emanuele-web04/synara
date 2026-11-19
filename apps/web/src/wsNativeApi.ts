@@ -904,6 +904,11 @@ export function createWsNativeApi(): NativeApi {
       readPlugin: (input) => executionRequest(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => executionRequest(WS_METHODS.providerListModels, input),
       listAgents: (input) => executionRequest(WS_METHODS.providerListAgents, input),
+      listAcpRegistryAgents: () => executionRequest(WS_METHODS.providerListAcpRegistryAgents),
+      installAcpRegistryAgent: (input) =>
+        executionRequest(WS_METHODS.providerInstallAcpRegistryAgent, input),
+      uninstallAcpAgent: (input) => executionRequest(WS_METHODS.providerUninstallAcpAgent, input),
+      resolveExecutable: (input) => executionRequest(WS_METHODS.providerResolveExecutable, input),
     },
     orchestration: {
       getSnapshot: () => executionRequest(ORCHESTRATION_WS_METHODS.getSnapshot),

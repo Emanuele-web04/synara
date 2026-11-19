@@ -29,6 +29,7 @@ interface LeaseSiteExpectation {
 }
 
 const LEASE_SITES: readonly LeaseSiteExpectation[] = [
+  { file: "AcpAdapter.ts", capabilityArguments: ["input"] },
   { file: "AntigravityAdapter.ts", capabilityArguments: ["context.gatewayCapabilityInput"] },
   { file: "ClaudeAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   {

@@ -385,6 +385,7 @@ export function PluginLibrary(props?: {
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const ompCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("omp"));
+  const acpCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("acp"));
 
   const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
     codex: {
@@ -426,6 +427,10 @@ export function PluginLibrary(props?: {
     omp: {
       plugins: supportsPluginDiscovery(ompCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(ompCapabilitiesQuery.data),
+    },
+    acp: {
+      plugins: supportsPluginDiscovery(acpCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(acpCapabilitiesQuery.data),
     },
   };
 

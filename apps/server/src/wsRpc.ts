@@ -147,6 +147,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { resolveExecutable } from "@synara/shared/executable";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
@@ -226,6 +227,11 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
+import {
+  installAcpRegistryAgent,
+  listAcpRegistryAgents,
+  uninstallAcpManagedAgent,
+} from "./provider/acp/AcpRegistry";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
@@ -3129,6 +3135,50 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        [WS_METHODS.providerListAcpRegistryAgents]: () =>
+          rpcEffect(
+            isServerBetaFeatureEnabled("acp")
+              ? Effect.tryPromise(() => listAcpRegistryAgents(config.baseDir))
+              : Effect.fail(new Error("Generic ACP agents are available in Synara Beta.")),
+            "Failed to list ACP registry agents",
+          ),
+        [WS_METHODS.providerInstallAcpRegistryAgent]: (input: { agentId: string }) =>
+          rpcEffect(
+            isServerBetaFeatureEnabled("acp")
+              ? Effect.tryPromise(() => installAcpRegistryAgent(input.agentId, config.baseDir))
+              : Effect.fail(new Error("Generic ACP agents are available in Synara Beta.")),
+            "Failed to install the ACP agent",
+          ),
+        [WS_METHODS.providerUninstallAcpAgent]: (input: { command: string; instanceId: string }) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const otherInstances = Object.entries(settings.providerInstances)
+                .filter(
+                  ([instanceId, instance]) =>
+                    instanceId !== input.instanceId && instance.driver === "acp",
+                )
+                .map(([instanceId, instance]) => {
+                  const config = instance.config as { command?: unknown } | undefined;
+                  const entry: { instanceId: string; command?: string } = { instanceId };
+                  if (typeof config?.command === "string") entry.command = config.command;
+                  return entry;
+                });
+              return yield* Effect.tryPromise(() =>
+                uninstallAcpManagedAgent({
+                  command: input.command,
+                  synaraBaseDir: config.baseDir,
+                  otherInstances,
+                }),
+              );
+            }),
+            "Failed to uninstall the ACP agent",
+          ),
+        [WS_METHODS.providerResolveExecutable]: (input: { command: string }) =>
+          rpcEffect(
+            Effect.sync(() => ({ resolvedPath: resolveExecutable(input.command) })),
+            "Failed to resolve the executable",
+          ),
         ...accountRpcHandlers,
         ...hostsRpcHandlers,
         [WS_METHODS.automationList]: (input) =>

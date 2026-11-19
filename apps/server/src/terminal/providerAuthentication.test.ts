@@ -25,6 +25,7 @@ import { PtyAdapter } from "./Services/PTY";
 import { layer as NodePtyLive } from "./Layers/NodePTY";
 import { TerminalManagerRuntime } from "./Layers/Manager";
 import {
+  acpAuthenticationArgs,
   prepareProviderAuthenticationSettings,
   resolveProviderAuthenticationLaunch,
 } from "./providerAuthentication";
@@ -211,6 +212,47 @@ it.skipIf(process.platform === "win32")(
       fixture("opencode", { standalone: false }),
     );
     expect(launch.args).toEqual(["auth", "login"]);
+  },
+);
+
+it.each([
+  [["@google/gemini-cli@0.68.0", "--acp"], ["@google/gemini-cli@0.68.0"]],
+  [["acp"], []],
+  [["acp", "serve"], []],
+  [["serve", "acp"], []],
+  [["acp", "--agent-engine=v3"], []],
+  [["exec", "--output-format", "acp-daemon"], []],
+  [["agent", "stdio"], []],
+  [["-x"], []],
+  [["--mode", "acp"], []],
+  [["--acp=true"], []],
+  [["--uid="], []],
+  [["--acp", "--experimental-skills"], ["--experimental-skills"]],
+  [["acp", "--verbose"], ["--verbose"]],
+  [["--experimental-acp"], []],
+] as const)("strips ACP daemon argv for sign-in: %j → %j", (argv, expected) => {
+  expect(acpAuthenticationArgs(argv)).toEqual(expected);
+});
+
+it.skipIf(process.platform === "win32")(
+  "launches the ACP agent's interactive CLI without its daemon arguments for sign-in",
+  async () => {
+    const input = fixture("acp");
+    input.settings = {
+      ...input.settings,
+      providerInstances: {
+        [input.instanceId]: {
+          driver: "acp",
+          config: {
+            command: path.join(input.root, "provider ' fixture"),
+            args: ["acp", "serve", "--verbose"],
+          },
+        },
+      },
+    };
+    const launch = await resolveProviderAuthenticationLaunch(input);
+    expect(launch.args).toEqual(["--verbose"]);
+    expect(launch.command).toBe(path.join(input.root, "provider ' fixture"));
   },
 );
 

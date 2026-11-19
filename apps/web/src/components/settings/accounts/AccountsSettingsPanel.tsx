@@ -64,14 +64,18 @@ export function AccountsSettingsPanel({
 
   if (!active) return null;
 
-  const enabledConfigs = PROVIDER_INSTALL_SETTINGS.filter((config) =>
-    isProviderOnAccountsPage(config.provider, settings.disabledProviders),
+  const accounts = getProviderInstanceOptions(settings);
+  const enabledConfigs = PROVIDER_INSTALL_SETTINGS.filter(
+    (config) =>
+      isProviderOnAccountsPage(config.provider, settings.disabledProviders) ||
+      // ACP agents carry their own enabled flag and keep working while the shared
+      // ACP toggle is off; a registered agent must stay manageable from here.
+      (config.provider === "acp" &&
+        accounts.some((account) => account.provider === "acp" && !account.isDefault)),
   );
 
   if (accountId !== null) {
-    const account = getProviderInstanceOptions(settings).find(
-      (option) => String(option.instanceId) === accountId,
-    );
+    const account = accounts.find((option) => String(option.instanceId) === accountId);
     const config = account
       ? enabledConfigs.find((entry) => entry.provider === account.provider)
       : undefined;
@@ -119,7 +123,6 @@ export function AccountsSettingsPanel({
     return <SettingsEmptyState>{t("settings:accounts_noProviders")}</SettingsEmptyState>;
   }
 
-  const accounts = getProviderInstanceOptions(settings);
   const isListed = (provider: (typeof enabledConfigs)[number]["provider"]) =>
     isProviderListedOnAccounts(provider, statusByInstance, accounts);
   const listedConfigs = enabledConfigs.filter((config) => isListed(config.provider));

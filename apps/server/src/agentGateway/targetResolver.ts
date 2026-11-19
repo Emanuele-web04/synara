@@ -234,6 +234,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", OMP_THINKING_LEVEL_OPTIONS) },
   }),
+  acp: defineProviderOptionConfig<"acp">({
+    primaryOptionKey: "reasoningEffort",
+    options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
@@ -279,7 +283,9 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" || provider === "acp"
+    ? null
+    : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {

@@ -4,14 +4,17 @@
 // Layer: Settings UI components
 // Depends on: dialog primitives, settings select control, account presentation helpers.
 
-import type { ProviderKind } from "@synara/contracts";
-import { type FormEvent, useId, useState } from "react";
+import type { AcpRegistryAgentDescriptor, ProviderKind } from "@synara/contracts";
+import { type FormEvent, useEffect, useId, useState } from "react";
 
 import {
   deriveProviderAccountId,
   validateProviderAccountId,
 } from "~/lib/providerInstancePresentation";
+import { acpArgsToText } from "~/lib/acpAgentConfigText";
+import { ensureNativeApi } from "~/nativeApi";
 
+import { CircleCheckIcon, TriangleAlertIcon } from "~/lib/icons";
 import { ProviderIcon } from "../../ProviderIcon";
 import { Button } from "../../ui/button";
 import {
@@ -36,7 +39,13 @@ export type AddProviderAccountConfigField = {
   readonly label: string;
   readonly placeholder: string;
   readonly description?: string;
+  /** The account cannot be added while this field is empty. */
+  readonly required?: boolean;
 };
+
+// The ACP add flow offers the curated agent registry next to a manual command,
+// like the "Install from Registry" pickers other ACP clients expose.
+const ACP_CUSTOM_AGENT = "__custom__";
 
 export type AddProviderAccountInput = {
   readonly provider: ProviderKind;
@@ -67,6 +76,27 @@ export function AddProviderAccountDialog(props: {
   const [accentColor, setAccentColor] = useState<string | undefined>(undefined);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [registryAgents, setRegistryAgents] =
+    useState<ReadonlyArray<AcpRegistryAgentDescriptor> | null>(null);
+  const [registryRunners, setRegistryRunners] = useState<{
+    npx: boolean;
+    uvx: boolean;
+  } | null>(null);
+  const [registrySelection, setRegistrySelection] = useState<string>(ACP_CUSTOM_AGENT);
+  const [installingAgentId, setInstallingAgentId] = useState<string | null>(null);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+  // Live PATH check for the custom agent's launch command.
+  const [commandResolution, setCommandResolution] = useState<
+    | { readonly kind: "idle" }
+    | { readonly kind: "checking" }
+    | { readonly kind: "found"; readonly path: string }
+    | { readonly kind: "missing" }
+  >({ kind: "idle" });
+  // Set for a registry binary agent that has no usable command yet: selecting
+  // it only fills the form, and the managed download runs inside submit, so
+  // merely picking a dropdown row never touches disk.
+  const [pendingBinaryInstall, setPendingBinaryInstall] =
+    useState<AcpRegistryAgentDescriptor | null>(null);
 
   // Start from a blank form every time the dialog opens.
   const [wasOpen, setWasOpen] = useState(props.open);
@@ -79,32 +109,172 @@ export function AddProviderAccountDialog(props: {
       setAccentColor(undefined);
       setConfig({});
       setSubmitAttempted(false);
+      setRegistryAgents(null);
+      setRegistryRunners(null);
+      setRegistrySelection(ACP_CUSTOM_AGENT);
+      setInstallingAgentId(null);
+      setPendingBinaryInstall(null);
+      setRegistryError(null);
+      setCommandResolution({ kind: "idle" });
     }
   }
+
+  useEffect(() => {
+    if (!props.open || provider !== "acp" || registryAgents !== null) return;
+    let cancelled = false;
+    ensureNativeApi()
+      .provider.listAcpRegistryAgents()
+      .then(
+        (result) => {
+          if (cancelled) return;
+          setRegistryAgents(result.agents);
+          if (result.runners) setRegistryRunners(result.runners);
+        },
+        (error) => {
+          if (!cancelled) {
+            setRegistryAgents([]);
+            setRegistryError(error instanceof Error ? error.message : String(error));
+          }
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [props.open, provider, registryAgents]);
+
+  const launchCommand = (config.command ?? "").trim();
+  useEffect(() => {
+    if (provider !== "acp" || !props.open || launchCommand.length === 0) {
+      setCommandResolution({ kind: "idle" });
+      return;
+    }
+    setCommandResolution({ kind: "checking" });
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      ensureNativeApi()
+        .provider.resolveExecutable({ command: launchCommand })
+        .then(
+          (result) => {
+            if (cancelled) return;
+            setCommandResolution(
+              result.resolvedPath
+                ? { kind: "found", path: result.resolvedPath }
+                : { kind: "missing" },
+            );
+          },
+          () => {
+            if (!cancelled) setCommandResolution({ kind: "missing" });
+          },
+        );
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [props.open, provider, launchCommand]);
+
+  const selectRegistryAgent = (agent: AcpRegistryAgentDescriptor) => {
+    setRegistrySelection(agent.id);
+    setRegistryError(null);
+    setLabel(agent.name);
+    setIdOverride(`acp_${agent.id}`);
+    setPendingBinaryInstall(null);
+    // The user's own install on PATH wins over a managed download or npx.
+    if (agent.availability?.state === "on-path" && agent.availability.path) {
+      setConfig((current) => ({
+        ...current,
+        command: agent.availability!.path!,
+        args: acpArgsToText(agent.launch.args ?? []),
+      }));
+      return;
+    }
+    if (agent.availability?.state === "installed" && agent.availability.path) {
+      setConfig((current) => ({
+        ...current,
+        command: agent.availability!.path!,
+        args: acpArgsToText(agent.launch.args ?? []),
+      }));
+      return;
+    }
+    if (agent.launch.kind !== "binary") {
+      setConfig((current) => ({
+        ...current,
+        command: agent.launch.command ?? "",
+        args: acpArgsToText(agent.launch.args ?? []),
+      }));
+      return;
+    }
+    setPendingBinaryInstall(agent);
+    setConfig((current) => ({
+      ...current,
+      command: agent.launch.command ?? "",
+      args: acpArgsToText(agent.launch.args ?? []),
+    }));
+  };
 
   const providerLabel =
     props.providers.find((option) => option.provider === provider)?.label ?? provider;
   const instanceId = idOverride ?? deriveProviderAccountId(provider, label);
   const idError = validateProviderAccountId(instanceId, props.existingIds);
   const configFields = props.configFieldsFor(provider);
+  const acpCommandField =
+    provider === "acp" ? configFields.find((field) => field.key === "command") : undefined;
+  const acpArgsField =
+    provider === "acp" ? configFields.find((field) => field.key === "args") : undefined;
+  const acpCommandInvalid =
+    submitAttempted && acpCommandField?.required === true && launchCommand.length === 0;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setSubmitAttempted(true);
     if (idError !== null) return;
+    if (
+      configFields.some(
+        (field) => field.required === true && (config[field.key] ?? "").trim().length === 0,
+      )
+    ) {
+      return;
+    }
+    const addWithConfig = (filledConfig: Record<string, string>) => {
+      props.onAdd({
+        provider,
+        instanceId: instanceId.trim(),
+        displayName: label.trim(),
+        accentColor,
+        config: filledConfig,
+      });
+      props.onOpenChange(false);
+    };
     const filledConfig: Record<string, string> = {};
     for (const field of configFields) {
       const value = config[field.key]?.trim();
       if (value) filledConfig[field.key] = value;
     }
-    props.onAdd({
-      provider,
-      instanceId: instanceId.trim(),
-      displayName: label.trim(),
-      accentColor,
-      config: filledConfig,
-    });
-    props.onOpenChange(false);
+    // A registry binary with no launchable path downloads its managed build
+    // here — on save — and its real command replaces the display name first.
+    if (pendingBinaryInstall !== null) {
+      const agent = pendingBinaryInstall;
+      setInstallingAgentId(agent.id);
+      void ensureNativeApi()
+        .provider.installAcpRegistryAgent({ agentId: agent.id })
+        .then(
+          (installed) => {
+            addWithConfig({
+              ...filledConfig,
+              command: installed.command,
+              args: acpArgsToText(installed.args),
+            });
+          },
+          (error: unknown) => {
+            setRegistryError(error instanceof Error ? error.message : String(error));
+          },
+        )
+        .finally(() => {
+          setInstallingAgentId(null);
+        });
+      return;
+    }
+    addWithConfig(filledConfig);
   };
 
   return (
@@ -142,6 +312,88 @@ export function AddProviderAccountDialog(props: {
                 ))}
               </SettingsSelectControl>
             </div>
+            {provider === "acp" ? (
+              <div className="space-y-1">
+                <span className={dialogFieldLabelClassName}>{t("settings:acpRegistryAgent")}</span>
+                <SettingsSelectControl
+                  value={registrySelection}
+                  onValueChange={(next) => {
+                    if (next === ACP_CUSTOM_AGENT) {
+                      setRegistrySelection(ACP_CUSTOM_AGENT);
+                      setPendingBinaryInstall(null);
+                      setRegistryError(null);
+                      return;
+                    }
+                    const agent = registryAgents?.find((entry) => entry.id === next);
+                    if (agent) selectRegistryAgent(agent);
+                  }}
+                  ariaLabel={t("settings:acpRegistryAgent")}
+                  triggerClassName="w-full"
+                  valueContent={
+                    <span className="flex items-center gap-2">
+                      <span className="truncate">
+                        {registrySelection === ACP_CUSTOM_AGENT
+                          ? t("settings:acpRegistryCustomAgent")
+                          : (registryAgents?.find((agent) => agent.id === registrySelection)
+                              ?.name ?? registrySelection)}
+                      </span>
+                    </span>
+                  }
+                >
+                  <SelectItem hideIndicator value={ACP_CUSTOM_AGENT}>
+                    {t("settings:acpRegistryCustomAgent")}
+                  </SelectItem>
+                  {registryAgents?.map((agent) => (
+                    <SelectItem
+                      hideIndicator
+                      key={agent.id}
+                      value={agent.id}
+                      disabled={!agent.launch.installable}
+                    >
+                      <span className="flex items-center gap-2">
+                        {agent.icon ? (
+                          <img src={agent.icon} alt="" className="size-4 shrink-0" />
+                        ) : null}
+                        <span className="truncate">{agent.name}</span>
+                        <span className="truncate text-muted-foreground">{agent.version}</span>
+                        {agent.availability?.state === "installed" ? (
+                          <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
+                        ) : null}
+                        {agent.availability?.state === "update-available" ? (
+                          <span className="shrink-0 text-muted-foreground">
+                            {t("settings:acpRegistryUpdateAvailable")}
+                          </span>
+                        ) : null}
+                        {agent.availability?.state === "on-path" ? (
+                          <span className="shrink-0 text-muted-foreground">
+                            {t("settings:acpRegistryOnPath")}
+                          </span>
+                        ) : null}
+                        {agent.launch.kind === "npx" && registryRunners?.npx === false ? (
+                          <span className="shrink-0 text-warning">
+                            {t("settings:acpRegistryNeedsNpx")}
+                          </span>
+                        ) : null}
+                        {agent.launch.kind === "uvx" && registryRunners?.uvx === false ? (
+                          <span className="shrink-0 text-warning">
+                            {t("settings:acpRegistryNeedsUvx")}
+                          </span>
+                        ) : null}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SettingsSelectControl>
+                <span className="block text-ui-sm text-muted-foreground">
+                  {installingAgentId !== null
+                    ? t("settings:acpRegistryInstalling")
+                    : registryError !== null
+                      ? registryError
+                      : registryAgents === null
+                        ? t("settings:acpRegistryLoading")
+                        : t("settings:acpRegistryHint")}
+                </span>
+              </div>
+            ) : null}
             <label className="block space-y-1">
               <span className={dialogFieldLabelClassName}>
                 {t("chat:pinned_renamePlaceholder")}
@@ -192,25 +444,109 @@ export function AddProviderAccountDialog(props: {
                 {t("settings:optionalShowsAsADotOnTheAccountS")}
               </span>
             </div>
-            {configFields.map((field) => (
-              <label key={`${provider}:${field.key}`} className="block space-y-1">
-                <span className={dialogFieldLabelClassName}>{field.label}</span>
-                <Input
-                  size="sm"
-                  value={config[field.key] ?? ""}
-                  onChange={(event) =>
-                    setConfig((current) => ({ ...current, [field.key]: event.target.value }))
-                  }
-                  placeholder={field.placeholder}
-                  spellCheck={false}
-                />
-                {field.description ? (
+            {provider === "acp" ? (
+              <div className="space-y-3">
+                <label className="block space-y-1">
+                  <span className={dialogFieldLabelClassName}>{acpCommandField?.label}</span>
+                  <Input
+                    size="sm"
+                    className="font-mono"
+                    value={config.command ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) => ({ ...current, command: event.target.value }))
+                    }
+                    placeholder={acpCommandField?.placeholder}
+                    spellCheck={false}
+                    aria-invalid={acpCommandInvalid}
+                  />
+                  {acpCommandInvalid ? (
+                    <span className="block text-ui-sm text-destructive">
+                      {t("settings:fieldRequired", {
+                        field: acpCommandField?.label ?? "",
+                      })}
+                    </span>
+                  ) : commandResolution.kind === "checking" ? (
+                    <span className="block text-ui-sm text-muted-foreground">
+                      {t("settings:acpCommandChecking")}
+                    </span>
+                  ) : commandResolution.kind === "found" ? (
+                    <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
+                      <CircleCheckIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">
+                        {t("settings:acpCommandResolved", { path: commandResolution.path })}
+                      </span>
+                    </span>
+                  ) : commandResolution.kind === "missing" ? (
+                    <span className="flex items-center gap-1.5 text-ui-sm text-warning">
+                      <TriangleAlertIcon className="size-3.5 shrink-0" />
+                      {t("settings:acpCommandNotFound")}
+                    </span>
+                  ) : (
+                    <span className="block text-ui-sm text-muted-foreground">
+                      {acpCommandField?.description}
+                    </span>
+                  )}
+                </label>
+                <label className="block space-y-1">
+                  <span className={dialogFieldLabelClassName}>{acpArgsField?.label}</span>
+                  <Input
+                    size="sm"
+                    className="font-mono"
+                    value={config.args ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) => ({ ...current, args: event.target.value }))
+                    }
+                    placeholder={acpArgsField?.placeholder}
+                    spellCheck={false}
+                  />
                   <span className="block text-ui-sm text-muted-foreground">
-                    {field.description}
+                    {acpArgsField?.description}
                   </span>
+                </label>
+                {launchCommand.length > 0 ? (
+                  <div className="space-y-1">
+                    <span className={dialogFieldLabelClassName}>
+                      {t("settings:acpLaunchPreview")}
+                    </span>
+                    <code className="block truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 font-mono text-ui-sm">
+                      {launchCommand}
+                      {(config.args ?? "").trim().length > 0
+                        ? ` ${(config.args ?? "").trim()}`
+                        : ""}
+                    </code>
+                  </div>
                 ) : null}
-              </label>
-            ))}
+              </div>
+            ) : (
+              configFields.map((field) => {
+                const fieldEmpty = (config[field.key] ?? "").trim().length === 0;
+                const fieldInvalid = submitAttempted && field.required === true && fieldEmpty;
+                return (
+                  <label key={`${provider}:${field.key}`} className="block space-y-1">
+                    <span className={dialogFieldLabelClassName}>{field.label}</span>
+                    <Input
+                      size="sm"
+                      value={config[field.key] ?? ""}
+                      onChange={(event) =>
+                        setConfig((current) => ({ ...current, [field.key]: event.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      spellCheck={false}
+                      aria-invalid={fieldInvalid}
+                    />
+                    {fieldInvalid ? (
+                      <span className="block text-ui-sm text-destructive">
+                        {t("settings:fieldRequired", { field: field.label })}
+                      </span>
+                    ) : field.description ? (
+                      <span className="block text-ui-sm text-muted-foreground">
+                        {field.description}
+                      </span>
+                    ) : null}
+                  </label>
+                );
+              })
+            )}
           </form>
         </DialogPanel>
         <DialogFooter>

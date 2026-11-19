@@ -19,6 +19,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "acp",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -384,3 +385,90 @@ export const ProviderListAgentsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListAgentsResult = typeof ProviderListAgentsResult.Type;
+
+// ---- ACP agent registry ----
+// The curated registry at agentclientprotocol.com is how other ACP clients
+// (Zed, JetBrains) offer one-click agent installs; Synara resolves the same
+// entries into instance launch configs.
+
+export const AcpRegistryAgentLaunchKind = Schema.Literals(["npx", "uvx", "binary"]);
+export type AcpRegistryAgentLaunchKind = typeof AcpRegistryAgentLaunchKind.Type;
+
+export const AcpRegistryAgentDescriptor = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  repository: Schema.optional(TrimmedNonEmptyString),
+  icon: Schema.optional(TrimmedNonEmptyString),
+  launch: Schema.Struct({
+    kind: AcpRegistryAgentLaunchKind,
+    /** False when the registry ships no artifact for the current platform. */
+    installable: Schema.Boolean,
+    // `npx`/`uvx` carry the runner + argv; `binary` carries the bare executable
+    // name for PATH detection and display (the managed path comes from
+    // `provider.installAcpRegistryAgent` or `availability.path`).
+    command: Schema.optional(TrimmedNonEmptyString),
+    args: Schema.optional(Schema.Array(Schema.String)),
+  }),
+  availability: Schema.optionalKey(
+    Schema.Struct({
+      /** Lifecycle state on this machine: managed install at the registry
+       * version, an older managed install, or the CLI already on PATH. */
+      state: Schema.Literals(["installed", "update-available", "on-path"]),
+      /** Managed or PATH-resolved executable backing this state. */
+      path: Schema.optional(TrimmedNonEmptyString),
+      /** Version under Synara management when a newer registry build exists. */
+      installedVersion: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type AcpRegistryAgentDescriptor = typeof AcpRegistryAgentDescriptor.Type;
+
+export const ProviderListAcpRegistryAgentsResult = Schema.Struct({
+  agents: Schema.Array(AcpRegistryAgentDescriptor),
+  /** Whether the npx/uvx package runners resolve on PATH. */
+  runners: Schema.optionalKey(Schema.Struct({ npx: Schema.Boolean, uvx: Schema.Boolean })),
+  cached: Schema.optional(Schema.Boolean),
+  error: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderListAcpRegistryAgentsResult = typeof ProviderListAcpRegistryAgentsResult.Type;
+
+export const ProviderInstallAcpRegistryAgentInput = Schema.Struct({
+  agentId: TrimmedNonEmptyString,
+});
+export type ProviderInstallAcpRegistryAgentInput = typeof ProviderInstallAcpRegistryAgentInput.Type;
+
+export const ProviderInstallAcpRegistryAgentResult = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  args: Schema.Array(Schema.String),
+  /** Only for binary installs: the managed directory the agent was unpacked into. */
+  installDir: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderInstallAcpRegistryAgentResult =
+  typeof ProviderInstallAcpRegistryAgentResult.Type;
+
+export const ProviderUninstallAcpAgentInput = Schema.Struct({
+  /** The managed command path the removed account launched. */
+  command: TrimmedNonEmptyString,
+  /** The account being removed; excluded from the in-use check. */
+  instanceId: TrimmedNonEmptyString,
+});
+export type ProviderUninstallAcpAgentInput = typeof ProviderUninstallAcpAgentInput.Type;
+
+export const ProviderUninstallAcpAgentResult = Schema.Struct({
+  removed: Schema.Boolean,
+  inUseByInstanceId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderUninstallAcpAgentResult = typeof ProviderUninstallAcpAgentResult.Type;
+
+export const ProviderResolveExecutableInput = Schema.Struct({
+  command: Schema.String,
+});
+export type ProviderResolveExecutableInput = typeof ProviderResolveExecutableInput.Type;
+
+export const ProviderResolveExecutableResult = Schema.Struct({
+  /** The executable a launch would run, or null when the command does not resolve. */
+  resolvedPath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProviderResolveExecutableResult = typeof ProviderResolveExecutableResult.Type;

@@ -65,6 +65,9 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        acp: {
+          ...DEFAULT_SERVER_SETTINGS.providers.acp,
+        },
       },
     };
 
@@ -88,6 +91,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
     expect(providerOptions.omp).toEqual({});
+    expect(providerOptions.acp).toEqual({});
   });
 
   it("preserves configured launch settings", () => {

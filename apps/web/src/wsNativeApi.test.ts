@@ -473,6 +473,7 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
           omp: { enabled: true, binaryPath: "omp", agentDir: "", customModels: [] },
+          acp: { enabled: true, binaryPath: "", customModels: [] },
         },
         providerInstances: {},
         skills: { disabled: [] },

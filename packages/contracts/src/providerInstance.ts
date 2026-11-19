@@ -80,3 +80,34 @@ export type ProviderInstanceConfigMap = typeof ProviderInstanceConfigMap.Type;
 export function defaultInstanceIdForDriver(driver: ProviderDriverKind): ProviderInstanceId {
   return driver;
 }
+
+// ── Generic ACP agent instances ────────────────────────────────────────
+// `config` payload for provider instances whose driver is "acp": a single
+// agent binary that serves the Agent Client Protocol over stdio. One
+// instance = one agent; the agent may itself multiplex upstream providers
+// through its model list.
+
+export const AcpAgentModel = Schema.Struct({
+  slug: TrimmedNonEmptyString,
+  name: Schema.optional(TrimmedNonEmptyString),
+  reasoningEfforts: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+});
+export type AcpAgentModel = typeof AcpAgentModel.Type;
+
+export const AcpAgentInstanceConfig = Schema.Struct({
+  // Executable plus the argv serving ACP, e.g. command "myagent" args ["acp"].
+  command: TrimmedNonEmptyString,
+  args: Schema.optionalKey(Schema.Array(Schema.String)),
+  cwd: Schema.optionalKey(TrimmedNonEmptyString),
+  // Static catalog used when the agent does not advertise a `model` config
+  // option in-band; entries may still be overridden by in-band discovery.
+  models: Schema.optionalKey(Schema.Array(AcpAgentModel)),
+  // authenticate is attempted only when the agent advertises auth methods:
+  // the configured id wins, otherwise the first advertised method is used.
+  authMethodId: Schema.optionalKey(TrimmedNonEmptyString),
+  // ACP config-option ids the agent uses for model and effort selection.
+  // Default to the de-facto "model"/"thinking" ids shared by ACP agents.
+  modelConfigId: Schema.optionalKey(TrimmedNonEmptyString),
+  effortConfigId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type AcpAgentInstanceConfig = typeof AcpAgentInstanceConfig.Type;
