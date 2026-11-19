@@ -2492,6 +2492,50 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  describe.runIf(process.platform === "darwin")("worktree dependency seeding", () => {
+    const commitPackageManifest = (cwd: string) =>
+      Effect.gen(function* () {
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(path.join(cwd, ".gitignore"), "node_modules/\n");
+        yield* writeTextFile(path.join(cwd, "package.json"), '{ "name": "app" }\n');
+        yield* writeTextFile(path.join(cwd, "bun.lock"), "lock v1\n");
+        yield* git(cwd, ["add", ".gitignore", "package.json", "bun.lock"]);
+        yield* git(cwd, ["commit", "-m", "add package manifest"]);
+        yield* Effect.promise(() =>
+          fs.mkdir(path.join(cwd, "node_modules/dep"), { recursive: true }),
+        );
+        yield* writeTextFile(path.join(cwd, "node_modules/dep/index.js"), "module.exports = 1;\n");
+      });
+
+    it.effect("clones node_modules into a new worktree when the lockfile matches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* commitPackageManifest(tmp);
+        const wtPath = path.join(tmp, "wt-seeded");
+
+        yield* (yield* GitCore).createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+
+        expect(yield* readTextFile(path.join(wtPath, "node_modules/dep/index.js"))).toBe(
+          "module.exports = 1;\n",
+        );
+        expect(yield* git(wtPath, ["status", "--porcelain"])).toBe("");
+      }),
+    );
+
+    it.effect("leaves node_modules out when the source lockfile has diverged", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* commitPackageManifest(tmp);
+        yield* writeTextFile(path.join(tmp, "bun.lock"), "lock v2\n");
+        const wtPath = path.join(tmp, "wt-unseeded");
+
+        yield* (yield* GitCore).createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: wtPath });
+
+        expect(existsSync(path.join(wtPath, "node_modules"))).toBe(false);
+      }),
+    );
+  });
+
   // ── Full flow: worktree creation from base branch ──
 
   describe("fetchPullRequestBranch", () => {
