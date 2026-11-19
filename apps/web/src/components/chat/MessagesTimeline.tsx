@@ -1597,6 +1597,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             directionMode="auto-blocks"
             isStreaming={false}
             style={{ ...chatTypographyStyle, color: MUTED_LABEL_TEXT_COLOR }}
+            shareParse
             onImageExpand={onImageExpand}
             knownAbsoluteFilePaths={knownAbsoluteFilePaths}
             {...threadFindMarkdownProps(findHighlight, item.message.id)}
@@ -1980,6 +1981,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
+                  shareParse
                   onImageExpand={onImageExpand}
                   {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
                 />
@@ -2661,6 +2663,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         imageAttachments={row.message.attachments}
                         directionMode="auto-blocks"
                         isStreaming={Boolean(row.message.streaming)}
+                        shareParse
                         style={chatTypographyStyle}
                         onImageExpand={onImageExpand}
                         knownAbsoluteFilePaths={knownAbsoluteFilePaths}
