@@ -1,3 +1,6 @@
+// FILE: worktreeDependencyClone.ts
+// Purpose: Plan and safely publish APFS dependency snapshots for new Git worktrees.
+import { constants as fsConstants } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -9,8 +12,7 @@ import { runProcess } from "../processRunner.ts";
  * A fresh worktree has no `node_modules`, so every agent workspace starts by
  * reinstalling dependencies. On APFS a whole directory tree can be cloned in a
  * single `clonefile(2)` call: the clone shares disk blocks with the source and
- * only diverges where a file is later written, so seeding a multi-gigabyte
- * `node_modules` takes about as long as one syscall and almost no disk.
+ * only diverges where a file is later written, so this avoids recopying file data.
  *
  * Seeding is best effort and conservative:
  * - macOS only. Node cannot clone directories (`copyFile` returns ENOSYS) and
@@ -18,6 +20,7 @@ import { runProcess } from "../processRunner.ts";
  *   so the one-call directory clone runs through JXA, which ships with macOS.
  * - Only when every tracked lockfile in the new worktree is byte-identical to
  *   the source checkout's, so the cloned tree matches what the branch expects.
+ * - Only publishes to Git-ignored paths. Absolute dependency links skip a tree.
  * - Never replaces an existing directory, and never fails worktree creation:
  *   callers treat the result as a hint and fall back to today's behaviour.
  */
@@ -42,10 +45,11 @@ const DEPENDENCY_DIRECTORY_NAME = "node_modules";
 // rebuilt on demand, so the clone drops them rather than reuse stale entries.
 const CLONED_CACHE_DIRECTORIES = [".cache", ".vite"];
 const MAX_CLONED_DIRECTORIES = 256;
-// A directory clone of a multi-gigabyte node_modules takes about two seconds.
-// Some callers create worktrees in uninterruptible regions or under the
-// repository's mutation lock, so a stuck helper must give up quickly.
-const CLONE_TIMEOUT_MS = 30_000;
+const MAX_LOCKFILES = 256;
+const MAX_LOCKFILE_BYTES = 16 * 1024 * 1024;
+const MAX_TOTAL_LOCKFILE_BYTES = 32 * 1024 * 1024;
+// The worktree creation lock covers seeding, so its subprocesses share one deadline.
+const SEED_TIMEOUT_MS = 30_000;
 
 export interface DependencyClonePair {
   readonly source: string;
@@ -71,10 +75,40 @@ export type CloneDirectories = (
 const isInsideDependencyDirectory = (relativePath: string): boolean =>
   relativePath.split("/").includes(DEPENDENCY_DIRECTORY_NAME);
 
-const readFileOrNull = (filePath: string): Promise<Buffer | null> =>
-  nodeFs.readFile(filePath).catch(() => null);
-
 const lstatOrNull = (filePath: string) => nodeFs.lstat(filePath).catch(() => null);
+
+async function hasPhysicalParent(filePath: string): Promise<boolean> {
+  const parent = nodePath.dirname(filePath);
+  return (await nodeFs.realpath(parent).catch(() => null)) === parent;
+}
+
+// Read from a checked descriptor with a fixed upper bound, including if the file grows.
+async function readLockfile(filePath: string, maxBytes: number): Promise<Buffer | null> {
+  if (!(await hasPhysicalParent(filePath)) || !(await lstatOrNull(filePath))?.isFile()) return null;
+  try {
+    const file = await nodeFs.open(
+      filePath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > maxBytes) return null;
+
+      const data = Buffer.allocUnsafe(stat.size + 1);
+      let offset = 0;
+      while (offset < data.length) {
+        const { bytesRead } = await file.read(data, offset, data.length - offset, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      return offset === stat.size ? data.subarray(0, offset) : null;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Decide which dependency directories to clone. `trackedPaths` are the
@@ -85,6 +119,7 @@ export async function planDependencyClones(input: {
   readonly sourceRoot: string;
   readonly worktreeRoot: string;
   readonly trackedPaths: ReadonlyArray<string>;
+  readonly signal?: AbortSignal | undefined;
 }): Promise<DependencyClonePlan> {
   const tracked = input.trackedPaths.filter((entry) => !isInsideDependencyDirectory(entry));
   const lockfiles = tracked.filter((entry) =>
@@ -92,14 +127,23 @@ export async function planDependencyClones(input: {
   );
   if (lockfiles.length === 0) return { kind: "skip", reason: "no-lockfile" };
 
+  if (lockfiles.length > MAX_LOCKFILES) return { kind: "skip", reason: "lockfile-mismatch" };
+  const [sourceRoot, worktreeRoot] = await Promise.all([
+    nodeFs.realpath(input.sourceRoot),
+    nodeFs.realpath(input.worktreeRoot),
+  ]);
+  let lockfileBytes = MAX_TOTAL_LOCKFILE_BYTES;
   for (const lockfile of lockfiles) {
+    input.signal?.throwIfAborted();
+    const maxBytes = Math.min(MAX_LOCKFILE_BYTES, lockfileBytes);
     const [source, target] = await Promise.all([
-      readFileOrNull(nodePath.join(input.sourceRoot, lockfile)),
-      readFileOrNull(nodePath.join(input.worktreeRoot, lockfile)),
+      readLockfile(nodePath.join(sourceRoot, lockfile), maxBytes),
+      readLockfile(nodePath.join(worktreeRoot, lockfile), maxBytes),
     ]);
     if (source === null || target === null || !source.equals(target)) {
       return { kind: "skip", reason: "lockfile-mismatch" };
     }
+    lockfileBytes -= source.length;
   }
 
   const packageDirectories = [
@@ -113,15 +157,18 @@ export async function planDependencyClones(input: {
   const pairs: DependencyClonePair[] = [];
   for (const directory of packageDirectories) {
     if (pairs.length >= MAX_CLONED_DIRECTORIES) break;
-    const source = nodePath.join(input.sourceRoot, directory, DEPENDENCY_DIRECTORY_NAME);
-    const target = nodePath.join(input.worktreeRoot, directory, DEPENDENCY_DIRECTORY_NAME);
-    const [sourceEntry, targetEntry] = await Promise.all([
+    input.signal?.throwIfAborted();
+    const source = nodePath.join(sourceRoot, directory, DEPENDENCY_DIRECTORY_NAME);
+    const target = nodePath.join(worktreeRoot, directory, DEPENDENCY_DIRECTORY_NAME);
+    const [sourceEntry, targetEntry, sourceParent, targetParent] = await Promise.all([
       lstatOrNull(source),
       lstatOrNull(target),
+      hasPhysicalParent(source),
+      hasPhysicalParent(target),
     ]);
     // A symlinked node_modules would clone the link, not the tree, and an
     // existing target belongs to someone else.
-    if (sourceEntry?.isDirectory() && targetEntry === null) {
+    if (sourceParent && targetParent && sourceEntry?.isDirectory() && targetEntry === null) {
       pairs.push({ source, target });
     }
   }
@@ -129,31 +176,37 @@ export async function planDependencyClones(input: {
   return pairs.length > 0 ? { kind: "clone", pairs } : { kind: "skip", reason: "nothing-to-clone" };
 }
 
-// One osascript launch clones every pair. `clonefile` with flags 0 refuses an
-// existing destination and clones the whole tree atomically per directory.
-const JXA_CLONE_DIRECTORIES = `
+// Batch each native operation. clonefile preserves links inside the tree.
+const JXA_FILE_OPERATIONS = `
 function run(argv) {
-  ObjC.bindFunction("clonefile", ["int", ["char *", "char *", "unsigned int"]]);
+  var operation = argv[0];
+  ObjC.bindFunction(operation, ["int", ["char *", "char *", "unsigned int"]]);
+  // CLONE_NOFOLLOW, or RENAME_EXCL | RENAME_NOFOLLOW_ANY for publication.
+  var flags = operation === "clonefile" ? 0x0001 : 0x00000014;
   var results = [];
-  for (var index = 0; index + 1 < argv.length; index += 2) {
-    results.push($.clonefile(argv[index], argv[index + 1], 0) === 0);
+  for (var index = 1; index + 1 < argv.length; index += 2) {
+    results.push($[operation](argv[index], argv[index + 1], flags) === 0);
   }
   return JSON.stringify(results);
 }
 `;
 
-/** Clone directories with APFS `clonefile(2)`; one boolean per pair. */
-export const cloneDirectoriesWithClonefile: CloneDirectories = async (pairs, signal) => {
+async function runFileOperation(
+  operation: "clonefile" | "renamex_np",
+  pairs: ReadonlyArray<DependencyClonePair>,
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<boolean>> {
   const result = await runProcess(
     "/usr/bin/osascript",
     [
       "-l",
       "JavaScript",
       "-e",
-      JXA_CLONE_DIRECTORIES,
+      JXA_FILE_OPERATIONS,
+      operation,
       ...pairs.flatMap((pair) => [pair.source, pair.target]),
     ],
-    { timeoutMs: CLONE_TIMEOUT_MS, ...(signal ? { signal } : {}) },
+    { timeoutMs: SEED_TIMEOUT_MS, signal },
   );
   const parsed: unknown = JSON.parse(result.stdout.trim());
   if (
@@ -161,54 +214,127 @@ export const cloneDirectoriesWithClonefile: CloneDirectories = async (pairs, sig
     parsed.length !== pairs.length ||
     !parsed.every((entry) => typeof entry === "boolean")
   ) {
-    throw new Error("clonefile helper returned an unexpected result.");
+    throw new Error(`${operation} helper returned an unexpected result.`);
   }
   return parsed;
-};
+}
 
-/**
- * Seed a new worktree's dependency directories from the checkout it was
- * created from. Resolves with what happened; rejects only on unexpected
- * failures, which callers log and ignore.
- */
+export const cloneDirectoriesWithClonefile: CloneDirectories = (pairs, signal) =>
+  runFileOperation("clonefile", pairs, signal);
+
+async function ignoredTargets(
+  worktreeRoot: string,
+  pairs: ReadonlyArray<DependencyClonePair>,
+  signal?: AbortSignal,
+): Promise<DependencyClonePair[]> {
+  const relativePaths = pairs.map((pair) => nodePath.relative(worktreeRoot, pair.target) + "/");
+  // Like workspace discovery, check ignore rules without running fsmonitor hooks.
+  const result = await runProcess(
+    "git",
+    [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "check-ignore",
+      "-z",
+      "--stdin",
+    ],
+    {
+      cwd: worktreeRoot,
+      stdin: relativePaths.join("\0") + "\0",
+      allowNonZeroExit: true,
+      timeoutMs: SEED_TIMEOUT_MS,
+      signal,
+    },
+  );
+  if (result.code !== 0 || result.timedOut) return [];
+  const ignored = new Set(result.stdout.split("\0"));
+  return pairs.filter((_pair, index) => ignored.has(relativePaths[index]!));
+}
+
+// Skip trees with absolute symlinks. Relative workspace links can move with the tree.
+async function findTreesWithAbsoluteLinks(
+  stagingRoot: string,
+  trees: ReadonlyArray<string>,
+  signal?: AbortSignal,
+): Promise<ReadonlySet<string>> {
+  const result = await runProcess(
+    "/usr/bin/find",
+    ["-P", ...trees, "-type", "l", "-lname", "/*", "-print0"],
+    {
+      timeoutMs: SEED_TIMEOUT_MS,
+      signal,
+    },
+  );
+  return new Set(
+    result.stdout
+      .split("\0")
+      .filter(Boolean)
+      .map((link) => nodePath.relative(stagingRoot, link).split(nodePath.sep, 1)[0]!),
+  );
+}
+
+/** Stage and validate privately, then publish without replacing any existing target. */
 export async function cloneWorktreeDependencies(input: {
   readonly sourceRoot: string;
   readonly worktreeRoot: string;
   readonly trackedPaths: ReadonlyArray<string>;
   readonly cloneDirectories?: CloneDirectories;
-  readonly signal?: AbortSignal;
+  readonly signal?: AbortSignal | undefined;
 }): Promise<DependencyCloneResult> {
-  const plan = await planDependencyClones(input);
+  const deadline = AbortSignal.timeout(SEED_TIMEOUT_MS);
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
+  const plan = await planDependencyClones({ ...input, signal });
   if (plan.kind === "skip") return { kind: "skipped", reason: plan.reason };
 
-  const cloneDirectories = input.cloneDirectories ?? cloneDirectoriesWithClonefile;
-  let outcomes: ReadonlyArray<boolean>;
-  try {
-    outcomes = await cloneDirectories(plan.pairs, input.signal);
-  } catch (cause) {
-    // Some clones may have landed before the helper failed or was cancelled.
-    // Every target was absent beforehand, so removing them restores the
-    // worktree to its pre-seeding state.
-    await Promise.all(
-      plan.pairs.map((pair) => nodeFs.rm(pair.target, { recursive: true, force: true })),
-    );
-    throw cause;
-  }
+  const worktreeRoot = await nodeFs.realpath(input.worktreeRoot);
+  const pairs = await ignoredTargets(worktreeRoot, plan.pairs, signal);
+  if (pairs.length === 0) return { kind: "skipped", reason: "target-not-ignored" };
 
-  let cloned = 0;
-  await Promise.all(
-    plan.pairs.map(async (pair, index) => {
-      if (outcomes[index]) {
-        cloned += 1;
-        await Promise.all(
-          CLONED_CACHE_DIRECTORIES.map((cache) =>
-            nodeFs.rm(nodePath.join(pair.target, cache), { recursive: true, force: true }),
-          ),
-        );
-      } else {
-        await nodeFs.rm(pair.target, { recursive: true, force: true });
-      }
-    }),
+  // Stage next to the checkout so Git never sees the temporary dependency tree.
+  const stagingRoot = await nodeFs.mkdtemp(
+    nodePath.join(nodePath.dirname(worktreeRoot), ".synara-deps-"),
   );
-  return { kind: "cloned", cloned, failed: plan.pairs.length - cloned };
+  try {
+    const stagingPairs = pairs.map((pair, index) => ({
+      source: pair.source,
+      target: nodePath.join(stagingRoot, String(index)),
+    }));
+    const cloneDirectories = input.cloneDirectories ?? cloneDirectoriesWithClonefile;
+    const outcomes = await cloneDirectories(stagingPairs, signal);
+    const complete: DependencyClonePair[] = [];
+    for (const [index, pair] of stagingPairs.entries()) {
+      if (outcomes[index] && (await lstatOrNull(pair.target))?.isDirectory()) {
+        complete.push({ source: pair.target, target: pairs[index]!.target });
+      }
+    }
+    if (complete.length === 0) return { kind: "cloned", cloned: 0, failed: pairs.length };
+
+    const treesWithAbsoluteLinks = await findTreesWithAbsoluteLinks(
+      stagingRoot,
+      complete.map((pair) => pair.source),
+      signal,
+    );
+    const publish = complete.filter(
+      (pair) => !treesWithAbsoluteLinks.has(nodePath.basename(pair.source)),
+    );
+    // Drop path-keyed caches in staging, where cleanup can only touch our own clone.
+    await Promise.all(
+      publish.flatMap((pair) =>
+        CLONED_CACHE_DIRECTORIES.map((cache) =>
+          nodeFs.rm(nodePath.join(pair.source, cache), { recursive: true, force: true }),
+        ),
+      ),
+    );
+    // The worktree's ignore rules can change while the clone is being prepared.
+    const stillIgnored =
+      publish.length > 0 ? await ignoredTargets(worktreeRoot, publish, signal) : [];
+    const published =
+      stillIgnored.length > 0 ? await runFileOperation("renamex_np", stillIgnored, signal) : [];
+    const cloned = published.filter(Boolean).length;
+    return { kind: "cloned", cloned, failed: pairs.length - cloned };
+  } finally {
+    await nodeFs.rm(stagingRoot, { recursive: true, force: true });
+  }
 }

@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { runProcess } from "../processRunner.ts";
+
 import {
   cloneDirectoriesWithClonefile,
   cloneWorktreeDependencies,
@@ -22,7 +24,9 @@ afterEach(async () => {
 });
 
 async function makeCheckouts() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worktree-dependency-clone-"));
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "worktree-dependency-clone-")),
+  );
   temporaryDirectories.push(root);
   const sourceRoot = path.join(root, "source");
   const worktreeRoot = path.join(root, "worktree");
@@ -39,6 +43,16 @@ async function writeFile(filePath: string, contents: string) {
 async function writeToBoth(roots: { sourceRoot: string; worktreeRoot: string }, file: string) {
   await writeFile(path.join(roots.sourceRoot, file), `contents of ${file}\n`);
   await writeFile(path.join(roots.worktreeRoot, file), `contents of ${file}\n`);
+}
+
+async function makeGitCheckouts(ignoreDependencies = true) {
+  const roots = await makeCheckouts();
+  await runProcess("git", ["init", "--quiet"], { cwd: roots.worktreeRoot });
+  await fs.writeFile(
+    path.join(roots.worktreeRoot, ".gitignore"),
+    ignoreDependencies ? "node_modules/\n" : "!node_modules/\n",
+  );
+  return roots;
 }
 
 // Stands in for clonefile: a recursive copy has the same observable result.
@@ -80,6 +94,27 @@ describe("planDependencyClones", () => {
         trackedPaths: ["package.json", "bun.lock", "apps/web/package-lock.json"],
       }),
     ).toEqual({ kind: "skip", reason: "lockfile-mismatch" });
+  });
+
+  it("skips matching lockfile contents stored behind a symlink or beyond the read limit", async () => {
+    const roots = await makeCheckouts();
+    await writeToBoth(roots, "package.json");
+    await writeToBoth(roots, "bun.lock");
+    await writeFile(path.join(roots.sourceRoot, "node_modules/a/index.js"), "a\n");
+    const sourceLockfile = path.join(roots.sourceRoot, "bun.lock");
+    const targetLockfile = path.join(roots.worktreeRoot, "bun.lock");
+    await fs.rename(sourceLockfile, sourceLockfile + ".real");
+    await fs.symlink("bun.lock.real", sourceLockfile);
+    const plan = () =>
+      planDependencyClones({ ...roots, trackedPaths: ["package.json", "bun.lock"] });
+    const skipped = { kind: "skip", reason: "lockfile-mismatch" };
+    expect(await plan()).toEqual(skipped);
+
+    await fs.unlink(sourceLockfile);
+    await fs.rename(sourceLockfile + ".real", sourceLockfile);
+    await fs.truncate(sourceLockfile, 16 * 1024 * 1024 + 1);
+    await fs.truncate(targetLockfile, 16 * 1024 * 1024 + 1);
+    expect(await plan()).toEqual(skipped);
   });
 
   it("plans every workspace package whose source has a real node_modules directory", async () => {
@@ -132,9 +167,9 @@ describe("planDependencyClones", () => {
   });
 });
 
-describe("cloneWorktreeDependencies", () => {
-  it("drops path-keyed tool caches from clones and removes failed targets", async () => {
-    const roots = await makeCheckouts();
+describe.runIf(process.platform === "darwin")("cloneWorktreeDependencies", () => {
+  it("cleans staged caches and discards unsuccessful private copies", async () => {
+    const roots = await makeGitCheckouts();
     for (const file of ["package.json", "bun.lock", "apps/web/package.json"]) {
       await writeToBoth(roots, file);
     }
@@ -165,8 +200,8 @@ describe("cloneWorktreeDependencies", () => {
     ).toBe("cached\n");
   });
 
-  it("removes every planned target when the clone helper fails", async () => {
-    const roots = await makeCheckouts();
+  it("preserves a concurrently created destination when the helper fails", async () => {
+    const roots = await makeGitCheckouts();
     await writeToBoth(roots, "package.json");
     await writeToBoth(roots, "bun.lock");
     await writeFile(path.join(roots.sourceRoot, "node_modules/a/index.js"), "a\n");
@@ -177,15 +212,92 @@ describe("cloneWorktreeDependencies", () => {
         trackedPaths: ["package.json", "bun.lock"],
         cloneDirectories: async (pairs) => {
           await copyDirectories(pairs);
+          await writeFile(path.join(roots.worktreeRoot, "node_modules/installer"), "owned");
           throw new Error("helper timed out");
         },
       }),
     ).rejects.toThrow("helper timed out");
-    await expect(fs.stat(path.join(roots.worktreeRoot, "node_modules"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(roots.worktreeRoot, "node_modules/installer"), "utf8")).toBe(
+      "owned",
+    );
+    expect(
+      (await fs.readdir(path.dirname(roots.worktreeRoot))).filter((name) =>
+        name.startsWith(".synara-deps-"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("preserves an empty destination created after an actual APFS clone", async () => {
+    const roots = await makeGitCheckouts();
+    await writeToBoth(roots, "package.json");
+    await writeToBoth(roots, "bun.lock");
+    await writeFile(path.join(roots.sourceRoot, "node_modules/a/index.js"), "a\n");
+    const target = path.join(roots.worktreeRoot, "node_modules");
+    const result = await cloneWorktreeDependencies({
+      ...roots,
+      trackedPaths: ["package.json", "bun.lock"],
+      cloneDirectories: async (pairs) => {
+        const result = await cloneDirectoriesWithClonefile(pairs);
+        expect(result).toEqual([true]);
+        // A plain rename could replace an empty directory.
+        await fs.mkdir(target);
+        return result;
+      },
+    });
+    expect(result).toEqual({ kind: "cloned", cloned: 0, failed: 1 });
+    expect(await fs.readdir(target)).toEqual([]);
+    expect(
+      (await fs.readdir(path.dirname(roots.worktreeRoot))).filter((name) =>
+        name.startsWith(".synara-deps-"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps relative links and skips an APFS clone containing an absolute link", async () => {
+    const roots = await makeGitCheckouts();
+    for (const file of ["package.json", "bun.lock", "Linked package/package.json"]) {
+      await writeToBoth(roots, file);
+    }
+    const portable = path.join(roots.sourceRoot, "node_modules");
+    const linked = path.join(roots.sourceRoot, "Linked package/node_modules");
+    await writeFile(path.join(portable, "a/index.js"), "a\n");
+    await writeFile(path.join(linked, "b/index.js"), "b\n");
+    await fs.symlink("a/index.js", path.join(portable, "entry.js"));
+    await fs.symlink(path.join(linked, "b/index.js"), path.join(linked, "entry.js"));
+    const result = await cloneWorktreeDependencies({
+      ...roots,
+      trackedPaths: ["package.json", "bun.lock", "Linked package/package.json"],
+    });
+    expect(result).toEqual({ kind: "cloned", cloned: 1, failed: 1 });
+    const published = path.join(roots.worktreeRoot, "node_modules");
+    expect(await fs.readlink(path.join(published, "entry.js"))).toBe("a/index.js");
+    await fs.writeFile(path.join(published, "a/index.js"), "changed\n");
+    expect(await fs.readFile(path.join(portable, "a/index.js"), "utf8")).toBe("a\n");
+    await expect(
+      fs.stat(path.join(roots.worktreeRoot, "Linked package/node_modules")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not clone a directory Git would report as untracked", async () => {
+    const roots = await makeGitCheckouts(false);
+    await writeToBoth(roots, "package.json");
+    await writeToBoth(roots, "bun.lock");
+    await fs.writeFile(path.join(roots.sourceRoot, ".gitignore"), "node_modules/\n");
+    await writeFile(path.join(roots.sourceRoot, "node_modules/a/index.js"), "a\n");
+    expect(
+      await cloneWorktreeDependencies({
+        ...roots,
+        trackedPaths: ["package.json", "bun.lock"],
+        cloneDirectories: () => Promise.reject(new Error("must not clone an unignored directory")),
+      }),
+    ).toEqual({ kind: "skipped", reason: "target-not-ignored" });
+    await expect(fs.stat(path.join(roots.worktreeRoot, "node_modules"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("does not call the clone helper when there is nothing to clone", async () => {
-    const roots = await makeCheckouts();
+    const roots = await makeGitCheckouts();
     await writeToBoth(roots, "package.json");
     await writeToBoth(roots, "bun.lock");
 
