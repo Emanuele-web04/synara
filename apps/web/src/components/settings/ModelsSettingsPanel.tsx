@@ -374,9 +374,9 @@ export function ModelsSettingsPanel({
           id="setting-synara-attribution"
           settingKey="gitAttributionEnabled"
           title="settings:addSynaraAttribution"
-          description="settings:addsCreatedWithSynaraToTheEndOfCommitMessages"
+          description="settings:addsCreatedWithSynaraToTheEndOfPullRequests"
           resetLabel="settings:addSynaraAttribution2"
-          ariaLabel="settings:addSynaraAttributionToCommitsAndPullRequests"
+          ariaLabel="settings:addSynaraAttributionToPullRequests"
         />
         <SettingsRow
           id="setting-git-writing-model"

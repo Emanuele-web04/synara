@@ -4,7 +4,8 @@
 // Layer: Header action control
 // Depends on: GitActionsControl.logic resolvers and the shared git dialog chrome.
 
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
 import { getSubmitShortcutKeyShortcuts, SubmitShortcutKbd } from "~/components/ui/kbd";
 import {
@@ -19,7 +20,6 @@ import {
   GitDialogActionList,
   GitDialogActionRow,
   GitDialogBody,
-  GitDialogCheckboxRow,
   GitDialogHeading,
   GitDialogShell,
 } from "./GitDialogChrome";
@@ -33,23 +33,17 @@ export interface GitCreatePrDialogSubmission {
   includeLocalChanges: boolean;
   title: string | null;
   body: string | null;
-  /** Add the "Created with Synara" footer and commit trailer to this action only. */
-  attribution: boolean;
 }
 
 export interface GitCreatePrDialogBrowserRequest {
   preparation: CreatePrBrowserPreparation;
   includeLocalChanges: boolean;
-  /** Applies to the commit the browser flow may create; GitHub authors the PR itself. */
-  attribution: boolean;
 }
 
 interface GitCreatePrDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   context: GitDialogContext;
-  /** Attribution checkbox state each time the dialog opens (the app setting). */
-  defaultAttribution: boolean;
   onSubmit: (submission: GitCreatePrDialogSubmission) => void;
   onOpenInBrowser: (request: GitCreatePrDialogBrowserRequest) => void;
 }
@@ -58,7 +52,6 @@ export function GitCreatePrDialog({
   open,
   onOpenChange,
   context,
-  defaultAttribution,
   onSubmit,
   onOpenInBrowser,
 }: GitCreatePrDialogProps) {
@@ -67,16 +60,12 @@ export function GitCreatePrDialog({
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [includeLocalChanges, setIncludeLocalChanges] = useState(true);
-  const [attribution, setAttribution] = useState(defaultAttribution);
-  // Seeded only when the dialog opens, so a setting change mid-dialog keeps the user's choice.
-  const readDefaultAttribution = useEffectEvent(() => defaultAttribution);
 
   useEffect(() => {
     if (!open) return;
     setTitle("");
     setBody("");
     setIncludeLocalChanges(true);
-    setAttribution(readDefaultAttribution());
   }, [open]);
 
   const view = useMemo(() => resolveCreatePrDialogView(context), [context]);
@@ -100,7 +89,6 @@ export function GitCreatePrDialog({
       includeLocalChanges,
       title: title.trim() || null,
       body: body.trim() || null,
-      attribution,
     });
   };
 
@@ -135,24 +123,19 @@ export function GitCreatePrDialog({
           onChange={(event) => setBody(event.target.value)}
         />
         {view.showCommitToggle && (
-          <GitDialogCheckboxRow
-            checked={includeLocalChanges}
-            onCheckedChange={setIncludeLocalChanges}
-            label={t("git:commitAndPushLocalChanges")}
-            trailing={
-              <DiffStat
-                className="shrink-0 font-mono text-ui leading-snug"
-                insertions={view.insertions}
-                deletions={view.deletions}
-              />
-            }
-          />
+          <label className="flex cursor-pointer items-center gap-2 py-1 text-ui leading-snug">
+            <Checkbox
+              checked={includeLocalChanges}
+              onCheckedChange={(checked) => setIncludeLocalChanges(checked === true)}
+            />
+            <span className="flex-1">{t("git:commitAndPushLocalChanges")}</span>
+            <DiffStat
+              className="shrink-0 font-mono text-ui leading-snug"
+              insertions={view.insertions}
+              deletions={view.deletions}
+            />
+          </label>
         )}
-        <GitDialogCheckboxRow
-          checked={attribution}
-          onCheckedChange={setAttribution}
-          label={t("git:addSynaraAttribution")}
-        />
         {unavailableHint && (
           <p className="py-1 text-warning text-ui leading-snug">{unavailableHint}</p>
         )}
@@ -177,9 +160,7 @@ export function GitCreatePrDialog({
           disabled={!canOpenInBrowser}
           icon={<ExternalLinkIcon />}
           label={t("git:openPRInBrowser")}
-          onClick={() =>
-            onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges, attribution })
-          }
+          onClick={() => onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges })}
         />
       </GitDialogActionList>
     </GitDialogShell>

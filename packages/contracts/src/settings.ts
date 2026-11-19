@@ -177,8 +177,7 @@ export const ServerSettings = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
     Schema.withDecodingDefault(() => ""),
   ),
-  // Ends commit messages and new pull request descriptions Synara writes with a
-  // "Created with Synara" line. Git actions can override it per run.
+  // Ends the description of a pull request Synara creates with a "Created with Synara" link.
   gitAttributionEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({

@@ -874,8 +874,6 @@ export function gitRunStackedActionMutationOptions(input: {
       prBody?: string;
       prDraft?: boolean;
       allowDirtyWorkingTree?: boolean;
-      /** Per-action attribution choice; omitted follows the server setting. */
-      attribution?: boolean;
       /** Thread the action runs for; the server links the PR it creates or pushes to. */
       threadId?: ThreadId;
     },
@@ -900,7 +898,6 @@ export function gitRunStackedActionMutationOptions(input: {
         prBody,
         prDraft,
         allowDirtyWorkingTree,
-        attribution,
         threadId,
       },
     ) =>
@@ -916,7 +913,6 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(prBody ? { prBody } : {}),
         ...(prDraft !== undefined ? { prDraft } : {}),
         ...(allowDirtyWorkingTree ? { allowDirtyWorkingTree } : {}),
-        ...(attribution !== undefined ? { attribution } : {}),
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
         ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),

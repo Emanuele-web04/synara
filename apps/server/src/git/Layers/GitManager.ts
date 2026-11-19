@@ -33,7 +33,7 @@ import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
 import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { appendCommitAttribution, appendPullRequestAttribution } from "../gitAttribution.ts";
+import { appendPullRequestAttribution } from "../gitAttribution.ts";
 
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
@@ -1130,7 +1130,6 @@ export const makeGitManager = Effect.gen(function* () {
     textGenerationParams?: GitTextGenerationParams,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
-    attribution = false,
   ) =>
     Effect.gen(function* () {
       const emit = (event: GitActionProgressPayload) =>
@@ -1215,12 +1214,10 @@ export const makeGitManager = Effect.gen(function* () {
               },
             }
           : null;
-      // Attribution touches only the body handed to git, never the subject or the
-      // suggestion that branch names and PR titles derive from.
       const { commitSha } = yield* gitCore.commit(
         cwd,
         suggestion.subject,
-        attribution ? appendCommitAttribution(suggestion.body) : suggestion.body,
+        suggestion.body,
         commitProgress ? { progress: commitProgress } : undefined,
       );
       if (currentHookName !== null) {
@@ -2674,19 +2671,16 @@ The local stash entry was kept for recovery.`,
       );
     });
 
-  // A per-run choice wins; otherwise the server setting decides. Attribution never blocks a
-  // git action, so an unreadable setting is logged and treated as off.
-  const resolveAttribution = (override: boolean | undefined) =>
-    override !== undefined
-      ? Effect.succeed(override)
-      : serverSettings.getSettings.pipe(
-          Effect.map((settings) => settings.gitAttributionEnabled),
-          Effect.catch((error) =>
-            Effect.logWarning("Failed to read the git attribution setting; skipping attribution.", {
-              error: error.message,
-            }).pipe(Effect.as(false)),
-          ),
-        );
+  // The server setting decides whether a new pull request gets the "Created with Synara"
+  // footer. It never blocks a git action, so an unreadable setting is logged and treated as off.
+  const resolvePullRequestAttribution = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.gitAttributionEnabled),
+    Effect.catch((error) =>
+      Effect.logWarning("Failed to read the git attribution setting; skipping attribution.", {
+        error: error.message,
+      }).pipe(Effect.as(false)),
+    ),
+  );
 
   const runStackedAction: GitManagerShape["runStackedAction"] = Effect.fnUntraced(
     function* (input, options) {
@@ -2710,8 +2704,7 @@ The local stash entry was kept for recovery.`,
           (input.action === "create_pr" &&
             (input.featureBranch || !initialStatus.hasUpstream || initialStatus.aheadCount > 0));
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
-        const attribution =
-          wantsCommit || wantsPr ? yield* resolveAttribution(input.attribution) : false;
+        const attribution = wantsPr ? yield* resolvePullRequestAttribution : false;
         const phases: GitActionProgressPhase[] = [
           ...(input.featureBranch ? (["branch"] as const) : []),
           ...(wantsCommit ? (["commit"] as const) : []),
@@ -2806,7 +2799,6 @@ The local stash entry was kept for recovery.`,
                 textGenerationParams,
                 options?.progressReporter,
                 progress.actionId,
-                attribution,
               );
             })
           : { status: "skipped_not_requested" as const };

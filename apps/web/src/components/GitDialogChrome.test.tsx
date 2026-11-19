@@ -51,7 +51,6 @@ describe.each([
         open
         onOpenChange={vi.fn()}
         context={context}
-        defaultAttribution
         onSubmit={vi.fn()}
         onOpenFile={vi.fn()}
       />,
@@ -67,77 +66,11 @@ describe.each([
         open
         onOpenChange={vi.fn()}
         context={context}
-        defaultAttribution
         onSubmit={vi.fn()}
         onOpenInBrowser={vi.fn()}
       />,
     );
 
     expectPrimaryShortcut(html, "Create PR", hint, shortcut);
-  });
-});
-
-const contextWithFiles: GitDialogContext = {
-  ...context,
-  gitStatus: {
-    ...context.gitStatus!,
-    workingTree: {
-      files: [{ path: "src/a.ts", insertions: 2, deletions: 1 }],
-      insertions: 2,
-      deletions: 1,
-    },
-  },
-};
-
-/** The checkbox state of the "Add Synara attribution" row, or null when it is not rendered. */
-function attributionCheckboxState(html: string): string | null {
-  const row = (html.match(/<label\b[^>]*>[\s\S]*?<\/label>/g) ?? []).find((label) =>
-    label.includes("Add Synara attribution"),
-  );
-  if (!row) return null;
-  return row.match(/aria-checked="(true|false)"/)?.[1] ?? "missing";
-}
-
-describe("git dialog attribution option", () => {
-  it.each([true, false])("seeds the Create PR checkbox from the setting (%s)", (enabled) => {
-    const html = renderToStaticMarkup(
-      <GitCreatePrDialog
-        open
-        onOpenChange={vi.fn()}
-        context={context}
-        defaultAttribution={enabled}
-        onSubmit={vi.fn()}
-        onOpenInBrowser={vi.fn()}
-      />,
-    );
-    expect(attributionCheckboxState(html)).toBe(String(enabled));
-  });
-
-  it.each([true, false])("seeds the Commit checkbox from the setting (%s)", (enabled) => {
-    const html = renderToStaticMarkup(
-      <GitCommitDialog
-        open
-        onOpenChange={vi.fn()}
-        context={contextWithFiles}
-        defaultAttribution={enabled}
-        onSubmit={vi.fn()}
-        onOpenFile={vi.fn()}
-      />,
-    );
-    expect(attributionCheckboxState(html)).toBe(String(enabled));
-  });
-
-  it("hides the Commit checkbox when there is nothing to commit", () => {
-    const html = renderToStaticMarkup(
-      <GitCommitDialog
-        open
-        onOpenChange={vi.fn()}
-        context={context}
-        defaultAttribution
-        onSubmit={vi.fn()}
-        onOpenFile={vi.fn()}
-      />,
-    );
-    expect(attributionCheckboxState(html)).toBeNull();
   });
 });

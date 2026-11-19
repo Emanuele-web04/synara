@@ -618,8 +618,8 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => "repository" as const),
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
-  // Server-backed: end commit messages and new PR descriptions Synara writes with a
-  // "Created with Synara" line. The git dialogs can override it per action.
+  // Server-backed: end the description of a pull request Synara creates with a
+  // "Created with Synara" link.
   gitAttributionEnabled: Schema.Boolean.pipe(withDefaults(() => true)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),

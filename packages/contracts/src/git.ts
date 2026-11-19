@@ -237,9 +237,6 @@ export const GitRunStackedActionInput = Schema.Struct({
   prTitle: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(300))),
   prBody: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(60_000))),
   prDraft: Schema.optional(Schema.Boolean),
-  // Per-run override for the "Created with Synara" attribution on the commit and PR this
-  // action creates. Omitted follows the server's `gitAttributionEnabled` setting.
-  attribution: Schema.optional(Schema.Boolean),
   // The user explicitly chose to leave working-tree changes out of a push/create_pr,
   // so the dirty-tree safety guard must not reject the action.
   allowDirtyWorkingTree: Schema.optional(Schema.Boolean),

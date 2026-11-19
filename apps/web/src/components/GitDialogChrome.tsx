@@ -1,11 +1,10 @@
 // FILE: GitDialogChrome.tsx
 // Purpose: The shared shell of every git dialog (Create PR, Commit) — popup sizing and
-//          submit chord, the branch heading, the borderless message fields, the option
-//          checkbox rows, and the bottom action rows with their "why is this unavailable" tooltip.
+//          submit chord, the branch heading, the borderless message fields, and the
+//          bottom action rows with their "why is this unavailable" tooltip.
 // Layer: Git dialog UI primitive
 
 import type { ReactNode } from "react";
-import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -89,30 +88,6 @@ export function GitDialogBody({ children }: { children: ReactNode }) {
 /** Borderless authoring field (PR title/description, commit message). */
 export const GIT_DIALOG_FIELD_CLASS =
   "w-full bg-transparent py-1 font-system-ui text-ui leading-snug outline-none placeholder:text-muted-foreground/70";
-
-/** Clickable checkbox option in a git dialog body, with optional trailing detail. */
-export function GitDialogCheckboxRow({
-  checked,
-  onCheckedChange,
-  label,
-  trailing,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  label: ReactNode;
-  trailing?: ReactNode;
-}) {
-  return (
-    <label className="flex cursor-pointer items-center gap-2 py-1 text-ui leading-snug">
-      <Checkbox
-        checked={checked}
-        onCheckedChange={(nextChecked) => onCheckedChange(nextChecked === true)}
-      />
-      <span className="flex-1">{label}</span>
-      {trailing}
-    </label>
-  );
-}
 
 /** Hairline-separated action strip pinned to the bottom of a git dialog. */
 export function GitDialogActionList({ children }: { children: ReactNode }) {
