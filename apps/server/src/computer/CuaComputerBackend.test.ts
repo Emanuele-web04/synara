@@ -261,6 +261,11 @@ function fixture(options?: {
     changeDesktop: () => {
       desktopEpoch += 1;
     },
+    // A host restart resets the driver's epoch counter, so the next reply
+    // reports a generation lower than the baseline the backend last sent.
+    restartHost: () => {
+      desktopEpoch = 0;
+    },
     calls,
     delayOverview: (wait: Promise<void>) => {
       overviewWait = wait;
@@ -1896,6 +1901,31 @@ describe("Cua native boundary", () => {
     await f.backend.checkInputReady("cua:10:20");
     finish();
     await failure;
+  });
+  it("rebases the desktop epoch on host restart but still fails the straddling call", async () => {
+    const f = fixture();
+    await f.backend.checkInputReady("cua:10:20");
+    f.changeDesktop();
+    await f.backend.checkInputReady("cua:10:20");
+    f.restartHost();
+    // A mutation in flight across the restart cannot be trusted as delivered
+    // on the new desktop generation, so it fails dispatched-unknown.
+    await expect(f.backend.moveCursor({ x: 1, y: 1 })).rejects.toMatchObject({
+      effect: "dispatched-unknown",
+      code: "stale_desktop_epoch",
+    });
+    // The reset counter was adopted as the new baseline: the next call
+    // proceeds instead of wedging on stale_desktop_epoch forever.
+    await expect(f.backend.checkInputReady("cua:10:20")).resolves.toBeUndefined();
+    // A read straddling a restart fails the same way, as not-dispatched.
+    f.changeDesktop();
+    await f.backend.checkInputReady("cua:10:20");
+    f.restartHost();
+    await expect(f.backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_desktop_epoch",
+    });
+    await expect(f.backend.checkInputReady("cua:10:20")).resolves.toBeUndefined();
   });
   it("checks exact native input readiness without capturing or dispatching input", async () => {
     const f = fixture();
