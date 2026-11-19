@@ -1171,3 +1171,24 @@
 .hb .timeline__outcome--going {
   border: 2px solid var(--hb-border-strong);
 }
+
+/* A narrow pane (a phone, a split column): the name pill gives up width first so the chat's
+   controls keep their engine chip, and card titles wrap to two lines instead of losing the
+   receiving bot's name. A folded baton puts its time under the title, as an open one does. */
+@container (max-width: 480px) {
+  .hb .thread-pill {
+    max-width: 120px;
+  }
+  .hb .card-head__title {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .hb .baton--folded .card-head__text {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
+  }
+}

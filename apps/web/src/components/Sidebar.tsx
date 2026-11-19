@@ -8343,7 +8343,12 @@ export default function Sidebar() {
           </div>
         ) : null}
         <div className={isMobile ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents"}>
-          <SidebarContent ref={setSidebarContentElement} className="gap-0 font-system-ui">
+          <SidebarContent
+            ref={setSidebarContentElement}
+            // SynBot's panel scrolls its own bot list and keeps New bot / Stop all at its foot,
+            // so it needs the panel's full height rather than growing inside the outer scroll.
+            className={cn("gap-0 font-system-ui", showRailSynbotPanel && "h-full")}
+          >
             {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
               <SidebarGroup className="px-2 pt-2 pb-0">
                 <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
