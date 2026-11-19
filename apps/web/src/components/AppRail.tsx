@@ -36,6 +36,7 @@ import {
   SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME,
 } from "~/sidebarRowStyles";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
+import { SynbotMarkIcon } from "./synbot/SynbotMarkIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { useTranslation } from "~/i18n";
@@ -86,16 +87,17 @@ export function railProjectGlyphs(
 /** A rail item whose glyph has no solid twin: the same icon at rest and while active. */
 const sameGlyphs = (glyph: RailGlyph): AppRailGlyphs => ({ idle: glyph, active: glyph });
 
-/** Hugeicons rail items: the same stroke glyph at rest and active. */
-type HugeiconRailItemId =
+/** Rail items with one glyph at rest and active: Hugeicons strokes, and SynBot's mark. */
+type SingleGlyphRailItemId =
   | "home"
   | "inbox"
   | "pullRequests"
   | "automations"
   | "tasks"
   | "spaces"
-  | "studio";
-const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
+  | "studio"
+  | "synbot";
+const RAIL_SINGLE_GLYPHS: Record<SingleGlyphRailItemId, AppRailGlyphs> = {
   home: sameGlyphs(HomeIcon),
   inbox: sameGlyphs(InboxIcon),
   pullRequests: sameGlyphs(CodeReviewIcon),
@@ -104,20 +106,22 @@ const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
   spaces: sameGlyphs(FoldersIcon),
   // Hubs (stored id "studio"): the Hugeicons `dashboard-circle` circles.
   studio: sameGlyphs(HubIcon),
+  // SynBot: HoloBot's logo, as on the iPhone's Bot tab.
+  synbot: sameGlyphs(SynbotMarkIcon),
 };
 
 /** Central glyphs matching the Codex rail for the remaining fixed rail items. */
-const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, HugeiconRailItemId>, string> = {
+const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, SingleGlyphRailItemId>, string> = {
   kanban: "columns-3-wide",
   settings: "settings-gear-4",
 };
 
-function isHugeiconRailItem(id: RailItemId): id is HugeiconRailItemId {
-  return id in RAIL_HUGEICON_GLYPHS;
+function isSingleGlyphRailItem(id: RailItemId): id is SingleGlyphRailItemId {
+  return id in RAIL_SINGLE_GLYPHS;
 }
 
 export function railItemGlyphs(id: RailItemId): AppRailGlyphs {
-  if (isHugeiconRailItem(id)) return RAIL_HUGEICON_GLYPHS[id];
+  if (isSingleGlyphRailItem(id)) return RAIL_SINGLE_GLYPHS[id];
   return railCentralGlyphs(RAIL_ITEM_GLYPH_NAMES[id]);
 }
 
@@ -172,6 +176,7 @@ export const APP_RAIL_LABEL_KEYS = {
   pullRequests: "workspace:codeReview",
   automations: "automation:detail_breadcrumb",
   studio: "common:hubs",
+  synbot: "synbot:railLabel",
   settings: "workspace:toast_settings",
   "editor:file": "workspace:toolCallDetails_filesSection",
   "editor:diff": "workspace:toolCallDetails_diffSection",

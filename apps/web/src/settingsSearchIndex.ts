@@ -17,6 +17,7 @@ import {
   isSettingsSectionAvailable,
   providerAccountAnchorId,
   SETTINGS_NAV_ITEMS,
+  SETTINGS_TARGETS,
   type SettingsSectionId,
 } from "./settingsNavigation";
 
@@ -326,6 +327,40 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: ["settings:everySkillFoundAcrossProvidersWithTogglesToControl"],
     target: null,
   },
+  // ── SynBot (Beta) ─────────────────────────────────────────────────────────────
+  {
+    target: SETTINGS_TARGETS.synbotRecap,
+    id: "synbot:recap",
+    section: "synbot",
+    title: "synbotEditor:recap",
+    keywords: ["synbotEditor:recapKeywords"],
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotControlChats,
+    id: "synbot:control-chats",
+    section: "synbot",
+    title: "synbotEditor:controlChats",
+    keywords: ["synbotEditor:controlChatsKeywords"],
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotMergeProof,
+    id: "synbot:merge-proof",
+    section: "synbot",
+    title: "synbotEditor:mergeProof",
+    keywords: ["synbotEditor:mergeProofKeywords"],
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotParallelTasks,
+    id: "synbot:parallel-tasks",
+    section: "synbot",
+    title: "synbotEditor:parallelTasks",
+    keywords: ["synbotEditor:parallelTasksKeywords"],
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+
   {
     id: "usage:usage",
     section: "usage",

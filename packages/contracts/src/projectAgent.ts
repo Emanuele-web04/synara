@@ -525,6 +525,8 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   ),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
+  /** The coordinator's first message on a new Hub; defaults to the Hub welcome (SynBot bots set their own). */
+  greeting: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
   libraryPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   libraryRemoteUrl: Schema.optional(Schema.NullOr(LibraryRemoteUrl)),
   libraryPushOnChange: Schema.optional(Schema.Boolean),

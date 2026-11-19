@@ -24,6 +24,13 @@ export function resolveHubWorkSource(input: {
   readonly callerThreadId: string;
   readonly callerTurnId: string | null;
   readonly contextMessageIds?: readonly string[];
+  /**
+   * SynBot provenance: a delegation or report message from another bot stands for the human
+   * messages that authorized it. Returns null for ordinary messages.
+   */
+  readonly delegatedSources?: (
+    messageId: string,
+  ) => Effect.Effect<readonly HubWorkSourceMessage[] | null, unknown>;
 }) {
   return Effect.gen(function* () {
     const detail = yield* input.snapshotQuery.getThreadDetailById(
@@ -69,24 +76,54 @@ export function resolveHubWorkSource(input: {
                 input.callerTurnId !== null,
             ),
           ];
-    if (selected.some((message) => !message || !isHuman(message))) {
-      return yield* Effect.fail(
-        new ToolInputError(
-          "Select original human messages in this coordinator thread with contextMessageIds. Agent and automation messages cannot authorize new Hub work.",
-        ),
-      );
+    // SynBot: a delegation message in this thread stands for the human messages behind it, so
+    // those messages' own ids (from another bot's thread) select them too.
+    const carriedSources = new Map<string, HubWorkSourceMessage>();
+    if (ids && input.delegatedSources && selected.some((message) => !message)) {
+      for (const message of messages) {
+        if (message.role !== "user" || isHuman(message)) continue;
+        const carried = yield* input
+          .delegatedSources(message.id)
+          .pipe(Effect.orElseSucceed(() => null));
+        for (const source of carried ?? []) carriedSources.set(source.messageId, source);
+      }
     }
-    return selected.map(
-      (message): HubWorkSourceMessage => ({
-        threadId: detail.value.id,
-        messageId: message!.id,
-        text: message!.text,
-        attachments: [...(message!.attachments ?? [])],
-        createdAt: message!.createdAt,
-        updatedAt: message!.updatedAt,
-        turnId: message!.turnId,
-      }),
-    );
+    const resolved: HubWorkSourceMessage[] = [];
+    for (const [index, message] of selected.entries()) {
+      const carried = !message && ids ? carriedSources.get(ids[index]!) : undefined;
+      if (carried) {
+        if (!resolved.some((entry) => entry.messageId === carried.messageId))
+          resolved.push(carried);
+        continue;
+      }
+      if (message && isHuman(message)) {
+        resolved.push({
+          threadId: detail.value.id,
+          messageId: message.id,
+          text: message.text,
+          attachments: [...(message.attachments ?? [])],
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+          turnId: message.turnId,
+        });
+        continue;
+      }
+      const delegated =
+        message && input.delegatedSources
+          ? yield* input.delegatedSources(message.id).pipe(Effect.orElseSucceed(() => null))
+          : null;
+      if (!delegated || delegated.length === 0) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            "Select original human messages in this coordinator thread with contextMessageIds. Agent and automation messages cannot authorize new Hub work.",
+          ),
+        );
+      }
+      for (const source of delegated) {
+        if (!resolved.some((entry) => entry.messageId === source.messageId)) resolved.push(source);
+      }
+    }
+    return resolved;
   });
 }
 

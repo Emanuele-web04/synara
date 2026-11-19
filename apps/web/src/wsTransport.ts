@@ -46,8 +46,10 @@ import {
   WsCompatibilityError,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
+  WsBotsRpcGroup,
   type AutomationStreamEvent,
   type TodoStreamEvent,
+  type BotStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
@@ -298,7 +300,10 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+    .merge(WsComputerRpcGroup)
+    .merge(WsProjectAgentRpcGroup)
+    .merge(WsBotsRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -2536,6 +2541,14 @@ export class WsTransport {
             "automation.events",
             client[WS_METHODS.subscribeAutomationEvents]({}),
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.botsEvent) {
+          this.startStream(
+            client,
+            "bots.events",
+            client[WS_METHODS.subscribeBotsEvents]({}),
+            (event: BotStreamEvent) => this.emit(WS_CHANNELS.botsEvent, event),
             restartChannel,
           );
         } else if (channel === WS_CHANNELS.todoEvent) {

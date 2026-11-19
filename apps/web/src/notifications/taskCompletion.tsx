@@ -3,12 +3,13 @@
 // Layer: Notification runtime
 // Exports: TaskCompletionNotifications and browser permission helpers
 
-import { ThreadId } from "@synara/contracts";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { ThreadId, type Bot } from "@synara/contracts";
+import { useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { useMemo, useEffect, useRef, useState } from "react";
 import { toastManager } from "../components/ui/toast";
 import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
 import { useAppSettings } from "../appSettings";
+import { SYNBOT_ON } from "../betaFeatures";
 import { isElectron } from "../env";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
@@ -37,6 +38,16 @@ import {
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import { claimSnoozeReminder } from "./snoozeReminderReceipts";
+import {
+  botHasOpenWork,
+  botsNewlyWaiting,
+  botWaitReason,
+  isBotOnScreen,
+  synbotPageForThread,
+  type BotWaitReason,
+} from "../synbot/synbotNotifications.logic";
+import { botByThreadId } from "../synbot/synbotState.logic";
+import { useSynbotStore } from "../synbot/synbotStore";
 import { t } from "~/i18n";
 
 export type BrowserNotificationPermissionState =
@@ -85,9 +96,41 @@ interface ThreadNotificationCopy {
   body: string;
 }
 
+/** SynBot (Beta): the bot whose chat `threadId` is; bot chats notify and open as the bot. */
+function synbotBotForThread(threadId: string) {
+  return SYNBOT_ON ? botByThreadId(useSynbotStore.getState().data, threadId) : null;
+}
+
+/** SynBot (Beta): the line a bot that starts waiting on the user notifies with. */
+function botWaitText(reason: BotWaitReason): string {
+  switch (reason.kind) {
+    case "start":
+      return t("synbot:notifyStart", { brief: reason.brief.split("\n")[0] });
+    case "approval":
+      return t("synbot:notifyApproval");
+    case "question":
+      return t("synbot:notifyQuestion");
+    case "task":
+      return t("synbot:notifyTask", { title: reason.title });
+    case "unknown":
+      return t("synbot:status_waiting");
+  }
+}
+
+/** Waits this long before naming why a bot waits, so the hand-off behind it has arrived. */
+const BOT_WAIT_SETTLE_MS = 1_200;
+
 // Notification opens are generic thread activations, so they clear splitViewId
-// instead of resurrecting a hidden split pairing.
+// instead of resurrecting a hidden split pairing. A bot's chat (or one of its tasks' threads)
+// opens on the SynBot page.
 function focusThread(threadId: Thread["id"], navigate: ReturnType<typeof useNavigate>): void {
+  const synbotPage = SYNBOT_ON
+    ? synbotPageForThread(useSynbotStore.getState().data, threadId)
+    : null;
+  if (synbotPage) {
+    void navigate({ to: "/synbot", search: synbotPage });
+    return;
+  }
   void navigate({
     to: "/$threadId",
     params: { threadId },
@@ -187,6 +230,15 @@ export function TaskCompletionNotifications() {
     rightDockRendered: routeSearch.view !== "editor",
     rightDockState,
   });
+  // SynBot (Beta): the bot chat on screen ("" is SynBot's), null off the SynBot page.
+  const synbotPageBot = useRouterState({
+    select: (state) =>
+      SYNBOT_ON && state.location.pathname === "/synbot"
+        ? ((state.location.search as { readonly bot?: string }).bot ?? "")
+        : null,
+  });
+  const synbotBots = useSynbotStore((store) => store.data.bots);
+  const router = useRouter();
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   // Lazy state init: evaluated once, keeping the impure Date.now() call out
@@ -195,6 +247,7 @@ export function TaskCompletionNotifications() {
   const readyRef = useRef(false);
   const notifiedCompletionKeysRef = useRef(new Set<string>());
   const notifiedSnoozeKeysRef = useRef(new Set<string>());
+  const previousBotStatusRef = useRef<ReadonlyMap<string, Bot["status"]> | null>(null);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -264,6 +317,54 @@ export function TaskCompletionNotifications() {
     threadsHydrated,
   ]);
 
+  // SynBot (Beta): a bot that starts waiting on the user (a Start, an approval, a question, a
+  // task) notifies once, as the bot. Its status is the signal: a bot chat's requests are only
+  // loaded while that chat is open.
+  useEffect(() => {
+    if (!SYNBOT_ON) return;
+    const previous = previousBotStatusRef.current;
+    previousBotStatusRef.current = new Map(synbotBots.map((bot) => [bot.id, bot.status]));
+    const entered = previous ? botsNewlyWaiting(previous, synbotBots) : [];
+    if (entered.length === 0) return;
+    // Not cleared on the next change: a later bot event must not drop this one.
+    window.setTimeout(() => {
+      const data = useSynbotStore.getState().data;
+      const systemEnabled = shouldAttemptSystemTaskNotification({
+        enabled: settings.enableSystemTaskCompletionNotifications,
+        isWindowForeground: isWindowForeground(),
+      });
+      const { location } = router.state;
+      const pageBot =
+        location.pathname === "/synbot"
+          ? ((location.search as { readonly bot?: string }).bot ?? "")
+          : null;
+      for (const { id } of entered) {
+        const bot = data.bots.find((candidate) => candidate.id === id);
+        if (!bot || bot.status !== "waiting") continue;
+        const reason = botWaitReason(
+          data,
+          bot,
+          useStore.getState().threadShellById?.[bot.threadId],
+        );
+        const copy = { title: bot.name, body: botWaitText(reason) };
+        // A task's request opens next to the bot's chat, in the task pane.
+        const threadId = reason.kind === "task" && reason.threadId ? reason.threadId : bot.threadId;
+        if (settings.enableTaskCompletionToasts && !isBotOnScreen(bot, pageBot)) {
+          showThreadToast(copy, threadId, "warning", navigate);
+        }
+        if (systemEnabled) {
+          void showSystemThreadNotification(copy, threadId, navigate);
+        }
+      }
+    }, BOT_WAIT_SETTLE_MS);
+  }, [
+    navigate,
+    router,
+    settings.enableSystemTaskCompletionNotifications,
+    settings.enableTaskCompletionToasts,
+    synbotBots,
+  ]);
+
   useEffect(() => {
     if (!threadsHydrated) {
       return;
@@ -316,17 +417,26 @@ export function TaskCompletionNotifications() {
       enabled: settings.enableSystemTaskCompletionNotifications,
       isWindowForeground: isWindowForeground(),
     });
+    // SynBot (Beta): a bot's chat notifies under the bot's name and toasts unless it is on screen.
+    const asBot = (threadId: Thread["id"], copy: ThreadNotificationCopy) => {
+      const bot = synbotBotForThread(threadId);
+      return bot ? { ...copy, title: bot.name } : copy;
+    };
+    const shouldToast = (threadId: Thread["id"]) => {
+      const bot = synbotBotForThread(threadId);
+      return bot
+        ? !isBotOnScreen(bot, synbotPageBot)
+        : shouldShowThreadNotificationToast({ threadId, visibleThreadIds });
+    };
 
     for (const completion of completions) {
       notifiedCompletionKeysRef.current.add(completedThreadNotificationKey(completion));
-      const copy = buildTaskCompletionCopy(completion);
-      if (
-        settings.enableTaskCompletionToasts &&
-        shouldShowThreadNotificationToast({
-          threadId: completion.threadId,
-          visibleThreadIds,
-        })
-      ) {
+      // A bot's turn that handed work out or started a task stays quiet: the report or recap
+      // that follows once the work settles is the one that notifies.
+      const bot = synbotBotForThread(completion.threadId);
+      if (bot && botHasOpenWork(useSynbotStore.getState().data, bot)) continue;
+      const copy = asBot(completion.threadId, buildTaskCompletionCopy(completion));
+      if (settings.enableTaskCompletionToasts && shouldToast(completion.threadId)) {
         showThreadToast(copy, completion.threadId, "success", navigate);
       }
 
@@ -336,14 +446,12 @@ export function TaskCompletionNotifications() {
     }
 
     for (const candidate of inputNeededCandidates) {
+      // A bot's request (its chat's or one of its tasks') notifies through its waiting status.
+      if (SYNBOT_ON && synbotPageForThread(useSynbotStore.getState().data, candidate.threadId)) {
+        continue;
+      }
       const copy = buildInputNeededCopy(candidate);
-      if (
-        settings.enableTaskCompletionToasts &&
-        shouldShowThreadNotificationToast({
-          threadId: candidate.threadId,
-          visibleThreadIds,
-        })
-      ) {
+      if (settings.enableTaskCompletionToasts && shouldToast(candidate.threadId)) {
         showThreadToast(copy, candidate.threadId, "warning", navigate);
       }
 
@@ -393,6 +501,7 @@ export function TaskCompletionNotifications() {
     runtimeStartedAtMs,
     terminalStateByThreadId,
     snoozedThreadIds,
+    synbotPageBot,
     threads,
     threadsHydrated,
     visibleThreadIds,

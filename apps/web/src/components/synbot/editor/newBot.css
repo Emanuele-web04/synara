@@ -1,0 +1,307 @@
+/* FILE: newBot.css
+   Purpose: The New bot steps (Paper "11 New bot", variant A): the progress line along the top
+            edge, the question, the computer rows, the identity fields, the template chips and
+            the defaults rows. Kit tokens only (kit/holobot.css); text follows the UI font size. */
+
+.hb .new-bot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gutter-lg);
+  padding-top: var(--hb-gap-sm);
+}
+.hb .new-bot__eyebrow {
+  font-size: var(--hb-text-sm);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+
+/* Absolute to the <dialog> itself, so it stays on the top edge while the box scrolls. */
+.hb .new-bot__progress {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--hb-border);
+}
+.hb .new-bot__progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 0 var(--hb-pill) var(--hb-pill) 0;
+  background: var(--hb-text);
+  transition: width 220ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .new-bot__progress > span {
+    transition: none;
+  }
+}
+
+.hb .new-bot__question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+}
+.hb .new-bot__title {
+  margin: 0;
+  font-size: calc(var(--hb-text-md) + 9px);
+  font-weight: var(--hb-weight-semibold);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.hb .new-bot__hint {
+  margin: 0;
+  font-size: var(--hb-text-md);
+  color: var(--hb-muted);
+}
+
+/* Computer */
+.hb .new-bot__computers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+}
+.hb .new-bot__computer {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  padding: 10px var(--hb-gap) 10px 10px;
+  border: 0;
+  border-radius: var(--hb-radius-lg);
+  background: transparent;
+  color: var(--hb-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hb .new-bot__computer:hover:not(:disabled),
+.hb .new-bot__computer[aria-checked="true"] {
+  background: var(--hb-card-hover);
+}
+.hb .new-bot__computer:disabled {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb .new-bot__computer:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+.hb .new-bot__computer-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--hb-radius-md);
+  background: var(--hb-card-hover);
+}
+.hb .new-bot__computer[aria-checked="true"] .new-bot__computer-icon {
+  background: var(--hb-card);
+  box-shadow:
+    0 0 0 var(--hb-hairline) var(--hb-border-strong),
+    0 1px 2px rgb(0 0 0 / 0.06);
+}
+.hb .new-bot__computer-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+  min-width: 0;
+}
+.hb .new-bot__computer-name {
+  overflow: hidden;
+  font-size: var(--hb-text-lg);
+  font-weight: var(--hb-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .new-bot__computer-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .new-bot__radio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: var(--hb-pill);
+  box-shadow: inset 0 0 0 1.5px var(--hb-border-strong);
+  color: var(--hb-bg);
+}
+.hb .new-bot__computer[aria-checked="true"] .new-bot__radio {
+  background: var(--hb-text);
+  box-shadow: none;
+}
+
+/* Bot */
+.hb .new-bot__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gutter);
+}
+.hb .new-bot__face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  flex-shrink: 0;
+  border-radius: var(--hb-radius-xl);
+  background: var(--hb-card);
+  box-shadow:
+    0 0 0 var(--hb-hairline) var(--hb-border-strong),
+    0 2px 6px rgb(0 0 0 / 0.05);
+}
+.hb .new-bot__fields {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+  min-width: 0;
+}
+.hb .new-bot__name,
+.hb .new-bot__role {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid var(--hb-border-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--hb-text);
+  font: inherit;
+  font-family: var(--hb-font);
+  outline: none;
+}
+.hb .new-bot__name {
+  font-size: calc(var(--hb-text-md) + 9px);
+  font-weight: var(--hb-weight-semibold);
+  letter-spacing: -0.015em;
+}
+.hb .new-bot__role {
+  font-size: var(--hb-text-lg);
+}
+.hb .new-bot__name:focus,
+.hb .new-bot__role:focus {
+  border-bottom-color: var(--hb-text);
+}
+.hb .new-bot__name::placeholder,
+.hb .new-bot__role::placeholder {
+  color: var(--hb-muted);
+  opacity: 0.7;
+}
+.hb .new-bot__templates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+}
+/* Every role reads as a chip: the unchosen ones get a hairline too. */
+.hb .new-bot__templates .hb-btn--ghost {
+  box-shadow: inset 0 0 0 1px var(--hb-border-strong);
+}
+.hb .new-bot__templates .hb-btn__core {
+  gap: var(--hb-gap-sm);
+}
+.hb .new-bot__templates-label {
+  margin-right: var(--hb-gap-xs);
+  font-size: var(--hb-text-md);
+  color: var(--hb-muted);
+}
+
+/* Where it starts */
+.hb .new-bot__defaults {
+  display: flex;
+  flex-direction: column;
+}
+/* A hairline above each row; a shadow, so the rows' own `border: 0` cannot drop it. */
+.hb .new-bot__defaults > * + * {
+  box-shadow: inset 0 1px 0 var(--hb-border);
+}
+.hb .new-bot__row {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  width: 100%;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hb-text);
+  font: inherit;
+  text-align: left;
+}
+.hb button.new-bot__row {
+  cursor: pointer;
+}
+.hb button.new-bot__row:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
+}
+.hb .new-bot__label {
+  width: 112px;
+  flex-shrink: 0;
+  font-size: var(--hb-text-md);
+  color: var(--hb-muted);
+}
+.hb .new-bot__value {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--hb-gap);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--hb-text-lg);
+  font-weight: var(--hb-weight-medium);
+}
+.hb .new-bot__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .new-bot__item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .new-bot__more {
+  font-weight: normal;
+  color: var(--hb-muted);
+}
+.hb .new-bot__chevron {
+  flex-shrink: 0;
+  color: var(--hb-muted);
+}
+.hb .new-bot__add {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hb-muted);
+  font: inherit;
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-medium);
+  cursor: pointer;
+}
+.hb .new-bot__add:hover {
+  color: var(--hb-text);
+}
+.hb .new-bot__instructions {
+  padding-top: var(--hb-gap);
+}
+
+/* Back and Continue / Create: a full-size capsule, so the metal ring leaves the label room. */
+.hb .new-bot__footer .hb-btn {
+  height: 36px;
+  padding: 0 var(--hb-gutter-lg);
+  font-size: var(--hb-text-md);
+}

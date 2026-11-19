@@ -1,0 +1,162 @@
+/* FILE: bots.css
+   Purpose: The bot sheet (ported from HoloBot's bots/bots.css): templates, the look pickers,
+            the paired fields, the crew list, the instructions box and the footer. Every value
+            is a kit token (kit/holobot.css). */
+
+.hb .bot-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gutter);
+}
+.hb .bot-sheet__templates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  padding-bottom: var(--hb-gap);
+  border-bottom: var(--hb-hairline) solid var(--hb-border);
+}
+.hb .bot-sheet__label {
+  margin-right: var(--hb-gap-xs);
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .bot-sheet__look {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gutter);
+}
+.hb .bot-sheet__pickers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+}
+.hb .bot-sheet__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hb-gap-sm);
+}
+.hb .bot-sheet__swatch,
+.hb .bot-sheet__color {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hb-control-sm);
+  height: var(--hb-control-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--hb-pill);
+  background: var(--hb-card-hover);
+  cursor: pointer;
+}
+.hb .bot-sheet__color {
+  width: 20px;
+  height: 20px;
+}
+.hb .bot-sheet__swatch[aria-checked="true"],
+.hb .bot-sheet__color[aria-checked="true"] {
+  box-shadow:
+    0 0 0 2px var(--hb-card),
+    0 0 0 3.5px var(--hb-text);
+}
+.hb .bot-sheet__swatch:focus-visible,
+.hb .bot-sheet__color:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+.hb .bot-sheet__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--hb-gap);
+}
+@container (max-width: 420px) {
+  .hb .bot-sheet__pair {
+    grid-template-columns: 1fr;
+  }
+}
+.hb .bot-sheet__repos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hb-gap-sm);
+}
+.hb .bot-sheet__hint {
+  margin: 0;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .bot-sheet__engine {
+  align-self: flex-start;
+  max-width: 100%;
+}
+.hb .bot-sheet__engine .hb-btn__core {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hb .bot-sheet__instructions {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--hb-gap-sm) var(--hb-gap);
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-md);
+  background: var(--hb-bg);
+  color: var(--hb-text);
+  font: inherit;
+  font-family: var(--hb-font);
+  font-size: var(--hb-text-md);
+  line-height: 1.45;
+  resize: vertical;
+}
+.hb .bot-sheet__instructions:focus {
+  outline: none;
+  border-color: var(--hb-chosen-border);
+}
+.hb .bot-sheet__crew {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--hb-border);
+  border-radius: var(--hb-radius-md);
+  background: var(--hb-bg);
+}
+.hb .bot-sheet__crew-row {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  padding: var(--hb-gap-sm) var(--hb-gap);
+}
+.hb .bot-sheet__crew-row + .bot-sheet__crew-row {
+  border-top: 1px solid var(--hb-border);
+}
+.hb .bot-sheet__crew-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hb .bot-sheet__crew-name {
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-medium);
+}
+.hb .bot-sheet__error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  color: var(--hb-danger-text);
+  font-size: var(--hb-text-sm);
+}
+.hb .bot-sheet__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  width: 100%;
+}
+.hb .bot-sheet__spacer {
+  flex: 1;
+}
+.hb-dialog .bot-sheet {
+  container-type: inline-size;
+}

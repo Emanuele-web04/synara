@@ -3,7 +3,7 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
-import { MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import { MCP_CONNECTORS_BETA_FEATURE, SYNBOT_BETA_FEATURE } from "@synara/shared/betaFeatures";
 
 import { isBetaFeatureOn } from "~/betaFeatures";
 import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBillingFlag";
@@ -25,6 +25,7 @@ export const SETTINGS_SECTION_IDS = [
   "models",
   "providers",
   "skills",
+  "synbot",
   "usage",
   "connectors",
   "integrations",
@@ -52,6 +53,10 @@ export const SETTINGS_TARGETS = {
   providerUpdates: "provider-updates",
   providerInstalls: "provider-installs",
   environmentPanel: "environment-panel",
+  synbotRecap: "setting-synbot-recap",
+  synbotControlChats: "setting-synbot-control-chats",
+  synbotMergeProof: "setting-synbot-merge-proof",
+  synbotParallelTasks: "setting-synbot-parallel-tasks",
 } as const;
 
 export type SettingsNavItem = {
@@ -89,6 +94,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
 /** Sections that exist only where their Beta-only feature is on. */
 const SETTINGS_SECTION_BETA_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   connectors: MCP_CONNECTORS_BETA_FEATURE,
+  synbot: SYNBOT_BETA_FEATURE,
 };
 
 /** False for a Beta-only section on Stable: no nav entry, search result, or deep link. */
@@ -239,6 +245,15 @@ const ALL_SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "settings:captureAnotherAppSFrontmostWindowDirectlyIntoA",
     icon: "screen-capture",
     eyebrow: "Screen capture",
+  },
+  {
+    id: "synbot",
+    group: "agents",
+    label: "synbotEditor:settingsNavLabel",
+    description: "synbotEditor:settingsNavDescription",
+    icon: "robot",
+    eyebrow: "Bots",
+    badge: "workspace:beta",
   },
   {
     id: "worktrees",

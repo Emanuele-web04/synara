@@ -50,6 +50,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -244,6 +245,7 @@ import {
   type SplitViewPanePanelState,
 } from "../splitViewStore";
 import { useStore } from "../store";
+import { useIsBotProject } from "../synbot/botHubs";
 import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -356,6 +358,7 @@ import {
 } from "./chat/ComposerModelPicker";
 import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import type { ChatTranscriptSlotInput } from "./chat/chatTranscriptSlot";
 import { HubPendingApprovals } from "./chat/group/HubPendingApprovals";
 import { ComposerRunningAgentsCapsule } from "./chat/ComposerRunningAgentsCapsule";
 import {
@@ -632,6 +635,21 @@ interface ChatViewProps {
     onClick: () => void;
   } | null;
   onCloseThreadPane?: () => void;
+  /** Opens a thread linked from the transcript (task cards, notices) in place of navigating. */
+  onOpenLinkedThread?: (threadId: ThreadId) => void;
+  /**
+   * SynBot (Beta): the thread draws its own rows in the transcript's place (a bot's thread).
+   * The composer, its send paths, queue and model controls stay ChatView's; pending approvals
+   * and questions are answered in those rows, so the composer's own cards stand down.
+   */
+  renderTranscript?: (input: ChatTranscriptSlotInput) => ReactNode;
+  /** The composer's resting placeholder in place of "Do anything in Synara" (a bot's chat). */
+  composerPlaceholder?: string;
+  /** Where the row of permission, model and context controls goes instead of under the
+   * composer: a bot chat's top bar, beside the bot's name. Null until that element mounts. */
+  composerStatusTarget?: HTMLElement | null;
+  /** Drawn inside the composer's Send button under its icon (a bot chat's liquid-metal ring). */
+  composerSendUnderlay?: ReactNode;
   /**
    * Enables the ambient computer preview rail for this chat: when provided,
    * a live computer session renders below the Environment card and the chat
@@ -661,6 +679,11 @@ export default function ChatView({
   onSplitSurface,
   viewModeAction: viewModeActionProp,
   onCloseThreadPane,
+  onOpenLinkedThread,
+  renderTranscript,
+  composerPlaceholder,
+  composerStatusTarget: composerStatusTargetProp,
+  composerSendUnderlay,
 }: ChatViewProps) {
   const { t } = useTranslation();
 
@@ -674,6 +697,10 @@ export default function ChatView({
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
   const viewModeAction = viewModeActionProp ?? null;
+  // A surface that takes the status row (a bot chat's top bar) draws it there, not under the
+  // composer.
+  const composerStatusInBar = composerStatusTargetProp !== undefined;
+  const composerStatusTarget = composerStatusTargetProp ?? null;
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -1275,6 +1302,8 @@ export default function ChatView({
     studioWorkspaceRoot,
     groupsWorkspaceRoot,
   });
+  // A bot is a Hub, but its chat is SynBot's: no Hubs panel, Library or coordinator chips.
+  const isBotHub = useIsBotProject(activeProject?.id);
   const isContainerLandingProject = isHomeChatContainer || isGroupContainer;
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
@@ -2133,6 +2162,7 @@ export default function ChatView({
   });
   const showCoordinatorSuggestions =
     isGroupContainer &&
+    !isBotHub &&
     coordinatorSuggestionChips.length > 0 &&
     shouldShowCoordinatorSuggestions({
       isCoordinatorThread: isCoordinatorConversation,
@@ -2320,6 +2350,7 @@ export default function ChatView({
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
   const isCenteredEmptyLanding =
+    renderTranscript === undefined &&
     timelineEntries.length === 0 &&
     !hasPendingThreadWork &&
     !activeThread?.parentThreadId &&
@@ -3364,7 +3395,7 @@ export default function ChatView({
   });
   const projectPanelEnabled = resolveProjectPanelEnabled({
     environmentEnabled,
-    isGroupContainer,
+    isGroupContainer: isGroupContainer && !isBotHub,
   });
   // Group chats default to the Groups panel — a newly created group's
   // coordinator chat opens with Focus/sections visible. An explicit toggle wins
@@ -5549,15 +5580,17 @@ export default function ChatView({
   }, [activeTurnLiveDiffState.turnId, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
     (nextThreadId: ThreadId) =>
-      navigate({
-        to: "/$threadId",
-        params: { threadId: nextThreadId },
-        search: (previous) =>
-          isEditorRail
-            ? { ...stripDiffSearchParams(previous), view: "editor" }
-            : stripDiffSearchParams(previous),
-      }),
-    [isEditorRail, navigate],
+      onOpenLinkedThread
+        ? Promise.resolve(onOpenLinkedThread(nextThreadId))
+        : navigate({
+            to: "/$threadId",
+            params: { threadId: nextThreadId },
+            search: (previous) =>
+              isEditorRail
+                ? { ...stripDiffSearchParams(previous), view: "editor" }
+                : stripDiffSearchParams(previous),
+          }),
+    [isEditorRail, navigate, onOpenLinkedThread],
   );
   // What the transcript's subagent cards read from this chat. Stop and
   // background go through the same per-row dispatches the keyboard uses.
@@ -6044,6 +6077,41 @@ export default function ChatView({
       : {}),
   };
   const showTrailingBranchToolbar = !activeThreadIsSidechat && isGitRepo && !environmentEnabled;
+  // Permission, branch controls (git threads), model/effort and the context ring: under the
+  // composer, or on one line in the surface's top bar (`composerStatusTarget`).
+  const composerStatusRow = composerStatusInBar ? (
+    <div
+      ref={composerStatusRowRef}
+      data-chat-composer-status-row=""
+      className="flex min-w-0 items-center gap-1 overflow-hidden"
+    >
+      {/* Only the mode's icon fits beside the name; its menu and tooltip still name it. */}
+      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" hideLabel />
+      <div className="flex shrink-0 items-center gap-2">
+        {composerPickerControls}
+        {composerContextMeter}
+      </div>
+    </div>
+  ) : (
+    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+      <div
+        ref={composerStatusRowRef}
+        data-chat-composer-status-row=""
+        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
+      >
+        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+        {showTrailingBranchToolbar ? (
+          <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-[1_0_9rem] px-1 py-0" />
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
+          {composerPickerControls}
+          {composerContextMeter}
+        </div>
+      </div>
+    </div>
+  );
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
@@ -6542,7 +6610,7 @@ export default function ChatView({
                 onOpenThread={onNavigateToThread}
               />
             ) : null}
-            {activePendingApproval ? (
+            {renderTranscript ? null : activePendingApproval ? (
               <div className="pb-2">
                 <ComposerPendingApprovalPanel
                   approval={activePendingApproval}
@@ -6816,7 +6884,7 @@ export default function ChatView({
                                 ? t("chat:placeholder_followUp")
                                 : standaloneSidechatContext
                                   ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
-                                  : t("chat:doAnythingInSynara")
+                                  : (composerPlaceholder ?? t("chat:doAnythingInSynara"))
                   }
                   prediction={composerPrediction.ghost}
                   disabled={isComposerEditorDisabled}
@@ -6826,7 +6894,7 @@ export default function ChatView({
               {/* Bottom toolbar — hidden while an approval takes over the composer,
                     since the approve/decline actions live in the detached approval card
                     floating above (see ComposerPendingApprovalPanel). */}
-              {activePendingApproval ? null : (
+              {activePendingApproval && !renderTranscript ? null : (
                 <ChatComposerFooter
                   layout={composerSingleRow ? "row" : "block"}
                   isComposerFooterCompact={isComposerFooterCompact}
@@ -6841,6 +6909,7 @@ export default function ChatView({
                   contextMeter={composerStatusBelow ? null : composerContextMeter}
                   interactionMode={interactionMode}
                   resetInteractionMode={handleResetInteractionMode}
+                  {...(composerSendUnderlay ? { sendUnderlay: composerSendUnderlay } : {})}
                   sidebarAction={
                     activeTaskList || sidebarProposedPlan || planSidebarOpen
                       ? {
@@ -7215,126 +7284,145 @@ export default function ChatView({
             {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                  <ChatTranscriptPane
-                    activeThreadId={activeThread.id}
-                    activeTurnId={activeTurnIdForTranscript}
-                    agentActivityDetail={openAgentActivityDetail}
-                    hasMessages={timelineEntries.length > 0}
-                    isWorking={isWorking}
-                    workingLabel={resolveWorkingLabel({
-                      isSettlingTurnDispatch,
-                      isSendBusy,
-                      turnTakenOver,
-                      isConnecting,
-                      providerName: providerDisplayName,
-                    })}
-                    worktreeSetup={activeWorktreeSetup}
-                    worktreeSetupPendingAction={worktreeSetupPendingAction}
-                    onResolveWorktreeSetup={onResolveWorktreeSetup}
-                    activeTurnInProgress={activeTurnInProgress}
-                    liveSubagentRunEntryIds={subagentCardScan.liveCardEntryIds}
-                    subagentRun={subagentRunContext}
-                    // The composer's "N agents running" capsule already counts and
-                    // scrolls to these agents; one indicator is enough.
-                    runningSubagentRun={runningAgents.count > 0 ? null : runningSubagentRun}
-                    subagentThread={subagentThread}
-                    collapseFinishedTurns={settings.collapseFinishedTurns}
-                    activeTurnStartedAt={activeWorkStartedAt}
-                    listRef={legendListRef}
-                    timelineControllerRef={timelineControllerRef}
-                    findHighlightStore={threadFindHighlightStore}
-                    pinnedMessageIds={pinnedMessageIds}
-                    canPinMessage={canPinMessage}
-                    onTogglePinMessage={handleTogglePinMessageGuarded}
-                    onForkFromMessage={handleForkFromMessage}
-                    goalAchievements={goalAchievements}
-                    enteringUserMessageIds={enteringUserMessageIds}
-                    tailAnchorMessageId={
-                      settings.anchorSentMessagesToTop &&
-                      tailAnchor !== null &&
-                      tailAnchor.threadId === activeThread.id
-                        ? tailAnchor.messageId
-                        : null
-                    }
-                    tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
-                    crossTaskOrigin={resolvedCrossTaskOrigin}
-                    forkSource={forkSource}
-                    isTemporaryThread={isThreadTemporary}
-                    isLocalDraft={isLocalDraftThread}
-                    isProjectImport={activeThread.isProjectImport === true}
-                    timelineEntries={timelineEntries}
-                    messageChangeSignal={timelineMessages}
-                    turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                    turnTimingByTurnId={turnTimingByTurnId}
-                    conversationOnly={isCoordinatorConversation}
-                    hubWorkItemsByMessageId={hubWorkItemsByMessageId}
-                    threadError={activeThread?.error ?? null}
-                    recoverableTurnId={
-                      activeLatestTurnState === "error" ? activeLatestTurnId : null
-                    }
-                    turnRecoveryDisabled={
-                      isSendBusy ||
-                      isConnecting ||
-                      isWorking ||
-                      pendingApprovals.length > 0 ||
-                      pendingUserInputs.length > 0
-                    }
-                    onContinueFailedTurn={onResumeTurn}
-                    onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
-                    unblockingThread={unblockingActiveThread}
-                    onDismissThreadError={dismissActiveThreadError}
-                    onUnblockThread={unblockThread}
-                    onOpenTurnDiff={onOpenTurnDiff}
-                    onOpenThread={onNavigateToThread}
-                    onOpenAutomation={onOpenAutomation}
-                    computerControlEnabled={enableComputerControl}
-                    onEnableComputerControl={handleEnableComputerControlFromDenial}
-                    revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                    onRevertUserMessage={onRevertUserMessage}
-                    onUndoTurnFiles={onUndoTurnFiles}
-                    onEditUserMessage={onEditUserMessage}
-                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
-                    editableUserMessageId={editableUserMessageId}
-                    isRevertingCheckpoint={isRevertingCheckpoint}
-                    onExpandTimelineImage={onExpandTimelineImage}
-                    // End-follow belongs to the reader, including the gaps
-                    // between assistant text and subsequent tool/layout updates.
-                    followLiveOutput={!isUserScrollDetached}
-                    animateTailAnchorSlide={!hasStreamingAssistantText}
-                    onIsAtEndChange={onIsAtEndChange}
-                    onNavigate={onTranscriptNavigate}
-                    markdownCwd={threadWorkspaceCwd ?? undefined}
-                    resolvedTheme={resolvedTheme}
-                    chatFontSizePx={settings.chatFontSizePx}
-                    timestampFormat={timestampFormat}
-                    messageTrailAudioSource={settings.messageTrailAudioSource}
-                    messageTrailMicrophoneId={settings.messageTrailMicrophoneId}
-                    workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
-                    keybindings={keybindings}
-                    availableEditors={availableEditors}
-                    emptyStateContent={transcriptEmptyStateContent}
-                    emptyStateProjectName={activeProjectDisplayName}
-                    terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
-                    onMessagesScroll={onMessagesScroll}
-                    onMessagesClickCapture={onMessagesClickCapture}
-                    onMessagesMouseUp={onMessagesMouseUp}
-                    onMessagesWheel={onMessagesWheel}
-                    onEmbeddedScrollIntent={onEmbeddedScrollIntent}
-                    onSendVisualChoice={onSendVisualChoice}
-                    onMessagesPointerDown={onMessagesPointerDown}
-                    onMessagesPointerUp={onMessagesPointerUp}
-                    onMessagesPointerCancel={onMessagesPointerCancel}
-                    onMessagesTouchStart={onMessagesTouchStart}
-                    onMessagesTouchMove={onMessagesTouchMove}
-                    onMessagesTouchEnd={onMessagesTouchEnd}
-                    onOpenAgentActivity={setOpenAgentActivityId}
-                    onCloseAgentActivityDetail={closeAgentActivityDetail}
-                    scrollButtonVisible={showScrollToBottom}
-                    onScrollToBottom={onScrollToBottom}
-                    contentInsetRightPx={contentInsetRightPx}
-                    contentInsetBottomPx={composerTranscriptInsetPx}
-                    contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
-                  />
+                  {renderTranscript ? (
+                    renderTranscript({
+                      contentInsetBottomPx: composerTranscriptInsetPx,
+                      pendingApprovals,
+                      respondingRequestKeys,
+                      onRespondToApproval,
+                      pendingUserInput: {
+                        input: activePendingUserInput,
+                        progress: activePendingProgress,
+                        question: activePendingQuestion,
+                        isResponding: activePendingIsResponding,
+                        onToggleOption: onToggleActivePendingUserInputOption,
+                        onAdvance: onAdvanceActivePendingUserInput,
+                        onPrevious: onPreviousActivePendingUserInputQuestion,
+                        onCancel: onCancelActivePendingUserInput,
+                      },
+                    })
+                  ) : (
+                    <ChatTranscriptPane
+                      activeThreadId={activeThread.id}
+                      activeTurnId={activeTurnIdForTranscript}
+                      agentActivityDetail={openAgentActivityDetail}
+                      hasMessages={timelineEntries.length > 0}
+                      isWorking={isWorking}
+                      workingLabel={resolveWorkingLabel({
+                        isSettlingTurnDispatch,
+                        isSendBusy,
+                        turnTakenOver,
+                        isConnecting,
+                        providerName: providerDisplayName,
+                      })}
+                      worktreeSetup={activeWorktreeSetup}
+                      worktreeSetupPendingAction={worktreeSetupPendingAction}
+                      onResolveWorktreeSetup={onResolveWorktreeSetup}
+                      activeTurnInProgress={activeTurnInProgress}
+                      liveSubagentRunEntryIds={subagentCardScan.liveCardEntryIds}
+                      subagentRun={subagentRunContext}
+                      // The composer's "N agents running" capsule already counts and
+                      // scrolls to these agents; one indicator is enough.
+                      runningSubagentRun={runningAgents.count > 0 ? null : runningSubagentRun}
+                      subagentThread={subagentThread}
+                      collapseFinishedTurns={settings.collapseFinishedTurns}
+                      activeTurnStartedAt={activeWorkStartedAt}
+                      listRef={legendListRef}
+                      timelineControllerRef={timelineControllerRef}
+                      findHighlightStore={threadFindHighlightStore}
+                      pinnedMessageIds={pinnedMessageIds}
+                      canPinMessage={canPinMessage}
+                      onTogglePinMessage={handleTogglePinMessageGuarded}
+                      onForkFromMessage={handleForkFromMessage}
+                      goalAchievements={goalAchievements}
+                      enteringUserMessageIds={enteringUserMessageIds}
+                      tailAnchorMessageId={
+                        settings.anchorSentMessagesToTop &&
+                        tailAnchor !== null &&
+                        tailAnchor.threadId === activeThread.id
+                          ? tailAnchor.messageId
+                          : null
+                      }
+                      tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
+                      crossTaskOrigin={resolvedCrossTaskOrigin}
+                      forkSource={forkSource}
+                      isTemporaryThread={isThreadTemporary}
+                      isLocalDraft={isLocalDraftThread}
+                      isProjectImport={activeThread.isProjectImport === true}
+                      timelineEntries={timelineEntries}
+                      messageChangeSignal={timelineMessages}
+                      turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                      turnTimingByTurnId={turnTimingByTurnId}
+                      conversationOnly={isCoordinatorConversation}
+                      hubWorkItemsByMessageId={hubWorkItemsByMessageId}
+                      threadError={activeThread?.error ?? null}
+                      recoverableTurnId={
+                        activeLatestTurnState === "error" ? activeLatestTurnId : null
+                      }
+                      turnRecoveryDisabled={
+                        isSendBusy ||
+                        isConnecting ||
+                        isWorking ||
+                        pendingApprovals.length > 0 ||
+                        pendingUserInputs.length > 0
+                      }
+                      onContinueFailedTurn={onResumeTurn}
+                      onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
+                      unblockingThread={unblockingActiveThread}
+                      onDismissThreadError={dismissActiveThreadError}
+                      onUnblockThread={unblockThread}
+                      onOpenTurnDiff={onOpenTurnDiff}
+                      onOpenThread={onNavigateToThread}
+                      onOpenAutomation={onOpenAutomation}
+                      computerControlEnabled={enableComputerControl}
+                      onEnableComputerControl={handleEnableComputerControlFromDenial}
+                      revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                      onRevertUserMessage={onRevertUserMessage}
+                      onUndoTurnFiles={onUndoTurnFiles}
+                      onEditUserMessage={onEditUserMessage}
+                      onRespondToAsyncUserInput={onRespondToAsyncUserInput}
+                      editableUserMessageId={editableUserMessageId}
+                      isRevertingCheckpoint={isRevertingCheckpoint}
+                      onExpandTimelineImage={onExpandTimelineImage}
+                      // End-follow belongs to the reader, including the gaps
+                      // between assistant text and subsequent tool/layout updates.
+                      followLiveOutput={!isUserScrollDetached}
+                      animateTailAnchorSlide={!hasStreamingAssistantText}
+                      onIsAtEndChange={onIsAtEndChange}
+                      onNavigate={onTranscriptNavigate}
+                      markdownCwd={threadWorkspaceCwd ?? undefined}
+                      resolvedTheme={resolvedTheme}
+                      chatFontSizePx={settings.chatFontSizePx}
+                      timestampFormat={timestampFormat}
+                      messageTrailAudioSource={settings.messageTrailAudioSource}
+                      messageTrailMicrophoneId={settings.messageTrailMicrophoneId}
+                      workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
+                      keybindings={keybindings}
+                      availableEditors={availableEditors}
+                      emptyStateContent={transcriptEmptyStateContent}
+                      emptyStateProjectName={activeProjectDisplayName}
+                      terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
+                      onMessagesScroll={onMessagesScroll}
+                      onMessagesClickCapture={onMessagesClickCapture}
+                      onMessagesMouseUp={onMessagesMouseUp}
+                      onMessagesWheel={onMessagesWheel}
+                      onEmbeddedScrollIntent={onEmbeddedScrollIntent}
+                      onSendVisualChoice={onSendVisualChoice}
+                      onMessagesPointerDown={onMessagesPointerDown}
+                      onMessagesPointerUp={onMessagesPointerUp}
+                      onMessagesPointerCancel={onMessagesPointerCancel}
+                      onMessagesTouchStart={onMessagesTouchStart}
+                      onMessagesTouchMove={onMessagesTouchMove}
+                      onMessagesTouchEnd={onMessagesTouchEnd}
+                      onOpenAgentActivity={setOpenAgentActivityId}
+                      onCloseAgentActivityDetail={closeAgentActivityDetail}
+                      scrollButtonVisible={showScrollToBottom}
+                      onScrollToBottom={onScrollToBottom}
+                      contentInsetRightPx={contentInsetRightPx}
+                      contentInsetBottomPx={composerTranscriptInsetPx}
+                      contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
+                    />
+                  )}
                   {/* Suggestions reserve clearance for both sets of controls.
                       Without them, the paused banner needs its own minimum gap
                       above the composer floating at `bottom-full`. */}
@@ -7393,40 +7481,29 @@ export default function ChatView({
                   >
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
-                  <div className="pt-0.5" />
+                  <div className={composerStatusInBar ? "pt-3" : "pt-0.5"} />
                   {/* Row under the composer: permission, branch controls (git threads), then
                       model/effort and the context ring. The footer tiers measure this row. It
                       takes the composer's right inset so it stays under the composer while the
-                      Environment card or preview rail is docked. */}
-                  <div
-                    className={cn(
-                      CHAT_COLUMN_GUTTER_CLASS_NAME,
-                      ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-                    )}
-                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-                  >
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div
-                        ref={composerStatusRowRef}
-                        data-chat-composer-status-row=""
-                        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
-                      >
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-                        {showTrailingBranchToolbar ? (
-                          <BranchToolbar
-                            {...branchToolbarProps}
-                            className="min-w-0 flex-[1_0_9rem] px-1 py-0"
-                          />
-                        ) : (
-                          <div className="min-w-0 flex-1" />
-                        )}
-                        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
-                          {composerPickerControls}
-                          {composerContextMeter}
-                        </div>
-                      </div>
+                      Environment card or preview rail is docked. A surface may draw it in its
+                      own top bar instead (`composerStatusTarget`). */}
+                  {composerStatusInBar ? (
+                    composerStatusTarget ? (
+                      createPortal(composerStatusRow, composerStatusTarget)
+                    ) : null
+                  ) : (
+                    <div
+                      className={cn(
+                        CHAT_COLUMN_GUTTER_CLASS_NAME,
+                        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+                      )}
+                      style={
+                        contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined
+                      }
+                    >
+                      {composerStatusRow}
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             ) : null}

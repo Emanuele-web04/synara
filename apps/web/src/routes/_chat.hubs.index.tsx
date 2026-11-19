@@ -29,6 +29,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { collectGroupProjectIds, findGroupDraftThreadId } from "../lib/groupProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
+import { useBotProjectIds, withoutBotHubs } from "../synbot/botHubs";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 
 // How long the splash below waits for the welcome's Hubs root before surfacing an error —
@@ -51,7 +52,9 @@ function HubsIndexRouteView() {
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
   const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
 
-  const groupProjectIds = collectGroupProjectIds(projects, {
+  // Bots are Hubs too, but they open on the SynBot page, never here.
+  const botProjectIds = useBotProjectIds();
+  const groupProjectIds = collectGroupProjectIds(withoutBotHubs(projects, botProjectIds), {
     homeDir,
     chatWorkspaceRoot,
     studioWorkspaceRoot,
@@ -141,7 +144,8 @@ function HubsIndexRouteView() {
     return () => window.clearTimeout(timer);
   }, [pathsWaitTimedOut, groupsWorkspaceRoot]);
 
-  if (!groupsSectionVisible) {
+  // Until SynBot says which Hubs are bots, the landing cannot pick one.
+  if (!groupsSectionVisible || botProjectIds === null) {
     return <SplashScreen />;
   }
 
