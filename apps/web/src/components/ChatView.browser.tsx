@@ -8923,6 +8923,10 @@ describe("ChatView transcript geometry (full app)", () => {
         })),
       };
       useRightDockStore.setState({ dockStateByThreadId: {} });
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ compactBottomTerminal: false }),
+      );
 
       const mounted = await mountChatView({
         viewport: { ...DEFAULT_VIEWPORT, width: 1_800 },
@@ -9598,7 +9602,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.poll(() => document.hasFocus()).toBe(false);
       localStorage.setItem(
         "synara:app-settings:v1",
-        JSON.stringify({ composerEffortSlider: true }),
+        JSON.stringify({ composerEffortSlider: true, compactBottomTerminal: false }),
       );
       mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -15235,6 +15239,10 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   it("Cmd/Ctrl+W preserves a busy dock terminal on Cancel and closes its own session on confirmation", async () => {
+    localStorage.setItem(
+      "synara:app-settings:v1",
+      JSON.stringify({ compactBottomTerminal: false }),
+    );
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({

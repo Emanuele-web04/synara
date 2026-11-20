@@ -58,6 +58,7 @@ import {
 } from "../../lib/workspaceFileOpener";
 import { requestExplorerReveal } from "../../explorerRevealRequestStore";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
+import { useBottomTerminalStore } from "../../bottomTerminalStore";
 import {
   resolveActivePane,
   type RightDockPane,
@@ -137,6 +138,7 @@ const EditorWorkspaceView = lazy(() =>
   })),
 );
 const DockTerminalPane = lazy(() => import("./DockTerminalPane"));
+const CompactBottomTerminalDrawer = lazy(() => import("./CompactBottomTerminalDrawer"));
 const GitPanel = lazy(() => import("./GitPanel"));
 const DockExplorerPane = lazy(() =>
   import("./DockExplorerPane").then((module) => ({
@@ -241,19 +243,37 @@ export function SingleChatSurface(props: {
     isGitRepo: hasGitRepository,
   });
   const hasDeviceSupport = useDeviceSupport();
+  const { settings: appSettings } = useAppSettings();
+  const compactBottomTerminal = appSettings.compactBottomTerminal;
   const dockLauncherItems = resolveRightDockLauncherItems(
     {
       hasWorkspace: workspaceRoot !== null,
       hasGitRepository,
       hasReview: dockDiffTotals.fileCount > 0,
       hasDeviceSupport,
+      includeTerminal: !compactBottomTerminal,
     },
     t,
   );
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const { settings: appSettings } = useAppSettings();
+  // When the compact bottom terminal replaces the right-sidebar terminal, hide
+  // persisted right-dock terminal tabs from the sidebar without discarding them
+  // so toggling the setting off restores them immediately.
+  const effectiveDockState = useMemo(() => {
+    if (!compactBottomTerminal) return dockState;
+    const nonTerminalPanes = dockState.panes.filter((pane) => pane.kind !== "terminal");
+    if (nonTerminalPanes.length === dockState.panes.length) return dockState;
+    const activeStillPresent =
+      dockState.activePaneId !== null &&
+      nonTerminalPanes.some((pane) => pane.id === dockState.activePaneId);
+    return {
+      ...dockState,
+      panes: nonTerminalPanes,
+      activePaneId: activeStillPresent ? dockState.activePaneId : (nonTerminalPanes[0]?.id ?? null),
+    };
+  }, [compactBottomTerminal, dockState]);
   const { handleNewThread } = useHandleNewThread();
   const queryClient = useQueryClient();
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
@@ -328,7 +348,7 @@ export function SingleChatSurface(props: {
     dismissFloatingBrowserForThread(props.threadId);
   }, [dismissFloatingBrowserForThread, props.threadId]);
 
-  const activePane = resolveActivePane(dockState);
+  const activePane = resolveActivePane(effectiveDockState);
   const floatingBrowserVisible = shouldRenderFloatingBrowserPanel({
     hostThreadId: props.threadId,
     floatingThreadId: floatingBrowserRequested ? props.threadId : null,
@@ -352,7 +372,7 @@ export function SingleChatSurface(props: {
         : null,
     diffTurnId: activePane?.kind === "diff" ? activePane.diffTurnId : null,
     diffFilePath: activePane?.kind === "diff" ? activePane.diffFilePath : null,
-    hasOpenedPanel: dockState.panes.length > 0,
+    hasOpenedPanel: effectiveDockState.panes.length > 0,
     lastOpenPanel: "browser",
   };
 
@@ -868,6 +888,13 @@ export function SingleChatSurface(props: {
   });
 
   const handleAddDockPane = (kind: RightDockPaneKind) => {
+    if (kind === "terminal" && compactBottomTerminal) {
+      useBottomTerminalStore.getState().openDrawer(props.threadId);
+      if (effectiveDockState.panes.length === 0) {
+        setDockOpen(props.threadId, false);
+      }
+      return;
+    }
     if (kind === "sidechat") {
       void createDockSidechat();
       return;
@@ -1213,6 +1240,17 @@ export function SingleChatSurface(props: {
                 onClick: handleOpenEditorView,
               }}
             />
+            {compactBottomTerminal ? (
+              <Suspense fallback={null}>
+                <CompactBottomTerminalDrawer
+                  key={props.threadId}
+                  hostThreadId={props.threadId}
+                  projectId={props.projectId}
+                  paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
+                  keybindings={searchKeybindings}
+                />
+              </Suspense>
+            ) : null}
             {floatingBrowserVisible ? (
               <FloatingBrowserPanel
                 key={props.threadId}
@@ -1228,7 +1266,7 @@ export function SingleChatSurface(props: {
           </ChatPaneBody>
         </KeptChatPane>
         <RightDock
-          state={dockState}
+          state={effectiveDockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
           widthStorageKey={`chat_right_dock_width:${props.threadId}`}

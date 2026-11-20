@@ -1,8 +1,16 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as processRunner from "../processRunner";
 
-import { captureProcessChildrenMap, inspectSubprocessActivity } from "./subprocessActivity";
+import {
+  captureLinuxProcChildrenMap,
+  captureProcessChildrenMap,
+  checkLinuxProcSubprocessActivity,
+  inspectSubprocessActivity,
+} from "./subprocessActivity";
 import type { ProcessChildrenMap } from "./processTreeKiller";
 
 function buildChildrenMap(
@@ -150,4 +158,69 @@ describe("captureProcessChildrenMap", () => {
       });
     },
   );
+});
+
+describe("Linux /proc subprocess inspection", () => {
+  async function withFakeProc(
+    setup: (procRoot: string) => Promise<void>,
+    run: (procRoot: string) => Promise<void>,
+  ) {
+    const procRoot = await fs.mkdtemp(path.join(os.tmpdir(), "synara-proc-test-"));
+    try {
+      await setup(procRoot);
+      await run(procRoot);
+    } finally {
+      await fs.rm(procRoot, { recursive: true, force: true });
+    }
+  }
+
+  it("reads empty and nested process trees directly from /proc without spawning ps", async () => {
+    await withFakeProc(
+      async (procRoot) => {
+        // Idle shell pid 100
+        await fs.mkdir(path.join(procRoot, "100", "task", "100"), { recursive: true });
+        await fs.writeFile(path.join(procRoot, "100", "task", "100", "children"), "");
+        await fs.writeFile(path.join(procRoot, "100", "stat"), "100 (zsh) S 1 100 100");
+        await fs.writeFile(path.join(procRoot, "100", "cmdline"), "zsh\u0000-l\u0000");
+
+        // Busy shell pid 200 -> child 201 (node build)
+        await fs.mkdir(path.join(procRoot, "200", "task", "200"), { recursive: true });
+        await fs.writeFile(path.join(procRoot, "200", "task", "200", "children"), "201 ");
+        await fs.writeFile(path.join(procRoot, "200", "stat"), "200 (bash) S 1 200 200");
+        await fs.writeFile(path.join(procRoot, "200", "cmdline"), "bash\u0000");
+
+        await fs.mkdir(path.join(procRoot, "201", "task", "201"), { recursive: true });
+        await fs.writeFile(path.join(procRoot, "201", "task", "201", "children"), "");
+        // Comm with spaces and parentheses must still parse ppid=200 cleanly.
+        await fs.writeFile(path.join(procRoot, "201", "stat"), "201 (node (worker)) S 200 200 200");
+        await fs.writeFile(path.join(procRoot, "201", "cmdline"), "node\u0000build.js\u0000");
+      },
+      async (procRoot) => {
+        expect(await checkLinuxProcSubprocessActivity(100, procRoot)).toEqual({
+          cliKind: null,
+          hasNonProviderSubprocess: false,
+          hasProviderDescendant: false,
+          hasRunningSubprocess: false,
+        });
+
+        expect(await checkLinuxProcSubprocessActivity(200, procRoot)).toEqual({
+          cliKind: null,
+          hasNonProviderSubprocess: true,
+          hasProviderDescendant: false,
+          hasRunningSubprocess: true,
+        });
+
+        const childrenMap = await captureLinuxProcChildrenMap(procRoot);
+        expect(childrenMap).not.toBeNull();
+        expect(inspectSubprocessActivity(200, childrenMap!)).toMatchObject({
+          hasRunningSubprocess: true,
+          hasNonProviderSubprocess: true,
+        });
+      },
+    );
+  });
+
+  it("returns null when /proc children listing is unavailable", async () => {
+    expect(await checkLinuxProcSubprocessActivity(999999, "/nonexistent-proc-root")).toBeNull();
+  });
 });

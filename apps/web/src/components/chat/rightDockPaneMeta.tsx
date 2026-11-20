@@ -117,10 +117,15 @@ export function resolveRightDockLauncherItems(
      * from this machine to make it work.
      */
     hasDeviceSupport?: boolean;
+    /** Hide Terminal from the right sidebar when the compact bottom drawer owns it. */
+    includeTerminal?: boolean;
   },
   translate: typeof t = t,
 ): readonly RightDockLauncherItem[] {
   return RIGHT_DOCK_LAUNCHER_ORDER.flatMap((kind) => {
+    if (kind === "terminal" && input.includeTerminal === false) {
+      return [];
+    }
     if (kind === "diff" && !input.hasReview) {
       return [];
     }

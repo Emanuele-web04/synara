@@ -1307,5 +1307,11 @@
   "signInFlow_tryAgain": "Try again",
   "signInFlow_closesItself": "This window closes by itself in a moment.",
   "signInFlow_unableToClose": "Unable to stop sign-in. Retry closing this window.",
-  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again."
+  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again.",
+  "terminalSection": "Terminal",
+  "compactBottomTerminal": "Compact bottom terminal",
+  "compactBottomTerminalDescription": "Replace the right-sidebar terminal with a compact, tileable drawer at the bottom of the chat.",
+  "compactBottomTerminalReset": "compact bottom terminal",
+  "compactBottomTerminalAria": "Use the compact bottom terminal instead of the right sidebar terminal",
+  "compactBottomTerminalKeywords": "bottom terminal drawer split tile linux fast compact sidebar"
 }

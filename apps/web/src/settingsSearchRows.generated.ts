@@ -157,6 +157,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:headerActionsDescription",
   },
   {
+    target: "setting-compact-bottom-terminal",
+    section: "layout",
+    title: "settings:compactBottomTerminal",
+    description: "settings:compactBottomTerminalDescription",
+  },
+  {
     target: "setting-automatically-open-simulator",
     section: "layout",
     title: "settings:automaticallyOpenSimulator",

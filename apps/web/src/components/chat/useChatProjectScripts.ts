@@ -20,6 +20,12 @@ import {
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
+import { selectBottomTerminalState, useBottomTerminalStore } from "~/bottomTerminalStore";
+import {
+  collectTerminalTileLeaves,
+  findTerminalTileLeafById,
+  resolveActiveBottomTerminalTab,
+} from "~/bottomTerminalStore.logic";
 import { isElectron } from "../../env";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import type { Project, Thread } from "../../types";
@@ -38,6 +44,7 @@ interface ChatProjectScriptsInput {
   activeProject: Project | undefined;
   gitCwd: string | null;
   isGroupContainer: boolean;
+  compactBottomTerminal?: boolean;
   setThreadError: (threadId: ThreadId, error: string | null) => void;
 }
 
@@ -47,8 +54,10 @@ export function useChatProjectScripts({
   activeProject,
   gitCwd,
   isGroupContainer,
+  compactBottomTerminal: compactBottomTerminalProp,
   setThreadError,
 }: ChatProjectScriptsInput) {
+  const compactBottomTerminal = compactBottomTerminalProp ?? false;
   const queryClient = useQueryClient();
   const pendingScriptThreads = useRef(new Set<ThreadId>());
   const storeEnsureDockTerminal = useTerminalStateStore((state) => state.ensureDockTerminal);
@@ -76,23 +85,50 @@ export function useChatProjectScripts({
       const terminalThreadId = dockTerminalThreadId(activeThreadId);
       const terminalState =
         useTerminalStateStore.getState().terminalStateByThreadId[terminalThreadId];
-      const dock = selectRightDockState(activeThreadId)(useRightDockStore.getState());
-      const terminalPane =
-        dock.panes.find((pane) => pane.id === dock.activePaneId && pane.kind === "terminal") ??
-        dock.panes.find(
-          (pane) =>
-            pane.kind === "terminal" &&
-            terminalState?.dockTerminalIdsByPaneId?.[pane.id] === terminalState?.activeTerminalId,
-        ) ??
-        dock.panes.find((pane) => pane.kind === "terminal");
-      const targetPaneId = terminalPane?.id ?? randomUUID();
-      const baseTerminalId = terminalState?.dockTerminalIdsByPaneId?.[targetPaneId];
+
+      let targetPaneId: string;
+      let targetBottomTabId: string | null = null;
+      let baseTerminalId: string | undefined;
+
+      if (compactBottomTerminal) {
+        const bottomState = selectBottomTerminalState(activeThreadId)(
+          useBottomTerminalStore.getState(),
+        );
+        const activeTab = resolveActiveBottomTerminalTab(bottomState);
+        const focusedLeaf = activeTab
+          ? (findTerminalTileLeafById(activeTab.root, activeTab.focusedPaneId) ??
+            collectTerminalTileLeaves(activeTab.root)[0])
+          : null;
+        if (activeTab && focusedLeaf) {
+          targetBottomTabId = activeTab.id;
+          targetPaneId = focusedLeaf.id;
+          baseTerminalId = focusedLeaf.terminalId;
+        } else {
+          targetPaneId = randomUUID();
+          baseTerminalId = undefined;
+        }
+      } else {
+        const dock = selectRightDockState(activeThreadId)(useRightDockStore.getState());
+        const terminalPane =
+          dock.panes.find((pane) => pane.id === dock.activePaneId && pane.kind === "terminal") ??
+          dock.panes.find(
+            (pane) =>
+              pane.kind === "terminal" &&
+              terminalState?.dockTerminalIdsByPaneId?.[pane.id] === terminalState?.activeTerminalId,
+          ) ??
+          dock.panes.find((pane) => pane.kind === "terminal");
+        targetPaneId = terminalPane?.id ?? randomUUID();
+        baseTerminalId = terminalState?.dockTerminalIdsByPaneId?.[targetPaneId];
+      }
+
       if (
         pendingScriptThreads.current.has(activeThreadId) ||
         (baseTerminalId !== undefined && terminalState?.runningTerminalIds.includes(baseTerminalId))
       ) {
         const error = new Error(
-          "The right-side terminal is busy. Stop its command before running another action.",
+          compactBottomTerminal
+            ? "The bottom terminal is busy. Stop its command before running another action."
+            : "The right-side terminal is busy. Stop its command before running another action.",
         );
         setThreadError(activeThreadId, error.message);
         if (options?.throwOnError) throw error;
@@ -115,6 +151,24 @@ export function useChatProjectScripts({
           worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
           ...(options?.env ? { env: options.env } : {}),
           onOpened: () => {
+            if (compactBottomTerminal) {
+              const bottomStore = useBottomTerminalStore.getState();
+              if (targetBottomTabId !== null) {
+                storeEnsureDockTerminal(terminalThreadId, targetPaneId, targetTerminalId);
+                bottomStore.replacePaneTerminalId(
+                  activeThreadId,
+                  targetBottomTabId,
+                  targetPaneId,
+                  targetTerminalId,
+                );
+              } else {
+                const created = bottomStore.addTab(activeThreadId, {
+                  terminalId: targetTerminalId,
+                });
+                storeEnsureDockTerminal(terminalThreadId, created.paneId, targetTerminalId);
+              }
+              return;
+            }
             // Attach only after the requested cwd/env are set, but before writing
             // so the session stays accessible if command delivery fails.
             storeEnsureDockTerminal(terminalThreadId, targetPaneId, targetTerminalId);
@@ -174,6 +228,7 @@ export function useChatProjectScripts({
       activeProject,
       activeThread,
       activeThreadId,
+      compactBottomTerminal,
       gitCwd,
       isGroupContainer,
       setThreadError,

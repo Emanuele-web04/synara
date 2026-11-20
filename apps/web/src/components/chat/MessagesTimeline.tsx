@@ -1350,16 +1350,47 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // reads it via a ref in the same frame, and a deferred update would let a
   // scheduled scrollToEnd override a user gesture that just scrolled away.
   const listScrollFrameRef = useRef<number | null>(null);
+  const scrollbarHideTimerRef = useRef<number | null>(null);
+  const scrollbarElementRef = useRef<HTMLElement | null>(null);
+  const revealChatScrollbar = useCallback((element: HTMLElement | null) => {
+    if (!element) return;
+    scrollbarElementRef.current = element;
+    if (!element.hasAttribute("data-chat-scrollbar-active")) {
+      element.setAttribute("data-chat-scrollbar-active", "true");
+    }
+    if (scrollbarHideTimerRef.current !== null) {
+      window.clearTimeout(scrollbarHideTimerRef.current);
+    }
+    scrollbarHideTimerRef.current = window.setTimeout(() => {
+      scrollbarHideTimerRef.current = null;
+      scrollbarElementRef.current?.removeAttribute("data-chat-scrollbar-active");
+    }, 900);
+  }, []);
   useEffect(() => {
     return () => {
       if (listScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(listScrollFrameRef.current);
         listScrollFrameRef.current = null;
       }
+      if (scrollbarHideTimerRef.current !== null) {
+        window.clearTimeout(scrollbarHideTimerRef.current);
+        scrollbarHideTimerRef.current = null;
+      }
+      scrollbarElementRef.current?.removeAttribute("data-chat-scrollbar-active");
+      scrollbarElementRef.current?.removeAttribute("data-chat-scrollbar-edge");
     };
   }, []);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
+      const target = scrollbarElementRef.current;
+      if (
+        target &&
+        (target.hasAttribute("data-chat-scrollbar-active") ||
+          target.hasAttribute("data-chat-scrollbar-edge") ||
+          document.activeElement === target)
+      ) {
+        revealChatScrollbar(target);
+      }
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
       if (!state) {
@@ -1387,6 +1418,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onIsAtEndChange,
       onMessagesScroll,
       resolvedListRef,
+      revealChatScrollbar,
     ],
   );
   const suppressTailExpansionScroll = useCallback(() => {
@@ -1410,18 +1442,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   >(
     (event) => {
       clearTailExpansionScrollTimers();
+      if (event.currentTarget instanceof HTMLElement) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX >= rect.right - 20) {
+          revealChatScrollbar(event.currentTarget);
+        }
+      }
       onMessagesPointerDown?.(event);
     },
-    [clearTailExpansionScrollTimers, onMessagesPointerDown],
+    [clearTailExpansionScrollTimers, onMessagesPointerDown, revealChatScrollbar],
   );
   const handleMessagesTouchMove = useCallback<
     NonNullable<MessagesTimelineProps["onMessagesTouchMove"]>
   >(
     (event) => {
       suppressTailExpansionScroll();
+      if (event.currentTarget instanceof HTMLElement) {
+        revealChatScrollbar(event.currentTarget);
+      }
       onMessagesTouchMove?.(event);
     },
-    [onMessagesTouchMove, suppressTailExpansionScroll],
+    [onMessagesTouchMove, revealChatScrollbar, suppressTailExpansionScroll],
   );
   const handleMessagesTouchStart = useCallback<
     NonNullable<MessagesTimelineProps["onMessagesTouchStart"]>
@@ -1435,9 +1476,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const handleMessagesWheel = useCallback<NonNullable<MessagesTimelineProps["onMessagesWheel"]>>(
     (event) => {
       suppressTailExpansionScroll();
+      if (event.currentTarget instanceof HTMLElement) {
+        revealChatScrollbar(event.currentTarget);
+      }
       onMessagesWheel?.(event);
     },
-    [onMessagesWheel, suppressTailExpansionScroll],
+    [onMessagesWheel, revealChatScrollbar, suppressTailExpansionScroll],
   );
   const handleEmbeddedScrollIntent = useCallback(
     (upward: boolean) => {
@@ -3234,7 +3278,40 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // to render even when there are no persisted chat messages yet.
   const hasRenderableTranscriptContent =
     hasMessages || rows.length > 0 || canRenderForkSourceDivider;
-  if (!hasRenderableTranscriptContent && !isWorking) {
+  const hasScrollContainer = hasRenderableTranscriptContent || isWorking;
+  useEffect(() => {
+    if (!hasScrollContainer) return;
+    const root = timelineRootRef.current;
+    const scroller = root?.querySelector<HTMLElement>("[data-chat-scroll-container='true']");
+    if (!scroller) return;
+    scrollbarElementRef.current = scroller;
+    let hoveringEdge = false;
+    const setEdgeHover = (next: boolean) => {
+      if (hoveringEdge === next) return;
+      hoveringEdge = next;
+      if (next) {
+        scroller.setAttribute("data-chat-scrollbar-edge", "true");
+      } else {
+        scroller.removeAttribute("data-chat-scrollbar-edge");
+      }
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      const rect = scroller.getBoundingClientRect();
+      setEdgeHover(event.clientX >= rect.right - 20);
+    };
+    const handlePointerLeave = () => {
+      setEdgeHover(false);
+    };
+    scroller.addEventListener("pointermove", handlePointerMove, { passive: true });
+    scroller.addEventListener("pointerleave", handlePointerLeave, { passive: true });
+    return () => {
+      scroller.removeEventListener("pointermove", handlePointerMove);
+      scroller.removeEventListener("pointerleave", handlePointerLeave);
+      scroller.removeAttribute("data-chat-scrollbar-edge");
+    };
+  }, [hasScrollContainer]);
+  if (!hasScrollContainer) {
     return (
       <div className="flex h-full flex-col">
         {historyHeader}

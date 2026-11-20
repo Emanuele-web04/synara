@@ -136,6 +136,17 @@ vi.mock("react", () => ({
   useState: reactHarness.useState,
 }));
 
+const bottomTerminalHarness = vi.hoisted(() => ({
+  toggleDrawer: vi.fn(),
+  addTab: vi.fn(),
+}));
+
+vi.mock("../../bottomTerminalStore", () => ({
+  useBottomTerminalStore: {
+    getState: () => bottomTerminalHarness,
+  },
+}));
+
 vi.mock("../../terminalStateStore", () => ({
   selectThreadTerminalState: () => terminalHarness.terminalState,
   useTerminalStateStore: (selector: (state: unknown) => unknown) =>
@@ -168,7 +179,7 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-a");
 describe("useChatTerminalController", () => {
   const onDeletePlaceholderThread = vi.fn();
 
-  const render = (isFocusedPane = false) => {
+  const render = (isFocusedPane = false, compactBottomTerminal = false) => {
     reactHarness.beginRender();
     return useChatTerminalController({
       threadId: THREAD_ID,
@@ -185,6 +196,7 @@ describe("useChatTerminalController", () => {
       isFocusedPane,
       isServerThread: true,
       confirmTerminalClose: true,
+      compactBottomTerminal,
       onDeletePlaceholderThread,
     });
   };
@@ -194,6 +206,8 @@ describe("useChatTerminalController", () => {
     vi.stubGlobal("window", {});
     terminalHarness.terminalState = terminalHarness.makeTerminalState(["terminal-1"]);
     for (const action of Object.values(terminalHarness.actions)) action.mockReset();
+    bottomTerminalHarness.toggleDrawer.mockReset();
+    bottomTerminalHarness.addTab.mockReset();
     nativeApi.confirm.mockReset().mockResolvedValue(true);
     terminalSession.disposeAndClose.mockReset();
     terminalLogic.shouldAutoDelete.mockReset().mockReturnValue(false);
@@ -302,5 +316,21 @@ describe("useChatTerminalController", () => {
     expect(terminalHarness.actions.closeTerminal).toHaveBeenCalledWith(THREAD_ID, "terminal-1");
     expect(onDeletePlaceholderThread).not.toHaveBeenCalled();
     expect(result.terminalFocusRequestId).toBe(1);
+  });
+
+  it("routes terminal toggle and new-tab shortcuts to the compact bottom drawer for chat threads", () => {
+    terminalHarness.terminalState = {
+      ...terminalHarness.makeTerminalState(["terminal-1"]),
+      entryPoint: "chat" as unknown as "terminal",
+      terminalOpen: false,
+    };
+    const result = render(true, true);
+
+    result.toggleTerminalVisibility();
+    result.createTerminalFromShortcut();
+
+    expect(bottomTerminalHarness.toggleDrawer).toHaveBeenCalledWith(THREAD_ID);
+    expect(bottomTerminalHarness.addTab).toHaveBeenCalledWith(THREAD_ID);
+    expect(terminalHarness.actions.setTerminalOpen).not.toHaveBeenCalled();
   });
 });

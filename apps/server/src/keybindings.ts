@@ -125,9 +125,57 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+8", command: "space.jump.8", when: "!terminalFocus || isMac" },
   { key: "mod+alt+9", command: "space.jump.9", when: "!terminalFocus || isMac" },
   { key: "mod+j", command: "terminal.toggle" },
-  // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
+  // Reserve Cmd/Ctrl+T for the terminal's "new tab" action while focused.
   { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
+  // Familiar terminal tiling bindings (Ghostty / iTerm2 / Hyprland / i3 / Zellij).
+  // Kept strictly under `terminalFocus` and using shift/alt chords on Linux/Windows
+  // so readline and shell controls (Ctrl+D, Ctrl+W, Ctrl+L, Ctrl+C) stay untouched.
+  { key: "mod+d", command: "terminal.tile.splitRight", when: "terminalFocus && isMac" },
+  { key: "ctrl+shift+d", command: "terminal.tile.splitRight", when: "terminalFocus && !isMac" },
+  { key: "mod+shift+d", command: "terminal.tile.splitDown", when: "terminalFocus && isMac" },
+  { key: "ctrl+shift+e", command: "terminal.tile.splitDown", when: "terminalFocus && !isMac" },
+  { key: "alt+h", command: "terminal.tile.focusLeft", when: "terminalFocus && !isMac" },
+  { key: "mod+alt+arrowleft", command: "terminal.tile.focusLeft", when: "terminalFocus && isMac" },
+  { key: "alt+j", command: "terminal.tile.focusDown", when: "terminalFocus && !isMac" },
+  { key: "mod+alt+arrowdown", command: "terminal.tile.focusDown", when: "terminalFocus && isMac" },
+  { key: "alt+k", command: "terminal.tile.focusUp", when: "terminalFocus && !isMac" },
+  { key: "mod+alt+arrowup", command: "terminal.tile.focusUp", when: "terminalFocus && isMac" },
+  { key: "alt+l", command: "terminal.tile.focusRight", when: "terminalFocus && !isMac" },
+  {
+    key: "mod+alt+arrowright",
+    command: "terminal.tile.focusRight",
+    when: "terminalFocus && isMac",
+  },
+  { key: "alt+shift+h", command: "terminal.tile.resizeLeft", when: "terminalFocus && !isMac" },
+  {
+    key: "mod+ctrl+shift+arrowleft",
+    command: "terminal.tile.resizeLeft",
+    when: "terminalFocus && isMac",
+  },
+  { key: "alt+shift+j", command: "terminal.tile.resizeDown", when: "terminalFocus && !isMac" },
+  {
+    key: "mod+ctrl+shift+arrowdown",
+    command: "terminal.tile.resizeDown",
+    when: "terminalFocus && isMac",
+  },
+  { key: "alt+shift+k", command: "terminal.tile.resizeUp", when: "terminalFocus && !isMac" },
+  {
+    key: "mod+ctrl+shift+arrowup",
+    command: "terminal.tile.resizeUp",
+    when: "terminalFocus && isMac",
+  },
+  { key: "alt+shift+l", command: "terminal.tile.resizeRight", when: "terminalFocus && !isMac" },
+  {
+    key: "mod+ctrl+shift+arrowright",
+    command: "terminal.tile.resizeRight",
+    when: "terminalFocus && isMac",
+  },
+  { key: "mod+shift+enter", command: "terminal.tile.zoom", when: "terminalFocus" },
+  { key: "ctrl+shift+pageup", command: "terminal.tab.previous", when: "terminalFocus && !isMac" },
+  { key: "mod+alt+[", command: "terminal.tab.previous", when: "terminalFocus && isMac" },
+  { key: "ctrl+shift+pagedown", command: "terminal.tab.next", when: "terminalFocus && !isMac" },
+  { key: "mod+alt+]", command: "terminal.tab.next", when: "terminalFocus && isMac" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
   // With no terminal focused and no workspace open, Cmd/Ctrl+W owns the regular

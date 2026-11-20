@@ -1102,5 +1102,18 @@
   "usageLimit_alwaysResume": "Always resume after limits",
   "usageLimit_alwaysResumeDescription": "Default for every chat on this computer",
   "usageLimit_pausedAt": "Paused at the {{provider}} usage limit · {{time}}",
-  "usageLimit_pausedAtNoProvider": "Paused at the usage limit · {{time}}"
+  "usageLimit_pausedAtNoProvider": "Paused at the usage limit · {{time}}",
+  "bottomTerminal_toggle": "Toggle terminal",
+  "bottomTerminal_toggleWithShortcut": "Toggle terminal ({{value0}})",
+  "bottomTerminal_newTab": "New terminal tab",
+  "bottomTerminal_splitRight": "Split terminal right",
+  "bottomTerminal_splitDown": "Split terminal down",
+  "bottomTerminal_expand": "Expand terminal",
+  "bottomTerminal_restore": "Restore terminal height",
+  "bottomTerminal_hide": "Hide terminal",
+  "bottomTerminal_closePane": "Close terminal pane",
+  "bottomTerminal_resize": "Resize terminal height",
+  "bottomTerminal_tabsAria": "Terminal tabs",
+  "bottomTerminal_paneCount": "{{count}} panes",
+  "bottomTerminal_zoomed": "Zoomed"
 }

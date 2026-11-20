@@ -169,6 +169,7 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "setting-delete-confirmation": ["settings:askBeforeDeletingAThreadAndItsChatHistory2"],
   "setting-archive-confirmation": ["settings:askBeforeArchivingAThreadSafetyConfirm"],
   "setting-terminal-close-confirmation": ["settings:askBeforeClosingATerminalTabAndClearingIts2"],
+  "setting-compact-bottom-terminal": ["settings:compactBottomTerminalKeywords"],
   "setting-keybindings": ["settings:openThePersistedKeybindingsJsonFileToEditAdvanced2"],
   "setting-source-control-writing-style": [
     "settings:repositoryConventionsConventionalCommitsCustomInstructionsCommitMessagesPR",

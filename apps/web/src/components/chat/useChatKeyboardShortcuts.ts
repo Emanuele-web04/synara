@@ -12,7 +12,12 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { isElectron } from "../../env";
 import { resolveShortcutCommand } from "../../keybindings";
-import { focusedDockTerminalPaneId } from "../../hooks/useTerminalSurfaceController";
+import {
+  closeBottomTerminalPane,
+  focusedBottomTerminalPane,
+  focusedDockTerminalPaneId,
+} from "../../hooks/useTerminalSurfaceController";
+import { useBottomTerminalStore } from "../../bottomTerminalStore";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import { isTerminalFocused } from "../../lib/terminalFocus";
 import type { Project } from "../../types";
@@ -113,6 +118,8 @@ interface ChatKeyboardShortcutsInput {
   setTerminalWorkspaceTab: ReturnType<typeof useChatTerminalController>["setTerminalWorkspaceTab"];
   onCloseActiveThreadTab: () => boolean;
   onCloseDockTerminalPane: (paneId: string) => void;
+  compactBottomTerminal?: boolean;
+  confirmTerminalClose?: boolean;
   onToggleDiff: () => void;
   commitAndPushTriggerRef: RefObject<(() => void) | null>;
   showGitActions: boolean;
@@ -167,6 +174,8 @@ export function useChatKeyboardShortcuts({
   setTerminalWorkspaceTab,
   onCloseActiveThreadTab,
   onCloseDockTerminalPane,
+  compactBottomTerminal: compactBottomTerminalProp,
+  confirmTerminalClose: confirmTerminalCloseProp,
   onToggleDiff,
   commitAndPushTriggerRef,
   showGitActions,
@@ -177,6 +186,8 @@ export function useChatKeyboardShortcuts({
   runProjectScript,
   activeThread,
 }: ChatKeyboardShortcutsInput) {
+  const compactBottomTerminal = compactBottomTerminalProp ?? false;
+  const confirmTerminalClose = confirmTerminalCloseProp ?? true;
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -262,7 +273,74 @@ export function useChatKeyboardShortcuts({
       const command = resolveShortcutCommand(event, keybindings, {
         context: shortcutContext,
       });
-      if (!command) return;
+      if (!command) {
+        if (compactBottomTerminal) {
+          // Universal VS Code / Linux backtick toggle (Ctrl+`) for the compact bottom terminal.
+          if (
+            event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey &&
+            !event.shiftKey &&
+            (event.key === "`" || event.code === "Backquote")
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleTerminalVisibility();
+            return;
+          }
+          // Familiar Linux/Windows terminal chords (Ctrl+Shift+T / Ctrl+Shift+W / Ctrl+Shift+Arrow)
+          // when focus sits inside a compact bottom terminal tile.
+          if (
+            !isMacNavigatorPlatform() &&
+            shortcutContext.terminalFocus &&
+            event.ctrlKey &&
+            event.shiftKey &&
+            !event.altKey &&
+            !event.metaKey
+          ) {
+            const bottomTile = focusedBottomTerminalPane(activeThreadId);
+            if (bottomTile !== null) {
+              const lowered = event.key.toLowerCase();
+              if (lowered === "t") {
+                event.preventDefault();
+                event.stopPropagation();
+                useBottomTerminalStore.getState().addTab(activeThreadId);
+                return;
+              }
+              if (lowered === "w") {
+                event.preventDefault();
+                event.stopPropagation();
+                void closeBottomTerminalPane({
+                  hostThreadId: activeThreadId,
+                  tabId: bottomTile.tabId,
+                  paneId: bottomTile.paneId,
+                  confirmationEnabled: confirmTerminalClose,
+                });
+                return;
+              }
+              const arrowDirection =
+                lowered === "arrowleft"
+                  ? "left"
+                  : lowered === "arrowdown"
+                    ? "down"
+                    : lowered === "arrowup"
+                      ? "up"
+                      : lowered === "arrowright"
+                        ? "right"
+                        : null;
+              if (arrowDirection !== null) {
+                event.preventDefault();
+                event.stopPropagation();
+                useBottomTerminalStore
+                  .getState()
+                  .focusDirectionalPane(activeThreadId, arrowDirection);
+                return;
+              }
+            }
+          }
+        }
+        return;
+      }
 
       if (command === "model.effort.next") {
         if (
@@ -355,6 +433,16 @@ export function useChatKeyboardShortcuts({
       if (command === "terminal.close") {
         event.preventDefault();
         event.stopPropagation();
+        const bottomTile = focusedBottomTerminalPane(activeThreadId);
+        if (bottomTile !== null) {
+          void closeBottomTerminalPane({
+            hostThreadId: activeThreadId,
+            tabId: bottomTile.tabId,
+            paneId: bottomTile.paneId,
+            confirmationEnabled: confirmTerminalClose,
+          });
+          return;
+        }
         // A dock-terminal pane in the regular chat layout runs under the dock's
         // synthetic scope, so terminalOpen/activeTerminalId cannot reach it — the
         // focused element identifies which dock pane owns the keydown.
@@ -365,6 +453,79 @@ export function useChatKeyboardShortcuts({
         }
         if (!terminalState.terminalOpen) return;
         closeTerminal(terminalState.activeTerminalId);
+        return;
+      }
+
+      if (command === "terminal.tile.splitRight" || command === "terminal.tile.splitDown") {
+        if (!compactBottomTerminal || focusedBottomTerminalPane(activeThreadId) === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        useBottomTerminalStore
+          .getState()
+          .splitFocusedPane(
+            activeThreadId,
+            command === "terminal.tile.splitRight" ? "horizontal" : "vertical",
+          );
+        return;
+      }
+
+      if (
+        command === "terminal.tile.focusLeft" ||
+        command === "terminal.tile.focusDown" ||
+        command === "terminal.tile.focusUp" ||
+        command === "terminal.tile.focusRight"
+      ) {
+        if (!compactBottomTerminal || focusedBottomTerminalPane(activeThreadId) === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction =
+          command === "terminal.tile.focusLeft"
+            ? "left"
+            : command === "terminal.tile.focusDown"
+              ? "down"
+              : command === "terminal.tile.focusUp"
+                ? "up"
+                : "right";
+        useBottomTerminalStore.getState().focusDirectionalPane(activeThreadId, direction);
+        return;
+      }
+
+      if (
+        command === "terminal.tile.resizeLeft" ||
+        command === "terminal.tile.resizeDown" ||
+        command === "terminal.tile.resizeUp" ||
+        command === "terminal.tile.resizeRight"
+      ) {
+        if (!compactBottomTerminal || focusedBottomTerminalPane(activeThreadId) === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction =
+          command === "terminal.tile.resizeLeft"
+            ? "left"
+            : command === "terminal.tile.resizeDown"
+              ? "down"
+              : command === "terminal.tile.resizeUp"
+                ? "up"
+                : "right";
+        useBottomTerminalStore.getState().resizeFocusedPane(activeThreadId, direction);
+        return;
+      }
+
+      if (command === "terminal.tile.zoom") {
+        if (!compactBottomTerminal || focusedBottomTerminalPane(activeThreadId) === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        useBottomTerminalStore.getState().toggleZoomFocusedPane(activeThreadId);
+        return;
+      }
+
+      if (command === "terminal.tab.previous" || command === "terminal.tab.next") {
+        if (!compactBottomTerminal || focusedBottomTerminalPane(activeThreadId) === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        useBottomTerminalStore
+          .getState()
+          .cycleTab(activeThreadId, command === "terminal.tab.next" ? 1 : -1);
         return;
       }
 
@@ -532,6 +693,8 @@ export function useChatKeyboardShortcuts({
     setTerminalWorkspaceTab,
     onCloseActiveThreadTab,
     onCloseDockTerminalPane,
+    compactBottomTerminal,
+    confirmTerminalClose,
     surfaceMode,
     scheduleComposerFocus,
     toggleComposerFocus,

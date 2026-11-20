@@ -76,6 +76,17 @@ describe("resolveRightDockLauncherItems", () => {
       }).map(({ kind }) => kind),
     ).not.toContain("device");
   });
+
+  it("hides terminal when owned by the compact bottom drawer", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: true,
+        hasReview: true,
+        includeTerminal: false,
+      }).map(({ kind }) => kind),
+    ).toEqual(["diff", "browser", "explorer", "sidechat", "git"]);
+  });
 });
 
 describe("buildRightDockPaneLabelOverrides", () => {

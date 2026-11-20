@@ -13,6 +13,11 @@ import {
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { readNativeApi } from "~/nativeApi";
 import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
+import { selectBottomTerminalState, useBottomTerminalStore } from "~/bottomTerminalStore";
+import {
+  findTerminalTileLeafById,
+  resolveActiveBottomTerminalTab,
+} from "~/bottomTerminalStore.logic";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
 import { toastManager } from "~/components/ui/toast";
@@ -147,5 +152,83 @@ export async function closeDockTerminalPane(input: {
       title: t("chat:unableToCloseTerminal"),
       description: error instanceof Error ? error.message : t("common:pleaseTryAgain"),
     });
+  }
+}
+
+export function focusedBottomTerminalPane(
+  hostThreadId: ThreadId,
+): { tabId: string; paneId: string; terminalId: string } | null {
+  const activeElement = document.activeElement;
+  const tileElement =
+    activeElement instanceof Element
+      ? activeElement.closest<HTMLElement>("[data-bottom-terminal-pane-id]")
+      : null;
+  const paneId = tileElement?.getAttribute("data-bottom-terminal-pane-id") ?? null;
+  const tabId = tileElement?.getAttribute("data-bottom-terminal-tab-id") ?? null;
+  const hostAttr = tileElement?.getAttribute("data-bottom-terminal-host-id") ?? null;
+  if (!paneId || !tabId || (hostAttr && hostAttr !== hostThreadId)) {
+    return null;
+  }
+  const bottomState = selectBottomTerminalState(hostThreadId)(useBottomTerminalStore.getState());
+  const tab = bottomState.tabs.find((candidate) => candidate.id === tabId);
+  if (!tab) return null;
+  const leaf = findTerminalTileLeafById(tab.root, paneId);
+  return leaf ? { tabId: tab.id, paneId: leaf.id, terminalId: leaf.terminalId } : null;
+}
+
+export async function closeBottomTerminalPane(input: {
+  hostThreadId: ThreadId;
+  tabId?: string;
+  paneId?: string;
+  confirmationEnabled: boolean;
+}): Promise<boolean> {
+  try {
+    const bottomStore = useBottomTerminalStore.getState();
+    const bottomState = selectBottomTerminalState(input.hostThreadId)(bottomStore);
+    const tab = input.tabId
+      ? bottomState.tabs.find((candidate) => candidate.id === input.tabId)
+      : resolveActiveBottomTerminalTab(bottomState);
+    if (!tab) return false;
+
+    const targetPaneId = input.paneId ?? tab.focusedPaneId;
+    const leaf = findTerminalTileLeafById(tab.root, targetPaneId);
+    if (!leaf) return false;
+
+    const scopeId = dockTerminalThreadId(input.hostThreadId);
+    const terminalStore = useTerminalStateStore.getState();
+    const terminalState = selectThreadTerminalState(terminalStore.terminalStateByThreadId, scopeId);
+    const api = readNativeApi();
+    const confirmed = await confirmTerminalTabClose({
+      api,
+      enabled: shouldPromptForTerminalClose({
+        confirmationEnabled: input.confirmationEnabled,
+        runningTerminalIds: terminalState.runningTerminalIds,
+        terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+        terminalId: leaf.terminalId,
+      }),
+      terminalTitle: resolveTerminalCloseTitle({
+        terminalId: leaf.terminalId,
+        terminalLabelsById: terminalState.terminalLabelsById,
+        terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+      }),
+    });
+    if (!confirmed) return false;
+
+    await disposeAndCloseTerminalSession({
+      api,
+      threadId: scopeId,
+      terminalId: leaf.terminalId,
+      requireStructuredClose: true,
+    });
+    terminalStore.closeTerminal(scopeId, leaf.terminalId);
+    bottomStore.closePane(input.hostThreadId, tab.id, leaf.id);
+    return true;
+  } catch (error: unknown) {
+    toastManager.add({
+      type: "error",
+      title: t("chat:unableToCloseTerminal"),
+      description: error instanceof Error ? error.message : t("common:pleaseTryAgain"),
+    });
+    return false;
   }
 }
