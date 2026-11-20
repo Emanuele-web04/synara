@@ -309,8 +309,6 @@ import {
   findNextThreadNeedingAttention,
   hasActivityNeedingAttention,
   resolveActivityPriorityTier,
-  resolveChildThreadsTier,
-  resolveChildThreadsTone,
 } from "./SidebarActivityView.logic";
 import {
   ActivityThreadRow,
@@ -394,7 +392,8 @@ import { Button } from "./ui/button";
 import { Popover, PopoverPopup } from "./ui/popover";
 import { StatusDot } from "./ui/status-chip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
-import { SidebarChildThreadsChip } from "./SidebarChildThreadsChip";
+import { SidebarChildThreadStatusDots } from "./SidebarChildThreadStatusDots";
+import { SidebarChildThreadsToggle } from "./SidebarChildThreadsToggle";
 import { Input } from "./ui/input";
 import {
   Dialog,
@@ -6016,6 +6015,7 @@ export default function Sidebar() {
     threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
     timestampToneClassName?: string;
     hoverActions: ReactNode;
+    childThreadsStatus?: ReactNode;
   }) {
     // The jump shortcut owns the slot while it is visible; otherwise the shared
     // rule decides which status glyph shows here.
@@ -6025,6 +6025,11 @@ export default function Sidebar() {
     });
     return (
       <div className="relative flex min-w-0 items-center justify-end gap-2 group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
+        {input.childThreadsStatus ? (
+          <div className={cn("flex shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
+            {input.childThreadsStatus}
+          </div>
+        ) : null}
         {input.rightMetaChips.length > 0 ? (
           <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -6286,7 +6291,7 @@ export default function Sidebar() {
         >
           {renderChildThreadStems(nesting, PINNED_ROW_PADDING_PX)}
           {childCount > 0
-            ? renderChildThreadsChip({
+            ? renderChildThreadsToggle({
                 threadId: thread.id,
                 count: childCount,
                 collapsed: childrenCollapsed,
@@ -6346,7 +6351,7 @@ export default function Sidebar() {
               terminalCount={terminalCount}
               isActive={isActive}
               variant="pinned"
-              // Pinned rows have no slot before the glyph; the child-count chip takes its place.
+              // Pinned rows have no slot before the glyph; the fold toggle takes its place.
               hideLeadingGlyph={childCount > 0}
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
@@ -6372,6 +6377,7 @@ export default function Sidebar() {
                 prChip,
                 threadStatus,
                 timestampToneClassName: "text-muted-foreground/38",
+                childThreadsStatus: childCount > 0 ? renderChildThreadStatusDots(thread.id) : null,
                 hoverActions: renderThreadHoverActions({
                   threadId: thread.id,
                   toneClassName: "text-muted-foreground/42",
@@ -6453,37 +6459,35 @@ export default function Sidebar() {
     return stems;
   }
 
-  // Fold/unfold chip for a parent's agent-created children, in the empty slot before the
-  // glyph. Folded, it takes the tint of the most urgent descendant it hides.
-  function renderChildThreadsChip(input: {
+  // Fold/unfold toggle for a parent's agent-created children, in the empty slot before the glyph.
+  function renderChildThreadsToggle(input: {
     threadId: ThreadId;
     count: number;
     collapsed: boolean;
     /** Left edge of the row's provider glyph. */
     glyphLeftPx: number;
-    /** Pinned rows have no slot before the glyph, so the chip is centred over it instead. */
+    /** Pinned rows have no slot before the glyph, so the toggle is centred over it instead. */
     overlaysGlyph: boolean;
   }) {
-    const tone = input.collapsed
-      ? resolveChildThreadsTone(
-          resolveChildThreadsTier(
-            collectAgentCreatedDescendants(input.threadId, agentChildrenByThreadId),
-            (thread) => resolveActivityPriorityTier(resolveThreadStatusForSidebar(thread)),
-          ),
-        )
-      : "quiet";
     const left = input.overlaysGlyph
       ? input.glyphLeftPx + SIDEBAR_THREAD_GLYPH_CENTER_PX - SIDEBAR_CHILD_CHIP_WIDTH_PX / 2
       : input.glyphLeftPx - SIDEBAR_CHILD_CHIP_GAP_PX - SIDEBAR_CHILD_CHIP_WIDTH_PX;
     return (
-      <SidebarChildThreadsChip
+      <SidebarChildThreadsToggle
         count={input.count}
         collapsed={input.collapsed}
-        tone={tone}
         onToggle={() => toggleChildParentCollapsed(input.threadId)}
         className={cn("absolute -translate-y-1/2", SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME)}
         style={{ left }}
       />
+    );
+  }
+
+  function renderChildThreadStatusDots(threadId: ThreadId) {
+    // Descendants, so a busy grandchild still shows while its parent is folded away.
+    const descendants = collectAgentCreatedDescendants(threadId, agentChildrenByThreadId);
+    return (
+      <SidebarChildThreadStatusDots statuses={descendants.map(resolveThreadStatusForSidebar)} />
     );
   }
 
@@ -6550,7 +6554,7 @@ export default function Sidebar() {
       >
         {renderChildThreadStems(nesting, SIDEBAR_THREAD_ROW_PADDING_PX)}
         {childCount > 0
-          ? renderChildThreadsChip({
+          ? renderChildThreadsToggle({
               threadId: thread.id,
               count: childCount,
               collapsed: childrenCollapsed,
@@ -6664,6 +6668,7 @@ export default function Sidebar() {
                 prChip,
                 threadStatus,
                 timestampToneClassName: secondaryMetaClass,
+                childThreadsStatus: childCount > 0 ? renderChildThreadStatusDots(thread.id) : null,
                 hoverActions: renderThreadHoverActions({
                   threadId: thread.id,
                   toneClassName: secondaryMetaClass,

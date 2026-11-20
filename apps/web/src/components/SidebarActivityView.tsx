@@ -81,7 +81,6 @@ import {
   resolveActivityRowPullRequests,
   resolveActivityScope,
   resolveChildThreadsTier,
-  resolveChildThreadsTone,
   splitActivityFamilyChildren,
   resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
@@ -91,7 +90,6 @@ import {
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
-  type ChildThreadsTone,
 } from "./SidebarActivityView.logic";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
@@ -100,7 +98,7 @@ import {
   type SidebarRowContextMenuPosition,
   type SidebarThreadRowGestureProps,
 } from "./sidebarThreadRowGestures";
-import { SidebarChildThreadsChip } from "./SidebarChildThreadsChip";
+import { SidebarChildThreadsToggle } from "./SidebarChildThreadsToggle";
 import { SidebarIconButton } from "./SidebarIconButton";
 import {
   SidebarCollapsibleSection,
@@ -136,11 +134,12 @@ const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
 const EMPTY_THREADS: SidebarThreadSummary[] = [];
 
-/** What a family's parent row needs to draw its child-count chip. */
+/** What a family's parent row needs to draw its fold toggle. */
 interface ActivityRowChildThreads {
   count: number;
   collapsed: boolean;
-  tone: ChildThreadsTone;
+  /** A child waits on the user; tints the folded summary. */
+  waiting: boolean;
   /** Folded only: the most urgent hidden state, e.g. "1 needs you". */
   summary: string | null;
   onToggle: () => void;
@@ -299,7 +298,7 @@ export function ActivityThreadRow({
         <span
           className={cn(
             "mr-auto shrink-0 text-ui-sm",
-            childThreads.tone === "waiting" ? "text-warning" : "text-muted-foreground/70",
+            childThreads.waiting ? "text-warning" : "text-muted-foreground/70",
           )}
         >
           {childThreads.summary}
@@ -434,7 +433,7 @@ export function ActivityThreadRow({
           ) : null}
         </span>
         {childThreads ? (
-          // The fold chip sits over the leading slot, under the provider glyph, and the
+          // The fold toggle sits over the leading slot, under the provider glyph, and the
           // family's stem drops from it beside the lines below while unfolded.
           <span className="flex min-h-[18px] min-w-0 gap-1.5">
             <span aria-hidden="true" className="w-[18px] shrink-0" />
@@ -454,10 +453,9 @@ export function ActivityThreadRow({
       </div>
       {childThreads ? (
         <>
-          <SidebarChildThreadsChip
+          <SidebarChildThreadsToggle
             count={childThreads.count}
             collapsed={childThreads.collapsed}
-            tone={childThreads.tone}
             onToggle={childThreads.onToggle}
             className="absolute top-[31px] left-[7px]"
           />
@@ -1364,7 +1362,7 @@ export function SidebarActivityView({
     return {
       count: children.length,
       collapsed: rows.collapsed,
-      tone: resolveChildThreadsTone(tier),
+      waiting: tier === "waiting",
       summary,
       onToggle: () => childThreadNesting.onToggleCollapsed(thread.id),
     };
