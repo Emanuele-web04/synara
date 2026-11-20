@@ -423,6 +423,74 @@ const CODE_EDITOR_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
+const TERMINAL_TILING_DEFINITIONS: readonly ShortcutDefinition[] = [
+  {
+    command: "terminal.tile.splitRight",
+    label: "Split terminal right",
+    description: "Split the focused terminal tile side by side.",
+  },
+  {
+    command: "terminal.tile.splitDown",
+    label: "Split terminal down",
+    description: "Split the focused terminal tile horizontally into a stacked pane.",
+  },
+  {
+    command: "terminal.tile.focusLeft",
+    label: "Focus terminal pane left",
+    description: "Move keyboard focus to the terminal tile on the left.",
+  },
+  {
+    command: "terminal.tile.focusDown",
+    label: "Focus terminal pane down",
+    description: "Move keyboard focus to the terminal tile below.",
+  },
+  {
+    command: "terminal.tile.focusUp",
+    label: "Focus terminal pane up",
+    description: "Move keyboard focus to the terminal tile above.",
+  },
+  {
+    command: "terminal.tile.focusRight",
+    label: "Focus terminal pane right",
+    description: "Move keyboard focus to the terminal tile on the right.",
+  },
+  {
+    command: "terminal.tile.resizeLeft",
+    label: "Resize terminal pane left",
+    description: "Nudge the nearest horizontal terminal divider to the left.",
+  },
+  {
+    command: "terminal.tile.resizeDown",
+    label: "Resize terminal pane down",
+    description: "Nudge the nearest vertical terminal divider downward.",
+  },
+  {
+    command: "terminal.tile.resizeUp",
+    label: "Resize terminal pane up",
+    description: "Nudge the nearest vertical terminal divider upward.",
+  },
+  {
+    command: "terminal.tile.resizeRight",
+    label: "Resize terminal pane right",
+    description: "Nudge the nearest horizontal terminal divider to the right.",
+  },
+  {
+    command: "terminal.tile.zoom",
+    label: "Zoom terminal pane",
+    description: "Temporarily expand the focused terminal tile to fill the drawer.",
+  },
+  {
+    command: "terminal.tab.previous",
+    label: "Previous terminal tab",
+    description: "Switch to the previous tab in the compact bottom terminal.",
+  },
+  {
+    command: "terminal.tab.next",
+    label: "Next terminal tab",
+    description: "Switch to the next tab in the compact bottom terminal.",
+  },
+] as const;
+
 const SIDEBAR_TOGGLE_DEFINITION: ShortcutDefinition = {
   command: "sidebar.toggle",
   label: "Toggle sidebar",
@@ -473,6 +541,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
       ),
     ),
     ...(NATIVE_EDITOR_ON ? singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS) : []),
+    ...singleCommandEditorDefinitions(TERMINAL_TILING_DEFINITIONS),
     ...singleCommandEditorDefinitions(WORKSPACE_DEFINITIONS),
     {
       id: "thread.jump",
@@ -521,6 +590,7 @@ export function shortcutSheetCommandLabel(command: KeybindingCommand): string | 
     [SIDEBAR_TOGGLE_DEFINITION],
     AVAILABLE_NOW_DEFINITIONS,
     CODE_EDITOR_DEFINITIONS,
+    TERMINAL_TILING_DEFINITIONS,
     WORKSPACE_DEFINITIONS,
     THREAD_JUMP_DEFINITIONS,
   ]) {
@@ -695,6 +765,22 @@ export function buildShortcutSheetSections(
       description: "Available while a code editor has focus.",
       tone: "muted",
       entries: codeEditorEntries,
+    });
+  }
+
+  const terminalTilingEntries = definitionsToEntries(
+    TERMINAL_TILING_DEFINITIONS,
+    options.keybindings,
+    options.platform,
+    { ...options.context, terminalFocus: true, terminalOpen: true },
+  );
+  if (terminalTilingEntries.length > 0) {
+    sections.push({
+      id: "terminal-tiling",
+      title: "Terminal tiling",
+      description: "Available while a terminal tile has focus.",
+      tone: "muted",
+      entries: terminalTilingEntries,
     });
   }
 
