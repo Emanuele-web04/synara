@@ -1,4 +1,5 @@
 import "../../index.css";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -26,9 +27,19 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => state.navigate,
 }));
-vi.mock("../../nativeApi", () => ({
-  readNativeApi: () => ({ orchestration: { dispatchCommand: state.dispatch } }),
-}));
+vi.mock("../../nativeApi", () => {
+  const api = {
+    orchestration: { dispatchCommand: state.dispatch },
+    server: {
+      getConfig: async () => ({ keybindings: [] }),
+      getSettings: async () => undefined,
+    },
+  };
+  return {
+    readNativeApi: () => api,
+    ensureNativeApi: () => api,
+  };
+});
 vi.mock("./useSubagentStripSource", () => ({
   useThreadSubagentRoster: () => ({
     roster: state.roster,
@@ -138,7 +149,14 @@ it("opens a subagent from the split dock beside its parent, never in the parent'
     },
   });
   useRightDockStore.getState().openPane(parent, { kind: "subagents" });
-  const screen = await render(<SplitChatSurface splitViewId={split} routeThreadId={parent} />);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={queryClient}>
+      <SplitChatSurface splitViewId={split} routeThreadId={parent} />
+    </QueryClientProvider>,
+  );
   try {
     await expect
       .element(page.getByRole("button", { name: "Open subagent Scout (Running)" }))
@@ -168,6 +186,7 @@ it("opens a subagent from the split dock beside its parent, never in the parent'
     expect(useRightDockStore.getState().dockStateByThreadId[parent]?.open).toBe(false);
   } finally {
     await screen.unmount();
+    queryClient.clear();
     useSplitViewStore.getState().removeSplitView(split);
     useStore.setState({ threadShellById: previousShells });
   }

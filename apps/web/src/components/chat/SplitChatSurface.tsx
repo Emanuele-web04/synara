@@ -41,6 +41,10 @@ import {
   removePanelResizeOverlay,
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
+import { useAppSettings } from "../../appSettings";
+import { serverConfigQueryOptions } from "../../lib/serverReactQuery";
+import { useQuery } from "@tanstack/react-query";
+import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import type { RightDockPaneKind } from "../../rightDockStore.logic";
 import { SubagentsDockPane } from "./SubagentsDockPane";
@@ -88,6 +92,8 @@ const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
 const DockTerminalPane = lazy(() => import("./DockTerminalPane"));
+const CompactBottomTerminalDrawer = lazy(() => import("./CompactBottomTerminalDrawer"));
+const EMPTY_SPLIT_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
 // Dock panes a split pane shows in place of its side panel (terminal and the run lists).
 function isSplitDockOverlayPaneKind(kind: RightDockPaneKind): boolean {
@@ -113,10 +119,14 @@ function SplitPaneEmbeddedPanel(props: {
 }) {
   const { t } = useTranslation();
 
+  const { settings: appSettings } = useAppSettings();
   const dockState = useRightDockStore(selectRightDockState(props.threadId));
-  const terminalPane = dockState.open
-    ? dockState.panes.find((pane) => pane.id === dockState.activePaneId && pane.kind === "terminal")
-    : undefined;
+  const terminalPane =
+    !appSettings.compactBottomTerminal && dockState.open
+      ? dockState.panes.find(
+          (pane) => pane.id === dockState.activePaneId && pane.kind === "terminal",
+        )
+      : undefined;
   const subagentsPane = dockState.open
     ? dockState.panes.find(
         (pane) => pane.id === dockState.activePaneId && pane.kind === "subagents",
@@ -392,12 +402,19 @@ function SplitPaneSurface(props: {
     side: SplitDropSide;
   }) => void;
 }) {
+  const { settings: appSettings } = useAppSettings();
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  const splitKeybindings = shortcutConfig.data?.keybindings ?? EMPTY_SPLIT_KEYBINDINGS;
   const paneScopeId = splitViewPaneScopeId(props.splitView.id, props.paneId);
   const dockState = useRightDockStore(selectRightDockState(props.threadId));
-  const terminalPane =
-    dockState.panes.find(
-      (pane) => pane.id === dockState.activePaneId && pane.kind === "terminal",
-    ) ?? dockState.panes.find((pane) => pane.kind === "terminal");
+  const terminalPane = appSettings.compactBottomTerminal
+    ? undefined
+    : (dockState.panes.find(
+        (pane) => pane.id === dockState.activePaneId && pane.kind === "terminal",
+      ) ?? dockState.panes.find((pane) => pane.kind === "terminal"));
+  const activePaneProjectId =
+    props.threads.find((thread) => thread.id === props.threadId)?.projectId ??
+    props.splitView.ownerProjectId;
   const panelOpen = props.panelState.panel !== null;
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
@@ -479,6 +496,17 @@ function SplitPaneSurface(props: {
               onSelectThread={props.onSelectThread}
             />
           )}
+          {props.threadId && appSettings.compactBottomTerminal ? (
+            <Suspense fallback={null}>
+              <CompactBottomTerminalDrawer
+                key={props.threadId}
+                hostThreadId={props.threadId}
+                projectId={activePaneProjectId}
+                paneScopeId={paneScopeId}
+                keybindings={splitKeybindings}
+              />
+            </Suspense>
+          ) : null}
           {props.threadId && props.showFloatingBrowser ? (
             <FloatingBrowserPanel
               key={props.threadId}
