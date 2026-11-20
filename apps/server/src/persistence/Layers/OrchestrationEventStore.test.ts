@@ -3,6 +3,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ThreadCreatedPayload,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
@@ -389,6 +390,27 @@ layer("OrchestrationEventStore", (it) => {
       const eventStore = yield* OrchestrationEventStore;
       const now = "2026-07-20T12:00:00.000Z";
       const threadId = ThreadId.makeUnsafe("thread-diagnostic-page");
+      const creation = yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-created"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: Schema.decodeUnknownSync(ThreadCreatedPayload)({
+          threadId,
+          projectId: "project-thread-diagnostics",
+          title: "Diagnostics",
+          modelSelection: { provider: "codex", model: "fixture" },
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      });
       const first = yield* eventStore.append({
         type: "thread.archived",
         eventId: EventId.makeUnsafe("evt-thread-diagnostic-first"),
@@ -401,7 +423,7 @@ layer("OrchestrationEventStore", (it) => {
         metadata: {},
         payload: { threadId, archivedAt: now, updatedAt: now },
       });
-      yield* eventStore.append({
+      const unrelated = yield* eventStore.append({
         type: "thread.archived",
         eventId: EventId.makeUnsafe("evt-thread-diagnostic-unrelated"),
         aggregateKind: "thread",
@@ -478,6 +500,34 @@ layer("OrchestrationEventStore", (it) => {
       assert.deepEqual(
         detailCatchup.map((event) => event.sequence),
         [second.sequence],
+      );
+      const range = {
+        threadId,
+        sequenceExclusive: creation.sequence,
+        throughSequenceInclusive: second.sequence,
+        eventTypes: ["thread.archived", "thread.unarchived"],
+        limit: 1,
+      };
+      assert.isFalse(yield* eventStore.canReplayThreadEventsInRange(range));
+      assert.isTrue(yield* eventStore.canReplayThreadEventsInRange({ ...range, limit: 2 }));
+      assert.isFalse(
+        yield* eventStore.canReplayThreadEventsInRange({
+          ...range,
+          sequenceExclusive: creation.sequence - 1,
+          limit: 2,
+        }),
+      );
+      assert.isTrue(
+        yield* eventStore.canReplayThreadEventsInRange({
+          ...range,
+          sequenceExclusive: first.sequence,
+        }),
+      );
+      assert.isTrue(
+        yield* eventStore.canReplayThreadEventsInRange({
+          ...range,
+          throughSequenceInclusive: unrelated.sequence,
+        }),
       );
     }),
   );

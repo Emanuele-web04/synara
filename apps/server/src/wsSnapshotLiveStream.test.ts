@@ -624,7 +624,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     ]);
   });
 
-  it("batches the resume gap into one replay item followed by live events", async () => {
+  it.each([5, 250])("batches resume through sequence %i before live events", async (highWater) => {
     const items = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -635,14 +635,15 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
             ),
             snapshot: Effect.die(new Error("cursor resume must not load the snapshot")),
             snapshotSequence: () => 0,
-            getHighWaterSequence: Effect.succeed(5),
+            getHighWaterSequence: Effect.succeed(highWater),
             resumeFromSequence: 3,
+            resumeReplayFits: () => Effect.succeed(true),
             batchReplay: true,
             replay: () =>
               Stream.concat(
-                Stream.fromEffect(PubSub.publish(live, event(6))).pipe(Stream.drain),
+                Stream.fromEffect(PubSub.publish(live, event(highWater + 1))).pipe(Stream.drain),
                 // Out-of-fence rows stay filtered out of the batch.
-                Stream.make(event(3), event(4), event(5), event(6)),
+                Stream.make(event(3), event(4), event(highWater), event(highWater + 1)),
               ),
           }).pipe(Stream.take(2), Stream.runCollect);
         }),
@@ -650,8 +651,8 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     );
 
     expect(Array.from(items)).toEqual([
-      { kind: "replay", events: [event(4), event(5)] },
-      { kind: "event", event: event(6) },
+      { kind: "replay", events: [event(4), event(highWater)] },
+      { kind: "event", event: event(highWater + 1) },
     ]);
   });
 

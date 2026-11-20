@@ -1881,10 +1881,23 @@ const makeWsRpcHandlersLayer = () =>
                 streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
                 tracker: resnapshotEscalationTracker,
               },
-              // Cursor resume: a client holding cached detail replays only the
-              // gap. Out-of-range cursors (negative or overflowing gap) fall
-              // back to the snapshot inside the stream factory.
+              // A client holding cached detail replays only the gap. The journal
+              // sequence is global, so confirm a wide gap against this thread's events.
               resumeFromSequence: input.afterSequence,
+              resumeReplayFits: (sequenceExclusive, throughSequenceInclusive, limit) =>
+                eventStore
+                  .canReplayThreadEventsInRange({
+                    threadId: input.threadId,
+                    sequenceExclusive,
+                    throughSequenceInclusive,
+                    eventTypes: THREAD_DETAIL_EVENT_TYPES,
+                    limit,
+                  })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to verify thread replay range"),
+                    ),
+                  ),
               // Opted-in clients get the whole gap as one item and apply it in a
               // single store update, so a stale cached turn does not replay its
               // intermediate states on screen.

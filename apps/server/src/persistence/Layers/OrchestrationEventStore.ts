@@ -495,15 +495,26 @@ const makeEventStore = Effect.gen(function* () {
     execute: (request) => buildReadEventRowsFromSequenceQuery(sql, request),
   });
 
+  const threadEventRange = (request: typeof ReadThreadFromSequenceRequestSchema.Type) => {
+    const typeFilter =
+      request.eventTypes.length === 0
+        ? sql``
+        : sql`AND event_type IN ${sql.in(request.eventTypes)}`;
+    return sql`
+      FROM orchestration_events
+      WHERE aggregate_kind = 'thread'
+        AND stream_id = ${request.threadId}
+        AND sequence > ${request.sequenceExclusive}
+        AND sequence <= ${request.throughSequenceInclusive}
+        ${typeFilter}
+      ORDER BY sequence ASC
+    `;
+  };
+
   const readThreadEventRowsFromSequence = SqlSchema.findAll({
     Request: ReadThreadFromSequenceRequestSchema,
     Result: RawPersistedEventRowSchema,
-    execute: (request) => {
-      const typeFilter =
-        request.eventTypes.length === 0
-          ? sql``
-          : sql`AND event_type IN ${sql.in(request.eventTypes)}`;
-      return sql`
+    execute: (request) => sql`
         SELECT
           sequence,
           event_id AS "eventId",
@@ -516,16 +527,30 @@ const makeEventStore = Effect.gen(function* () {
           correlation_id AS "correlationId",
           payload_json AS "payloadJson",
           metadata_json AS "metadataJson"
-        FROM orchestration_events
+        ${threadEventRange(request)}
+        LIMIT ${request.limit}
+    `,
+  });
+
+  const readThreadReplayAdmission = SqlSchema.findOne({
+    Request: ReadThreadFromSequenceRequestSchema,
+    Result: Schema.Struct({ canReplay: Schema.Literals([0, 1]) }),
+    // A purged ID can be recreated. Its new stream starts at version 0, so a
+    // cursor older than that creation cannot describe the cached thread.
+    execute: (request) => sql`
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM orchestration_events
         WHERE aggregate_kind = 'thread'
           AND stream_id = ${request.threadId}
+          AND stream_version = 0
+          AND event_type = 'thread.created'
           AND sequence > ${request.sequenceExclusive}
           AND sequence <= ${request.throughSequenceInclusive}
-          ${typeFilter}
-        ORDER BY sequence ASC
-        LIMIT ${request.limit}
-      `;
-    },
+      ) THEN 0 ELSE NOT EXISTS (
+        SELECT 1 ${threadEventRange(request)}
+        LIMIT 1 OFFSET ${request.limit}
+      ) END AS "canReplay"
+    `,
   });
 
   const readHighWaterSequenceRow = SqlSchema.findOne({
@@ -785,6 +810,18 @@ const makeEventStore = Effect.gen(function* () {
       Effect.map((row) => row.highWaterSequence),
     );
 
+  const canReplayThreadEventsInRange: OrchestrationEventStoreShape["canReplayThreadEventsInRange"] =
+    (input) =>
+      readThreadReplayAdmission(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.canReplayThreadEventsInRange:query",
+            "OrchestrationEventStore.canReplayThreadEventsInRange:decodeRow",
+          ),
+        ),
+        Effect.map((row) => row.canReplay === 1),
+      );
+
   const getThreadHighWaterSequence: OrchestrationEventStoreShape["getThreadHighWaterSequence"] = (
     threadId,
   ) =>
@@ -860,6 +897,7 @@ const makeEventStore = Effect.gen(function* () {
     getThreadTitleHighWaterSequence,
     readThreadEvents,
     readThreadEventsFromSequence,
+    canReplayThreadEventsInRange,
     readFromSequence,
     readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
   } satisfies OrchestrationEventStoreShape;
