@@ -424,6 +424,9 @@ export const AppSettingsSchema = Schema.Struct({
   resumeChatsAfterQuit: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preference: spawn terminals in a compact, tileable drawer at
+  // the bottom of the chat instead of as a tab in the right sidebar dock.
+  compactBottomTerminal: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
   githubLinkOpenTarget: GitHubLinkOpenTarget.pipe(

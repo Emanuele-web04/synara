@@ -205,6 +205,9 @@ export function useSettingsRestoreDefaults({
     ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
       ? ["settings:changed_terminalCloseConfirmation"]
       : []),
+    ...(settings.compactBottomTerminal !== defaults.compactBottomTerminal
+      ? ["settings:compactBottomTerminal"]
+      : []),
     ...(isGitTextGenerationModelDirty ? ["settings:changed_gitWritingModel"] : []),
     ...(settings.sourceControlWritingStyle !== defaults.sourceControlWritingStyle ||
     settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions
