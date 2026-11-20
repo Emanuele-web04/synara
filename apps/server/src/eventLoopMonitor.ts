@@ -9,6 +9,11 @@ const SAMPLE_MS = 1000;
 const SUMMARY_MS = 30_000;
 const STALL_MS = 2000;
 const RESOLUTION_MS = 20;
+// The native histograms wake the process every RESOLUTION_MS. An idle loop has
+// no delay to measure, so they are paused until it does work again; timer
+// drift still detects a stall that starts while they are paused.
+const IDLE_UTILIZATION = 0.02;
+const IDLE_SAMPLES_BEFORE_PAUSE = 5;
 
 type DelayHistogram = Histogram & { enable(): boolean; disable(): boolean };
 type Logger = {
@@ -65,6 +70,8 @@ export function makeEventLoopMonitor(
   let discardedIdleGapMs = 0;
   let lastIdleLog = -Infinity;
   let stopped = false;
+  let idleSamples = 0;
+  let nativeSamplingPaused = false;
   let completed = {
     sampleWindowMs: 0,
     sampleCount: 0,
@@ -136,6 +143,18 @@ export function makeEventLoopMonitor(
         aggregate.reset();
         windowStart = sampledAt;
         return;
+      }
+      if (utilization >= IDLE_UTILIZATION) {
+        idleSamples = 0;
+        if (nativeSamplingPaused) {
+          nativeSamplingPaused = false;
+          histogram.enable();
+          aggregate.enable();
+        }
+      } else if (!nativeSamplingPaused && ++idleSamples >= IDLE_SAMPLES_BEFORE_PAUSE) {
+        nativeSamplingPaused = true;
+        histogram.disable();
+        aggregate.disable();
       }
       // HDR bucket error grows with duration (default 3 significant digits).
       // Keep bounded evidence from a late previous sample if the native timer
@@ -227,6 +246,7 @@ export function makeEventLoopMonitor(
     stop() {
       if (stopped) return;
       stopped = true;
+      if (nativeSamplingPaused) return;
       histogram.disable();
       aggregate.disable();
     },

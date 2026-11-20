@@ -13,7 +13,11 @@ These fields contain numbers/booleans only, with no paths, stacks or identifiers
 An unreachable status probe cannot distinguish overload from a network failure.
 
 The scoped monitor uses Node `monitorEventLoopDelay` at **20 ms resolution**, reads
-it every **1 second**. A second native histogram keeps the full **30 second summary**
+it every **1 second**. The native histograms wake the process 50 times a second, so
+they are paused after **5 consecutive samples** below **2% utilization** and resumed by
+the first sample at or above it. While paused, delay percentiles and `sampleCount`
+stop advancing; the 1 second sampling timer keeps running, and its drift still
+reports a stall that starts during the pause. A second native histogram keeps the full **30 second summary**
 window; Node cannot merge interval histograms into recordable histograms.
 Reported delay percentiles subtract the 20 ms idle baseline and clamp at zero.
 `sampleWindowMs` is actual elapsed time, so a blocked sampling timer can yield a

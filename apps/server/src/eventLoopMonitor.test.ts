@@ -243,3 +243,71 @@ it("handles delayed native sampling without counting the same stall twice", () =
   monitor.sample();
   expect(monitor.getSnapshot().stallWindowCount).toBe(2);
 });
+
+function idleFixture() {
+  let now = 0;
+  let loop = { activeMs: 1, utilization: 0.001 };
+  const native = () =>
+    Object.assign(createHistogram(), { enable: vi.fn(() => true), disable: vi.fn(() => true) });
+  const histogram = native();
+  const summaryHistogram = native();
+  const warn = vi.fn();
+  const monitor = makeMonitor({
+    histogram,
+    summaryHistogram,
+    now: () => now,
+    logger: { warn, info: vi.fn() },
+    readLoop: () => loop,
+  });
+  monitor.sample();
+  histogram.enable.mockClear();
+  summaryHistogram.enable.mockClear();
+  return {
+    monitor,
+    histogram,
+    summaryHistogram,
+    warn,
+    sample(next: { activeMs: number; utilization: number }, elapsed = 1000) {
+      now += elapsed;
+      loop = next;
+      monitor.sample();
+    },
+  };
+}
+
+it("pauses native sampling while the loop stays idle and resumes it under load", () => {
+  const f = idleFixture();
+  for (let i = 0; i < 4; i++) f.sample({ activeMs: 1, utilization: 0.001 });
+  expect(f.histogram.disable).not.toHaveBeenCalled();
+
+  f.sample({ activeMs: 1, utilization: 0.001 });
+  expect(f.histogram.disable).toHaveBeenCalledOnce();
+  expect(f.summaryHistogram.disable).toHaveBeenCalledOnce();
+
+  f.sample({ activeMs: 1, utilization: 0.001 });
+  expect(f.histogram.disable).toHaveBeenCalledOnce();
+  expect(f.histogram.enable).not.toHaveBeenCalled();
+
+  f.sample({ activeMs: 400, utilization: 0.4 });
+  expect(f.histogram.enable).toHaveBeenCalledOnce();
+  expect(f.summaryHistogram.enable).toHaveBeenCalledOnce();
+});
+
+it("does not pause native sampling while idle samples are interrupted by load", () => {
+  const f = idleFixture();
+  for (let i = 0; i < 3; i++) f.sample({ activeMs: 1, utilization: 0.001 });
+  f.sample({ activeMs: 400, utilization: 0.4 });
+  for (let i = 0; i < 4; i++) f.sample({ activeMs: 1, utilization: 0.001 });
+  expect(f.histogram.disable).not.toHaveBeenCalled();
+});
+
+it("reports a stall that starts while native sampling is paused", () => {
+  const f = idleFixture();
+  for (let i = 0; i < 6; i++) f.sample({ activeMs: 1, utilization: 0.001 });
+  expect(f.histogram.disable).toHaveBeenCalledOnce();
+
+  f.sample({ activeMs: 3_200, utilization: 1 }, 3_200);
+  expect(f.warn).toHaveBeenCalledOnce();
+  expect(f.warn.mock.calls[0]?.[1]).toMatchObject({ stallDurationMs: 2_200 });
+  expect(f.monitor.getSnapshot().stallWindowCount).toBe(1);
+});
