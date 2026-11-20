@@ -397,7 +397,7 @@ const ACTIVITY_PRIORITY_TIER_BY_STATUS: Record<ThreadStatusPill["label"], Activi
   "In Background": "working",
 };
 
-const ACTIVITY_PRIORITY_TIER_RANK: Record<ActivityPriorityTier, number> = {
+export const ACTIVITY_PRIORITY_TIER_RANK: Record<ActivityPriorityTier, number> = {
   waiting: 0,
   unread: 1,
   working: 2,
@@ -432,14 +432,6 @@ export function resolveChildThreadsTier(
     if (tier === "waiting") break;
   }
   return tier;
-}
-
-/** A folded parent's chip tint: a child waits on the user, a child has news, or all quiet. */
-export type ChildThreadsTone = "waiting" | "active" | "quiet";
-
-export function resolveChildThreadsTone(tier: ActivityPriorityTier | null): ChildThreadsTone {
-  if (tier === "waiting") return "waiting";
-  return tier === null ? "quiet" : "active";
 }
 
 /**

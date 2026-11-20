@@ -9,6 +9,9 @@ import { THREAD_STATUS_LABEL_KEYS, type ThreadStatusPill } from "./Sidebar.logic
 import { ThreadBackgroundWorkSpinner, ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { useTranslation } from "~/i18n";
 
+/** Fill of the unread-completion dot, shared with the parent row's child-status dots. */
+export const UNREAD_COMPLETION_DOT_CLASS_NAME = "bg-[var(--color-text-accent)]";
+
 export function SidebarUnreadCompletionGlyph({ className }: { className?: string }) {
   const { t } = useTranslation();
 
@@ -16,7 +19,11 @@ export function SidebarUnreadCompletionGlyph({ className }: { className?: string
     <span
       role="img"
       aria-label={t("workspace:unreadCompletion")}
-      className={cn("size-[7px] shrink-0 rounded-full bg-[var(--color-text-accent)]", className)}
+      className={cn(
+        "size-[7px] shrink-0 rounded-full",
+        UNREAD_COMPLETION_DOT_CLASS_NAME,
+        className,
+      )}
     />
   );
 }
