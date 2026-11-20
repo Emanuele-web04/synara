@@ -3839,6 +3839,8 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
           ref={imageRef}
           src={imageSrc}
           alt={props.image.name}
+          loading="lazy"
+          decoding="async"
           className="size-full object-cover"
           onLoad={(event) => {
             if (onImageLoad(event)) props.onTimelineImageLoad();
