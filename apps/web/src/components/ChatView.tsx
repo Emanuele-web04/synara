@@ -3331,17 +3331,15 @@ export default function ChatView({
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext ||
-    isMobileViewport ||
-    rightDockOpen ||
-    surfaceMode === "split" ||
-    isNarrowChatColumn;
+  const isConstrainedChatLayout =
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
+  // The column-width threshold changes docking without changing the open preference.
+  const environmentUsesFloatingOverlay = isConstrainedChatLayout || isNarrowChatColumn;
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
-    isConstrainedChatLayout: environmentUsesFloatingOverlay,
+    isConstrainedChatLayout,
     settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
   // Every close (header toggle or panel action click) stores the cross-chat preference,

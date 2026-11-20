@@ -6239,38 +6239,46 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("[geometry:linux] keeps Environment open and floats it when the chat narrows", async () => {
-    const wide = { ...DEFAULT_VIEWPORT, width: 1_400 };
-    const narrow = { ...DEFAULT_VIEWPORT, width: 800 };
-    const mounted = await mountChatView({
-      viewport: wide,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: MessageId.makeUnsafe("environment-layout"),
-        targetText: "Keep the chat readable",
-      }),
-    });
+  it.each([false, true])(
+    "[geometry:linux] keeps Environment open when the chat narrows with default open set to %s",
+    async (environmentPanelDefaultOpen) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ environmentPanelDefaultOpen }),
+      );
+      const wide = { ...DEFAULT_VIEWPORT, width: 1_400 };
+      const narrow = { ...DEFAULT_VIEWPORT, width: 800 };
+      const mounted = await mountChatView({
+        viewport: wide,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("environment-layout"),
+          targetText: "Keep the chat readable",
+        }),
+      });
 
-    const openPanel = () =>
-      document.querySelector('[data-environment-panel-variant][aria-hidden="false"]');
+      const openPanel = () =>
+        document.querySelector('[data-environment-panel-variant][aria-hidden="false"]');
 
-    try {
-      const toggle = page.getByRole("button", { name: "Toggle environment panel" });
-      if (!openPanel()) await toggle.click();
-      await expect
-        .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
-        .toBe("docked");
-      await mounted.setViewport(narrow);
-      await expect
-        .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
-        .toBe("floating");
-      await mounted.setViewport(wide);
-      await expect
-        .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
-        .toBe("docked");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
+      try {
+        if (!environmentPanelDefaultOpen) {
+          await page.getByRole("button", { name: "Toggle environment panel" }).click();
+        }
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("docked");
+        await mounted.setViewport(narrow);
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("floating");
+        await mounted.setViewport(wide);
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("docked");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("[geometry:linux] keeps part of a long model name visible in a narrow composer", async () => {
     const model = "fixture-model-with-a-deliberately-long-name-".repeat(4) + "v1";
