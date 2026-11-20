@@ -2,6 +2,7 @@
 // Purpose: Detects subprocess and coding-provider activity below terminal PTY processes.
 // Layer: Terminal infrastructure
 
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -14,6 +15,7 @@ import { parseProcessChildrenMap, type ProcessChildrenMap } from "./processTreeK
 import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
 
 const POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED = 256;
+const DEFAULT_LINUX_PROC_ROOT = "/proc";
 
 export interface TerminalSubprocessActivity {
   cliKind: TerminalCliKind | null;
@@ -224,6 +226,149 @@ async function checkPosixSubprocessActivity(
   return inspectSubprocessActivity(terminalPid, childrenByParentPid);
 }
 
+async function readLinuxProcChildPids(
+  parentPid: number,
+  procRoot: string,
+): Promise<number[] | null> {
+  try {
+    const taskEntries = await fs.readdir(path.join(procRoot, String(parentPid), "task"));
+    const childPids = new Set<number>();
+    let readAnyChildrenFile = false;
+    await Promise.all(
+      taskEntries.map(async (tid) => {
+        try {
+          const raw = await fs.readFile(
+            path.join(procRoot, String(parentPid), "task", tid, "children"),
+            "utf8",
+          );
+          readAnyChildrenFile = true;
+          for (const token of raw.trim().split(/\s+/g)) {
+            if (!token) continue;
+            const pid = Number(token);
+            if (Number.isInteger(pid) && pid > 0) {
+              childPids.add(pid);
+            }
+          }
+        } catch {
+          // A thread can exit mid-read or CONFIG_PROC_CHILDREN may be disabled.
+        }
+      }),
+    );
+    return readAnyChildrenFile ? [...childPids] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readLinuxProcCommand(pid: number, procRoot: string): Promise<string> {
+  try {
+    const rawCmdline = await fs.readFile(path.join(procRoot, String(pid), "cmdline"));
+    const decoded = rawCmdline.toString("utf8").replaceAll("\u0000", " ").trim();
+    if (decoded.length > 0) {
+      return decoded;
+    }
+  } catch {
+    // Fall back to /proc/<pid>/comm for kernel threads or races.
+  }
+  try {
+    return (await fs.readFile(path.join(procRoot, String(pid), "comm"), "utf8")).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Inspect subprocess activity below `terminalPid` directly through Linux `/proc`
+ * without spawning `pgrep` or `ps`. Returns `null` when `/proc` child listings
+ * are unavailable (e.g., restricted container or non-Linux kernel) so callers
+ * can fall back to the POSIX `ps` path.
+ */
+export async function checkLinuxProcSubprocessActivity(
+  terminalPid: number,
+  procRoot = DEFAULT_LINUX_PROC_ROOT,
+): Promise<TerminalSubprocessActivity | null> {
+  let visited = 0;
+
+  const inspectPid = async (parentPid: number): Promise<TerminalSubprocessActivity | null> => {
+    if (visited >= POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED) {
+      return {
+        cliKind: null,
+        hasNonProviderSubprocess: true,
+        hasProviderDescendant: false,
+        hasRunningSubprocess: true,
+      };
+    }
+
+    const childPids = await readLinuxProcChildPids(parentPid, procRoot);
+    if (childPids === null) {
+      return parentPid === terminalPid ? null : emptySubprocessActivity();
+    }
+    if (childPids.length === 0) {
+      return emptySubprocessActivity();
+    }
+
+    let activity = emptySubprocessActivity();
+    for (const childPid of childPids) {
+      visited += 1;
+      const command = await readLinuxProcCommand(childPid, procRoot);
+      if (!command) continue;
+      const nestedActivity = (await inspectPid(childPid)) ?? emptySubprocessActivity();
+      activity = includeChildActivity(activity, command, nestedActivity);
+    }
+
+    return activity;
+  };
+
+  return inspectPid(terminalPid);
+}
+
+/**
+ * Build a process children map from Linux `/proc` without spawning `ps`.
+ * Used on Linux when polling multiple terminals in one pass.
+ */
+export async function captureLinuxProcChildrenMap(
+  procRoot = DEFAULT_LINUX_PROC_ROOT,
+): Promise<ProcessChildrenMap | null> {
+  try {
+    const entries = await fs.readdir(procRoot);
+    const pids = entries
+      .filter((name) => /^\d+$/.test(name))
+      .map((name) => Number(name))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+    if (pids.length === 0) return null;
+
+    const childrenByParentPid: ProcessChildrenMap = new Map();
+    await Promise.all(
+      pids.map(async (pid) => {
+        try {
+          const stat = await fs.readFile(path.join(procRoot, String(pid), "stat"), "utf8");
+          // Process comm sits inside (...) and may contain spaces or parentheses;
+          // parse ppid strictly after the final ')'.
+          const commEnd = stat.lastIndexOf(")");
+          if (commEnd === -1) return;
+          const fields = stat
+            .slice(commEnd + 2)
+            .trim()
+            .split(/\s+/g);
+          const ppid = Number(fields[1]);
+          if (!Number.isInteger(ppid) || ppid < 0) return;
+          const command = await readLinuxProcCommand(pid, procRoot);
+          if (!command) return;
+          const siblings = childrenByParentPid.get(ppid) ?? [];
+          siblings.push({ pid, command });
+          childrenByParentPid.set(ppid, siblings);
+        } catch {
+          // Process may exit while iterating /proc.
+        }
+      }),
+    );
+
+    return childrenByParentPid.size > 0 ? childrenByParentPid : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function defaultSubprocessChecker(
   terminalPid: number,
 ): Promise<TerminalSubprocessActivity> {
@@ -235,6 +380,12 @@ export async function defaultSubprocessChecker(
     return childrenByParentPid === null
       ? emptySubprocessActivity()
       : inspectSubprocessActivity(terminalPid, childrenByParentPid);
+  }
+  if (process.platform === "linux") {
+    const procActivity = await checkLinuxProcSubprocessActivity(terminalPid);
+    if (procActivity !== null) {
+      return procActivity;
+    }
   }
   return checkPosixSubprocessActivity(terminalPid);
 }
