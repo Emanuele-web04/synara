@@ -187,6 +187,7 @@ import { persistAppStateNow, useStore } from "../store";
 import { deepEqualJson } from "../storeNormalization";
 import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import { getThreadFromState } from "../threadDerivation";
+import { warmThreadDetailFromCache } from "../threadDetailCache";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -6318,6 +6319,7 @@ export default function Sidebar() {
                 : undefined
             }
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
+            onPointerEnter={() => void warmThreadDetailFromCache(thread.id)}
             onClick={(event) => activateThreadRow(thread.id, event.currentTarget)}
             onDoubleClick={(event) => {
               event.preventDefault();
@@ -6592,6 +6594,7 @@ export default function Sidebar() {
                 onClick={(event) => {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
+                onPointerEnter={() => void warmThreadDetailFromCache(thread.id)}
                 onPointerDown={(event) => primeThreadActivation(event, thread.id)}
                 onDoubleClick={(event) => {
                   event.preventDefault();
