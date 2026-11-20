@@ -26983,3 +26983,163 @@ diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driv
          let wire = r#"{"method":"call","name":"click","expected_input_epoch":7,"args":{"expected_input_epoch":99}}"#;
          assert_eq!(parse(wire, true, true).unwrap(), Some(7));
          assert!(parse(wire, true, false).is_err());
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+index 8b11622..6825e35 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+@@ -460,6 +460,16 @@ pub struct GetDesktopStateInput {
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     #[schemars(schema_with = "string_schema")]
+     pub screenshot_out_file: Option<String>,
++    /// Wire encoding for the screenshot: "png" (default, lossless) or
++    /// "jpeg" (smaller payload; pick it for photographic content, keep png
++    /// when small UI text must stay sharp).
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[schemars(schema_with = "string_schema")]
++    pub screenshot_format: Option<String>,
++    /// JPEG quality 1-100 (default 90). Ignored when screenshot_format is
++    /// "png".
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub screenshot_quality: Option<u8>,
+ }
+ 
+ impl ToolInput for GetDesktopStateInput {
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
+index 16d35e8..0e88ca0 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
+@@ -369,16 +369,15 @@ pub struct DesktopStateOutput {
+ 
+ impl ToolOutput for DesktopStateOutput {
+     fn validate(&self) -> Result<(), String> {
+-        if self.screenshot_mime_type == "image/png" {
+-            Ok(())
+-        } else {
+-            Err("screenshot_mime_type must be image/png".into())
++        match self.screenshot_mime_type.as_str() {
++            "image/png" | "image/jpeg" => Ok(()),
++            _ => Err("screenshot_mime_type must be image/png or image/jpeg".into()),
+         }
+     }
+ }
+ 
+ fn png_mime_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+-    schemars::json_schema!({ "const": "image/png" })
++    schemars::json_schema!({ "enum": ["image/png", "image/jpeg"] })
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index c86e7e7..9643662 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -720,7 +720,7 @@ fn daemon_metadata_response() -> DaemonResponse {
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(40);
++        metadata["synara_native_revision"] = serde_json::json!(41);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
+index 652a372..aab54b2 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_desktop_state.rs
+@@ -37,7 +37,9 @@ fn def() -> &'static ToolDef {
+             "type": "object",
+             "properties": {
+                 "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
+-                "screenshot_out_file": { "type": "string", "description": "Write PNG here instead of base64." }
++                "screenshot_out_file": { "type": "string", "description": "Write PNG here instead of base64." },
++                "screenshot_format": { "type": "string", "enum": ["png", "jpeg"], "description": "Wire encoding for the screenshot. Default \"png\" (lossless — keep it when small UI text must stay sharp). \"jpeg\" shrinks the payload ~70%; prefer it for photographic content (photos, games, video frames)." },
++                "screenshot_quality": { "type": "integer", "description": "JPEG quality 1-100 (default 90). Ignored for png." }
+             },
+             "additionalProperties": false
+         }),
+@@ -69,6 +71,17 @@ impl Tool for GetDesktopStateTool {
+             }
+         });
+ 
++        let want_jpeg = match input.screenshot_format.as_deref() {
++            None | Some("png") => false,
++            Some("jpeg") => true,
++            Some(other) => {
++                return ToolResult::error(format!(
++                    "screenshot_format must be \"png\" or \"jpeg\", got {other:?}"
++                ));
++            }
++        };
++        let jpeg_quality = input.screenshot_quality.unwrap_or(90).clamp(1, 100);
++
+         // True screen geometry (points + backing scale). Safe off the main thread.
+         let (screen_width, screen_height, scale_factor) = match main_screen_size() {
+             Some(t) => t,
+@@ -76,24 +89,40 @@ impl Tool for GetDesktopStateTool {
+         };
+ 
+         // Capture the FULL display at native size — no resize. Run the
+-        // blocking screencapture subprocess off the async runtime.
++        // blocking capture off the async runtime. ScreenCaptureKit hands us
++        // RGBA straight into the chosen encoder; the `screencapture` CLI is
++        // the fallback and always produces PNG (transcoded when JPEG was
++        // asked for).
+         let out_file = screenshot_out_file.clone();
+         let res = tokio::task::spawn_blocking(
+-            move || -> anyhow::Result<(Option<String>, Option<String>, u32, u32)> {
++            move || -> anyhow::Result<(Option<String>, Option<String>, u32, u32, &'static str)> {
+                 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
++                // `screencapture` stays the display backend: it is reliable,
++                // already ~100ms end-to-end, and ScreenCaptureKit's display
++                // path measured no faster with intermittent capture hangs.
++                // JPEG is a transcode on the PNG bytes — same pixels, ~70%
++                // smaller payload.
+                 let png = crate::capture::screenshot_display_bytes()?;
+                 let (w, h) = crate::capture::png_dimensions(&png)?;
++                let (bytes, mime): (Vec<u8>, &'static str) = if want_jpeg {
++                    (
++                        cua_driver_core::image_utils::png_bytes_to_jpeg(&png, jpeg_quality)?,
++                        "image/jpeg",
++                    )
++                } else {
++                    (png, "image/png")
++                };
+                 if let Some(ref path) = out_file {
+-                    std::fs::write(path, &png)?;
+-                    Ok((None, Some(path.clone()), w, h))
++                    std::fs::write(path, &bytes)?;
++                    Ok((None, Some(path.clone()), w, h, mime))
+                 } else {
+-                    Ok((Some(BASE64.encode(&png)), None, w, h))
++                    Ok((Some(BASE64.encode(&bytes)), None, w, h, mime))
+                 }
+             },
+         )
+         .await;
+ 
+-        let (b64_opt, file_path, screenshot_width, screenshot_height) = match res {
++        let (b64_opt, file_path, screenshot_width, screenshot_height, mime) = match res {
+             Ok(Ok(v)) => v,
+             Ok(Err(e)) => return ToolResult::error(format!("Desktop screenshot failed: {e}")),
+             Err(e) => return ToolResult::error(format!("Desktop screenshot task error: {e}")),
+@@ -101,7 +130,10 @@ impl Tool for GetDesktopStateTool {
+ 
+         let mut content: Vec<Content> = Vec::new();
+         if let Some(b64) = b64_opt {
+-            content.push(Content::image_png(b64));
++            content.push(match mime {
++                "image/jpeg" => Content::image_jpeg(b64),
++                _ => Content::image_png(b64),
++            });
+         }
+         let summary = format!(
+             "desktop screenshot {screenshot_width}x{screenshot_height} px \
+@@ -117,7 +149,7 @@ impl Tool for GetDesktopStateTool {
+             "screen_width": screen_width,
+             "screen_height": screen_height,
+             "scale_factor": scale_factor,
+-            "screenshot_mime_type": "image/png",
++            "screenshot_mime_type": mime,
+         });
+         if let Some(ref fp) = file_path {
+             structured["screenshot_file_path"] = serde_json::json!(fp);

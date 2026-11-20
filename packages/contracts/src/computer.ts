@@ -551,7 +551,7 @@ export const ComputerUiNode: Schema.Codec<ComputerUiNode> = Schema.Struct({
 });
 
 export const ComputerScreenshot = Schema.Struct({
-  mimeType: Schema.Literal("image/png"),
+  mimeType: Schema.Literals(["image/png", "image/jpeg"]),
   width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
   height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32_768 })),
   sizeBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
