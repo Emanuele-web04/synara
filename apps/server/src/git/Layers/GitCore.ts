@@ -41,10 +41,6 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
 import {
-  cloneWorktreeDependencies,
-  DEPENDENCY_CLONE_PATHSPECS,
-} from "../worktreeDependencyClone.ts";
-import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
   parseGitStatusPorcelain,
@@ -3424,7 +3420,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ...GIT_MUTATION_OPTIONS,
           fallbackErrorMessage: "git worktree add failed",
         });
-        yield* seedWorktreeDependencies(input.cwd, worktreePath);
 
         return {
           worktree: {
@@ -3445,46 +3440,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             !entry.startsWith(`..${nodePath.sep}`) &&
             !entry.split(/[\\/]/u).includes(".."),
         );
-
-    // Best effort: a new worktree starts without ignored dependency trees, so
-    // seed them from the checkout it came from (see worktreeDependencyClone).
-    // Failures only cost the speedup; worktree creation never fails here.
-    const seedWorktreeDependencies = (sourceCwd: string, worktreePath: string) =>
-      process.platform !== "darwin"
-        ? Effect.void
-        : Effect.gen(function* () {
-            const trackedPaths = yield* executeGit(
-              "GitCore.seedWorktreeDependencies.list",
-              worktreePath,
-              ["ls-files", "-z", "--", ...DEPENDENCY_CLONE_PATHSPECS],
-              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
-            ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
-            const startedAt = Date.now();
-            const result = yield* Effect.tryPromise({
-              try: (signal) =>
-                cloneWorktreeDependencies({
-                  sourceRoot: sourceCwd,
-                  worktreeRoot: worktreePath,
-                  trackedPaths,
-                  signal,
-                }),
-              catch: (cause) => cause,
-            });
-            yield* Effect.logDebug(
-              `GitCore.seedWorktreeDependencies: ${
-                result.kind === "cloned"
-                  ? `cloned ${result.cloned}, failed ${result.failed}`
-                  : `skipped (${result.reason})`
-              } in ${Date.now() - startedAt}ms for ${worktreePath}`,
-            );
-          }).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning(
-                `GitCore.seedWorktreeDependencies: could not seed dependencies for ${worktreePath}`,
-                cause,
-              ),
-            ),
-          );
 
     const updateHashFromFile = async (
       hash: ReturnType<typeof createHash>,
@@ -4063,9 +4018,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ),
           );
         }
-        // After copy-changes, so an uncommitted lockfile edit copied from the
-        // source checkout still matches the tree being cloned.
-        yield* seedWorktreeDependencies(input.copyChangesFrom ?? input.cwd, worktreePath);
 
         return {
           worktree: {
