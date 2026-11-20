@@ -26,6 +26,7 @@ import { Terminal } from "@xterm/xterm";
 import { readNativeApi } from "~/nativeApi";
 import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
 import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
+import { getNavigatorPlatform, isLinuxPlatform, isMacPlatform } from "~/lib/utils";
 
 import { openInPreferredEditor } from "../../editorPreferences";
 import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../../keybindings";
@@ -58,14 +59,23 @@ import { waitForTerminalFontReady } from "./terminalFontSettle";
 import { observeTerminalWriteParsed } from "./terminalPerformance";
 
 const ENABLE_TERMINAL_WEBGL = true;
-const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
-const BACKEND_RESIZE_DEBOUNCE_MS = 120;
+const VISUAL_RESIZE_MIN_INTERVAL_MS = 32;
+const BACKEND_RESIZE_DEBOUNCE_MS = 60;
 const WRITE_BATCH_SIZE_LIMIT = 262_144;
 const WRITE_BATCH_MAX_LATENCY_MS = 50;
+const LEADING_WRITE_BYTE_LIMIT = 4_096;
+const LEADING_WRITE_COOLDOWN_MS = 16;
+const MAX_WARM_WEBGL_CONTEXTS = 4;
+const DEFERRED_ADDON_LOAD_DELAY_MS = 200;
 const LINK_MATCH_CACHE_LIMIT = 512;
 const OPEN_SNAPSHOT_RECONCILE_DELAY_MS = 250;
 const TERMINAL_TEXT_ENCODER = new TextEncoder();
 const TERMINAL_PARKING_CONTAINER_ID = "synara-terminal-parking";
+
+// Track active WebGL-backed terminals so hiding a compact bottom terminal can
+// keep its GPU context warm (instant reopen on Linux/Wayland/Mesa without
+// context-creation stalls) while strictly staying under Chromium's context cap.
+const activeWebglEntries = new Set<TerminalRuntimeEntry>();
 
 type SynaraTerminalOptions = NonNullable<ConstructorParameters<typeof Terminal>[0]> & {
   fontWeight?: string | number;
@@ -256,6 +266,7 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
   entry.pendingWrites.length = 0;
   entry.pendingWriteLength = 0;
   entry.pendingWriteBytes = 0;
+  entry.lastWriteFlushAt = performance.now();
   entry.terminal.write(combined, () => {
     acknowledgeParsedOutput(entry, byteLength);
     observeTerminalWriteParsed({
@@ -267,10 +278,33 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
 }
 
 function scheduleWrite(entry: TerminalRuntimeEntry, data: string, byteLength: number): void {
+  const now = performance.now();
+  // Leading-edge interactive flush: when no batch is pending and the channel
+  // has been quiet for at least one frame, feed small interactive output (e.g.
+  // keystroke echoes, prompt redraws) straight into xterm instead of waiting a
+  // full requestAnimationFrame. Sustained bursts still coalesce cleanly below.
+  if (
+    entry.pendingWrites.length === 0 &&
+    entry.writeRafHandle === null &&
+    byteLength <= LEADING_WRITE_BYTE_LIMIT &&
+    now - entry.lastWriteFlushAt >= LEADING_WRITE_COOLDOWN_MS
+  ) {
+    entry.lastWriteFlushAt = now;
+    entry.terminal.write(data, () => {
+      acknowledgeParsedOutput(entry, byteLength);
+      observeTerminalWriteParsed({
+        runtimeKey: entry.runtimeKey,
+        bytes: byteLength,
+        queuedAt: now,
+      });
+    });
+    return;
+  }
+
   entry.pendingWrites.push({
     data,
     byteLength,
-    queuedAt: performance.now(),
+    queuedAt: now,
   });
   entry.pendingWriteLength += data.length;
   entry.pendingWriteBytes += byteLength;
@@ -536,6 +570,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   terminalOptions.cursorStyle = TERMINAL_CURSOR_STYLE;
   terminalOptions.cursorInactiveStyle = TERMINAL_INACTIVE_CURSOR_STYLE;
   terminalOptions.cursorWidth = TERMINAL_CURSOR_WIDTH;
+  terminalOptions.cursorBlink = true;
   if (shouldClearTextureAtlas) {
     scheduleFontSettleRefit(entry);
   }
@@ -555,8 +590,21 @@ function cancelPendingWebglLoad(entry: TerminalRuntimeEntry): void {
 
 function disposeWebglAddon(entry: TerminalRuntimeEntry): void {
   cancelPendingWebglLoad(entry);
+  activeWebglEntries.delete(entry);
   entry.webglAddon?.dispose();
   entry.webglAddon = null;
+}
+
+function evictHiddenWebglContextsIfNeeded(): void {
+  if (activeWebglEntries.size < MAX_WARM_WEBGL_CONTEXTS) return;
+  for (const candidate of activeWebglEntries) {
+    if (!candidate.viewState.isVisible) {
+      disposeWebglAddon(candidate);
+      if (activeWebglEntries.size < MAX_WARM_WEBGL_CONTEXTS) {
+        return;
+      }
+    }
+  }
 }
 
 function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
@@ -583,10 +631,18 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
       return;
     }
 
+    evictHiddenWebglContextsIfNeeded();
+    if (activeWebglEntries.size >= MAX_WARM_WEBGL_CONTEXTS) {
+      // Fall back to xterm's fast DOM renderer for overflow tiles instead of
+      // exhausting Chromium's per-page WebGL context limit.
+      return;
+    }
+
     try {
       const nextWebglAddon = new WebglAddon();
       nextWebglAddon.onContextLoss(() => {
         suggestedRendererType = "dom";
+        activeWebglEntries.delete(entry);
         nextWebglAddon.dispose();
         if (entry.webglAddon === nextWebglAddon) {
           entry.webglAddon = null;
@@ -595,8 +651,10 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
       });
       entry.terminal.loadAddon(nextWebglAddon);
       entry.webglAddon = nextWebglAddon;
+      activeWebglEntries.add(entry);
     } catch {
       suggestedRendererType = "dom";
+      activeWebglEntries.delete(entry);
       entry.webglAddon = null;
     }
   });
@@ -605,29 +663,27 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
 function applyInitialVisualResize(entry: TerminalRuntimeEntry): void {
   if (!entry.viewState.isVisible) return;
 
-  let firstFrame = 0;
-  let secondFrame = 0;
-
-  firstFrame = window.requestAnimationFrame(() => {
+  // Synchronous fit when the host container already has layout geometry so the
+  // first painted frame matches the exact viewport without a 2-frame jump.
+  const rect = entry.container?.getBoundingClientRect();
+  if (rect && rect.width > 1 && rect.height > 1) {
     cancelScheduledVisualResize(entry);
     entry.lastVisualResizeAt = Date.now();
-    runTerminalResize(entry, {
-      clearTextureAtlas: true,
-      refresh: true,
-    });
+    runTerminalResize(entry, { refresh: true });
+    return;
+  }
 
-    secondFrame = window.requestAnimationFrame(() => {
-      entry.lastVisualResizeAt = Date.now();
-      runTerminalResize(entry, { refresh: true });
-    });
+  let firstFrame = 0;
+  firstFrame = window.requestAnimationFrame(() => {
+    firstFrame = 0;
+    cancelScheduledVisualResize(entry);
+    entry.lastVisualResizeAt = Date.now();
+    runTerminalResize(entry, { refresh: true });
   });
 
   entry.attachDisposables.push(() => {
     if (firstFrame !== 0) {
       window.cancelAnimationFrame(firstFrame);
-    }
-    if (secondFrame !== 0) {
-      window.cancelAnimationFrame(secondFrame);
     }
   });
 }
@@ -781,10 +837,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
   const fitAddon = new FitAddon();
   const clipboardAddon = new ClipboardAddon();
-  const imageAddon = new ImageAddon();
   const searchAddon = new SearchAddon();
   const unicode11Addon = new Unicode11Addon();
   const theme = terminalThemeFromApp();
+  const platform = getNavigatorPlatform();
+  const isLinux = isLinuxPlatform(platform);
   const terminalOptions: SynaraTerminalOptions = {
     cursorBlink: true,
     fontSize: getTerminalFontSizePx(),
@@ -809,14 +866,17 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const terminal = new Terminal(terminalOptions);
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(clipboardAddon);
-  terminal.loadAddon(imageAddon);
   terminal.loadAddon(searchAddon);
   terminal.loadAddon(unicode11Addon);
   terminal.unicode.activeVersion = "11";
-  try {
-    terminal.loadAddon(new LigaturesAddon());
-  } catch {
-    // Keep terminal startup resilient when the active font doesn't support ligatures.
+  // LigaturesAddon inspects font tables and hooks every line render; skipping it
+  // on Linux cuts terminal spawn/split latency and avoids font-shaping stalls.
+  if (!isLinux) {
+    try {
+      terminal.loadAddon(new LigaturesAddon());
+    } catch {
+      // Keep terminal startup resilient when the active font doesn't support ligatures.
+    }
   }
   terminal.open(wrapper);
 
@@ -854,6 +914,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     pendingWrites: [],
     pendingWriteLength: 0,
     pendingWriteBytes: 0,
+    lastWriteFlushAt: 0,
+    deferredAddonTimer: null,
     linkMatchCache: new Map(),
     outputEventVersion: 0,
     snapshotReconcileRequestId: 0,
@@ -875,8 +937,45 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     entry.runtimeEnv = config.runtimeEnv;
   }
 
+  // Defer ImageAddon initialization off the critical open path so the first
+  // shell prompt paints faster without paying sixel/iTerm-image setup upfront.
+  entry.deferredAddonTimer = window.setTimeout(() => {
+    entry.deferredAddonTimer = null;
+    if (entry.disposed) return;
+    try {
+      entry.terminal.loadAddon(new ImageAddon());
+    } catch {
+      // Optional image protocol support; ignore if unavailable.
+    }
+  }, DEFERRED_ADDON_LOAD_DELAY_MS);
+
   scheduleFontSettleRefit(entry);
   entry.querySuppressionDispose = suppressQueryResponses(terminal);
+
+  // Shells (zsh vi-mode, starship, oh-my-zsh, readline) commonly emit steady
+  // DECSCUSR (CSI 2/4/6 SP q) or DEC private mode 12 reset (CSI ? 12 l), which
+  // overrides xterm's `cursorBlink: true` via `decPrivateModes.cursorBlink`.
+  // Preserve the requested cursor shape while keeping blinking enabled.
+  entry.terminalDisposables.push(
+    terminal.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+      const rawCode = params[0];
+      const code = typeof rawCode === "number" ? rawCode : 0;
+      const nextStyle: NonNullable<SynaraTerminalOptions["cursorStyle"]> =
+        code === 1 || code === 2
+          ? "block"
+          : code === 3 || code === 4
+            ? "underline"
+            : code === 5 || code === 6
+              ? "bar"
+              : TERMINAL_CURSOR_STYLE;
+      terminal.options.cursorStyle = nextStyle;
+      terminal.options.cursorBlink = true;
+      return true;
+    }),
+    terminal.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      return params.length === 1 && params[0] === 12;
+    }),
+  );
 
   const handleCopy = (event: ClipboardEvent) => {
     const selection = terminal.getSelection();
@@ -932,6 +1031,44 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       !event.shiftKey
     ) {
       return true;
+    }
+
+    // Linux/Windows terminal clipboard ergonomics: Ctrl+Shift+C copies the active
+    // selection instead of leaking SIGINT (^C) to the running command, and
+    // Ctrl+Shift+V pastes from the clipboard into the PTY.
+    if (
+      event.type === "keydown" &&
+      !isMacPlatform(getNavigatorPlatform()) &&
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      const loweredKey = event.key.toLowerCase();
+      if (loweredKey === "c") {
+        const selection = terminal.getSelection();
+        if (selection) {
+          event.preventDefault();
+          event.stopPropagation();
+          const trimmed = selection.replace(/[^\S\n]+$/gm, "");
+          void navigator.clipboard?.writeText(trimmed).catch(() => undefined);
+          return false;
+        }
+        return false;
+      }
+      if (loweredKey === "v") {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            if (text && !entry.disposed) {
+              terminal.paste(text);
+            }
+          })
+          .catch(() => undefined);
+        return false;
+      }
     }
 
     const navigationData = terminalNavigationShortcutData(event);
@@ -1263,7 +1400,12 @@ export function updateRuntimeViewState(
     } else if (!nextViewState.isVisible && wasVisible) {
       cancelScheduledVisualResize(entry);
       stopVisibilityRecovery(entry);
-      disposeWebglAddon(entry);
+      // Keep the WebGL context warm while under the global pool cap so toggling
+      // a compact bottom terminal off/on doesn't stall recreating GPU state on
+      // Linux/Mesa; contexts over the cap are evicted lazily on next open.
+      if (activeWebglEntries.size > MAX_WARM_WEBGL_CONTEXTS) {
+        disposeWebglAddon(entry);
+      }
       clearAttachDisposables(entry);
     }
   }
@@ -1289,6 +1431,10 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
 export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   detachRuntimeFromContainer(entry);
   entry.disposed = true;
+  if (entry.deferredAddonTimer !== null) {
+    window.clearTimeout(entry.deferredAddonTimer);
+    entry.deferredAddonTimer = null;
+  }
   // Closing a terminal should not synchronously paint queued output into a buffer
   // that is about to be destroyed; acknowledge and drop it to keep close latency low.
   clearPendingWrites(entry);
