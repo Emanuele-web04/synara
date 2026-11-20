@@ -92,7 +92,7 @@ export function ComposerModelMenuTrigger(props: {
       variant="chrome"
       disabled={props.disabled ?? false}
       className={cn(
-        "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
+        "min-w-0 max-w-full shrink justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
       aria-label={t("chat:modelEffort_changeModelAndReasoning")}
@@ -135,7 +135,10 @@ export function ComposerModelMenuTrigger(props: {
           {props.hideModelLabel ? (
             <span className="sr-only">{label.modelLabel}</span>
           ) : (
-            <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+            <span
+              data-composer-model-label=""
+              className="min-w-0 truncate text-[var(--color-text-foreground)]"
+            >
               {label.modelLabel}
             </span>
           )}

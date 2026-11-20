@@ -411,6 +411,7 @@ import { WorkflowRunCapsule } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import {
   ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
+  ENVIRONMENT_DOCKED_MIN_COLUMN_WIDTH_PX,
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
@@ -501,6 +502,7 @@ import { useStopBackgroundTask } from "./chat/useThreadBackgroundTasks";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
+  COMPOSER_MODEL_LABEL_MIN_VISIBLE_WIDTH_PX,
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
   shouldUseCompactComposerFooter,
@@ -3312,11 +3314,29 @@ export default function ChatView({
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
   const isMobileViewport = useIsMobile();
+  const [mainContentElement, setMainContentElement] = useState<HTMLDivElement | null>(null);
+  const [isNarrowChatColumn, setIsNarrowChatColumn] = useState(false);
+  // A sidebar slide changes width every frame. Remember only the docking threshold.
+  useLayoutEffect(() => {
+    if (!mainContentElement) return;
+    const update = () => {
+      const width = mainContentElement.clientWidth;
+      setIsNarrowChatColumn(width > 0 && width < ENVIRONMENT_DOCKED_MIN_COLUMN_WIDTH_PX);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(mainContentElement);
+    return () => observer.disconnect();
+  }, [mainContentElement]);
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
   const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
+    isTerminalEnvironmentContext ||
+    isMobileViewport ||
+    rightDockOpen ||
+    surfaceMode === "split" ||
+    isNarrowChatColumn;
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
@@ -3643,10 +3663,17 @@ export default function ChatView({
           nextCompact &&
           leadingCluster !== null &&
           leadingCluster.scrollWidth > leadingCluster.clientWidth + 1;
+        const modelLabel = footerRow.querySelector<HTMLElement>("[data-composer-model-label]");
+        // Shed secondary controls first. Keep an ellipsized model name while it is legible.
+        const modelLabelNeedsSpace =
+          modelLabel !== null &&
+          modelLabel.scrollWidth > modelLabel.clientWidth + 1 &&
+          (composerFooterTierRef.current < 2 ||
+            modelLabel.clientWidth < COMPOSER_MODEL_LABEL_MIN_VISIBLE_WIDTH_PX);
         const nextStep = resolveNextComposerFooterTier({
           currentTier: composerFooterTierRef.current,
           clientWidth: footerRow.clientWidth,
-          isOverflowing: rowOverflows || leadingClips,
+          isOverflowing: rowOverflows || leadingClips || modelLabelNeedsSpace,
           demotionWidths: composerFooterDemotionWidthsRef.current,
         });
         composerFooterDemotionWidthsRef.current = nextStep.demotionWidths;
@@ -3664,16 +3691,13 @@ export default function ChatView({
     if (typeof ResizeObserver === "undefined") return;
 
     const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
-      if (!entry) return;
-
       syncComposerFooterLayout();
-
-      const nextHeight = entry.contentRect.height;
-      composerFormHeightRef.current = nextHeight;
+      const formEntry = entries.find((entry) => entry.target === composerForm);
+      if (formEntry) composerFormHeightRef.current = formEntry.contentRect.height;
     });
 
     observer.observe(composerForm);
+    if (composerStatusRowRef.current) observer.observe(composerStatusRowRef.current);
     return () => {
       observer.disconnect();
     };
@@ -5773,9 +5797,7 @@ export default function ChatView({
   const environmentInsetPx = environmentAppliesContentInset
     ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
     : 0;
-  // Only the preview's budget follows the column width, so a sidebar slide or window resize
-  // does not re-render the chat on every frame.
-  const [mainContentElement, setMainContentElement] = useState<HTMLDivElement | null>(null);
+  // The preview tracks its capped budget so column width alone does not trigger renders.
   const previewBudgetPx = useComputerPreviewBudgetPx({
     column: mainContentElement,
     environmentInsetPx,
@@ -7407,7 +7429,7 @@ export default function ChatView({
                         ) : (
                           <div className="min-w-0 flex-1" />
                         )}
-                        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
+                        <div className="ml-auto flex min-w-0 shrink items-center gap-2 pr-1">
                           {composerPickerControls}
                           {composerContextMeter}
                         </div>
