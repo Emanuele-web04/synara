@@ -505,16 +505,15 @@ layer("OrchestrationEventStore", (it) => {
         threadId,
         sequenceExclusive: creation.sequence,
         throughSequenceInclusive: second.sequence,
-        eventTypes: ["thread.archived", "thread.unarchived"],
-        limit: 1,
+        limit: 2,
       };
       assert.isFalse(yield* eventStore.canReplayThreadEventsInRange(range));
-      assert.isTrue(yield* eventStore.canReplayThreadEventsInRange({ ...range, limit: 2 }));
+      assert.isTrue(yield* eventStore.canReplayThreadEventsInRange({ ...range, limit: 3 }));
       assert.isFalse(
         yield* eventStore.canReplayThreadEventsInRange({
           ...range,
           sequenceExclusive: creation.sequence - 1,
-          limit: 2,
+          throughSequenceInclusive: creation.sequence - 1,
         }),
       );
       assert.isTrue(
@@ -527,6 +526,7 @@ layer("OrchestrationEventStore", (it) => {
         yield* eventStore.canReplayThreadEventsInRange({
           ...range,
           throughSequenceInclusive: unrelated.sequence,
+          limit: 1,
         }),
       );
     }),

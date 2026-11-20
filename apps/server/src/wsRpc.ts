@@ -1890,7 +1890,6 @@ const makeWsRpcHandlersLayer = () =>
                     threadId: input.threadId,
                     sequenceExclusive,
                     throughSequenceInclusive,
-                    eventTypes: THREAD_DETAIL_EVENT_TYPES,
                     limit,
                   })
                   .pipe(

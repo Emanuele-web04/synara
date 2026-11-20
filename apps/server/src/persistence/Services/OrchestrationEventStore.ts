@@ -80,7 +80,6 @@ export interface OrchestrationEventStoreShape {
     readonly threadId: string;
     readonly sequenceExclusive: number;
     readonly throughSequenceInclusive: number;
-    readonly eventTypes: ReadonlyArray<string>;
     readonly limit: number;
   }) => Effect.Effect<boolean, OrchestrationEventStoreError>;
 
