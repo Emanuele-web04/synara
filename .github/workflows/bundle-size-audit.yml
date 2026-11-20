@@ -1,0 +1,15 @@
+name: Desktop bundle size audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep the original manual entry point on the same exact-source verification
+# path. Both callers use one stage identity and measurement implementation.
+jobs:
+  verify:
+    uses: ./.github/workflows/bundle-size-final.yml
+    with:
+      build_version: 0.8.4
