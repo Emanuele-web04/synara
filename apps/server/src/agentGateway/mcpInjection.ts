@@ -8,7 +8,7 @@
  * - Codex: a shared endpoint-only TOML block plus per-thread HTTP authorization,
  *   or the legacy `bearer_token_env_var` transport for environment-based callers.
  * - Claude Agent SDK: `mcpServers` record with an HTTP entry.
- * - ACP agents (cursor/grok/droid): `mcpServers` session entries; HTTP when
+ * - ACP agents (cursor/grok/droid/antigravity): `mcpServers` session entries; HTTP when
  *   the agent advertises `mcpCapabilities.http`, otherwise a stdio proxy that
  *   forwards to the HTTP endpoint.
  *
@@ -241,50 +241,6 @@ export function buildClaudeMcpServers(
 }
 
 export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
-
-export interface AntigravityMcpPluginConfig {
-  readonly mcpServers: Record<
-    string,
-    {
-      readonly command: string;
-      readonly args: ReadonlyArray<string>;
-      readonly env: Record<string, string>;
-      readonly disabled: false;
-      readonly disabledTools: ReadonlyArray<string>;
-    }
-  >;
-}
-
-/**
- * Build the secret-free MCP fragment installed with Synara's Antigravity
- * plugin. Antigravity expands the endpoint plus a one-shot bootstrap value
- * from each `agy` process. The stdio proxy consumes that value during MCP
- * initialization and keeps the exchanged session bearer in its own memory,
- * so `run_command` descendants never inherit the bearer.
- *
- * `ELECTRON_RUN_AS_NODE` keeps the generated proxy runnable when a packaged
- * desktop uses its Electron executable as `process.execPath`; it is harmless
- * for regular Node and Bun executables.
- */
-export function buildAntigravityMcpPluginConfig(
-  stdioProxy: AcpStdioProxySpawn,
-): AntigravityMcpPluginConfig {
-  return {
-    mcpServers: {
-      [SYNARA_MCP_SERVER_NAME]: {
-        command: stdioProxy.command,
-        args: [...stdioProxy.args],
-        env: {
-          [SYNARA_AGENT_GATEWAY_URL_ENV]: `$${SYNARA_AGENT_GATEWAY_URL_ENV}`,
-          [SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]: `$${SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV}`,
-          ELECTRON_RUN_AS_NODE: "1",
-        },
-        disabled: false,
-        disabledTools: [],
-      },
-    },
-  };
-}
 
 // Structural view of an ACP initialize response so callers with untyped
 // (raw JSON) responses can reuse the same transport negotiation.

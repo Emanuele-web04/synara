@@ -3082,22 +3082,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
-    it.effect("rejects versions that predate --new-project support", () =>
+    it.effect("rejects versions that predate agy acp", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus();
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.available, false);
-        assert.strictEqual(status.version, "1.0.11");
+        assert.strictEqual(status.version, "1.4.12");
         assert.strictEqual(
           status.message,
-          "Antigravity CLI 1.0.11 is too old for Synara. Upgrade to 1.0.12 or newer.",
+          "Antigravity CLI 1.4.12 is too old for Synara. Upgrade to 1.5.0 or newer.",
         );
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.0.11\n", stderr: "", code: 0 };
+              return { stdout: "Antigravity CLI 1.4.12\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -3112,7 +3112,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
-        assert.strictEqual(status.version, "1.1.2");
+        assert.strictEqual(status.version, "1.5.13");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
@@ -3120,7 +3120,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+              return { stdout: "Antigravity CLI 1.5.13\n", stderr: "", code: 0 };
             }
             if (joined === "models") {
               return {
