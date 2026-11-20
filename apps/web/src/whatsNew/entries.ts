@@ -22,6 +22,54 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.4",
+    date: "Nov 20",
+    features: [
+      {
+        id: "antigravity-connectors",
+        title: "Use connectors with Antigravity",
+        description:
+          "Antigravity can use Synara tools and connected services such as Notion and Linear. Chat shows live tool activity, reasoning, and questions in the same format as other providers.",
+        details:
+          "Requires Antigravity CLI 1.5.0 or newer. Start a new session to pick up newly connected services.",
+      },
+      {
+        id: "remote-thread-resume",
+        title: "Resume Remote chats with less data",
+        description:
+          "A cached chat can catch up on its own changes after unrelated activity on the desktop. Synara still reloads the full chat when it needs a fresh snapshot.",
+        details:
+          "In a loopback benchmark with 400 chats and 1,500 messages in the active chat, one sparse catch-up returned about 2 KB, down from 676 KB. Median time to apply the update in the iOS Simulator fell from 73 ms to 55 ms.",
+      },
+      {
+        id: "compact-chat-layout",
+        title: "Smoother sidebars and more room in chat",
+        description:
+          "The Environment panel floats when chat gets narrow, overlay cards stay within the chat column, and the composer keeps the model name visible longer.",
+        details:
+          "In a Chromium profile with four empty chat tabs, sidebar open and close each went from 14–16 React commits to 3.",
+      },
+      {
+        id: "codex-tool-summaries",
+        title: "Cleaner Codex tool summaries",
+        description:
+          "Reasoning stays with the surrounding tool run without adding to its tool count. MCP startup failures and app-server logs stay in diagnostics. Failed tool calls and turns remain visible in chat.",
+      },
+      {
+        id: "pull-request-attribution",
+        title: "Optional pull request attribution",
+        description:
+          "New pull requests created through Synara include a Created with Synara link by default. Turn it off in Settings → Models & writing → Add Synara attribution.",
+      },
+      {
+        id: "mac-worktree-setup",
+        title: "Restore macOS worktree setup",
+        description:
+          "New worktrees start without cloned dependencies. Use your project setup script or install dependencies in the new worktree.",
+      },
+    ],
+  },
+  {
     version: "1.6.3",
     date: "Nov 19",
     features: [

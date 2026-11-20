@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.4 — 2026-11-20
+
+**Antigravity connectors, lighter Remote reconnects, and more usable narrow chats.**
+
+### Added
+
+- Antigravity sessions can use Synara tools and connected services such as Notion and Linear. The new ACP integration streams reasoning, tool activity, context usage, and questions, and resumes existing conversations. Requires Antigravity CLI 1.5.0 or newer. Start a new session to pick up newly connected services. ([#2233](https://github.com/Emanuele-web04/synara/pull/2233))
+- New pull requests created through Synara include a “Created with Synara” link by default. Turn it off in **Settings → Models & writing → Add Synara attribution**. ([#2229](https://github.com/Emanuele-web04/synara/pull/2229))
+
+### Changed
+
+- Remote can catch up a cached chat using just that chat's changes, even after heavy unrelated desktop activity. In an authenticated loopback benchmark with 400 chats and 1,500 messages in the active chat, a sparse catch-up response fell from about 676 KB to 2 KB. In the same fixture, the iOS Simulator applied the update in a median of 55 ms, down from 73 ms. Full snapshots still cover dense gaps and recreated chats. ([#2234](https://github.com/Emanuele-web04/synara/pull/2234))
+- Opening or closing the sidebar avoids per-frame chat renders when the computer preview size stays the same. In an isolated Chromium profile with four empty chat tabs, a sidebar toggle went from 14–16 React commits to 3. ([#2231](https://github.com/Emanuele-web04/synara/pull/2231))
+- Removed the automatic APFS clone of `node_modules` introduced in 1.6.3 after it slowed down worktree creation in practice. Worktree setup scripts and manual dependency installs are available as before. ([#2230](https://github.com/Emanuele-web04/synara/pull/2230))
+
+### Fixed
+
+- In narrow chats, Environment switches to a floating panel, Environment, Project, and Library overlays fit the chat column, and the composer keeps more of the model name visible. ([#2237](https://github.com/Emanuele-web04/synara/pull/2237))
+- Codex reasoning stays inside the surrounding tool summary without adding to the tool count. App-server stderr and MCP startup failures stay in diagnostics across live and saved chats. Failed tool calls and turns still appear in the transcript. ([#2228](https://github.com/Emanuele-web04/synara/pull/2228))
+- Antigravity tool updates from long-running processes stay on the originating turn when they arrive during a follow-up. ([#2238](https://github.com/Emanuele-web04/synara/pull/2238))
+
+### Verification
+
+The release workflow gates publication on workspace checks, server tests, native packaging, provenance, and packaged startup. macOS requires signing and notarization. Windows x64 uses the version-scoped unsigned exception and requires Microsoft Defender scanning. Manual installation, installed-app upgrades, and live provider sessions are outside these automated checks.
+
 ## 1.6.3 — 2026-11-19
 
 **Faster long chats, live tool activity, and dependency seeding for macOS worktrees.**
