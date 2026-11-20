@@ -224,7 +224,7 @@ export function ChatComposerFooter({
               : "col-start-3 row-start-1 shrink-0"
             : voiceActive
               ? "min-w-0 flex-1"
-              : "shrink-0",
+              : "min-w-0 shrink",
         )}
       >
         {contextMeter}

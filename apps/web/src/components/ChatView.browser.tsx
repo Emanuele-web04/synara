@@ -6239,6 +6239,83 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([false, true])(
+    "[geometry:linux] keeps Environment open when the chat narrows with default open set to %s",
+    async (environmentPanelDefaultOpen) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ environmentPanelDefaultOpen }),
+      );
+      const wide = { ...DEFAULT_VIEWPORT, width: 1_400 };
+      const narrow = { ...DEFAULT_VIEWPORT, width: 800 };
+      const mounted = await mountChatView({
+        viewport: wide,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("environment-layout"),
+          targetText: "Keep the chat readable",
+        }),
+      });
+
+      const openPanel = () =>
+        document.querySelector('[data-environment-panel-variant][aria-hidden="false"]');
+
+      try {
+        if (!environmentPanelDefaultOpen) {
+          await page.getByRole("button", { name: "Toggle environment panel" }).click();
+        }
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("docked");
+        await mounted.setViewport(narrow);
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("floating");
+        await mounted.setViewport(wide);
+        await expect
+          .poll(() => openPanel()?.getAttribute("data-environment-panel-variant"))
+          .toBe("docked");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("[geometry:linux] keeps part of a long model name visible in a narrow composer", async () => {
+    const model = "fixture-model-with-a-deliberately-long-name-".repeat(4) + "v1";
+    const modelName = "Fixture Model With A Deliberately Long Name ".repeat(4) + "V1";
+    const modelSelection = { provider: "codex", model } as const;
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, modelSelection);
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 800 },
+      snapshot: createSnapshotForTargetUser({
+        modelSelection,
+        targetMessageId: MessageId.makeUnsafe("long-model-label"),
+        targetText: "Keep the selected model legible",
+      }),
+    });
+
+    try {
+      const trigger = page.getByRole("button", { name: "Change model and reasoning" });
+      await expect.element(trigger).toBeVisible();
+      await expect
+        .poll(() => {
+          const label = Array.from(trigger.element().querySelectorAll("span")).find(
+            (span) => span.textContent === modelName && span.children.length === 0,
+          );
+          return {
+            text: label?.textContent ?? trigger.element().textContent,
+            legible: (label?.clientWidth ?? 0) > 50,
+            truncated: label !== undefined && label.scrollWidth > label.clientWidth,
+            width: label?.clientWidth,
+            renderedWidth: trigger.element().getBoundingClientRect().width,
+          };
+        })
+        .toMatchObject({ text: modelName, legible: true, truncated: true });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows transport recovery without auto-following a detached transcript", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
