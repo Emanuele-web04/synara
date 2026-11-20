@@ -251,7 +251,7 @@ describe("EscapeKillSwitchMonitor", () => {
         monitor.setArmed(false);
         activation = monitor.activate();
       }
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       await activation;
       expect(monitor.state.ready).toBe(false);
       expect(stalled.kill).toHaveBeenCalledWith("SIGTERM");

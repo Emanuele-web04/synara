@@ -114,6 +114,7 @@ import { makeConnectorTools } from "../connectorTools.ts";
 import { McpConnectors } from "../../mcpConnectors/Services/McpConnectors.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
+import { makeComputerAttachmentTools } from "../computerAttachmentTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
@@ -1597,6 +1598,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         })
       : [];
 
+  const computerAttachmentTools =
+    computerService?.supported === true
+      ? makeComputerAttachmentTools({ browserTools, computerBrowserTools, resolveWorkspaceRoot })
+      : [];
+
   const kanbanTools = makeAgentGatewayKanbanTools({
     snapshotQuery,
     workspacePaths: {
@@ -1786,10 +1792,11 @@ export const makeAgentGateway = Effect.gen(function* () {
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
           requestForegroundConsent: requestComputerForegroundConsent,
           resolveSpaceDesignation: resolveComputerSpaceDesignation,
-          relatedTools: computerBrowserTools,
+          relatedTools: [...computerBrowserTools, ...computerAttachmentTools],
         })
       : []),
     ...computerBrowserTools,
+    ...computerAttachmentTools,
     // Offer Hub tools only when the authoritative shared feature policy enables them.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
   ];

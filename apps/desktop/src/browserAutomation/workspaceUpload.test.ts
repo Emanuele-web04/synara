@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { runInNewContext } from "node:vm";
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative } from "node:path";
@@ -99,7 +100,14 @@ const createRuntime = (
       objectId: "file-input",
       files: options.uploadFiles,
     });
-    return {};
+    return {
+      selectedFiles: await Promise.all(
+        (options.uploadFiles ?? []).map(async (path) => ({
+          name: basename(path),
+          byteLength: (await stat(path)).size,
+        })),
+      ),
+    };
   });
   if (uploadConfiguration) {
     configureWorkspaceUploadForTests(webContents, uploadConfiguration);
@@ -488,4 +496,87 @@ describe("workspace-confined browser upload", () => {
     lifecycle.emit("destroyed");
     await eventuallyMissing(stagedPaths[1] ?? "");
   });
+});
+
+describe("file-input selection evidence", () => {
+  it.each(["match", "cleared", "wrong-name", "wrong-size", "extra", "detached", "unreadable"])(
+    "executes the generated selection/readback code for %s",
+    async (outcome) => {
+      const { base, workspaceRoot } = await workspaceFixture();
+      let dispatchedPaths: readonly string[] = [];
+      const { runtime, lifecycle, sendCommand } = createRuntime(
+        (files) => {
+          dispatchedPaths = files;
+        },
+        { userDataRoot: join(base, "user-data") },
+      );
+      class Input {
+        type = "file";
+        multiple = false;
+        isConnected = true;
+        files: { name: string; size: number }[] = [];
+        matches() {
+          return false;
+        }
+        getAttribute() {
+          return null;
+        }
+      }
+      const input = new Input();
+      let evaluations = 0;
+      const target = {
+        count: async () => 1,
+        evaluate: async (callback: (element: Input) => unknown) => {
+          evaluations += 1;
+          if (outcome === "unreadable" && evaluations > 1) throw new Error("Target gone");
+          return callback(input);
+        },
+        setInputFiles: async (files: readonly string[]) => {
+          await runtime.webContents.debugger.sendCommand("DOM.setFileInputFiles", { files });
+          input.files = [{ name: "avatar.txt", size: 6 }];
+          if (outcome === "cleared") input.files = [];
+          if (outcome === "wrong-name") input.files[0]!.name = "different.txt";
+          if (outcome === "wrong-size") input.files[0]!.size = 7;
+          if (outcome === "extra") input.files.push({ name: "extra.txt", size: 0 });
+          if (outcome === "detached") input.isConnected = false;
+        },
+      };
+      vi.mocked(runBetterwright).mockImplementation(
+        (options) =>
+          runInNewContext(`(async () => {${options.code}})()`, {
+            page: { locator: () => target },
+            HTMLInputElement: Input,
+          }) as ReturnType<typeof runBetterwright>,
+      );
+      const result = uploadBrowserFiles(
+        runtime,
+        {
+          target: { selector: 'input[type="file"]' as BrowserCssSelector },
+          paths: ["fixtures/avatar.txt"],
+        },
+        workspaceRoot,
+      );
+      if (outcome === "match") {
+        await expect(result).resolves.toMatchObject({
+          selectionVerified: true,
+          files: [{ name: "avatar.txt", byteLength: 6 }],
+        });
+      } else {
+        await expect(result).rejects.toMatchObject({
+          browserError: {
+            code: "BrowserAmbiguousResult",
+            retryable: false,
+            effectMayHaveCommitted: true,
+          },
+        });
+      }
+      expect(
+        sendCommand.mock.calls.filter(([method]) => method === "DOM.setFileInputFiles"),
+      ).toHaveLength(1);
+      // Both confirmed and uncertain input retain staging until document teardown.
+      expect(await readFile(dispatchedPaths[0]!, "utf8")).toBe("avatar");
+      lifecycle.emit("destroyed");
+      await eventuallyMissing(dispatchedPaths[0]!);
+    },
+  );
 });

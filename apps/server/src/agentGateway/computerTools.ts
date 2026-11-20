@@ -1,3 +1,8 @@
+import {
+  COMPUTER_APP_PLAYBOOK_POLICY,
+  COMPUTER_APP_PLAYBOOK_TOPICS,
+  computerAppPlaybookEvidence,
+} from "./computerAppPlaybooks.ts";
 import { parseCuaActionDiagnostics } from "@synara/shared/cuaActionDiagnostics";
 import { ComputerProgressGuard, type ComputerProgressAction } from "./computerProgressGuard.ts";
 import { boundComputerPastePayload, readComputerPastePayload } from "./computerPasteInput.ts";
@@ -8,7 +13,7 @@ import {
 } from "../computer/computerElementIdentity.ts";
 import { makeComputerSpaceTools } from "./computerSpaceTools.ts";
 import { cursorToolActivity } from "../computer/cursorActivity.ts";
-import { waitForControl } from "../computer/waitForControl.ts";
+import { waitForControl, type ComputerControlWaitOptions } from "../computer/waitForControl.ts";
 import {
   assertDesktopOperationActive,
   desktopOperationSignal,
@@ -98,6 +103,7 @@ import {
   COMPUTER_HELP_INDEX,
   COMPUTER_HELP_SECTIONS,
   COMPUTER_HELP_TOPICS,
+  normalizeComputerHelpTopic,
   type ComputerHelpTopic,
 } from "./computerGuidance.ts";
 import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
@@ -517,7 +523,7 @@ const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
   include_screenshot: {
     type: "boolean",
     description:
-      "Post-action screenshot, default true. For a short sequence, use false then verify with fresh state or a final screenshot.",
+      "Screenshot defaults true. With false, verify with fresh state or a final screenshot.",
   },
 } as const;
 
@@ -526,7 +532,7 @@ const WINDOW_FOCUS_NOTE =
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  "Pass window_id or use the last aimed window; hover does not aim keys. Use a field ref or label to disambiguate text targets.";
+  "Pass window_id or use the last aimed window; hover does not aim keys. A ref targets a field.";
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
@@ -594,11 +600,13 @@ function validateInspectionArguments(
 
 /**
  * Per-app notes that change how the standard tools behave, attached once to
- * the first state read scoped to that app's window. Verified behavior only —
- * a hint that guesses teaches the model a wrong move it then has to unlearn.
+ * the first state read scoped to that app's window. Documentation-backed
+ * playbooks use a small discovery hint, not a claim of interaction testing.
  * Keyed by the lowercase appName computer_list_windows reports.
  */
 const APP_GUIDANCE: Record<string, string> = {
+  notion:
+    'Notion playbook: computer_help({topic:"notion"}). Documentation-backed; not interaction-tested.',
   slack: COMPUTER_HELP_SECTIONS.slack,
 };
 
@@ -606,8 +614,7 @@ function keyboardTargetProperty(): Record<string, unknown> {
   return {
     window_id: {
       type: "string",
-      description:
-        "Exact target window from computer_list_windows; does not activate it. Screenshot is scoped to it.",
+      description: "Exact observed window; does not activate it. Scopes the screenshot.",
     },
   };
 }
@@ -617,8 +624,7 @@ function textTargetProperty(): Record<string, unknown> {
     ...keyboardTargetProperty(),
     label: {
       type: "string",
-      description:
-        "Writable label from computer_get_state, scoped by window_id without activation.",
+      description: "Observed writable label, scoped by window_id.",
     },
     role: {
       type: "string",
@@ -671,8 +677,7 @@ function withActionScreenshotSchema(schema: Record<string, unknown>): Record<str
 const SCREENSHOT_ID_PROPERTY = {
   screenshot_id: {
     type: "string",
-    description:
-      "Frame for x/y; defaults to the latest screenshot. An earlier one must still be valid.",
+    description: "Frame for x/y; defaults to the latest valid screenshot.",
   },
 } as const;
 
@@ -688,8 +693,7 @@ const TARGET_PROPERTIES = {
   ...SCREENSHOT_ID_PROPERTY,
   label: {
     type: "string",
-    description:
-      "Exact label from computer_get_state; matched verbatim against fresh state, including surrounding spaces.",
+    description: "Exact observed label, matched verbatim including surrounding spaces.",
   },
   role: {
     type: "string",
@@ -698,13 +702,12 @@ const TARGET_PROPERTIES = {
   ref: {
     type: "integer",
     minimum: 0,
-    description:
-      "Ref from computer_get_state; distinguishes duplicates and stays bound to that element, never another.",
+    description: "Observed ref bound to that exact element, including unnamed controls.",
   },
   ref_ordinal: {
     type: "integer",
     minimum: 0,
-    description: "With label: zero-based index among same-labelled controls, when no ref is given.",
+    description: "With label and no ref: zero-based duplicate index.",
   },
 } as const;
 
@@ -715,7 +718,7 @@ function targetProperties(): Record<string, unknown> {
     window_id: {
       type: "string",
       description:
-        "Exact window for label or x/y targeting; outside coordinates are refused. For computer_scroll, window_id alone targets the window.",
+        "Exact window for label or x/y targeting; outside coordinates refuse. Scroll accepts window_id alone.",
     },
   };
 }
@@ -913,6 +916,21 @@ function readDelta(args: Record<string, unknown>, name: string): number {
   return value;
 }
 
+function limitScrollDelta(
+  args: Record<string, unknown>,
+  delta: { deltaX: number; deltaY: number },
+  region: ComputerRect,
+): { deltaX: number; deltaY: number } {
+  const mode = readStringArg(args, "scroll_mode") ?? "read";
+  if (mode !== "read" && mode !== "navigate")
+    throw new ToolInputError('scroll_mode must be "read" or "navigate".');
+  const viewports = mode === "navigate" ? 3 : 0.5;
+  // Stay inside the native 50-notch budget before gearing correction too.
+  const bound = (value: number, size: number) =>
+    Math.sign(value) * Math.min(Math.abs(value), size * viewports, 6_000);
+  return { deltaX: bound(delta.deltaX, region.width), deltaY: bound(delta.deltaY, region.height) };
+}
+
 function readScrollDelta(args: Record<string, unknown>): { deltaX: number; deltaY: number } {
   const deltaX = readNumberArg(args, "delta_x") ?? 0;
   const deltaY = readNumberArg(args, "delta_y") ?? 0;
@@ -942,6 +960,20 @@ function readRawRequiredString(args: Record<string, unknown>, name: string): str
   const value = args[name];
   if (typeof value !== "string") throw new ToolInputError(`Argument "${name}" must be a string.`);
   return value;
+}
+
+function readTypingMode(args: Record<string, unknown>): "auto" | "keyboard" {
+  const mode = readStringArg(args, "typing_mode") ?? "auto";
+  if (mode !== "auto" && mode !== "keyboard")
+    throw new ToolInputError('typing_mode must be "auto" or "keyboard".');
+  if (mode === "keyboard") {
+    if (!readWindowIdArg(args)) throw new ToolInputError("Keyboard text entry requires window_id.");
+    if (["label", "role", "ref", "ref_ordinal", "refOrdinal"].some((key) => args[key] != null))
+      throw new ToolInputError(
+        "Keyboard text entry uses the window's focused field, not an element ref.",
+      );
+  }
+  return mode;
 }
 
 function readRequiredText(args: Record<string, unknown>): string {
@@ -1196,6 +1228,54 @@ function readWaitDurationMs(args: Record<string, unknown>): number {
   const value = readNumberArg(args, "duration_ms");
   if (value === undefined) throw new ToolInputError('Missing required argument "duration_ms".');
   return Math.min(COMPUTER_WAIT_MAX_MS, Math.max(0, Math.floor(value)));
+}
+
+const CONTROL_WAIT_PROPERTIES = {
+  absent: { type: "boolean", description: "Wait for the named control to disappear." },
+  value_equals: {
+    type: "string",
+    maxLength: COMPUTER_TEXT_MAX_LENGTH,
+    description:
+      "Wait for an exact accessibility value, including empty text. Not app save/upload proof.",
+  },
+  stable_ms: {
+    type: "integer",
+    minimum: 0,
+    maximum: COMPUTER_WAIT_MAX_MS,
+    description: "Require matching observations across this interval, within duration_ms.",
+  },
+} as const;
+
+function readControlWaitOptions(
+  args: Record<string, unknown>,
+  durationMs: number,
+): ComputerControlWaitOptions {
+  const absent = readBooleanArg(args, "absent") === true;
+  const valueEquals = args.value_equals;
+  const stableMs = readNumberArg(args, "stable_ms");
+  if (
+    valueEquals !== undefined &&
+    (typeof valueEquals !== "string" || valueEquals.length > COMPUTER_TEXT_MAX_LENGTH)
+  )
+    throw new ToolInputError('"value_equals" must be bounded text.');
+  if (
+    stableMs !== undefined &&
+    (!Number.isInteger(stableMs) || stableMs < 0 || stableMs > durationMs)
+  )
+    throw new ToolInputError('"stable_ms" must be an integer within duration_ms.');
+  if (absent && valueEquals !== undefined)
+    throw new ToolInputError('"absent" cannot combine with "value_equals".');
+  return {
+    absent,
+    ...(typeof valueEquals === "string" ? { valueEquals } : {}),
+    ...(stableMs === undefined ? {} : { stableMs }),
+  };
+}
+
+function hasControlWaitCondition(options: ComputerControlWaitOptions): boolean {
+  return (
+    options.absent === true || options.valueEquals !== undefined || options.stableMs !== undefined
+  );
 }
 
 function isToolResult(value: unknown): value is McpToolCallResult {
@@ -1842,6 +1922,7 @@ export function makeAgentGatewayComputerTools(
   };
 
   const progressGuard = new ComputerProgressGuard();
+  const uncertainObservations = new WeakMap<CuaActionError, McpToolCallResult>();
 
   /**
    * The calls that mutate the desktop — the approval taxonomy minus its one
@@ -2155,6 +2236,7 @@ export function makeAgentGatewayComputerTools(
                   abortSignal,
                   context.callerTurnId ?? undefined,
                   name === "computer_type_text" &&
+                    args.typing_mode !== "keyboard" &&
                     args.delivery_mode !== "foreground" &&
                     manager.supportsFocusNeutralSemanticText &&
                     readWindowIdArg(args) !== undefined
@@ -2203,24 +2285,32 @@ export function makeAgentGatewayComputerTools(
               Array.isArray(batch?.steps)
                 ? batch.steps.find((step) => typeof step.error?.code === "string")?.error?.code
                 : undefined;
-            // Correlated scroll travel is evidence of progress even when the
-            // native wheel dispatch cannot itself verify delivery. A fresh
-            // image alone, or zero/unknown travel, never clears uncertainty.
-            const measuredScrollProgress =
-              name === "computer_scroll" &&
-              successEffect === "dispatched-unknown" &&
-              typeof measured?.scroll?.traveledY === "number" &&
-              Number.isFinite(measured.scroll.traveledY) &&
-              measured.scroll.traveledY !== 0;
+            const scroll = payload as
+              | { scrollObservation?: { status?: string }; scroll?: { traveledY?: number } }
+              | undefined;
             const inlineVerifiedProgress =
               batchProgress?.resolvedTargetKey !== undefined &&
               batchProgress.verifiedWindowIds.includes(batchProgress.resolvedTargetKey);
             const resolvedTargetKey = batchProgress?.resolvedTargetKey ?? resultWindowId;
-            progressGuard.record(progressAction, {
-              effect: measuredScrollProgress || inlineVerifiedProgress ? "verified" : successEffect,
-              ...(resolvedTargetKey === undefined ? {} : { resolvedTargetKey }),
-              ...(typeof refusalCode === "string" ? { code: refusalCode } : {}),
-            });
+            if (
+              name === "computer_scroll" &&
+              successEffect !== "not-dispatched" &&
+              resultWindowId === progressAction.targetKey &&
+              scroll?.scrollObservation?.status === "movement-observed" &&
+              typeof scroll.scroll?.traveledY === "number" &&
+              Number.isFinite(scroll.scroll.traveledY) &&
+              scroll.scroll.traveledY !== 0
+            ) {
+              // Pixel-correlated movement proves navigation progress, not that
+              // earlier paste/typing on this window succeeded. Keep its history.
+              progressGuard.recordVerifiedActionProgress(progressAction);
+            } else {
+              progressGuard.record(progressAction, {
+                effect: inlineVerifiedProgress ? "verified" : successEffect,
+                ...(resolvedTargetKey === undefined ? {} : { resolvedTargetKey }),
+                ...(typeof refusalCode === "string" ? { code: refusalCode } : {}),
+              });
+            }
           }
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
@@ -2314,7 +2404,8 @@ export function makeAgentGatewayComputerTools(
                   }
                 : error instanceof CuaActionError
                   ? {
-                      ...mcpToolResultJson(cuaActionErrorPayload(error)),
+                      ...(uncertainObservations.get(error) ??
+                        mcpToolResultJson(cuaActionErrorPayload(error))),
                       isError: true,
                     }
                   : error instanceof ComputerTargetError
@@ -2374,7 +2465,7 @@ export function makeAgentGatewayComputerTools(
             description:
               name === "computer_invoke_menu"
                 ? "This menu route is always foreground and requires the user's explicit visible-use request."
-                : "Background by default. Foreground requires the user's own task to ask to see the screen. Never replay uncertain input.",
+                : "Default background. Foreground needs visible-use consent. Never replay uncertain input.",
           },
         },
       },
@@ -2520,7 +2611,44 @@ export function makeAgentGatewayComputerTools(
           if (readBooleanArg(args, "include_screenshot") === false)
             throw new Error("wait_for_label requires the action screenshot.");
         }
-        const outcome = await run(args, context);
+        let outcome: ObservedActionOutcome;
+        try {
+          outcome = await run(args, context);
+        } catch (error) {
+          // Count/timeout failures can follow a complete edit. Supply the
+          // exact window's recovery view in this result, without replaying,
+          // promoting the verdict, or treating this as a human resume gesture.
+          if (
+            error instanceof CuaActionError &&
+            error.effect === "dispatched-unknown" &&
+            !error.inputPause &&
+            readBooleanArg(args, "include_screenshot") !== false
+          ) {
+            assertDesktopOperationActive();
+            const windowId =
+              readWindowIdArg(args) ??
+              (typeof args.ref === "number"
+                ? elementRefTables.get(context.callerThreadId)?.entries.get(args.ref)?.windowId
+                : undefined);
+            if (windowId) {
+              try {
+                const capture = await manager.captureActionScreenshot(
+                  windowId,
+                  undefined,
+                  context.callerThreadId,
+                );
+                assertDesktopOperationActive();
+                const observed = withObservation(context, cuaActionErrorPayload(error), capture);
+                if (isToolResult(observed)) uncertainObservations.set(error, observed);
+                else if (capture) uncertainObservations.set(error, mcpToolResultJson(observed));
+              } catch {
+                assertDesktopOperationActive();
+                // A perception failure cannot replace the original input verdict.
+              }
+            }
+          }
+          throw error;
+        }
         const result = "result" in outcome ? outcome.result : outcome;
         const observed = [
           "computer_click",
@@ -2610,9 +2738,10 @@ export function makeAgentGatewayComputerTools(
     click: [...RUN_TARGET_FIELDS, "modifiers", "count", "button"],
     move_cursor: RUN_TARGET_FIELDS,
     drag: ["from", "to", "duration_ms"],
-    scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers"],
+    scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers", "scroll_mode"],
     type_text: [
       "text",
+      "typing_mode",
       "label",
       "role",
       "ref",
@@ -2648,6 +2777,7 @@ export function makeAgentGatewayComputerTools(
     ],
     wait: [
       "duration_ms",
+      "settle",
       "label",
       "role",
       "ref",
@@ -2656,6 +2786,8 @@ export function makeAgentGatewayComputerTools(
       "window_id",
       "windowId",
       "absent",
+      "value_equals",
+      "stable_ms",
     ],
     activate_window: ["window_id", "windowId"],
     launch_app: ["app", "arguments", "wait_for_window", "hidden"],
@@ -2730,12 +2862,7 @@ export function makeAgentGatewayComputerTools(
             : resolved;
         const requestedDelta = readScrollDelta(step);
         const delta = screenshotDeltaToDesktop(frame, requestedDelta.deltaX, requestedDelta.deltaY);
-        const limited = {
-          deltaX:
-            Math.sign(delta.deltaX) * Math.min(Math.abs(delta.deltaX), frame.region.width / 2),
-          deltaY:
-            Math.sign(delta.deltaY) * Math.min(Math.abs(delta.deltaY), frame.region.height / 2),
-        };
+        const limited = limitScrollDelta(step, delta, frame.region);
         const modifiers = readModifiers(step);
         return async () => {
           const outcome = await manager.scrollCalibrated(
@@ -2763,7 +2890,10 @@ export function makeAgentGatewayComputerTools(
       }
       case "type_text": {
         const text = readRequiredText(step);
+        const mode = readTypingMode(step);
         const target = readTarget(step, context);
+        if (mode === "keyboard")
+          return () => manager.typeTextWithKeyboard(threadId, text, target.windowId!);
         return () =>
           target.label !== undefined || target.role !== undefined
             ? manager.typeTextAt(threadId, text, target)
@@ -2795,8 +2925,23 @@ export function makeAgentGatewayComputerTools(
       }
       case "wait": {
         const durationMs = readWaitDurationMs(step);
-        const absent = readBooleanArg(step, "absent") === true;
+        const condition = readControlWaitOptions(step, durationMs);
         const raw = readScreenshotTarget(step);
+        if (readBooleanArg(step, "settle") === true) {
+          if (
+            !raw.windowId ||
+            hasControlWaitCondition(condition) ||
+            raw.ref !== undefined ||
+            raw.refOrdinal !== undefined ||
+            raw.label !== undefined ||
+            raw.role !== undefined
+          )
+            throw new ToolInputError(
+              "A settle step requires window_id and cannot combine with a control condition.",
+            );
+          const windowId = raw.windowId;
+          return async () => ({ windowId, ...(await manager.waitForSettle(windowId, durationMs)) });
+        }
         const target =
           raw.ref !== undefined ||
           raw.label !== undefined ||
@@ -2820,11 +2965,11 @@ export function makeAgentGatewayComputerTools(
               target,
               durationMs,
               desktopOperationSignal(),
-              { absent },
+              condition,
             );
         }
-        if (absent) {
-          throw new ToolInputError('A "wait" step with "absent" requires an element target.');
+        if (hasControlWaitCondition(condition)) {
+          throw new ToolInputError('A conditional "wait" step requires an element target.');
         }
         return async () => {
           if (durationMs > 0)
@@ -3170,7 +3315,7 @@ export function makeAgentGatewayComputerTools(
 
     const steps: Record<string, unknown>[] = [];
     let stopped = false;
-    let stoppedReason: "no_usable_window" | undefined;
+    let stoppedReason: "no_usable_window" | "surface_not_settled" | "control_not_ready" | undefined;
     // The window the last step touched scopes the closing state read.
     let lastWindowId: string | undefined;
     for (const [index, preparedStep] of prepared.entries()) {
@@ -3230,6 +3375,29 @@ export function makeAgentGatewayComputerTools(
               : value,
         });
         if (
+          preparedStep.type === "wait" &&
+          preparedStep.step.settle === true &&
+          (value as { settled?: boolean }).settled !== true
+        ) {
+          // A planned click cannot safely consume a still-changing layout.
+          stopped = true;
+          stoppedReason = "surface_not_settled";
+          break;
+        }
+        if (
+          preparedStep.type === "wait" &&
+          typeof value === "object" &&
+          value !== null &&
+          "status" in value &&
+          value.status !== "ready"
+        ) {
+          // Readiness is a barrier, not a best-effort delay. Even continue_on_error
+          // cannot authorize input whose preceding condition was not established.
+          stopped = true;
+          stoppedReason = "control_not_ready";
+          break;
+        }
+        if (
           preparedStep.type === "launch_app" &&
           (value as ComputerLaunchAppResult).windowStatus === "no_usable_window"
         ) {
@@ -3252,6 +3420,20 @@ export function makeAgentGatewayComputerTools(
           ok: false,
           error: runStepError(error),
         });
+        // Failed observation is an unmet barrier too: continue_on_error may
+        // skip ordinary action failures, but cannot establish readiness.
+        if (preparedStep.type === "wait") {
+          if (preparedStep.step.settle === true) {
+            stopped = true;
+            stoppedReason = "surface_not_settled";
+            break;
+          }
+          if (preparedStep.step.label !== undefined || preparedStep.step.ref !== undefined) {
+            stopped = true;
+            stoppedReason = "control_not_ready";
+            break;
+          }
+        }
         if (!preparedStep.continueOnError) {
           stopped = true;
           break;
@@ -3640,7 +3822,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_wait",
-        description: `Wait for delayed content without sending input or changing focus. Prefer label plus window_id when you know the next control: duration_ms is then a maximum, and the tool returns as soon as that unique control appears, with a screenshot by default. Target it by label afterward so a layout change cannot leave stale coordinates. An unavailable accessibility tree returns immediately; use the screenshot and do not repeat semantic waits until the environment changes. Or pass settle:true plus window_id to return as soon as the window's accessibility surface stops changing — duration_ms is again the maximum — or after a fixed pause reported as mode:"fixed" when it cannot be watched. Without label or settle this is a fixed pause with no screenshot. Never repeat the preceding action merely because a page is still loading. Waiting is capped at ${COMPUTER_WAIT_MAX_MS} ms; one accessibility read may finish after the deadline.`,
+        description: `Observe without input or focus changes. With label and window_id, return when a unique control appears; absent:true waits for disappearance, value_equals checks its exact accessibility value, and stable_ms requires matching observations over time. Unavailable or incomplete negative evidence returns immediately. A screenshot is included by default for control waits. settle:true instead watches layout quiet; fallback is labeled fixed. Without a condition this is a fixed pause. AX readiness is not renderer, upload, or save proof. Never replay preceding input. Maximum ${COMPUTER_WAIT_MAX_MS} ms; an in-flight AX read may finish after the deadline.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3667,6 +3849,7 @@ export function makeAgentGatewayComputerTools(
               description:
                 "Wait for the window's accessibility surface to go quiet instead of for a named control. Requires window_id; cannot combine with label.",
             },
+            ...CONTROL_WAIT_PROPERTIES,
             ...INCLUDE_ACTION_SCREENSHOT_PROPERTY,
           },
           required: ["duration_ms"],
@@ -3676,8 +3859,14 @@ export function makeAgentGatewayComputerTools(
       },
       handler: handle("computer_wait", async (args, context) => {
         const durationMs = readWaitDurationMs(args);
-        if (args.label !== undefined && readBooleanArg(args, "settle") === true)
-          throw new Error("A settle wait cannot combine with label; pick one observation mode.");
+        const condition = readControlWaitOptions(args, durationMs);
+        if (
+          (args.label !== undefined || hasControlWaitCondition(condition)) &&
+          readBooleanArg(args, "settle") === true
+        )
+          throw new ToolInputError("A settle wait cannot combine with a control condition.");
+        if (args.label === undefined && hasControlWaitCondition(condition))
+          throw new ToolInputError("A conditional wait requires a nonempty label and window_id.");
         if (args.label !== undefined) {
           const target = readTarget(args, context);
           if (!target.windowId || !target.label?.trim()) {
@@ -3700,11 +3889,13 @@ export function makeAgentGatewayComputerTools(
             target,
             durationMs,
             desktopOperationSignal(),
+            condition,
           );
           const result = { computerId: manager.computerId, ...readiness };
           if (
             readBooleanArg(args, "include_screenshot") === false ||
-            readiness.status === "closed"
+            readiness.status === "closed" ||
+            readiness.windowClosed === true
           ) {
             return result;
           }
@@ -3741,7 +3932,25 @@ export function makeAgentGatewayComputerTools(
             desktopOperationSignal(),
             context.callerTurnId ?? undefined,
           );
-          return { computerId: manager.computerId, ...verdict };
+          const result = { computerId: manager.computerId, windowId, ...verdict };
+          if (readBooleanArg(args, "include_screenshot") !== true) return result;
+          const capture = await manager.withAgentActivity(
+            context.callerThreadId,
+            async () => {
+              await Effect.runPromise(context.assertCallerTurnActive(), {
+                signal: desktopOperationSignal(),
+              });
+              return manager.captureActionScreenshot(
+                windowId,
+                undefined,
+                context.callerThreadId,
+                false,
+              );
+            },
+            desktopOperationSignal(),
+            context.callerTurnId ?? undefined,
+          );
+          return withObservation(context, result, capture);
         }
         if (durationMs > 0)
           await waitForComputer(durationMs, undefined, {
@@ -4051,9 +4260,8 @@ export function makeAgentGatewayComputerTools(
           properties: {
             topic: {
               type: "string",
-              enum: [...COMPUTER_HELP_TOPICS, "all"],
               description:
-                'Which chapter to read. Omit for the index of chapters; "all" reads every chapter.',
+                'Chapter name from the index; app names accept spaces or hyphens. Omit for the index; "all" explicitly reads every chapter.',
             },
             tool: {
               type: "string",
@@ -4070,7 +4278,8 @@ export function makeAgentGatewayComputerTools(
       },
       handler: handle("computer_help", async (args) => {
         const toolName = readStringArg(args, "tool");
-        const topic = readStringArg(args, "topic");
+        const rawTopic = readStringArg(args, "topic");
+        const topic = rawTopic === undefined ? undefined : normalizeComputerHelpTopic(rawTopic);
         if (toolName !== undefined) {
           if (topic !== undefined) {
             throw new ToolInputError("Use either tool or topic, not both.");
@@ -4115,7 +4324,9 @@ export function makeAgentGatewayComputerTools(
         // The tools chapter's static intro gains the generated catalog index
         // on the way out — same text for "tools" alone and inside "all".
         const sectionText = (name: string): string | undefined => {
-          const text = COMPUTER_HELP_SECTIONS[name as ComputerHelpTopic];
+          const text = Object.hasOwn(COMPUTER_HELP_SECTIONS, name)
+            ? COMPUTER_HELP_SECTIONS[name as ComputerHelpTopic]
+            : undefined;
           return name === "tools" && text !== undefined
             ? `${text}\n\n${computerToolIndexText()}`
             : text;
@@ -4128,7 +4339,18 @@ export function makeAgentGatewayComputerTools(
                   .join("\n\n")
               : undefined;
           return {
-            ...(chapters !== undefined ? { chapters } : { topics: COMPUTER_HELP_INDEX }),
+            ...(chapters !== undefined
+              ? {
+                  chapters,
+                  policy: COMPUTER_APP_PLAYBOOK_POLICY,
+                  playbooks: Object.fromEntries(
+                    COMPUTER_APP_PLAYBOOK_TOPICS.map((name) => [
+                      name,
+                      computerAppPlaybookEvidence(name),
+                    ]),
+                  ),
+                }
+              : { topics: COMPUTER_HELP_INDEX }),
           };
         }
         const section = sectionText(topic);
@@ -4137,7 +4359,12 @@ export function makeAgentGatewayComputerTools(
             `Unknown computer_help topic "${topic}". Topics: ${COMPUTER_HELP_TOPICS.join(", ")}, all.`,
           );
         }
-        return { topic, text: section };
+        const playbook = computerAppPlaybookEvidence(topic);
+        return {
+          topic,
+          text: section,
+          ...(playbook ? { playbook, policy: COMPUTER_APP_PLAYBOOK_POLICY } : {}),
+        };
       }),
     },
     discoveryOnly(
@@ -4386,12 +4613,18 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll with delta_x and delta_y in screenshot pixels; omitted axes default to 0, e.g. {delta_y:300}. amount/direction are not supported. Requires a screenshot even without coordinates. Capped at half its width/height for overlap; scroll.limitedTo reports reductions. scroll.traveledY measures vertical movement; 0 may mean an edge or dropped input. Inspect the returned image before another scroll; use computer_get_state to find controls. ${POINTER_COORDINATE_HINT}`,
+      `Scroll with delta_x and delta_y in screenshot pixels; omitted axes default to 0, e.g. {delta_y:300}. amount/direction are not supported. Requires a screenshot even without coordinates. scroll_mode:read keeps half-viewport overlap; navigate allows three viewports. scroll.limitedTo reports reductions. scroll.traveledY measures vertical movement; 0 may mean an edge or dropped input. Inspect the returned image before another scroll; use computer_get_state to find controls. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
           ...pointerTargetProperties,
           ...MODIFIERS_PROPERTY,
+          scroll_mode: {
+            type: "string",
+            enum: ["read", "navigate"],
+            description:
+              "read (default) caps at half a viewport for overlap. navigate allows up to three viewports (6000 logical pixels); may skip content and lose measurable travel. Observe afterward.",
+          },
           delta_x: {
             type: "number",
             description:
@@ -4420,12 +4653,7 @@ export function makeAgentGatewayComputerTools(
         const delta = screenshotDeltaToDesktop(frame, requestedDelta.deltaX, requestedDelta.deltaY);
         // Keep adjacent observations overlapping even when the model repeats
         // a pixel count after the screenshot changes scale.
-        const limited = {
-          deltaX:
-            Math.sign(delta.deltaX) * Math.min(Math.abs(delta.deltaX), frame.region.width / 2),
-          deltaY:
-            Math.sign(delta.deltaY) * Math.min(Math.abs(delta.deltaY), frame.region.height / 2),
-        };
+        const limited = limitScrollDelta(args, delta, frame.region);
         const modifiers = readModifiers(args);
         const incomingWindow = target.windowId ?? frame.windowId;
         let streak = unchangedScrolls.get(threadId);
@@ -4541,16 +4769,26 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             description: "The exact text to insert at the caret.",
           },
+          typing_mode: {
+            type: "string",
+            enum: ["auto", "keyboard"],
+            description:
+              "auto prefers semantic insertion. keyboard uses native key events in the focused field; requires window_id only and approved delivery_mode:foreground. Never replay uncertain input.",
+          },
           ...textTargetProperties,
         },
         required: ["text"],
         additionalProperties: false,
       },
       async (args, context) => {
+        const text = readRequiredText(args);
+        const mode = readTypingMode(args);
         const target = readTarget(args, context);
+        if (mode === "keyboard")
+          return manager.typeTextWithKeyboard(context.callerThreadId, text, target.windowId!);
         return target.label !== undefined || target.role !== undefined
-          ? manager.typeTextAt(context.callerThreadId, readRequiredText(args), target)
-          : manager.typeText(context.callerThreadId, readRequiredText(args), target.windowId);
+          ? manager.typeTextAt(context.callerThreadId, text, target)
+          : manager.typeText(context.callerThreadId, text, target.windowId);
       },
     ),
     observedActionEntry(
@@ -4596,7 +4834,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_paste",
       "Paste content",
-      `Paste text or a workspace image/file via the app's paste command. Requires clipboard preservation; clipboardRestored reports restoration without overwriting a newer human copy. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Paste text or a workspace image/file via the target window's paste command. Requires clipboard preservation; clipboardRestored reports restoration without overwriting a newer human copy. Native preservation retains all representations; the text-only fallback refuses unreadable or non-text clipboard contents before writing and is not an atomic pasteboard transaction. ${SHARED_CLIPBOARD_NOTE} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4744,7 +4982,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      'Batch up to 25 known desktop steps in one call, such as {"steps":[{"type":"press_key","key":"tab","window_id":"..."}]}. Each step uses type plus the matching computer_ tool fields; computer_help({tool:"computer_" + type}) lists exact fields. All steps are validated before dispatch and keep targeting, consent and refusal checks. Read state before acting; use get_state or if_element/unless_element for changes between steps. Stops on failure unless continue_on_error:true. No per-step screenshots or browser steps; an optional final screenshot covers the affected window.',
+      'Batch up to 25 known desktop steps in one call, such as {"steps":[{"type":"press_key","key":"tab","window_id":"..."}]}. Each step uses type plus the matching computer_ tool fields; computer_help({tool:"computer_" + type}) lists exact fields. All steps are validated before dispatch and keep targeting, consent and refusal checks. Read state before acting; use get_state or if_element/unless_element for changes between steps. Stops on failure unless continue_on_error:true; unmet wait/settle barriers always stop before the next input. No per-step screenshots or browser steps; an optional final screenshot covers the affected window.',
       {
         type: "object",
         properties: {
