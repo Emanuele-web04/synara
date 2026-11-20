@@ -296,23 +296,48 @@ describe("Antigravity ACP adapter", () => {
     expect(toolCompletion?.turnId).toBe(turnId);
   });
 
-  it("does not wait on daemon commands", async () => {
+  it("settles without waiting for a daemon and keeps its updates on the originating turn", async () => {
     const fake = makeControllableRuntime();
-    const events = await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
       Effect.gen(function* () {
         const threadId = ThreadId.makeUnsafe("thread-agy-daemon");
+        const daemon = { CommandLine: "npm run dev", IsDaemon: true };
         yield* adapter.startSession(startInput(threadId));
         const collector = yield* collectTurn(adapter);
-        yield* adapter.sendTurn({ threadId, input: "run the dev server", attachments: [] });
-        fake.emit(
-          toolCall("call-dev", "inProgress", { CommandLine: "npm run dev", IsDaemon: true }),
-        );
-        yield* Effect.sleep("30 millis");
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "run the dev server",
+          attachments: [],
+        });
+        fake.emit(toolCall("call-dev", "inProgress", daemon));
+        yield* Effect.yieldNow;
         fake.finishPrompt("end_turn");
-        return yield* Fiber.join(collector).pipe(Effect.timeout("1 second"));
+        const firstEvents = yield* Fiber.join(collector).pipe(Effect.timeout("1 second"));
+        const initialTool = firstEvents.find(
+          (event) =>
+            event.type === "item.updated" && event.payload.itemType === "command_execution",
+        );
+        expect(initialTool?.itemId).toBeDefined();
+        expect(firstEvents.at(-1)).toMatchObject({ type: "turn.completed", turnId: first.turnId });
+
+        const followUpCollector = yield* collectTurn(adapter);
+        const second = yield* adapter.sendTurn({ threadId, input: "what port?", attachments: [] });
+        fake.emit(toolCall("call-dev", "completed", daemon));
+        yield* Effect.yieldNow;
+        fake.finishPrompt("end_turn");
+        const followUpEvents = yield* Fiber.join(followUpCollector).pipe(
+          Effect.timeout("1 second"),
+        );
+        expect(followUpEvents.find((event) => event.type === "item.completed")).toMatchObject({
+          turnId: first.turnId,
+          itemId: initialTool?.itemId,
+        });
+        expect(followUpEvents.at(-1)).toMatchObject({
+          type: "turn.completed",
+          turnId: second.turnId,
+        });
       }),
     );
-    expect(events.at(-1)?.type).toBe("turn.completed");
   });
 
   it("cancels a turn that is waiting on background commands", async () => {
