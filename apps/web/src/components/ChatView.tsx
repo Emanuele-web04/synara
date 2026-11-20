@@ -57,6 +57,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useComputerPreviewBudgetPx } from "~/hooks/useComputerPreviewBudgetPx";
 import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
@@ -463,10 +464,6 @@ import { getComposerTraitSelection } from "./chat/composerTraits";
 import { deriveFastModeNotice } from "~/lib/fastModeState";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
 import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
-import {
-  computerPreviewBudgetPx,
-  computerPreviewCardCaps,
-} from "./chat/ComputerPreviewPopover.logic";
 import {
   selectThreadComputerPreviewLayout,
   selectThreadComputerPreviewSession,
@@ -5762,20 +5759,28 @@ export default function ChatView({
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
   const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
   const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
-  const mainContentRef = useRef<HTMLDivElement | null>(null);
-  const [mainContentWidth, setMainContentWidth] = useState(1600);
-  useEffect(() => {
-    const element = mainContentRef.current;
-    if (!element) return;
-    const update = () => {
-      const width = element.clientWidth;
-      setMainContentWidth((previous) => (previous === width ? previous : width));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
+  // column is already narrow — right dock open or a split pane (same as header compact mode).
+  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
+  const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
+  const environmentPanelVisibleEffective =
+    environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
+  const environmentAppliesContentInset =
+    (environmentPanelVisibleEffective || projectPanelVisible || libraryPanelVisible) &&
+    !environmentUsesFloatingOverlay;
+  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+  const environmentInsetPx = environmentAppliesContentInset
+    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+    : 0;
+  // Only the preview's budget follows the column width, so a sidebar slide or window resize
+  // does not re-render the chat on every frame.
+  const [mainContentElement, setMainContentElement] = useState<HTMLDivElement | null>(null);
+  const previewBudgetPx = useComputerPreviewBudgetPx({
+    column: mainContentElement,
+    environmentInsetPx,
+    size: settings.computerPreviewSize === "large" ? "large" : "compact",
+  });
   const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
   const applyComputerControlEffortHint = useCallback(() => {
     setComposerDraftProviderModelOptions(
@@ -6293,33 +6298,10 @@ export default function ChatView({
     onClose: closeEnvironmentPanelAfterAction,
     onRegisterCommitAndPushTrigger,
   };
-  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
-  // column is already narrow — right dock open or a split pane (same as header compact mode).
-  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
-  const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
-  const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
-  const environmentPanelVisibleEffective =
-    environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
-  const environmentAppliesContentInset =
-    (environmentPanelVisibleEffective || projectPanelVisible || libraryPanelVisible) &&
-    !environmentUsesFloatingOverlay;
-  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
-
   // Ambient preview rail: the live card sits below the Environment card and
   // the chat frees its gutter, so it never covers the transcript. Space is
   // reserved only for a card that actually has content (live phase + a landed
   // frame), at its fitted width — never for an armed or waiting session.
-  const environmentInsetPx = environmentAppliesContentInset
-    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
-    : 0;
-  const previewCaps = computerPreviewCardCaps(
-    settings.computerPreviewSize === "large" ? "large" : "compact",
-  );
-  const previewBudgetPx = computerPreviewBudgetPx({
-    mainContentWidthPx: mainContentWidth,
-    environmentInsetPx: environmentInsetPx,
-    caps: previewCaps,
-  });
   const previewReservesInset =
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
@@ -7096,7 +7078,10 @@ export default function ChatView({
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div ref={mainContentRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        ref={setMainContentElement}
+        className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      >
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
