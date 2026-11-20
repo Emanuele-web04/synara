@@ -203,8 +203,8 @@ interface AntigravitySessionContext {
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   lastTurnActivityAt: number | undefined;
-  /** Provider tool-call ids seen in the latest turn; late updates keep their turn. */
-  readonly turnToolCallIds: Map<string, TurnId>;
+  /** Recent tool calls and outstanding calls that can still report after their turn ends. */
+  readonly toolCallOwners: Map<string, { readonly turnId: TurnId; readonly settled: boolean }>;
   /** Non-daemon tool calls of the active turn that have not settled yet. */
   readonly runningToolCallIds: Set<string>;
   /** Set while a turn whose prompt returned waits for background commands. */
@@ -826,7 +826,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
-            turnToolCallIds: new Map(),
+            toolCallOwners: new Map(),
             runningToolCallIds: new Set(),
             backgroundWaitTurnId: undefined,
             sessionConfigReady,
@@ -873,7 +873,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             event: Stream.Success<ReturnType<AcpSessionRuntimeShape["getEvents"]>>,
           ) =>
             Effect.gen(function* () {
-              if (isAcpTurnProgressEventTag(event._tag)) {
+              if (event._tag !== "ToolCallUpdated" && isAcpTurnProgressEventTag(event._tag)) {
                 ctx.lastTurnActivityAt = Date.now();
               }
               switch (event._tag) {
@@ -920,21 +920,18 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 }
                 case "ToolCallUpdated": {
                   const { toolCall } = event;
-                  // A queued update for a call the settled turn already showed
-                  // keeps that turn, so its row resolves in place.
-                  const lateTurnId =
-                    ctx.activeTurnId === undefined
-                      ? ctx.turnToolCallIds.get(toolCall.toolCallId)
-                      : undefined;
-                  if (lateTurnId !== undefined) {
+                  const owner = ctx.toolCallOwners.get(toolCall.toolCallId);
+                  const turnId = owner?.turnId ?? (yield* activeTurnIdFor(event._tag));
+                  if (turnId === undefined) return;
+                  const settled = toolCall.status === "completed" || toolCall.status === "failed";
+                  ctx.toolCallOwners.set(toolCall.toolCallId, { turnId, settled });
+                  if (turnId !== ctx.activeTurnId) {
                     yield* logNative(ctx.threadId, "session/update", event.rawPayload);
-                    yield* emitToolCall(toolCall, lateTurnId, event.rawPayload);
+                    yield* emitToolCall(toolCall, turnId, event.rawPayload);
                     return;
                   }
-                  const turnId = yield* activeTurnIdFor(event._tag);
-                  if (turnId === undefined) return;
-                  ctx.turnToolCallIds.set(toolCall.toolCallId, turnId);
-                  if (toolCall.status === "completed" || toolCall.status === "failed") {
+                  ctx.lastTurnActivityAt = Date.now();
+                  if (settled) {
                     ctx.runningToolCallIds.delete(toolCall.toolCallId);
                   } else if (!isAntigravityDaemonToolCall(toolCall)) {
                     ctx.runningToolCallIds.add(toolCall.toolCallId);
@@ -1195,7 +1192,9 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
-        ctx.turnToolCallIds.clear();
+        for (const [toolCallId, owner] of ctx.toolCallOwners) {
+          if (owner.settled) ctx.toolCallOwners.delete(toolCallId);
+        }
         ctx.runningToolCallIds.clear();
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
