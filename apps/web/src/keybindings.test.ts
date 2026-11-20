@@ -23,6 +23,7 @@ import {
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
+  threadTabJumpIndexFromCommand,
   type ShortcutEventLike,
 } from "./keybindings";
 
@@ -745,6 +746,43 @@ describe("copy thread id shortcut", () => {
         platform: "Linux",
         context: { terminalFocus: true },
       }),
+    );
+  });
+});
+
+describe("thread tab jump shortcuts", () => {
+  it("maps tab jump commands to tab strip indices", () => {
+    assert.strictEqual(threadTabJumpIndexFromCommand("threadTab.jump.1"), 0);
+    assert.strictEqual(threadTabJumpIndexFromCommand("threadTab.jump.4"), 3);
+    assert.strictEqual(threadTabJumpIndexFromCommand("threadTab.jump.9"), 8);
+    assert.isNull(threadTabJumpIndexFromCommand("thread.jump.1"));
+    assert.isNull(threadTabJumpIndexFromCommand("threadTab.next"));
+  });
+
+  it("ships unassigned and resolves once the user binds it", () => {
+    const press = event({ code: "Digit4", key: "4", ctrlKey: true });
+    for (const platform of ["MacIntel", "Win32", "Linux"]) {
+      for (const bindings of [[], DEFAULT_BINDINGS]) {
+        const resolved = resolveShortcutCommand(press, bindings, { platform });
+        assert.notMatch(String(resolved), /^threadTab\.jump\./);
+      }
+    }
+
+    const userBindings = compile([
+      {
+        shortcut: ctrlShortcut("4"),
+        command: "threadTab.jump.4",
+        whenAst: whenIdentifier("isMac"),
+      },
+    ]);
+    assert.strictEqual(
+      resolveShortcutCommand(press, userBindings, { platform: "MacIntel" }),
+      "threadTab.jump.4",
+    );
+    // The rule is Mac-only, so the same chord stays with its other owners on Windows.
+    assert.notStrictEqual(
+      resolveShortcutCommand(press, userBindings, { platform: "Win32" }),
+      "threadTab.jump.4",
     );
   });
 });
