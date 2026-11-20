@@ -34,7 +34,7 @@ import {
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Command, Flag } from "effect/unstable/cli";
-import type { ServerSettings } from "@synara/contracts";
+import { EXTERNAL_MCP_MAX_WAIT_MS, type ServerSettings } from "@synara/contracts";
 import { NetService } from "@synara/shared/Net";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
@@ -103,6 +103,7 @@ import {
   verifyServerRuntime,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import { compactToolArguments, runExternalMcpToolCommand } from "./externalMcp/taskCli";
 import {
   ACCOUNT_URL_ENV_NAME,
   resolveAccountUrl,
@@ -971,6 +972,150 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
+// `--integration` lives on the base `task` command only: the Effect CLI rejects
+// a flag declared on both a parent and its subcommand (same as `--home-dir`).
+const baseTaskCommand = Command.make("task", { integration: mcpIntegrationFlag }).pipe(
+  Command.withDescription(
+    "Create and inspect Synara tasks through the paired external MCP integration (pair first with `synara mcp pair`).",
+  ),
+);
+
+const runTaskTool = (tool: string, args: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const root = yield* baseServerCommand;
+    const task = yield* baseTaskCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+    const integrationId = Option.getOrUndefined(task.integration);
+    const { exitCode } = yield* Effect.tryPromise({
+      try: () =>
+        runExternalMcpToolCommand({
+          baseDir,
+          tool,
+          arguments: args,
+          ...(integrationId ? { integrationId } : {}),
+        }),
+      catch: (cause) => new StartupError({ message: `${tool} failed.`, cause }),
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  });
+
+const optionalString = (name: string, description: string) =>
+  Flag.string(name).pipe(Flag.withDescription(description), Flag.optional);
+
+const taskOverviewCommand = Command.make("overview", {}, () =>
+  runTaskTool("synara_overview", {}),
+).pipe(
+  Command.withDescription(
+    "Allowed projects, provider availability, granted scopes, limits and next steps.",
+  ),
+);
+
+const taskProjectsCommand = Command.make("projects", {}, () =>
+  runTaskTool("synara_list_allowed_projects", {}),
+).pipe(Command.withDescription("List the projects this integration may use."));
+
+const taskCapabilitiesCommand = Command.make(
+  "capabilities",
+  { project: Flag.string("project").pipe(Flag.withDescription("Allowed project id.")) },
+  ({ project }) => runTaskTool("synara_capabilities", { projectId: project }),
+).pipe(Command.withDescription("Provider/model construction and safety limits for a project."));
+
+const taskCreateCommand = Command.make(
+  "create",
+  {
+    project: Flag.string("project").pipe(Flag.withDescription("Allowed project id.")),
+    provider: Flag.string("provider").pipe(
+      Flag.withDescription("Provider kind, e.g. claudeAgent or codex (see `task capabilities`)."),
+    ),
+    model: Flag.string("model").pipe(Flag.withDescription("Exact model slug.")),
+    prompt: Flag.string("prompt").pipe(Flag.withAlias("m"), Flag.withDescription("Task prompt.")),
+    requestId: optionalString(
+      "request-id",
+      "Stable idempotency key; reuse it to retry safely. Defaults to a fresh UUID.",
+    ),
+    title: optionalString("title", "Task title."),
+    environment: Flag.choice("environment", ["worktree", "local"]).pipe(
+      Flag.withDescription("Execution environment (default: worktree)."),
+      Flag.optional,
+    ),
+    runtimeMode: Flag.choice("runtime-mode", ["approval-required", "full-access"]).pipe(
+      Flag.withDescription("Runtime approval mode (default: approval-required)."),
+      Flag.optional,
+    ),
+    baseRef: optionalString("base-ref", "Git revision the worktree is pinned at."),
+  },
+  (input) =>
+    runTaskTool(
+      "synara_create_task",
+      compactToolArguments({
+        requestId: Option.getOrElse(input.requestId, () => crypto.randomUUID()),
+        projectId: input.project,
+        provider: input.provider,
+        model: input.model,
+        prompt: input.prompt,
+        title: Option.getOrUndefined(input.title),
+        environment: Option.getOrUndefined(input.environment),
+        runtimeMode: Option.getOrUndefined(input.runtimeMode),
+        baseRef: Option.getOrUndefined(input.baseRef),
+      }),
+    ),
+).pipe(Command.withDescription("Create one task in an allowed project."));
+
+const taskReadCommand = Command.make(
+  "read",
+  {
+    thread: Flag.string("thread").pipe(Flag.withDescription("Task thread id.")),
+    cursor: optionalString("cursor", "Opaque cursor from a previous read."),
+    messageLimit: Flag.integer("message-limit").pipe(
+      Flag.withDescription("Messages per page (1-100)."),
+      Flag.optional,
+    ),
+  },
+  ({ thread, cursor, messageLimit }) =>
+    runTaskTool(
+      "synara_read_task",
+      compactToolArguments({
+        threadId: thread,
+        cursor: Option.getOrUndefined(cursor),
+        messageLimit: Option.getOrUndefined(messageLimit),
+      }),
+    ),
+).pipe(Command.withDescription("Read a task's status and messages."));
+
+const taskWaitCommand = Command.make(
+  "wait",
+  {
+    thread: Flag.string("thread").pipe(Flag.withDescription("Task thread id.")),
+    runId: optionalString("run-id", "Specific run to wait for."),
+    timeoutMs: Flag.integer("timeout-ms").pipe(
+      Flag.withDescription(
+        `Long-poll timeout in milliseconds (max ${EXTERNAL_MCP_MAX_WAIT_MS}; rerun to keep waiting).`,
+      ),
+      Flag.optional,
+    ),
+  },
+  ({ thread, runId, timeoutMs }) =>
+    runTaskTool(
+      "synara_wait_for_task",
+      compactToolArguments({
+        threadId: thread,
+        runId: Option.getOrUndefined(runId),
+        timeoutMs: Option.getOrUndefined(timeoutMs),
+      }),
+    ),
+).pipe(Command.withDescription("Block until the task's current turn settles or the timeout ends."));
+
+const taskCommand = baseTaskCommand.pipe(
+  Command.withSubcommands([
+    taskOverviewCommand,
+    taskProjectsCommand,
+    taskCapabilitiesCommand,
+    taskCreateCommand,
+    taskReadCommand,
+    taskWaitCommand,
+  ]),
+);
+
 const accountUrlFlag = Flag.string("account-url").pipe(
   Flag.withDescription(`Synara account server to talk to (overrides ${ACCOUNT_URL_ENV_NAME}).`),
   Flag.optional,
@@ -1176,6 +1321,7 @@ const serverCommand = baseServerCommand.pipe(
   Command.withSubcommands([
     serverToolsCommand,
     mcpCommand,
+    taskCommand,
     authCommand,
     statusCommand,
     remoteCommand,
