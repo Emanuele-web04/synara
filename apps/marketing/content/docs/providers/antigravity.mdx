@@ -25,6 +25,8 @@ The Unix installer normally places `agy` under `~/.local/bin`. Verify the execut
 agy --version
 ```
 
+Synara needs Antigravity CLI 1.5.0 or newer, because it runs Antigravity through `agy acp`. Run `agy update` if the version is older.
+
 ## Authenticate
 
 Start Antigravity in a normal terminal:
@@ -90,15 +92,19 @@ Use a clean repository and a small objective. Review the selected model, mode, a
 
 ## Capabilities in Synara
 
-Antigravity sessions can expose:
+Synara runs Antigravity through `agy acp`, the Agent Client Protocol server built into the CLI. Antigravity sessions can expose:
 
-- Model selection discovered from the installed runtime
-- Assistant output, command execution, file changes, and web-search activity
-- Permission requests surfaced through Synara
-- Plan-oriented and normal task workflows supported by the runtime
-- Attachments projected into the provider prompt
-- Conversation continuity where the runtime supplies a conversation identifier
+- Model and thinking-level selection discovered from the installed runtime
+- Streamed assistant and reasoning text, with command, file, search, fetch, and web-search activity shown as it runs
+- Synara's own tools and every connected connector, such as Notion, attached to each new session
+- Context-window usage reported by the runtime
+- Attachments, including images, projected into the provider prompt
+- Conversation continuity: Synara resumes the same Antigravity conversation after a restart
 - Synara’s terminal, browser, diff, checkpoint, and Git delivery surfaces
+
+Antigravity runs with full access in Synara. Computer Use actions use Synara’s own approval cards.
+
+When Antigravity sends a command to the background, the turn stays open until the command finishes and Antigravity reports on it. Dev servers and other long-running daemons do not hold the turn open. Stopping the turn also stops its background commands.
 
 Synara does not currently classify Antigravity as supporting native live-turn steering. Use interruption and follow-up controls according to the state shown in the active task.
 
@@ -127,9 +133,13 @@ Launch `agy` directly. Check whether the operating-system keyring is unlocked an
 
 Update Antigravity, confirm the account can see the expected models in the CLI, then refresh provider status in Synara. Availability can depend on the account and runtime release.
 
-### A completed reply ends with a timeout
+### Antigravity is reported as too old
 
-Synara can recover the exact `timeout waiting for response` error after a complete assistant reply when all tools and background tasks have settled and stop-hook cleanup captured the process tree before its parent exited and verified cleanup. Other provider errors, incomplete output, and interrupted turns remain failures or interruptions. A visible reply alone does not guarantee completion.
+Synara needs Antigravity CLI 1.5.0 or newer. Run `agy update`, confirm the new version with `agy --version`, then refresh provider status in Synara.
+
+### Connector or Synara tools are missing
+
+Connectors attach when a session starts. Start a new chat after connecting a service; existing sessions keep the tools they started with.
 
 ### Antigravity reports an updater lock
 
