@@ -418,8 +418,11 @@ the twelve browser processes took 77–167 s each. A component process spent
 ChatView process spent 60–101 s in tests.
 
 The browser lane is now nine jobs of two processes each. The component files run
-as ten native Vitest shards on five runners instead of six shards on three; the
-six-shard pins are gone because they were measured for that layout. ChatView
+as ten native Vitest shards on five runners instead of six shards on three. The six-shard pins are gone because they were
+measured for that layout. In the first two runs of the new layout shard 9/10
+took 109–110 s beside 51–52 s for 10/10: native placement puts
+`EventRouter.browser.tsx` (40 s of tests) on 9. Five files now move from 9 to
+10, which evens the estimated load of the pair at about 72 s each. ChatView
 keeps its three projects and runs as eight processes instead of six.
 
 Each ChatView project is split by the length of the full test name modulo its

@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 
+import { createPinnedShardSequencer } from "../../vitest.shards";
 import stableConfig from "./vitest.browser.stable.config";
 
 const chatViewFile = "src/components/ChatView.browser.tsx";
@@ -25,6 +26,20 @@ export const CHAT_SLICE_COUNTS = {
   "chat-workflows": 3,
 } as const;
 
+// Native placement put EventRouter (40 s of tests) on shard 9 beside the
+// lightest shard, 10. These five files move from 9 to 10 so the pair on
+// components 5/5 is balanced; every other file keeps its native shard
+// (.github/CI.md).
+const componentSequencer = createPinnedShardSequencer({
+  10: {
+    "src/components/chat/AsciiWaveBackground.browser.tsx": 10,
+    "src/components/chat/group/GroupSettingsDialog.browser.tsx": 10,
+    "src/components/SafariAccessOnboarding.browser.tsx": 10,
+    "src/components/settings/SyncKeyPairingPanel.browser.tsx": 10,
+    "src/components/useRouteSpaceSync.browser.tsx": 10,
+  },
+});
+
 function sliceCondition(): string {
   const slice = process.env.VITEST_BROWSER_CHAT_SLICE;
   if (slice === undefined || slice === "") return "";
@@ -44,6 +59,7 @@ export default defineConfig({
     // A root testNamePattern overrides project patterns at runtime in Vitest.
     // Keep the quarantine in each project so the ChatView split also applies.
     ...stableTestConfig,
+    sequence: { sequencer: componentSequencer },
     // Project inheritance concatenates include arrays. Give each project sole
     // ownership of its files instead of inheriting the full browser glob set.
     include: [],

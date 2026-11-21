@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { createVitest, type TestSpecification } from "vitest/node";
+import { BaseSequencer, createVitest, type TestSpecification } from "vitest/node";
 
 const webRoot = fileURLToPath(new URL("../apps/web/", import.meta.url));
 
@@ -65,6 +65,7 @@ async function collectComponentShard(shard: string) {
     return {
       all: files.map(name).toSorted(),
       configured: (await new Sequencer(vitest).shard(files)).map(name).toSorted(),
+      native: (await new BaseSequencer(vitest).shard(files)).map(name).toSorted(),
     };
   } finally {
     await vitest.close();
@@ -160,7 +161,7 @@ describe("browser CI partitions", () => {
     }
   }, 120_000);
 
-  it("places every component file in exactly one of the ten shards", async () => {
+  it("places every component file in exactly one of the ten shards and moves only the measured files", async () => {
     const shards = [];
     for (let index = 1; index <= 10; index++) {
       shards.push(await collectComponentShard(`${index}/10`));
@@ -168,9 +169,23 @@ describe("browser CI partitions", () => {
     const all = shards[0]!.all;
     expect(all.length).toBeGreaterThan(0);
     expect(shards.flatMap(({ configured }) => configured).toSorted()).toEqual(all);
-    for (const { all: collected, configured } of shards) {
+
+    const expectedPins = {
+      "src/components/chat/AsciiWaveBackground.browser.tsx": 10,
+      "src/components/chat/group/GroupSettingsDialog.browser.tsx": 10,
+      "src/components/SafariAccessOnboarding.browser.tsx": 10,
+      "src/components/settings/SyncKeyPairingPanel.browser.tsx": 10,
+      "src/components/useRouteSpaceSync.browser.tsx": 10,
+    };
+    for (const [file, index] of Object.entries(expectedPins)) {
+      expect(shards[index - 1]!.configured).toContain(file);
+    }
+    for (const { all: collected, configured, native } of shards) {
       expect(collected).toEqual(all);
       expect(configured.length).toBeGreaterThan(0);
+      expect(configured.filter((file) => !(file in expectedPins))).toEqual(
+        native.filter((file) => !(file in expectedPins)),
+      );
     }
   }, 120_000);
 });
