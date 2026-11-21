@@ -24,7 +24,7 @@ created after 1 s and 29 s.
 
 ## Job budgets
 
-Every job records its start in its first step and ends with
+Every job records its start right after checkout and ends with
 `.github/scripts/job-budget.mjs`, which fails the job when it took longer than
 its budget. Only a job that passed everything else reaches that step, so a
 budget failure always means "green but too slow". `timeout-minutes` sits one to
@@ -50,6 +50,12 @@ Browser (components, each)    178   261   288      330       35
 Desktop Build                 120   196   254      285       35
 Windows Process Regression    104   150   171      195       35
 ```
+
+The clock starts after checkout because a clone can stall on GitHub's side: 2 of
+2,314 checkout steps in the November 17–21 window took 45 s or more, and one in
+this change's own [first run](https://github.com/Emanuele-web04/synara/actions/runs/44937536474)
+took 161 s with 119 s of tests behind it. The job timeout still bounds a stalled
+clone.
 
 A lane that misses its exact `node_modules` archive (a lockfile or install-input
 change) reinstalls from scratch. Setup marks that run `CI_COLD_CACHE`, and the

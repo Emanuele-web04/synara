@@ -36,12 +36,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # The budget clock starts after checkout: a clone that stalls on GitHub's
+      # side is not the lane being slow. The job timeout still bounds it.
       - name: Start job clock
         shell: bash
         run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -84,16 +86,16 @@ jobs:
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
-      - name: Start job clock
-        shell: bash
-        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
       - name: Checkout
         uses: actions/checkout@v6
         # The lineage check needs release tags and their migration manifests.
         with:
           fetch-depth: 0
           filter: blob:none
+
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
 
       # Docs-only changes skip the rest of this lane. The lane decides for itself,
       # so it starts with the run instead of after a separate filter job.
@@ -175,12 +177,12 @@ jobs:
             scope: "server"
             budget: 210
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Start job clock
         shell: bash
         run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@v6
 
       - name: Detect code changes
         id: changes
@@ -266,12 +268,12 @@ jobs:
             shardB: 6/6
             budget: 330
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Start job clock
         shell: bash
         run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@v6
 
       - name: Detect code changes
         id: changes
@@ -362,12 +364,12 @@ jobs:
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Start job clock
         shell: bash
         run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@v6
 
       - name: Detect code changes
         id: changes
@@ -497,12 +499,12 @@ jobs:
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Start job clock
         shell: bash
         run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@v6
 
       - name: Detect code changes
         id: changes

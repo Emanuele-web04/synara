@@ -73,9 +73,9 @@ test("no lane waits on another; each detects docs-only changes before any work",
   for (const name of heavyJobs) {
     const { steps, outputs } = jobs[name];
     assert.deepEqual(outputs, { code: "${{ steps.changes.outputs.code }}" }, name);
-    assert.equal(steps[0].name, "Start job clock", name);
-    assert.ok(steps[1].uses.startsWith("actions/checkout@"), name);
-    assert.equal(steps[1].if, undefined, name);
+    assert.ok(steps[0].uses.startsWith("actions/checkout@"), name);
+    assert.equal(steps[0].if, undefined, name);
+    assert.equal(steps[1].name, "Start job clock", name);
     assert.equal(steps[2].id, "changes", name);
     assert.equal(steps[2].run, "node .github/scripts/detect-code-changes.mjs", name);
     assert.equal(steps[2].if, undefined, name);
@@ -98,12 +98,14 @@ test("no lane waits on another; each detects docs-only changes before any work",
     assert.equal(jobs.quality.steps[0].env[`CODE_${lane}`], `\${{ needs.${name}.outputs.code }}`);
   }
 });
-test("every job starts a clock and ends by enforcing a budget inside its timeout", () => {
+test("every job starts a clock after checkout and ends by enforcing a budget inside its timeout", () => {
   for (const [name, job] of Object.entries(jobs)) {
     if (name === "quality") continue;
     const { steps } = job;
+    // Checkout comes first; the clock starts right after it.
+    assert.ok(steps[0].uses.startsWith("actions/checkout@"), name);
     assert.deepEqual(
-      steps[0],
+      steps[1],
       {
         name: "Start job clock",
         shell: "bash",
