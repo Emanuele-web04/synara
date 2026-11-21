@@ -286,10 +286,17 @@ export function chooseAntigravityAcpModel(
   const exact = resolveAntigravityAcpModelId(availableModels, cliModelLabel);
   if (exact) return { kind: "model", modelId: exact };
   const base = baseModelName(cliModelLabel).toLowerCase();
+  // Orchestrator's parenthesized name identifies the planner, not a thinking level.
+  if (base === "orchestrator" && cliModelLabel.trim().toLowerCase() !== base) {
+    return { kind: "unavailable" };
+  }
   const sameBase = availableModels.filter(
     (model) => baseModelName(model.name).toLowerCase() === base,
   );
   if (sameBase.length === 0) return { kind: "unavailable" };
+  if (base === "orchestrator" && sameBase.length === 1) {
+    return { kind: "model", modelId: sameBase[0]!.modelId };
+  }
   if (currentModelId && sameBase.some((model) => model.modelId === currentModelId)) {
     return { kind: "model", modelId: currentModelId };
   }
