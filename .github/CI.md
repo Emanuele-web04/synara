@@ -1348,6 +1348,50 @@ Uploads took 23.1 s and 25.5 s, compared with 23.8 s and 22.4 s. Both macOS
 legs passed and the unrelated Windows startup smoke stalled, so the run
 did not measure a complete release.
 
+## November 21 audit: where a run's time goes
+
+`node .github/scripts/ci-audit.mjs` reads the most recent `ci.yml` runs through
+`gh` and splits every job into blocked (run created to job created), waiting
+(job created to started), setup (checkout, workspace, caches, browser runtime;
+overlapping background steps count once) and running (the rest of the job).
+`--runs=N` sets the window, `--steps` adds per-step times and `--json` prints
+the raw result. Rerun it before and after any CI change instead of reusing the
+tables in this file.
+
+The last 150 runs (November 17–21), seconds at p50 / p95:
+
+```text
+Job                                                     n     Blocked     Waiting       Setup     Running       Total
+Browser Tests (chat-workflows 1/1)                    130    15 / 166     2 / 158     33 / 62   226 / 418   263 / 460
+Browser Tests (components 3/3)                        132    15 / 165     2 / 193     35 / 61   203 / 371   242 / 409
+Browser Tests (components 1/3)                        132    15 / 165     2 / 148     34 / 59   200 / 287   234 / 338
+Browser Tests (components 2/3)                        131    15 / 166     3 / 197     34 / 60   180 / 542   216 / 587
+Browser Tests (chat-projects 1/1)                     131    15 / 166     2 / 151     35 / 59   172 / 267   206 / 306
+Unit Tests (web)                                      133    15 / 165     2 / 174     30 / 50   163 / 262   195 / 292
+Desktop Build                                         135    15 / 165     2 / 116     43 / 65   140 / 203   186 / 252
+Browser Tests (chat-follow 1/1)                       134    15 / 165     2 / 127     35 / 59   113 / 230   160 / 271
+Unit Tests (server 2/3)                               136    15 / 164     2 / 184     33 / 49    97 / 179   139 / 222
+Unit Tests (server 1/3)                               136    15 / 164     2 / 155     34 / 49    95 / 137   135 / 180
+Unit Tests (server 3/3)                               136    15 / 164     2 / 158     35 / 49    91 / 137   132 / 170
+Unit Tests (core)                                     136    15 / 164     3 / 163     37 / 50    73 / 133   108 / 171
+Windows Process Regression                            138    15 / 164      2 / 34     57 / 80     46 / 63   103 / 138
+Static Checks (typecheck)                             138    15 / 164      2 / 82     39 / 59     38 / 58     84 / 96
+Static Checks (fast)                                  140      1 / 44      2 / 46     23 / 33     18 / 25     42 / 52
+Migration Lineage                                      76    17 / 178     3 / 227     17 / 23     14 / 18     30 / 38
+Detect code changes                                   139      1 / 45      2 / 33      7 / 13       4 / 8     11 / 17
+Format, Lint, Typecheck, Test, Browser Test, Build    142   313 / 836      2 / 29       0 / 1       4 / 6       4 / 6
+```
+
+A successful pull request run took 269 s at the median and 754 s at p95; a
+successful run used 2,317 runner-seconds at the median. The window spans three
+workflow shapes. The 60 newest runs took 217 s and 303 s for pull requests and
+2,021 runner-seconds.
+
+Running is the largest bucket in every lane above `Static Checks`: 113–226 s at
+the median in the browser lanes against 33–35 s of setup and 2 s of waiting.
+Waiting is 2–3 s at the median in every lane; its p95 comes from overlapping
+runs reaching the account's 20 concurrent jobs, as in the November 16 audit.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
