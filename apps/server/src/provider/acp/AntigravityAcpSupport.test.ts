@@ -166,6 +166,17 @@ describe("Antigravity ACP support", () => {
     });
   });
 
+  it("resolves a saved Orchestrator selection without substituting another planner", () => {
+    const models = [{ modelId: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)" }];
+    expect(chooseAntigravityAcpModel(models, "Orchestrator (Carbon)", models[0]!.modelId)).toEqual({
+      kind: "unavailable",
+    });
+    expect(chooseAntigravityAcpModel(models, "Orchestrator", undefined)).toEqual({
+      kind: "model",
+      modelId: "gemini-pro-orchestrator-neon",
+    });
+  });
+
   it("authenticates with a Gemini API key and otherwise asks for sign-in", () => {
     const initialize = {
       protocolVersion: 1,
