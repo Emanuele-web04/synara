@@ -1,5 +1,6 @@
 # Independent feedback lanes; the quality job only aggregates results.
 # No lane waits on another: each detects docs-only changes itself.
+# Every job ends by failing if it took longer than its budget (.github/CI.md).
 # Install scope/cache decisions and measured tradeoffs: .github/CI.md.
 # Stable browser coverage blocks PRs; geometry quarantine stays nightly.
 name: CI
@@ -33,8 +34,12 @@ jobs:
   static-fast:
     name: Static Checks (fast)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 4
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -67,13 +72,22 @@ jobs:
           - name: Exercise release-only workflow steps
             run: node scripts/release-smoke.ts
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "75"
+        run: node .github/scripts/job-budget.mjs
+
   static-typecheck:
     name: Static Checks (typecheck)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
         # The lineage check needs release tags and their migration manifests.
@@ -112,6 +126,11 @@ jobs:
               test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
               node scripts/check-migration-lineage.ts
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "135"
+        run: node .github/scripts/job-budget.mjs
+
   # Use three independent server runners, each with one Vitest worker per CPU.
   # The measured native 3-way split lowers the slowest shard without changing
   # collected tests. Tests import @synara/contracts from source (its ESM export),
@@ -119,7 +138,7 @@ jobs:
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 6
     outputs:
       code: ${{ steps.changes.outputs.code }}
     strategy:
@@ -131,26 +150,35 @@ jobs:
           - pkg: core
             filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics"
             test-args: ""
+            budget: 240
           - pkg: web
             filters: "--filter=@synara/web"
             test-args: "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time"
             scope: "web"
             save-modules: "true"
+            budget: 240
           # Server lane tests the CLI package (package name @synara/cli).
           - pkg: server 1/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=1/3"
             scope: "server"
             save-modules: "true"
+            budget: 210
           - pkg: server 2/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=2/3"
             scope: "server"
+            budget: 210
           - pkg: server 3/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=3/3"
             scope: "server"
+            budget: 210
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -186,6 +214,11 @@ jobs:
               --config=vitest.unit.ci.config.ts --project=web-compiler
               --no-passWithNoTests --maxWorkers=2
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: ${{ matrix.budget }}
+        run: node .github/scripts/job-budget.mjs
+
   # ChatView is one large file, so split it by complementary test-name groups.
   # Each ChatView job runs two name groups on one runner. The component jobs
   # each run two Vitest file shards.
@@ -193,7 +226,7 @@ jobs:
   browser:
     name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 9
     outputs:
       code: ${{ steps.changes.outputs.code }}
     strategy:
@@ -206,27 +239,37 @@ jobs:
             shard: 1/1
             shardA: 1/1
             shardB: 1/1
+            budget: 285
           - project: chat-projects
             shard: 1/1
             shardA: 1/1
             shardB: 1/1
+            budget: 315
           - project: chat-workflows
             shard: 1/1
             shardA: 1/1
             shardB: 1/1
+            budget: 405
           - project: components
             shard: 1/3
             shardA: 1/6
             shardB: 2/6
+            budget: 330
           - project: components
             shard: 2/3
             shardA: 3/6
             shardB: 4/6
+            budget: 330
           - project: components
             shard: 3/3
             shardA: 5/6
             shardB: 6/6
+            budget: 330
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -307,13 +350,22 @@ jobs:
               VITEST_BROWSER_CHAT_SLICE: b
             run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardB }}
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: ${{ matrix.budget }}
+        run: node .github/scripts/job-budget.mjs
+
   build:
     name: Desktop Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 7
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -371,6 +423,11 @@ jobs:
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
+
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "285"
+        run: node .github/scripts/job-budget.mjs
 
   # Aggregate only: no checkout, install, build or test execution.
   # Preserve the branch-protection display name and always() failure handling.
@@ -436,10 +493,14 @@ jobs:
   windows_process:
     name: Windows Process Regression
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 6
     outputs:
       code: ${{ steps.changes.outputs.code }}
     steps:
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -507,3 +568,8 @@ jobs:
           bun run --cwd apps/desktop test
           src/backendShutdown.windows.integration.test.ts
           src/desktopMigrationRecovery.test.ts
+
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "195"
+        run: node .github/scripts/job-budget.mjs

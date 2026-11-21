@@ -22,6 +22,40 @@ current workflow (November 18–21) the heavy lanes were created 13 s after the 
 at the median and 58 s at p95. `Static Checks (fast)`, which never waited, was
 created after 1 s and 29 s.
 
+## Job budgets
+
+Every job records its start in its first step and ends with
+`.github/scripts/job-budget.mjs`, which fails the job when it took longer than
+its budget. Only a job that passed everything else reaches that step, so a
+budget failure always means "green but too slow". `timeout-minutes` sits one to
+four minutes above the budget and only catches a hang.
+
+Budgets come from the 58 most recent runs on the current workflow (November
+18–21, successful jobs): the larger of 1.25 × p95 and 1.1 × the slowest
+observed job, rounded up to 15 s. They hold today's speed; they are not the
+targets. Lower a budget in the same change that makes its job faster. Raise one
+only with a new measurement from `ci-audit.mjs`.
+
+```text
+Job                           p50   p95   max   Budget   Target
+Static Checks (fast)           42    50    58       75
+Static Checks (typecheck)      88    99   106      135
+Unit Tests (core)             148   182   193      240       35
+Unit Tests (web)              147   184   191      240       35
+Unit Tests (server, each)     134   164   174      210       35
+Browser (chat-follow)         135   226   253      285       35
+Browser (chat-projects)       175   250   267      315       35
+Browser (chat-workflows)      174   258   356      405       35
+Browser (components, each)    178   261   288      330       35
+Desktop Build                 120   196   254      285       35
+Windows Process Regression    104   150   171      195       35
+```
+
+A lane that misses its exact `node_modules` archive (a lockfile or install-input
+change) reinstalls from scratch. Setup marks that run `CI_COLD_CACHE`, and the
+budget step reports the time without failing: the run measures the install, not
+the lane. A missing clock or budget value fails the job.
+
 After workspace setup and CI contract validation, `static-fast` uses GitHub
 Actions' native `parallel` group for identity, Windows boundary, formatting,
 lint and release smoke. These checks read the installed workspace; release

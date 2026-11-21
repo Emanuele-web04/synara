@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import { compilerCacheFingerprint } from "../../apps/web/scripts/compiler-cache-key.ts";
 import { changedPaths, hasCodeChanges, isDocsPath } from "./detect-code-changes.mjs";
+import { checkBudget } from "./job-budget.mjs";
 import { lockfilePackageFingerprint } from "./lockfile-package-key.mjs";
 import { workspaceInstallFingerprint } from "../../scripts/ci-install-key.ts";
 
@@ -72,15 +73,16 @@ test("no lane waits on another; each detects docs-only changes before any work",
   for (const name of heavyJobs) {
     const { steps, outputs } = jobs[name];
     assert.deepEqual(outputs, { code: "${{ steps.changes.outputs.code }}" }, name);
-    assert.ok(steps[0].uses.startsWith("actions/checkout@"), name);
-    assert.equal(steps[0].if, undefined, name);
-    assert.equal(steps[1].id, "changes", name);
-    assert.equal(steps[1].run, "node .github/scripts/detect-code-changes.mjs", name);
+    assert.equal(steps[0].name, "Start job clock", name);
+    assert.ok(steps[1].uses.startsWith("actions/checkout@"), name);
     assert.equal(steps[1].if, undefined, name);
+    assert.equal(steps[2].id, "changes", name);
+    assert.equal(steps[2].run, "node .github/scripts/detect-code-changes.mjs", name);
+    assert.equal(steps[2].if, undefined, name);
     // Every later step, including each member of a parallel group, is skipped
     // only by this lane's own decision. A wait step takes no condition: it
     // joins a background step that carries one.
-    const later = steps.slice(2).flatMap((step) => step.parallel ?? [step]);
+    const later = steps.slice(3, -1).flatMap((step) => step.parallel ?? [step]);
     for (const step of later) {
       if (step.wait) {
         assert.equal(step.if, undefined, `${name}: ${step.name}`);
@@ -95,6 +97,68 @@ test("no lane waits on another; each detects docs-only changes before any work",
     const lane = lanes[heavyJobs.indexOf(name)];
     assert.equal(jobs.quality.steps[0].env[`CODE_${lane}`], `\${{ needs.${name}.outputs.code }}`);
   }
+});
+test("every job starts a clock and ends by enforcing a budget inside its timeout", () => {
+  for (const [name, job] of Object.entries(jobs)) {
+    if (name === "quality") continue;
+    const { steps } = job;
+    assert.deepEqual(
+      steps[0],
+      {
+        name: "Start job clock",
+        shell: "bash",
+        run: 'echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"',
+      },
+      name,
+    );
+    const last = steps.at(-1);
+    assert.equal(last.name, "Enforce job budget", name);
+    assert.equal(last.run, "node .github/scripts/job-budget.mjs", name);
+    // Only a job that passed everything else is judged on time, and nothing may excuse it.
+    assert.equal(last.if, undefined, name);
+    assert.equal(last["continue-on-error"], undefined, name);
+    const budget = last.env.CI_JOB_BUDGET_SECONDS;
+    const budgets =
+      budget === "${{ matrix.budget }}"
+        ? job.strategy.matrix.include.map((lane) => lane.budget)
+        : [Number(budget)];
+    for (const seconds of budgets)
+      assert.ok(Number.isInteger(seconds) && seconds > 0, `${name}: ${seconds}`);
+    // The timeout only catches a hang: the budget step must be reachable first,
+    // and the timeout must not drift far above the slowest lane's budget.
+    const slowest = Math.max(...budgets);
+    assert.ok(job["timeout-minutes"] * 60 >= slowest + 60, name);
+    assert.ok(job["timeout-minutes"] * 60 <= slowest + 240, name);
+  }
+});
+test("a budget fails when exceeded or unreadable and reports a cold dependency cache", () => {
+  const check = (overrides) =>
+    checkBudget({ started: 1000, budget: 60, now: 1050, coldCache: "", ...overrides });
+  assert.deepEqual(check({}), {
+    ok: true,
+    elapsed: 50,
+    message: "Within budget: 50 s of a 60 s budget.",
+  });
+  assert.equal(check({ now: 1060 }).ok, true);
+  assert.equal(check({ now: 1061 }).ok, false);
+  assert.match(check({ now: 1061 }).message, /Over budget: 61 s of a 60 s budget/);
+  const cold = check({ now: 1100, coldCache: "node_modules" });
+  assert.equal(cold.ok, true);
+  assert.match(cold.message, /cold node_modules cache, not enforced/);
+  for (const broken of [
+    { started: Number.NaN },
+    { started: 0 },
+    { budget: Number.NaN },
+    { budget: 0 },
+  ])
+    assert.equal(check(broken).ok, false);
+  const coldStep = requireFromScripts("yaml")
+    .parse(setup)
+    .runs.steps.find((step) => step.name === "Mark cold dependency cache");
+  assert.equal(
+    coldStep.if,
+    "${{ steps.modules.outcome == 'success' && steps.modules.outputs.cache-hit != 'true' }}",
+  );
 });
 test("docs-only detection keeps code in docs-like trees on the code path", () => {
   for (const path of [
@@ -291,6 +355,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
         "test-args": "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time",
         scope: "web",
         "save-modules": "true",
+        budget: 240,
       },
       {
         pkg: "server 1/3",
@@ -298,18 +363,21 @@ test("caches restore in every consumer and save from one owner per key", () => {
         "test-args": "--shard=1/3",
         scope: "server",
         "save-modules": "true",
+        budget: 210,
       },
       {
         pkg: "server 2/3",
         filters: "--filter=@synara/cli",
         "test-args": "--shard=2/3",
         scope: "server",
+        budget: 210,
       },
       {
         pkg: "server 3/3",
         filters: "--filter=@synara/cli",
         "test-args": "--shard=3/3",
         scope: "server",
+        budget: 210,
       },
     ],
   );
