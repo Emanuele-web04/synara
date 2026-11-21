@@ -34,13 +34,22 @@ export function splitJob(job) {
   const started = seconds(job.started_at);
   const completed = seconds(job.completed_at);
   if (created === null || started === null || completed === null) return null;
-  let setup = 0;
+  // Background steps overlap the step after them, so count the union of the
+  // setup intervals rather than their sum.
+  const intervals = [];
   for (const step of job.steps ?? []) {
     const from = seconds(step.started_at);
     const to = seconds(step.completed_at);
     // The API reports placeholder timestamps for some skipped steps.
     if (from === null || to === null || to < from || to - from > DAY) continue;
-    if (SETUP_STEP.test(step.name)) setup += to - from;
+    if (SETUP_STEP.test(step.name)) intervals.push([from, to]);
+  }
+  let setup = 0;
+  let covered = Number.NEGATIVE_INFINITY;
+  for (const [from, to] of intervals.toSorted((a, b) => a[0] - b[0])) {
+    if (to <= covered) continue;
+    setup += to - Math.max(from, covered);
+    covered = to;
   }
   const total = completed - started;
   return {

@@ -25,6 +25,15 @@ const job = (overrides = {}) => ({
 test("a job splits into waiting, setup and running without counting parallel members twice", () => {
   assert.deepEqual(splitJob(job()), { waiting: 4, setup: 30, running: 70, total: 100 });
 });
+test("a background setup step that overlaps the next one is counted once", () => {
+  const steps = [
+    step("Checkout", 14, 20),
+    step("Restore Chromium headless shell", 20, 26),
+    step("Setup workspace", 21, 40),
+    step("Browser test", 40, 114),
+  ];
+  assert.deepEqual(splitJob(job({ steps })), { waiting: 4, setup: 26, running: 74, total: 100 });
+});
 test("placeholder step timestamps and unfinished jobs are ignored", () => {
   const skipped = { name: "Cache Turbo", started_at: "0001-01-01T00:00:00Z", completed_at: at(30) };
   assert.equal(splitJob(job({ steps: [...job().steps, skipped] })).setup, 30);
