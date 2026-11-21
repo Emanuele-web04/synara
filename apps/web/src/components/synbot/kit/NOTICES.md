@@ -1,7 +1,7 @@
 # Third-party notices (SynBot kit)
 
 The SynBot kit uses tokens and components ported from HoloBot's `packages/ui`. The
-animal avatars and outfits are original Synara vector artwork.
+animal avatars, outfits, and desktop navigation mark are original Synara vector artwork.
 
 ## Hugeicons (free, stroke rounded)
 
@@ -44,8 +44,6 @@ SOFTWARE.
 ```
 
 ## HoloBot
-
-The monochrome SynBot navigation mark uses the original HoloBot ghost outline.
 
 The dithered backdrop (`Backdrop.tsx`, `dither.ts`) is HoloBot's own, generated in code (HoloBot's
 `packages/ui/src/dither.ts`), ported to SynBot at the owner's request.
