@@ -131,6 +131,9 @@ jobs:
           - pkg: core
             filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics"
             test-args: ""
+            # Replays the hot-path compiler guard's events for unchanged modules
+            # (apps/web/src/test/compilerEventCache.ts); edited ones compile.
+            web-transform-cache: "unit-core-compiler"
           - pkg: web
             filters: "--filter=@synara/web"
             test-args: "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time"
@@ -166,6 +169,7 @@ jobs:
         with:
           scope: ${{ matrix.scope || 'full' }}
           save-modules: ${{ matrix.save-modules || 'false' }}
+          web-transform-cache: ${{ matrix.web-transform-cache || '' }}
 
       - name: Verify Linux terminal PTY native dependency
         if: steps.changes.outputs.code == 'true' && matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'

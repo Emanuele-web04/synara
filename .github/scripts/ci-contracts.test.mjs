@@ -281,6 +281,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
   assert.deepEqual(unitSetup.with, {
     scope: "${{ matrix.scope || 'full' }}",
     "save-modules": "${{ matrix.save-modules || 'false' }}",
+    "web-transform-cache": "${{ matrix.web-transform-cache || '' }}",
   });
   assert.deepEqual(
     jobs.unit.strategy.matrix.include.filter((lane) => lane.scope || lane["save-modules"]),
@@ -483,7 +484,8 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   assert.ok(viteConfig.includes('command === "build" && mode === "production"'));
   assert.ok(viteConfig.includes('process.env.VITEST === "true"'));
   assert.ok(viteConfig.includes("transformCacheSalt(productionBuild)"));
-  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 2);
+  // Browser lanes, Desktop Build, and the Core unit lane's matrix entry and setup.
+  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 4);
   assert.equal(workflow.match(/web-transform-fallback:/g)?.length, 1);
   const browserSetup = jobs.browser.steps.find((step) => step.name === "Setup workspace").with;
   assert.equal(
@@ -523,6 +525,33 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
     assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
+});
+test("only the Core lane replays hot-path compiler events, keyed by source and toolchain", () => {
+  const cached = jobs.unit.strategy.matrix.include.filter((lane) => lane["web-transform-cache"]);
+  assert.deepEqual(
+    cached.map((lane) => [lane.pkg, lane["web-transform-cache"]]),
+    [["core", "unit-core-compiler"]],
+  );
+  const setupWith = jobs.unit.steps.find((step) => step.name === "Setup workspace").with;
+  assert.equal(setupWith["web-transform-fallback"], undefined);
+  const compiler = jobs.unit.steps
+    .find((step) => step.parallel)
+    .parallel.find(({ name }) => name === "Verify chat hot-path compiler");
+  // The guard reads the directory the setup action exports; nothing overrides it.
+  assert.equal(compiler.env, undefined);
+  const cache = read("../../apps/web/src/test/compilerEventCache.ts");
+  assert.ok(cache.includes("env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim()"));
+  assert.ok(cache.includes('path.join(root, "hot-path-compiler")'));
+  assert.ok(cache.includes(".update(compilerCacheFingerprint(repositoryRoot))"));
+  for (const input of ["toolchain", "path.resolve(input.filePath)", "input.source"])
+    assert.ok(cache.includes(`.update(${input})`), input);
+  for (const file of ["compilerEventCache.ts", "hotPathCompiler.ts", "reactCompiler.ts"])
+    assert.ok(cache.includes(`"src/test/${file}"`), file);
+  for (const name of ["babel-plugin-react-compiler", "@babel/core"])
+    assert.ok(cache.includes(`"${name}"`), name);
+  const guard = read("../../apps/web/src/test/hotPathCompiler.ts");
+  assert.ok(guard.includes("cachedCompilerEvents({"));
+  assert.ok(guard.includes("compile: () => compileReactSource(filePath, source)"));
 });
 test("the Electron runtime cache keys on its own lockfile resolution", () => {
   const steps = Object.fromEntries(

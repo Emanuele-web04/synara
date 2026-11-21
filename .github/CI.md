@@ -534,6 +534,58 @@ worker. ChatView's own compile sets the floor. Hosted, the guard took 123 s
 and 95 s with two workers in runs 44383201899 and 44384792991, and Core took
 170 s and 146 s.
 
+### Hot-path compiler event cache
+
+A CPU profile of the single `ChatView.tsx` compile on the Mac mini spent
+about 92% of its time inside React Compiler's `inferMutationAliasingEffects`
+fixed-point pass (`merge` and `clone` of its abstract state), plus GC. Parsing,
+code generation and the event logger were each under 2%, and skipping code
+generation (`code: false`) did not change the time. The guard already passes
+the same parser options as the production build, so there is nothing avoidable
+on the harness side; the compiler itself was left unpatched.
+
+The guard's result is a pure function of the module's bytes and the
+toolchain, so the Core lane now replays it for unchanged modules.
+`apps/web/src/test/compilerEventCache.ts` stores the events the guard reads
+(kind, function name, bailout reason and description, PipelineError text),
+keyed by:
+
+- the transform cache's fingerprint (`compiler-cache-key.ts`: Node version,
+  normalized lockfile, patches, compiler plugin definition, Vite config),
+- the three harness files,
+- the installed `babel-plugin-react-compiler` and `@babel/core` versions and
+  entry bytes,
+- `BABEL_ENV` and `NODE_ENV`,
+- the module's absolute path and exact source.
+
+A fresh compile and a replay both pass through the same projection and JSON
+round trip, so a hit returns exactly what the compile it recorded returned.
+The cache holds compile results, not verdicts: a recorded bailout fails the
+guard again. An entry whose stored key differs from its file name, whose
+format is unknown, or whose events do not have the expected types is
+recompiled and rewritten. Without `SYNARA_WEB_TRANSFORM_CACHE_DIR` (local runs,
+Web Unit) every call compiles. `compilerEventCache.test.ts` covers edits,
+plugin version and code changes, malformed entries, and real compiler events.
+
+The Core lane owns the `unit-core-compiler` archive under the existing
+ownership rules: pull requests restore the newest matching archive and seed it
+only on a miss, and pushes to `main` save one entry per commit.
+
+Mac mini, both guard files, `--maxWorkers=2`:
+
+```text
+State                                    Wall (s)   User CPU (s)
+No cache directory                         22.60        39.03
+Empty cache (compiles, writes 49 entries)  22.63        38.10
+Warm cache                                  0.66         1.00
+```
+
+With the cache warm, adding a default value to a destructured parameter in
+`chat/useChatWorkLog.ts` failed the guard on that run and the next one
+(`AssignmentPattern`). Restoring the file passed from the cache. The 49 entries
+take 196 KB. A pull request that edits `ChatView.tsx` still compiles it for
+real and keeps the old critical path for that step.
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall
