@@ -1,22 +1,6 @@
-/**
- * Picks the base direction of markdown prose from its dominant script.
- *
- * The browser primitive (`dir="auto"`) decides from the first strong character,
- * so a Persian paragraph that opens with a product name, a bold English label,
- * or a link label resolves LTR and the rest of the paragraph is laid out in
- * logical LTR order — upside down for an RTL reader. Technical Persian writing
- * opens paragraphs that way constantly, and whether the leading token is plain
- * text or an isolated `code` span changed the outcome, so the transcript flipped
- * block by block.
- *
- * Counting strong letters instead makes the decision about the whole block, not
- * its first word. The transcript applies it per block, because a bilingual reply
- * genuinely contains Persian and English paragraphs side by side; the message as
- * a whole gets the same treatment as the inherited default.
- *
- * Code, math, link targets, bare URLs, HTML tags, and image alt text never count:
- * they are either LTR by definition or metadata, not prose.
- */
+// FILE: markdownDirection.ts
+// Purpose: Detect the dominant script of transcript prose for the message and its blocks.
+// Layer: Markdown rendering helper used by ChatMarkdown.
 
 export type MarkdownDirection = "rtl" | "ltr";
 
@@ -106,16 +90,19 @@ function stripNonProse(text: string): string {
     prose.push(line);
   }
 
+  // Stop at another opening delimiter as well as the closer. During streaming
+  // incomplete markup is common, and each opener must not rescan the same tail.
   return prose
     .join("\n")
     .replace(/`+[^`]*`+/g, " ")
     .replace(/\$\$[\s\S]*?\$\$/g, " ")
     .replace(/\$[^$\n]*\$/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/\]\([^)]*\)/g, "]")
-    .replace(/<https?:\/\/[^>]*>/g, " ")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/<\/?[a-z][^>]*>/gi, " ");
+    .replace(/!\[[^[\]]*\]\([^()]*\)/g, " ")
+    .replace(/\]\([^()]*\)/g, "]")
+    .replace(/<https?:\/\/[^<>]*>/gi, " ")
+    .replace(/(?:https?:\/\/|www\.)\S+/gi, " ")
+    .replace(/(?:^|[\s<])[\w.%+-]+@[a-z\d-]+(?:\.[a-z\d-]+)+/gi, " ")
+    .replace(/<\/?[a-z][^<>]*>/gi, " ");
 }
 
 /** `rtl` when the message holds more right-to-left words than other words. */

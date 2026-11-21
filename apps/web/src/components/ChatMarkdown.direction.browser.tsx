@@ -132,6 +132,28 @@ describe("ChatMarkdown message direction", () => {
     screen.unmount();
   });
 
+  it("ignores automatic link labels but counts authored link text", async () => {
+    const { screen, root } = await renderMessage(
+      [
+        "https://api.example.net/alpha www.example.com/beta build@example.com سلام",
+        "[سلام دنیا](https://example.com) English",
+        ENGLISH,
+      ].join("\n\n"),
+    );
+
+    try {
+      const paragraphs = Array.from(root.querySelectorAll("p"));
+      expect(paragraphs[0]?.querySelectorAll("a")).toHaveLength(3);
+      expect(paragraphs.map((paragraph) => getComputedStyle(paragraph).direction)).toEqual([
+        "rtl",
+        "rtl",
+        "ltr",
+      ]);
+    } finally {
+      screen.unmount();
+    }
+  });
+
   it("reads a bilingual message block by block", async () => {
     const { screen, root } = await renderMessage(BILINGUAL);
 

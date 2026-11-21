@@ -497,6 +497,26 @@ function ownsItsDirection(node: BidiHastNode): boolean {
   );
 }
 
+/** GFM links named after their address carry no additional prose. */
+function isAutomaticBidiLink(node: BidiHastNode): boolean {
+  const href = node.properties?.href;
+  if (node.tagName !== "a" || typeof href !== "string" || node.children?.length !== 1) {
+    return false;
+  }
+  let labelNode = node.children[0];
+  // Transcript search wraps plain labels in a source-position node.
+  if (labelNode?.tagName === CHAT_FIND_TEXT_TAG_NAME && labelNode.children?.length === 1) {
+    labelNode = labelNode.children[0];
+  }
+  const label = labelNode?.type === "text" ? labelNode.value : undefined;
+  if (!label) return false;
+  return (
+    (href === label && /^[a-z][a-z0-9+.-]*:\/\//i.test(label)) ||
+    (/^www\./i.test(label) && href === `http://${label}`) ||
+    href === `mailto:${label}`
+  );
+}
+
 /**
  * Collects a block's own prose, joined with spaces so identifiers that sit in
  * separate inline nodes stay separate words. Nested blocks (a list inside a list
@@ -511,7 +531,7 @@ function collectBlockText(node: BidiHastNode): string {
       parts.push(child.value ?? "");
       return;
     }
-    if (isBidiOpaque(child) || ownsItsDirection(child)) return;
+    if (isBidiOpaque(child) || ownsItsDirection(child) || isAutomaticBidiLink(child)) return;
     for (const grandchild of child.children ?? []) walk(grandchild);
   };
 
