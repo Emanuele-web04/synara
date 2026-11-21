@@ -1,5 +1,5 @@
 // FILE: MascotPicker.tsx
-// Purpose: A bot's look: one row of shapes in the chosen color, one row of colors. Shared by the
+// Purpose: A bot's look: one row of outfits in the chosen color, one row of colors. Shared by the
 //          bot sheet (edit) and the New bot steps.
 // Layer: SynBot editor UI
 // Exports: MascotPicker
@@ -10,8 +10,8 @@ import { useTranslation } from "~/i18n";
 
 import { BotMascot as MascotGlyph } from "../kit/Mascot";
 
-/** Every shape a bot may take: all but SynBot's reserved mark. */
-const PICKER_SHAPES = BOT_MASCOT_SHAPES.filter((shape) => shape !== "synara");
+/** Every outfit a bot may take: all but SynBot's reserved captain. */
+const PICKER_OUTFITS = BOT_MASCOT_SHAPES.filter((shape) => shape !== "synara");
 const COLOR_KEYS = ["blue", "orange", "green", "purple", "red", "teal", "yellow", "gray"] as const;
 
 export function MascotPicker({
@@ -25,7 +25,7 @@ export function MascotPicker({
   return (
     <div className="bot-sheet__pickers">
       <div className="bot-sheet__row" role="radiogroup" aria-label={t("synbotEditor:shape")}>
-        {PICKER_SHAPES.map((shape) => (
+        {PICKER_OUTFITS.map((shape) => (
           <button
             key={shape}
             type="button"

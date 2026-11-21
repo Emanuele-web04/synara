@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <title>SynBot Captain</title>
+  <defs>
+    <clipPath id="tile"><rect width="100" height="100" rx="22"/></clipPath>
+    <g id="creature" stroke="#22202a" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#fbefdc" d="M60 47C67 38 78 34 88 36C85 46 79 52 69 54Z"/>
+      <path fill="#dec3ac" stroke="none" d="M68 47C72 41 79 39 83 39C81 44 76 49 70 50Z"/>
+      <path fill="#fbefdc" d="M14 107C16 92 24 86 34 81L37 74C29 70 26 62 30 54C20 54 12 47 9 38C20 36 31 38 38 44C44 36 54 34 63 39C70 43 73 49 74 55C76 59 82 59 83 64C86 75 74 80 63 80L65 85C75 90 80 98 83 107Z"/>
+      <path fill="#dec3ac" stroke="none" d="M15 41C23 40 31 43 35 49C27 50 20 47 15 41Z"/>
+      <path fill="#eedac1" stroke="none" d="M55 78C66 80 76 76 81 71C79 77 72 80 64 80L66 85C72 89 76 94 78 99H68C63 89 58 86 55 78Z"/>
+      <path fill="#383542" d="M37 44L31 33L22 25L17 10L40 28L45 39Z"/>
+      <path fill="#383542" d="M59 39L61 27L81 8L75 26L68 34L65 43Z"/>
+      <path fill="#686274" stroke="none" d="M21 15L37 29L40 35L25 24Z"/>
+      <path fill="#686274" stroke="none" d="M64 28L77 14L72 24L63 34Z"/>
+      <path fill="none" stroke-width="1.9" d="M68 69Q72 70 75 67M49 78Q56 81 63 80"/>
+      <path fill="#22202a" stroke="none" d="M76 60Q80 60 80 62Q79 64 77 64Q75 63 76 60Z"/>
+    </g>
+    <g id="eyes" fill="#22202a">
+      <ellipse cx="48" cy="54" rx="2.6" ry="3.8" transform="rotate(-7 48 54)"/>
+      <ellipse cx="68" cy="52.5" rx="2.25" ry="3.35" transform="rotate(-8 68 52.5)"/>
+    </g>
+
+    <g id="pebble">
+      <ellipse cx="50" cy="50" rx="39" ry="35" fill="#8e8e93"/>
+      <ellipse cx="44" cy="45" rx="5.5" ry="10" fill="#403c46"/>
+      <ellipse cx="62" cy="43" rx="5.5" ry="10" fill="#403c46"/>
+    </g>
+
+    <g id="captain" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#283748" d="M18 107L20 94Q27 86 37 83L49 93L63 84Q75 88 81 104L82 107Z"/>
+      <path fill="#fbefdc" d="M37 83L48 87L63 84L53 102Z"/>
+      <path fill="#d8aa57" stroke="none" d="M22 93L31 87L34 90L25 96ZM68 89L70 86L76 92L74 95Z"/>
+      <path fill="#f6e7d1" d="M30 42Q28 35 35 30L49 24Q56 22 70 28Q78 33 73 39L64 44Z"/>
+      <path fill="#344758" d="M31 41Q50 35 71 38L79 42Q74 49 56 45L34 46Z"/>
+      <path fill="none" stroke="#d8aa57" stroke-width="2.5" d="M34 42Q47 38 60 40"/>
+      <path fill="#d8aa57" stroke="none" d="M50 28L55 31L54 35L50 37L46 34L46 30Z"/>
+      <path fill="#f9ebc4" stroke="none" d="M50 30L52 32L50 34L48 32Z"/>
+    </g>
+
+    <g id="hoodie" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#637fa1" d="M9 107Q11 91 27 85Q19 79 21 64L29 56Q26 71 38 77Q55 85 67 78L69 84Q81 86 89 104L89 107Z"/>
+      <path fill="#3d5370" d="M23 83Q31 82 38 88L51 99Q33 96 25 90Z"/>
+      <path fill="#8ba3bb" d="M52 97Q61 87 71 86L73 91Q64 98 57 101Z"/>
+      <path fill="none" stroke="#e5d4b6" stroke-width="2" d="M45 94L43 103M58 95L61 102"/>
+    </g>
+
+    <g id="terminal" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#29323f" d="M47 107L56 78L89 73Q92 72 91 76L88 101L78 107Z"/>
+      <path fill="#4a6b70" d="M59 82L86 78L84 95L55 99Z"/>
+      <path fill="none" stroke="#d5edac" stroke-width="2.2" d="M63 85L67 88L62 91M71 91L77 90"/>
+      <path fill="#fbefdc" d="M26 101C27 91 37 90 45 93L52 96Q55 99 51 103L46 106Z"/>
+      <path fill="none" stroke-width="1.3" d="M42 94L44 98M47 95L49 99"/>
+    </g>
+
+    <g id="mechanic" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#d69347" d="M30 42Q30 28 47 25Q62 21 70 36L68 42Z"/>
+      <path fill="#e6ad5d" d="M41 36Q38 27 46 24L54 24Q49 29 52 36Z"/>
+      <path fill="#eed090" d="M27 41Q47 34 72 37L79 42Q67 47 32 46Q27 46 27 41Z"/>
+      <path fill="#556674" d="M65 102L78 87Q74 82 78 76L81 74L82 80L87 82L91 77Q94 85 87 90L76 106Z"/>
+      <path fill="#fbefdc" d="M61 104Q61 96 68 93Q73 91 77 97L75 104Z"/>
+    </g>
+
+    <g id="mobile" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#456c5d" d="M18 107L24 90L36 83L48 91L58 86L76 93L83 107Z"/>
+      <path fill="#95b59a" stroke="none" d="M29 87L37 82L48 91L43 95Z"/>
+      <path fill="#354052" d="M80 72L91 75Q94 76 93 80L88 103L69 100L74 76Q75 71 80 72Z"/>
+      <path fill="#b8d3db" stroke="none" d="M80 76L89 78L85 98L74 96L78 78Q78 76 80 76Z"/>
+      <path fill="none" stroke="#354052" stroke-width="1.5" d="M81 79L86 80"/>
+      <path fill="#fbefdc" d="M64 103Q64 96 71 93Q78 91 81 96Q83 101 77 105Z"/>
+    </g>
+
+    <g id="inspector" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#ad7651" d="M28 41Q30 35 38 34Q42 24 53 25Q66 25 71 35L75 39Q66 43 51 40Q38 45 28 41Z"/>
+      <path fill="#d39968" d="M41 34Q50 29 60 32L69 36L68 40L51 39Z"/>
+      <path fill="#6d4d3d" d="M33 40Q48 35 63 39Q70 41 78 39Q77 44 70 46Q60 46 54 42Q41 45 33 43Z"/>
+      <path stroke="#22202a" stroke-width="7" d="M66 106L78 91"/>
+      <path stroke="#a9704c" stroke-width="3.3" d="M66 106L78 91"/>
+      <circle cx="83" cy="83" r="10.4" fill="#deb668"/>
+      <circle cx="83" cy="83" r="6.6" fill="#b6ced1" stroke-width="1.5"/>
+      <path stroke="#f7eee1" stroke-width="1.75" d="M81 80L85 79"/>
+      <path fill="#fbefdc" d="M57 107Q57 100 64 98Q69 97 73 103L71 107Z"/>
+    </g>
+
+    <g id="navigator" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="none" stroke-width="4.8" d="M34 54Q28 38 44 31Q60 24 71 39L75 54"/>
+      <path fill="none" stroke="#89a597" stroke-width="2.1" d="M35 48Q33 34 49 31Q63 29 71 44"/>
+      <path fill="#648074" d="M32 48Q36 48 37 52L39 62Q39 67 35 68L31 68Q27 67 26 62L24 55Q24 50 29 49Z"/>
+      <path fill="#9cb4a1" stroke-width="1.5" d="M29 53Q32 52 33 56L35 62Q35 65 32 65Q29 66 28 62L27 56Q26 54 29 53Z"/>
+      <path fill="none" d="M35 67Q43 74 58 70"/>
+      <ellipse cx="59" cy="70" rx="4" ry="2.6" fill="#648074"/>
+    </g>
+
+    <g id="designer" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#ae6765" d="M28 40Q26 34 34 29Q45 22 62 28Q73 31 73 36Q70 42 52 42Z"/>
+      <path fill="#7c515b" d="M30 39Q47 39 63 34Q71 32 74 36Q75 40 64 44Q45 50 31 43Z"/>
+      <path fill="none" d="M48 28L49 23"/>
+      <path fill="#e0b369" d="M64 106L80 78L87 72L87 81L71 108Z"/>
+      <path fill="#354756" stroke-width="1.5" d="M83 75L87 72L87 77Z"/>
+      <path fill="#fbefdc" d="M55 106Q57 97 66 96Q72 96 76 101L73 107Z"/>
+    </g>
+
+    <g id="archivist" stroke="#22202a" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="none" stroke="#69574c" stroke-width="2" d="M35 52L41 54M56 54Q58 50 62 53M73 51L76 49"/>
+      <ellipse cx="49" cy="54" rx="7.6" ry="6.5" fill="none"/>
+      <ellipse cx="68" cy="52" rx="6.8" ry="6.1" fill="none"/>
+      <path fill="#9c6553" d="M37 82Q49 79 62 86Q74 78 88 77L91 100L64 108L42 105Z"/>
+      <path fill="#f7e8cd" d="M39 80Q52 78 62 86Q73 77 86 76L87 96Q71 99 64 105Q52 99 42 101Z"/>
+      <path fill="none" stroke="#b38971" stroke-width="1.7" d="M62 87L64 103M46 86Q51 86 57 89M70 88L81 84M71 92L81 88"/>
+      <path fill="#fbefdc" d="M35 107Q31 100 34 95Q39 91 43 98L46 107Z"/>
+    </g>
+
+    <g id="night-shift" stroke="#22202a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path fill="#797192" d="M27 42Q30 29 43 27Q59 24 70 32L73 42Q48 44 27 42Z"/>
+      <path fill="#a29ab7" d="M27 40Q43 34 70 36L74 42Q63 44 28 47Z"/>
+      <path fill="none" stroke="#716687" stroke-width="1.4" d="M36 40L36 44M43 39L43 43M51 38L51 42M60 38L60 42"/>
+      <path fill="#517687" d="M65 84L84 83L83 100Q81 105 74 105Q67 105 66 101Z"/>
+      <path fill="none" stroke="#517687" stroke-width="4.5" d="M85 88Q96 87 92 95Q90 99 84 98"/>
+      <ellipse cx="74.5" cy="84" rx="9.5" ry="3.1" fill="#624538"/>
+      <path fill="none" stroke="#f7e8cd" stroke-width="1.5" d="M73 78Q70 75 74 72M79 77Q77 74 81 71"/>
+      <path fill="#fbefdc" d="M53 106Q53 98 62 96Q69 95 71 101L69 107Z"/>
+    </g>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="100" height="100" fill="#81738f"/>
+    <use href="#creature"/>
+    <use href="#eyes"/>
+    <use href="#captain"/>
+  </g>
+</svg>
