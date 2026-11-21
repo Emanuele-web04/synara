@@ -4868,7 +4868,11 @@ describe("ProviderRuntimeIngestion", () => {
     expect(settled?.messages).toHaveLength(0);
   });
 
-  it("retains OpenCode reasoning from streamed deltas when the turn ends", async () => {
+  it.each([
+    { completion: "turn-only" },
+    { completion: "item-without-detail" },
+    { completion: "item-with-detail", detail: "The adapter edge is accounted for." },
+  ])("retains OpenCode reasoning after $completion completion", async ({ completion, detail }) => {
     const harness = await createHarness({ startIngestion: false });
     const base = {
       provider: "opencode" as const,
@@ -4878,6 +4882,7 @@ describe("ProviderRuntimeIngestion", () => {
     };
     const activityId = "provider-reasoning:thread-1:opencode-thought-1";
     const firstAt = "2026-10-03T10:00:30.000Z";
+    const completedItemAt = "2026-10-03T10:00:30.200Z";
     const appendDelta = (eventId: string, createdAt: string, delta: string) =>
       Effect.runPromise(
         harness.runtimeEventRepository.append({
@@ -4893,12 +4898,29 @@ describe("ProviderRuntimeIngestion", () => {
     await appendDelta("opencode-reasoning-2", "2026-10-03T10:00:30.100Z", "boundary.");
     await harness.startIngestion();
     await harness.drain();
-    // OpenCode publishes no live reasoning preview; its text waits for the turn end.
+    // OpenCode publishes no live reasoning preview.
     expect(
       (await harness.readProjectedThread())?.activities.find(
         (activity) => activity.id === activityId,
       ),
     ).toBeUndefined();
+
+    if (completion !== "turn-only") {
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("opencode-reasoning-item-completed"),
+          createdAt: completedItemAt,
+          payload: {
+            itemType: "reasoning",
+            status: "completed",
+            title: "Reasoning",
+            ...(detail !== undefined ? { detail } : {}),
+          },
+        }),
+      );
+    }
 
     await Effect.runPromise(
       harness.runtimeEventRepository.append({
@@ -4914,12 +4936,12 @@ describe("ProviderRuntimeIngestion", () => {
     const thoughts = thread?.activities.filter((activity) => activity.id === activityId);
     expect(thoughts).toHaveLength(1);
     expect(thoughts?.[0]).toMatchObject({
-      createdAt: firstAt,
+      createdAt: completion === "turn-only" ? firstAt : completedItemAt,
       kind: "task.progress",
       summary: "Reasoning trace",
       payload: {
         status: "completed",
-        detail: "Reading the adapter boundary.",
+        detail: detail ?? "Reading the adapter boundary.",
       },
     });
     expect(thread?.messages).toHaveLength(0);

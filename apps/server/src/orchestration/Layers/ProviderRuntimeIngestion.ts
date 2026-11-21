@@ -524,11 +524,9 @@ function withBufferedReasoningSummary(
   event: ProviderRuntimeEvent,
   summary: BufferedReasoningSummary | undefined,
 ): ProviderRuntimeEvent {
+  // The caller has already verified the provider through the reasoning buffer key.
   if (
     event.type !== "item.completed" ||
-    (event.provider !== "codex" &&
-      event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
     event.payload.itemType !== "reasoning" ||
     readableReasoningDetail(event.payload.detail)
   ) {
