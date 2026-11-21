@@ -37,7 +37,10 @@ const MODELS = {
 
 /** A fake `agy acp` session whose updates and prompt results the test drives. */
 function makeControllableRuntime(
-  options: { readonly sessionSetupMethod?: "new" | "load" | "resume" } = {},
+  options: {
+    readonly sessionSetupMethod?: "new" | "load" | "resume";
+    readonly models?: typeof MODELS;
+  } = {},
 ) {
   const events = Effect.runSync(Queue.unbounded<AcpParsedSessionEvent>());
   const requests: Array<{ readonly method: string; readonly payload: unknown }> = [];
@@ -60,7 +63,10 @@ function makeControllableRuntime(
       Effect.succeed({
         sessionId: SESSION_ID,
         initializeResult: { protocolVersion: 1 } as Acp.InitializeResponse,
-        sessionSetupResult: { sessionId: SESSION_ID, models: MODELS } as Acp.NewSessionResponse,
+        sessionSetupResult: {
+          sessionId: SESSION_ID,
+          models: options.models ?? MODELS,
+        } as Acp.NewSessionResponse,
         modelConfigId: "model",
         sessionSetupMethod: options.sessionSetupMethod ?? "new",
       }),
@@ -251,6 +257,48 @@ describe("Antigravity ACP adapter", () => {
         method: "session/set_model",
         payload: { sessionId: SESSION_ID, modelId: "gemini-3.8-flash-low" },
       },
+    ]);
+  });
+
+  it("uses the session planner for a saved Orchestrator without an explicit choice", async () => {
+    const neon = { modelId: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)" };
+    const fake = makeControllableRuntime({
+      sessionSetupMethod: "resume",
+      models: { ...MODELS, availableModels: [...MODELS.availableModels, neon] },
+    });
+    await runWithAdapter(
+      {
+        makeRuntime: fake.makeRuntime,
+        runHelper: async () => ({ code: 0, stdout: "Orchestrator (Carbon)\n", stderr: "" }),
+      },
+      (adapter) =>
+        Effect.gen(function* () {
+          yield* adapter.listModels!({ provider: "antigravity" });
+          const threadId = ThreadId.makeUnsafe("thread-agy-legacy-orchestrator");
+          yield* adapter.startSession(
+            startInput(threadId, {
+              resumeCursor: "legacy-orchestrator",
+              modelSelection: { provider: "antigravity", model: "Orchestrator" },
+            }),
+          );
+
+          const failure = yield* adapter
+            .sendTurn({
+              threadId,
+              input: "hi",
+              attachments: [],
+              modelSelection: {
+                provider: "antigravity",
+                model: "Orchestrator",
+                options: { reasoningEffort: "carbon" },
+              },
+            })
+            .pipe(Effect.flip);
+          expect(failure.message).toContain("Orchestrator (Carbon)");
+        }),
+    );
+    expect(fake.requests).toEqual([
+      { method: "session/set_model", payload: { sessionId: SESSION_ID, modelId: neon.modelId } },
     ]);
   });
 
