@@ -3,17 +3,24 @@
 The required check remains **Format, Lint, Typecheck, Test, Browser Test, Build**.
 It aggregates results only. Static checks start independently. Normal code
 changes run typechecking, five unit partitions, six stable browser partitions,
-desktop build, native Windows regression and migration lineage. Docs-only
-detection and nightly geometry ownership are unchanged.
+desktop build, native Windows regression and migration lineage. Nightly geometry
+ownership is unchanged.
 
-The PR change detector sends its inline filter to `dorny/paths-filter`,
-which reads changed files from the GitHub API. Pushes retain a Git checkout
-for commit comparisons. Across 12 archived hosted runs, the PR checkout step
-took 4–10 s with a median of 7.5 s. A local replay of the action verified
-docs-only changes, code changes, renames, API failure, and push detection.
-The combined hosted trial completed change detection in 3 s with checkout
-skipped. [Filter implementation](https://github.com/dorny/paths-filter/blob/0e4a8c6effa4802afeda77dc8d303f8176d7dfad/src/main.ts#L69),
-[Hosted trial](https://github.com/Emanuele-web04/synara/actions/runs/44307004109)
+No lane waits on another. Each heavy lane runs
+`.github/scripts/detect-code-changes.mjs` right after checkout and skips its
+remaining steps on a docs-only change. The script lists the pull request's files
+(or the pushed commit range) through the GitHub API and applies the same
+code-free rules as before: Markdown/MDX, the root `docs/` tree, marketing content
+and images under `.github/`. A renamed file counts under both names. An API
+error, an empty or possibly truncated list, a forced or first push and any other
+event run every lane. The gate requires every lane to succeed and to report the
+same decision.
+
+The separate `Detect code changes` job this replaces held every heavy lane back
+until it had been scheduled and finished. In the 59 first-attempt runs on the
+current workflow (November 18–21) the heavy lanes were created 13 s after the run
+at the median and 58 s at p95. `Static Checks (fast)`, which never waited, was
+created after 1 s and 29 s.
 
 After workspace setup and CI contract validation, `static-fast` uses GitHub
 Actions' native `parallel` group for identity, Windows boundary, formatting,
