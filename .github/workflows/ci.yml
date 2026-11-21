@@ -186,12 +186,13 @@ jobs:
               --config=vitest.unit.ci.config.ts --project=web-compiler
               --no-passWithNoTests --maxWorkers=2
 
-  # ChatView is one large file, so split it by complementary test-name groups.
-  # Each ChatView job runs two name groups on one runner. The component jobs
-  # each run two Vitest file shards.
-  # Each browser process still executes files serially.
+  # ChatView is one large file. Its three projects split it by complementary
+  # test-name groups, and each project runs as two or three processes that take
+  # the cases by name length (apps/web/vitest.browser.ci.config.ts). The other
+  # browser files run as ten Vitest file shards. Every job runs two processes;
+  # each browser process still executes its files serially.
   browser:
-    name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
+    name: Browser Tests (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -202,30 +203,78 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - project: chat-follow
-            shard: 1/1
+          - name: chat-follow
+            cache: chat-follow
+            projectA: chat-follow
+            sliceA: "1/2"
             shardA: 1/1
+            projectB: chat-follow
+            sliceB: "2/2"
             shardB: 1/1
-          - project: chat-projects
-            shard: 1/1
+          - name: chat-projects
+            cache: chat-projects
+            projectA: chat-projects
+            sliceA: "1/3"
             shardA: 1/1
+            projectB: chat-projects
+            sliceB: "2/3"
             shardB: 1/1
-          - project: chat-workflows
-            shard: 1/1
+          - name: chat-workflows
+            cache: chat-workflows
+            projectA: chat-workflows
+            sliceA: "1/3"
             shardA: 1/1
+            projectB: chat-workflows
+            sliceB: "2/3"
             shardB: 1/1
-          - project: components
-            shard: 1/3
-            shardA: 1/6
-            shardB: 2/6
-          - project: components
-            shard: 2/3
-            shardA: 3/6
-            shardB: 4/6
-          - project: components
-            shard: 3/3
-            shardA: 5/6
-            shardB: 6/6
+          - name: chat-mixed
+            cache: chat-mixed
+            projectA: chat-projects
+            sliceA: "3/3"
+            shardA: 1/1
+            projectB: chat-workflows
+            sliceB: "3/3"
+            shardB: 1/1
+          - name: components 1/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 1/10
+            projectB: components
+            sliceB: ""
+            shardB: 2/10
+          - name: components 2/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 3/10
+            projectB: components
+            sliceB: ""
+            shardB: 4/10
+          - name: components 3/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 5/10
+            projectB: components
+            sliceB: ""
+            shardB: 6/10
+          - name: components 4/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 7/10
+            projectB: components
+            sliceB: ""
+            shardB: 8/10
+          - name: components 5/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 9/10
+            projectB: components
+            sliceB: ""
+            shardB: 10/10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -254,7 +303,7 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           scope: "web"
-          web-transform-cache: browser-${{ matrix.project }}-${{ strategy.job-index }}
+          web-transform-cache: browser-${{ matrix.cache }}-${{ strategy.job-index }}
           web-transform-fallback: ${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}
 
       - name: Wait for Chromium cache
@@ -276,7 +325,7 @@ jobs:
       - name: Save Chromium headless shell
         if: >-
           steps.changes.outputs.code == 'true' &&
-          matrix.project == 'chat-follow' &&
+          matrix.name == 'chat-follow' &&
           steps.chromium-cache.outputs.cache-hit != 'true' &&
           steps.chromium-cache.outputs.cache-primary-key != ''
         uses: actions/cache/save@v5
@@ -287,25 +336,25 @@ jobs:
       # Share cold compiler work by cache key. Vite's optimizer cache and the
       # browser API listener still need a separate directory and port.
       - parallel:
-          - name: Browser test (${{ matrix.project }} ${{ matrix.shardA }} A)
+          - name: Browser test (${{ matrix.projectA }} ${{ matrix.sliceA || matrix.shardA }})
             if: steps.changes.outputs.code == 'true'
             timeout-minutes: 20
             env:
               SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
               VITEST_BROWSER_API_PORT: "51101"
               VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-a
-              VITEST_BROWSER_CHAT_SLICE: a
-            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardA }}
+              VITEST_BROWSER_CHAT_SLICE: ${{ matrix.sliceA }}
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.projectA }} --shard=${{ matrix.shardA }}
 
-          - name: Browser test (${{ matrix.project }} ${{ matrix.shardB }} B)
+          - name: Browser test (${{ matrix.projectB }} ${{ matrix.sliceB || matrix.shardB }})
             if: steps.changes.outputs.code == 'true'
             timeout-minutes: 20
             env:
               SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
               VITEST_BROWSER_API_PORT: "51102"
               VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-b
-              VITEST_BROWSER_CHAT_SLICE: b
-            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shardB }}
+              VITEST_BROWSER_CHAT_SLICE: ${{ matrix.sliceB }}
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.projectB }} --shard=${{ matrix.shardB }}
 
   build:
     name: Desktop Build
