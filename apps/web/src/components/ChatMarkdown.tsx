@@ -65,6 +65,7 @@ import {
   normalizeMarkdownImagePath,
 } from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
+import { resolveMarkdownTextDirection, scriptDirection } from "../lib/markdownDirection";
 import { extractTableMarkdown, rehypeTableLayout } from "../lib/markdownTableLayout";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import {
@@ -171,9 +172,13 @@ interface ChatMarkdownProps {
   imageAttachments?: ReadonlyArray<ChatAttachment> | undefined;
   wikiLinkRoot?: string | undefined;
   /**
-   * Assigns native bidi ownership to transcript markdown blocks. The default
-   * keeps the shared renderer's existing direction behavior for previews,
-   * plans, and other non-transcript consumers.
+   * Opts a transcript message into direction detection. The message takes a base
+   * direction from its dominant script, and every prose block overrides it from
+   * its own dominant script (see `markdownDirection`), so a Persian reply stays
+   * RTL even when a paragraph opens with a Latin name or a code chip, and an
+   * English paragraph in the same reply stays LTR. The default keeps the shared
+   * renderer's existing direction behavior for previews, plans, and other
+   * non-transcript consumers.
    */
   directionMode?: "off" | "auto-blocks";
   isStreaming?: boolean;
@@ -468,55 +473,126 @@ type BidiHastNode = {
   type?: string;
   tagName?: string;
   properties?: Record<string, unknown>;
+  value?: string;
   children?: BidiHastNode[];
 };
 
-const TOP_LEVEL_BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6"]);
-const NESTED_BIDI_OWNER_TAGS = new Set(["li", "blockquote", "th", "td"]);
+const BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "th", "td"]);
+const BIDI_CONTAINER_TAGS = new Set(["ul", "ol", "blockquote"]);
+const BIDI_OPAQUE_TAGS = new Set(["pre", "code", "script", "style"]);
 
-function setBidiDirection(node: BidiHastNode, direction: "auto" | "ltr"): void {
-  node.properties = { ...node.properties, dir: direction };
+function isBidiOpaque(node: BidiHastNode): boolean {
+  if (!node.tagName) return false;
+  if (BIDI_OPAQUE_TAGS.has(node.tagName)) return true;
+  const className = node.properties?.className;
+  return className === "katex" || (Array.isArray(className) && className.includes("katex"));
 }
 
-function applyNestedBidiOwners(node: BidiHastNode): void {
-  if (node.type === "element" && node.tagName) {
-    if (NESTED_BIDI_OWNER_TAGS.has(node.tagName)) {
-      setBidiDirection(node, "auto");
-    } else if (
-      node.tagName === "pre" ||
-      node.tagName === "table" ||
-      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex")) ||
-      node.properties?.className === "katex"
-    ) {
-      // Code, tables, and rendered math retain source/LTR ordering and must
-      // not contribute their Latin text to an enclosing prose block's scan.
-      setBidiDirection(node, "ltr");
-    }
-  }
+function ownsItsDirection(node: BidiHastNode): boolean {
+  return Boolean(
+    node.tagName &&
+    (BIDI_OWNER_TAGS.has(node.tagName) ||
+      BIDI_CONTAINER_TAGS.has(node.tagName) ||
+      node.tagName === "table"),
+  );
+}
 
-  for (const child of node.children ?? []) {
-    applyNestedBidiOwners(child);
+/** GFM links named after their address carry no additional prose. */
+function isAutomaticBidiLink(node: BidiHastNode): boolean {
+  const href = node.properties?.href;
+  if (node.tagName !== "a" || typeof href !== "string" || node.children?.length !== 1) {
+    return false;
   }
+  let labelNode = node.children[0];
+  // Transcript search wraps plain labels in a source-position node.
+  if (labelNode?.tagName === CHAT_FIND_TEXT_TAG_NAME && labelNode.children?.length === 1) {
+    labelNode = labelNode.children[0];
+  }
+  const label = labelNode?.type === "text" ? labelNode.value : undefined;
+  if (!label) return false;
+  return (
+    (href === label && /^[a-z][a-z0-9+.-]*:\/\//i.test(label)) ||
+    (/^www\./i.test(label) && href === `http://${label}`) ||
+    href === `mailto:${label}`
+  );
 }
 
 /**
- * Let the browser's Unicode bidi algorithm choose each prose block's first
- * strong direction. Regular anchors intentionally remain direction-neutral:
- * a link label is part of its paragraph's content, so setting dir=auto on the
- * anchor would isolate it and make a link-only Arabic paragraph resolve LTR.
+ * Collects a block's own prose, joined with spaces so identifiers that sit in
+ * separate inline nodes stay separate words. Nested blocks (a list inside a list
+ * item, a paragraph inside a quote) resolve their own direction, so they are
+ * skipped, as are code, math, and other non-prose runs.
+ */
+function collectBlockText(node: BidiHastNode): string {
+  const parts: string[] = [];
+
+  const walk = (child: BidiHastNode) => {
+    if (child.type === "text") {
+      parts.push(child.value ?? "");
+      return;
+    }
+    if (isBidiOpaque(child) || ownsItsDirection(child) || isAutomaticBidiLink(child)) return;
+    for (const grandchild of child.children ?? []) walk(grandchild);
+  };
+
+  for (const child of node.children ?? []) walk(child);
+  return parts.join(" ");
+}
+
+function majorityDirection(directions: ReadonlyArray<"rtl" | "ltr">): "rtl" | "ltr" | undefined {
+  let rtl = 0;
+  let ltr = 0;
+  for (const direction of directions) {
+    if (direction === "rtl") rtl += 1;
+    else ltr += 1;
+  }
+  if (rtl + ltr === 0) return undefined;
+  return rtl > ltr ? "rtl" : "ltr";
+}
+
+function setBidiDirection(node: BidiHastNode, direction: "rtl" | "ltr"): void {
+  node.properties = { ...node.properties, dir: direction };
+}
+
+function resolveBidiDirections(node: BidiHastNode): "rtl" | "ltr" | undefined {
+  if (node.type === "text" || isBidiOpaque(node)) return undefined;
+
+  const childDirections: Array<"rtl" | "ltr"> = [];
+  for (const child of node.children ?? []) {
+    const direction = resolveBidiDirections(child);
+    if (direction) childDirections.push(direction);
+  }
+
+  if (node.type !== "element" || !node.tagName) {
+    return majorityDirection(childDirections);
+  }
+  if (BIDI_OWNER_TAGS.has(node.tagName)) {
+    // Loose list items and table cells hold nested paragraphs; when they carry no
+    // inline text of their own, follow the blocks they contain.
+    const direction =
+      scriptDirection(collectBlockText(node)) ?? majorityDirection(childDirections) ?? undefined;
+    if (direction) setBidiDirection(node, direction);
+    return direction;
+  }
+  if (BIDI_CONTAINER_TAGS.has(node.tagName)) {
+    const direction = majorityDirection(childDirections);
+    if (direction) setBidiDirection(node, direction);
+    return direction;
+  }
+  return undefined;
+}
+
+/**
+ * Gives every prose block its own direction from the dominant script of that
+ * block. First-strong (`dir="auto"`) is not enough in technical Persian: a
+ * paragraph that opens with `netkeep`, `**Stripe، Linear:**`, or `*.github.com`
+ * would otherwise be laid out in logical LTR order. Containers follow the
+ * majority of their items so list markers, gutters, and quote borders stay on
+ * the same side as the text they decorate.
  */
 function rehypeBidiBlockDirection() {
   return (tree: BidiHastNode) => {
-    for (const child of tree.children ?? []) {
-      if (
-        child.type === "element" &&
-        child.tagName &&
-        TOP_LEVEL_BIDI_OWNER_TAGS.has(child.tagName)
-      ) {
-        setBidiDirection(child, "auto");
-      }
-      applyNestedBidiOwners(child);
-    }
+    resolveBidiDirections(tree);
   };
 }
 
@@ -1450,6 +1526,10 @@ function TechnicalBidiIsolate(props: { active: boolean; children: ReactNode }) {
   );
 }
 
+/**
+ * A table keeps its columns in source order (`dir="ltr"` on the table), so cells
+ * get their own direction from the rehype plugin instead of inheriting it.
+ */
 const MARKDOWN_COMPONENTS: Components = {
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
     const { t } = useTranslation();
@@ -1580,6 +1660,7 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   table: function MarkdownTableElement({ node, children, ...props }) {
+    const { usesAutomaticBlockDirection } = useContext(MarkdownRenderContext)!;
     const start = node?.position?.start;
     const end = node?.position?.end;
     const source =
@@ -1587,7 +1668,14 @@ const MARKDOWN_COMPONENTS: Components = {
         ? null
         : { start: start.offset, end: end.offset, column: start.column };
     return (
-      <MarkdownTable source={source} {...props}>
+      // Column order follows the table's own direction, not the prose around
+      // it, so an RTL message keeps its columns in source order. Cells carry
+      // their own direction instead.
+      <MarkdownTable
+        source={source}
+        {...props}
+        dir={usesAutomaticBlockDirection ? "ltr" : undefined}
+      >
         {children}
       </MarkdownTable>
     );
@@ -1599,7 +1687,11 @@ const MARKDOWN_COMPONENTS: Components = {
     const renderInlineVisual = useContext(InlineVisualEmbedContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
-      return <pre {...props}>{children}</pre>;
+      return (
+        <pre {...props} dir={usesAutomaticBlockDirection ? "ltr" : undefined}>
+          {children}
+        </pre>
+      );
     }
 
     const rawFenceInfo = extractRawFenceInfo(codeBlock.className);
@@ -1868,6 +1960,14 @@ function ChatMarkdown({
   const variant = variantProp ?? "assistant";
   const directionMode = directionModeProp ?? "off";
   const usesAutomaticBlockDirection = directionMode === "auto-blocks";
+  // The message's own direction is the inherited default (bare text, images, and
+  // blocks with no letters of their own); each prose block then overrides it from
+  // its own dominant script, so a bilingual reply keeps Persian paragraphs RTL
+  // and English paragraphs LTR in the same message.
+  const textDirection = useMemo(
+    () => (usesAutomaticBlockDirection ? resolveMarkdownTextDirection(text) : undefined),
+    [text, usesAutomaticBlockDirection],
+  );
   const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
@@ -2020,6 +2120,7 @@ function ChatMarkdown({
       ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
+      dir={textDirection}
       style={style}
     >
       <ChatFindRenderProvider
