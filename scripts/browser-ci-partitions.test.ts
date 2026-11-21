@@ -22,23 +22,30 @@ async function collectPartitions(config: string) {
   }
 }
 
-// Resolve the same configuration as each of the two GitHub browser steps.
+// Expected independently of the config under test: the slices CI runs per project.
+const CHAT_SLICES = { "chat-follow": 2, "chat-projects": 3, "chat-workflows": 3 } as const;
+
+// Resolve the same configuration as each GitHub browser process: one project
+// with one slice. Other projects resolved with that slice are not run by CI.
 async function collectChatSlices() {
-  const slices: Awaited<ReturnType<typeof collectPartitions>> = [];
+  const slices: (Awaited<ReturnType<typeof collectPartitions>>[number] & { slice: string })[] = [];
   try {
-    for (const slice of ["a", "b"]) {
-      vi.stubEnv("VITEST_BROWSER_CHAT_SLICE", slice);
-      slices.push(...(await collectPartitions("vitest.browser.ci.config.ts")));
+    for (const [name, count] of Object.entries(CHAT_SLICES)) {
+      for (let index = 1; index <= count; index++) {
+        const slice = `${index}/${count}`;
+        vi.stubEnv("VITEST_BROWSER_CHAT_SLICE", slice);
+        const partitions = await collectPartitions("vitest.browser.ci.config.ts");
+        slices.push(
+          ...partitions
+            .filter(({ project }) => project === `${name} (chromium)`)
+            .map((partition) => Object.assign(partition, { slice })),
+        );
+      }
     }
   } finally {
     vi.unstubAllEnvs();
   }
-  return slices.filter(
-    ({ project }) =>
-      project === "chat-follow (chromium)" ||
-      project === "chat-projects (chromium)" ||
-      project === "chat-workflows (chromium)",
-  );
+  return slices;
 }
 
 async function collectComponentShard(shard: string) {
@@ -116,10 +123,16 @@ describe("browser CI partitions", () => {
             selected.map(({ project }) => project),
             name,
           ).toEqual([`${lane} (chromium)`]);
+          // Exactly one process of the owning project runs the case: a case in
+          // no slice would be missing from a green gate, a case in two is wasted.
+          const sliceOwners = ciOwners.filter(({ pattern }) => pattern?.test(name));
           expect(
-            ciOwners.filter(({ pattern }) => pattern?.test(name)).map(({ project }) => project),
+            sliceOwners.map(({ project }) => project),
             name,
           ).toEqual([`${lane} (chromium)`]);
+          expect(sliceOwners[0]!.slice, name).toBe(
+            `${(name.length % CHAT_SLICES[lane]) + 1}/${CHAT_SLICES[lane]}`,
+          );
           const quarantined = `[geometry:linux] ${name}`;
           expect(
             owners.filter(({ pattern }) => pattern?.test(quarantined)),
@@ -135,29 +148,41 @@ describe("browser CI partitions", () => {
     }
   }, 120_000);
 
-  it("places all component files exactly once and moves only the measured files", async () => {
+  it("rejects a slice that is not one of a project's processes", async () => {
+    try {
+      for (const slice of ["a", "0/3", "4/3", "1/10", "1"]) {
+        vi.stubEnv("VITEST_BROWSER_CHAT_SLICE", slice);
+        await expect(collectPartitions("vitest.browser.ci.config.ts"), slice).rejects.toThrow(
+          /Invalid VITEST_BROWSER_CHAT_SLICE/,
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 120_000);
+
+  it("places every component file in exactly one of the ten shards and moves only the measured files", async () => {
     const shards = [];
-    for (let index = 1; index <= 6; index++) {
-      shards.push(await collectComponentShard(`${index}/6`));
+    for (let index = 1; index <= 10; index++) {
+      shards.push(await collectComponentShard(`${index}/10`));
     }
     const all = shards[0]!.all;
     expect(all.length).toBeGreaterThan(0);
     expect(shards.flatMap(({ configured }) => configured).toSorted()).toEqual(all);
 
     const expectedPins = {
-      "src/components/ChatMarkdown.streaming.browser.tsx": 3,
-      "src/components/ProjectImportPanel.browser.tsx": 3,
-      "src/components/codeEditor/CodeEditorPane.pierre.browser.tsx": 3,
-      "src/components/EventRouter.browser.tsx": 5,
-      "src/components/chat/environment/EnvironmentPullRequestSection.browser.tsx": 6,
-      "src/components/chat/GeneratedMarkdownImage.browser.tsx": 6,
-      "src/hooks/useWorkspaceFileEditorSession.browser.tsx": 6,
+      "src/components/chat/AsciiWaveBackground.browser.tsx": 10,
+      "src/components/chat/group/GroupSettingsDialog.browser.tsx": 10,
+      "src/components/SafariAccessOnboarding.browser.tsx": 10,
+      "src/components/settings/SyncKeyPairingPanel.browser.tsx": 10,
+      "src/components/useRouteSpaceSync.browser.tsx": 10,
     };
     for (const [file, index] of Object.entries(expectedPins)) {
       expect(shards[index - 1]!.configured).toContain(file);
     }
     for (const { all: collected, configured, native } of shards) {
       expect(collected).toEqual(all);
+      expect(configured.length).toBeGreaterThan(0);
       expect(configured.filter((file) => !(file in expectedPins))).toEqual(
         native.filter((file) => !(file in expectedPins)),
       );

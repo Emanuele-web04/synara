@@ -29,6 +29,7 @@
     "scripts/compiler-cache-key.ts",
     "scripts/production-assets*.ts",
     "scripts/transform-cache*.ts",
+    "scripts/unit-test-deps*.ts",
     "scripts/parallel-transform*.ts",
     "scripts/react-compiler-plugin.d.mts",
     "scripts/settingsSearchRows.ts",

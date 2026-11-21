@@ -119,10 +119,11 @@ runs:
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
           ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
 
-    # Browser tests and Desktop CI use separate cache namespaces.
-    # apps/web/scripts/transform-cache.ts keys each result by
-    # the exact module source, so an archive only ever supplies output for
-    # unchanged modules; a changed module is always recompiled. The key prefix
+    # Browser tests, Desktop CI and the Core unit lane use separate cache
+    # namespaces. apps/web/scripts/transform-cache.ts (and, for the Core
+    # lane's compiler guard, apps/web/src/test/compilerEventCache.ts) keys each
+    # result by the exact module source, so an archive only ever supplies output
+    # for unchanged modules; a changed module is always recompiled. The key prefix
     # hashes the dependency graph, toolchain, config and patches. Workspace
     # release-version metadata does not change the graph. Pull requests
     # restore the newest accessible archive for their lane and seed that lane

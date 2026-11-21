@@ -1,12 +1,15 @@
 // FILE: hotPathCompiler.ts
 // Purpose: Shared React Compiler bailout guard for the chat hot-path test files.
 // Layer: Web test helper
-// Depends on: reactCompiler.ts (same plugin the Vite build uses).
+// Depends on: reactCompiler.ts (same plugin the Vite build uses) and
+//             compilerEventCache.ts (CI replays events for unchanged bytes).
 
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { compileReactModule } from "./reactCompiler";
+import { cachedCompilerEvents } from "./compilerEventCache";
+import { compileReactSource } from "./reactCompiler";
 
 export interface HotPathModule {
   readonly relativePath: string;
@@ -38,7 +41,13 @@ export function describeHotPathCompilation(
       it(
         `compiles ${module.relativePath} without unexpected bailouts`,
         () => {
-          const events = compileReactModule(join(directory, module.relativePath));
+          const filePath = join(directory, module.relativePath);
+          const source = readFileSync(filePath, "utf8");
+          const events = cachedCompilerEvents({
+            filePath,
+            source,
+            compile: () => compileReactSource(filePath, source),
+          });
           const bailoutReasons = events
             .filter((event) => event.kind === "CompileError")
             .map((event) => event.detail?.reason ?? event.detail?.description ?? "unknown")
