@@ -586,6 +586,25 @@ With the cache warm, adding a default value to a destructured parameter in
 take 196 KB. A pull request that edits `ChatView.tsx` still compiles it for
 real and keeps the old critical path for that step.
 
+### Cua host test teardown
+
+`apps/desktop/src/cuaDriverHost.test.ts` waits on real child processes, and
+its fake driver models a 30 ms cleanup acknowledgement and a 150 ms graceful
+exit. Every test paid both again in `afterEach` (about 190 ms each), after its
+assertions had run. The fixture now writes a teardown flag before
+`host.dispose()`, and from then on the fake driver answers and exits without
+those delays. Dispose still takes the same cancel, acknowledgement and exit
+path, and a dispose error still fails the test. Test bodies keep every modeled
+delay, including the exit-before-replacement ordering checks.
+
+Mac mini, same 157 cases: the file took 68.4 s and 51.5 s (three runs:
+51.60 / 51.49 / 51.61 s), and the whole Desktop suite 72.7 s and 49.7 s (1,655
+passed, 6 skipped both times). The remaining local per-test time is mostly
+macOS's first-exec check of each freshly written fake driver (about 0.2 s,
+measured with `process.uptime()` in the child), which hosted Linux does not
+have. `browserVault.test.ts` deliberately uses the production scrypt cost and
+is left as it is.
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall
