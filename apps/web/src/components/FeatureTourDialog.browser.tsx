@@ -3,8 +3,8 @@ import "../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { act, useState } from "react";
-import { page, userEvent } from "vitest/browser";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { cdp, page, userEvent } from "vitest/browser";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useFeatureTourStore } from "~/featureTour/store";
@@ -68,6 +68,21 @@ afterEach(async () => {
   localStorage.removeItem(importKey);
   localStorage.removeItem("synara:appsnap-welcome:v1");
 });
+// Steps glide for 420ms and Playwright waits for a stable box before each click.
+// Tests about step order use the product's reduced-motion path (CSS only) to skip
+// that wait; tests about waiting for exiting dialogs keep real motion.
+async function reduceMotion() {
+  const protocol = cdp() as {
+    send(
+      method: "Emulation.setEmulatedMedia",
+      params: { features: { name: string; value: string }[] },
+    ): Promise<void>;
+  };
+  await protocol.send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+  });
+  onTestFinished(() => protocol.send("Emulation.setEmulatedMedia", { features: [] }));
+}
 async function show(children = <FeatureTourDialog />) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
@@ -79,6 +94,7 @@ async function show(children = <FeatureTourDialog />) {
 }
 
 it("walks the tour in order, remembers dismissal per installation, and replays after a handoff", async () => {
+  await reduceMotion();
   const screen = await show();
   await expect
     .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
@@ -119,6 +135,7 @@ it("skips controls in a collapsed sidebar or under the rail and rings the visibl
       {id}
     </button>
   );
+  await reduceMotion();
   await show(
     <>
       {/* A collapsed offcanvas sidebar stays laid out, slid off the left edge. */}
@@ -151,6 +168,7 @@ it("announces again when the browser connects to a different installation", asyn
   localStorage.setItem(tourKey, JSON.stringify([installation]));
   installation = "/second/worktrees";
   localStorage.setItem(importKey, JSON.stringify([installation]));
+  await reduceMotion();
   await show();
   await expect
     .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
