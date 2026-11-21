@@ -93,6 +93,47 @@ export const PRODUCT_TURN_FAILURES = [
 ] as const;
 export const ProductAnalyticsTurnFailure = Schema.Literals(PRODUCT_TURN_FAILURES);
 export type ProductAnalyticsTurnFailure = typeof ProductAnalyticsTurnFailure.Type;
+
+/** Events that describe a remote connection attempt and may carry connection detail. */
+export const PRODUCT_CONNECTION_EVENTS = [
+  "connection.pair",
+  "connection.connect",
+  "connection.reconnect",
+] as const;
+/**
+ * Where a failed connection attempt stopped. A fixed category the native client
+ * derives from its own connection stage, never error text, hostnames or identifiers.
+ */
+export const PRODUCT_CONNECTION_FAILURES = [
+  "account_unavailable",
+  "subscription_required",
+  "billing_unavailable",
+  "host_unlinked",
+  "identity_mismatch",
+  "no_route",
+  "route_connect",
+  "route_upgrade",
+  "tls_handshake",
+  "inner_upgrade",
+  "session_mint",
+  "session_authorize",
+  "incompatible",
+  "timeout",
+  "other",
+] as const;
+export const ProductAnalyticsConnectionFailure = Schema.Literals(PRODUCT_CONNECTION_FAILURES);
+export type ProductAnalyticsConnectionFailure = typeof ProductAnalyticsConnectionFailure.Type;
+/** The client's network kind during a connection attempt. */
+export const PRODUCT_CONNECTION_NETWORKS = ["wifi", "cellular", "wired", "other", "none"] as const;
+export const ProductAnalyticsNetwork = Schema.Literals(PRODUCT_CONNECTION_NETWORKS);
+export type ProductAnalyticsNetwork = typeof ProductAnalyticsNetwork.Type;
+/**
+ * The path a connection attempt used: `local` is the LAN pairing path, `direct` an
+ * account-published direct endpoint, `tunnel` the managed Cloudflare tunnel.
+ */
+export const PRODUCT_CONNECTION_ROUTES = ["local", "direct", "tunnel"] as const;
+export const ProductAnalyticsRoute = Schema.Literals(PRODUCT_CONNECTION_ROUTES);
+export type ProductAnalyticsRoute = typeof ProductAnalyticsRoute.Type;
 import { BUILT_IN_COMPOSER_SLASH_COMMANDS } from "./composerSlashCommands";
 
 export const PRODUCT_ANALYTICS_COMMANDS = [
@@ -184,8 +225,13 @@ export const ProductAnalyticsEnvelope = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
-  failure: Schema.optional(ProductAnalyticsTurnFailure),
+  // Turn failures on `turn.completed`; connection failures on PRODUCT_CONNECTION_EVENTS.
+  failure: Schema.optional(
+    Schema.Union([ProductAnalyticsTurnFailure, ProductAnalyticsConnectionFailure]),
+  ),
   httpStatus: Schema.optional(HttpStatus),
+  network: Schema.optional(ProductAnalyticsNetwork),
+  route: Schema.optional(ProductAnalyticsRoute),
   command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),

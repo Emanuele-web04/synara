@@ -150,6 +150,20 @@ was seen. `edge_blocked` separates a provider's Cloudflare 403 page from a real
 text is stored. Rows exist only from clients that send the category and after
 migration `0014_product_turn_failures.sql`.
 
+The `connectionFailures` field in `GET /api/product` groups failed `connection.pair`, `connection.connect` and
+`connection.reconnect` events by day, device, app version, mode, route, network,
+failure stage and HTTP status. The native client sends one fixed stage
+(`account_unavailable`, `subscription_required`, `billing_unavailable`,
+`host_unlinked`, `identity_mismatch`, `no_route`, `route_connect`,
+`route_upgrade`, `tls_handshake`, `inner_upgrade`, `session_mint`,
+`session_authorize`, `incompatible`, `timeout`, `other`), the network kind (`wifi`,
+`cellular`, `wired`, `other`, `none`) and the route (`local`, `direct`, `tunnel`).
+The receiver accepts network and route on connection events only, and a stage only on
+a failed connection event. Older clients leave all three empty; their failures still
+appear with an unknown cause. No address, hostname, network name or error text is
+stored. The columns arrive with migration `0015_product_connection_detail.sql`. The
+host-side counterparts are the `remote.*` codes in [RELIABILITY.md](RELIABILITY.md).
+
 These are client observations, not unique global executions: multiple installations
 can observe the same turn. Event UUID retries deduplicate, but cross-device turn
 identity is not collected. No provider/model cost or global billing claim is made.
