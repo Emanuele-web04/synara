@@ -22,6 +22,30 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.5",
+    date: "Nov 22",
+    features: [
+      {
+        id: "multilingual-chat-direction",
+        title: "Better reading order in multilingual chats",
+        description:
+          "Each transcript block follows its dominant writing direction. A Persian, Arabic, or Hebrew paragraph can start with an English product name and still read right to left. Code and table columns keep their original order.",
+      },
+      {
+        id: "opencode-reasoning-trace",
+        title: "Keep OpenCode reasoning in activity history",
+        description:
+          "When an OpenCode turn ends, its streamed reasoning is saved as a Reasoning trace in the activity log.",
+      },
+      {
+        id: "antigravity-planner-selection",
+        title: "Keep your Antigravity planner selection",
+        description:
+          "Synara honors the selected Orchestrator planner when resuming. If your chosen planner is unavailable, you can select one that the session offers.",
+      },
+    ],
+  },
+  {
     version: "1.6.4",
     date: "Nov 20",
     features: [

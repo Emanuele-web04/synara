@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.6.5 — 2026-11-22
+
+**Better multilingual transcripts, retained OpenCode reasoning, and more predictable Antigravity resume.**
+
+### Added
+
+- The analytics receiver can group Remote connection failures by stage, network kind, and connection path when updated iPhone and iPad clients send those categories. Desktop Beta adds six consent-gated reliability codes for admission, authorization, tunnel provisioning, and connector exits. Payloads use fixed categories without hostnames, IP addresses, network names, or free-form errors. The receiver migration and deployment are separate from this Stable desktop release. ([#2257](https://github.com/Emanuele-web04/synara/pull/2257))
+
+### Changed
+
+- Desktop refreshes the recorded app version for existing Remote links when reporting endpoints. The account service also gains maintenance logic to retire stale pre-Stable Remote 1.0.6 preview identities after a grace period. That cleanup runs through account service maintenance. ([#2256](https://github.com/Emanuele-web04/synara/pull/2256))
+- Browser CI runs across nine jobs, up from six, and the 666 provider-orchestration tests from a single file now run across seven files with the same test inventory. CI starts its heavy jobs immediately, reports timing by phase, enforces per-job time budgets on warm installs, reuses React Compiler results for unchanged inputs, and removes timer waits from selected browser fixtures. ([#2241](https://github.com/Emanuele-web04/synara/pull/2241), [#2244](https://github.com/Emanuele-web04/synara/pull/2244), [#2247](https://github.com/Emanuele-web04/synara/pull/2247), [#2249](https://github.com/Emanuele-web04/synara/pull/2249), [#2251](https://github.com/Emanuele-web04/synara/pull/2251), [#2252](https://github.com/Emanuele-web04/synara/pull/2252), [#2253](https://github.com/Emanuele-web04/synara/pull/2253))
+- Web Unit CI pre-bundles Effect and Synara contracts while keeping test isolation. Across three shuffle seeds on a Mac mini with four workers, the measured suite took 27.4–28.6 s, down from 36.4–39.5 s. This measures test runtime. ([#2255](https://github.com/Emanuele-web04/synara/pull/2255))
+
+### Fixed
+
+- Transcript paragraphs, headings, lists, quotes, and table cells follow the dominant script of each block. Mixed Persian or Hebrew and English text gets the appropriate reading direction even when a paragraph starts with a Latin product name. Code stays left to right, and tables retain column order. ([#2239](https://github.com/Emanuele-web04/synara/pull/2239))
+- OpenCode reasoning streamed as text deltas is retained in the activity log as a **Reasoning trace** when a turn settles. ([#2250](https://github.com/Emanuele-web04/synara/pull/2250))
+- Antigravity requires a matching planner for explicit Orchestrator selections such as Carbon or Neon. A legacy bare Orchestrator selection can resolve automatically when the session exposes exactly one planner. ([#2240](https://github.com/Emanuele-web04/synara/pull/2240))
+
+### Verification
+
+Publication requires workspace and server checks, native packaging, provenance, and packaged startup. The Windows x64 installer uses the version-scoped unsigned exception and requires Microsoft Defender scanning. macOS requires signing and notarization. Manual installation, installed-app upgrades, and live provider sessions fall outside these automated checks.
+
 ## 1.6.4 — 2026-11-20
 
 **Antigravity connectors, lighter Remote reconnects, and more usable narrow chats.**
