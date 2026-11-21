@@ -52,6 +52,44 @@ describe("server reliability IPC", () => {
     }
   });
 
+  it("bounds repeating remote failures per code: peers every 30 s, host state every 10 min", async () => {
+    // A fresh module keeps this window state independent of other tests.
+    vi.resetModules();
+    const { reportReliabilityIssue: report } = await import("./reliability");
+    const sendMessage = vi.fn();
+    ipc(true, sendMessage);
+    let now = 1_000_000;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const hostState = [
+      "remote.authorization_failed",
+      "remote.authorization_denied",
+      "remote.authorization_subscription_required",
+      "remote.tunnel_provision_failed",
+      "remote.connector_exited",
+    ] as const;
+    const sent = () => sendMessage.mock.calls.map(([message]) => message.issue.code);
+    try {
+      for (let count = 0; count < 20; count++) {
+        report("remote.admission_refused");
+        for (const code of hostState) report(code);
+      }
+      expect(sent()).toEqual(["remote.admission_refused", ...hostState]);
+      now += 30_000;
+      report("remote.admission_refused");
+      for (const code of hostState) report(code);
+      expect(sent()).toEqual([
+        "remote.admission_refused",
+        ...hostState,
+        "remote.admission_refused",
+      ]);
+      now += 10 * 60_000 - 30_000;
+      for (const code of hostState) report(code);
+      expect(sent().slice(-hostState.length)).toEqual(hostState);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("sends only a fixed code to the desktop and rejects arbitrary error text", () => {
     const sendMessage = vi.fn();
     ipc(true, sendMessage);

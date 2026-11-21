@@ -19,10 +19,14 @@ function makeHome() {
   };
 }
 
-function makeReporter(homeDir: string, fetcher: typeof fetch) {
+function makeReporter(
+  homeDir: string,
+  fetcher: typeof fetch,
+  channel: ReliabilityRecord["channel"] = "stable",
+) {
   const reporter = new ReliabilityReporter({
     homeDir,
-    channel: "stable",
+    channel,
     appVersion: "1.5.1",
     platform: "darwin",
     fetcher,
@@ -106,6 +110,27 @@ it("requires consent, rejects private input fields, and deletes unsent data on o
   await reporter.flush();
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
+
+it.each([
+  ["stable", ["remote.ingress_socket_error"]],
+  ["remote", ["remote.ingress_socket_error"]],
+  ["beta", ["remote.ingress_socket_error", "remote.admission_refused"]],
+] as const)(
+  "queues and uploads new host failure reports only in Beta, channel %s",
+  async (channel, codes) => {
+    const { homeDir, path } = makeHome();
+    const fetcher = vi.fn(acknowledgeBatch);
+    const reporter = makeReporter(homeDir, fetcher, channel);
+
+    reporter.setEnabled(true);
+    reporter.track({ code: "remote.ingress_socket_error" });
+    reporter.track({ code: "remote.admission_refused" });
+    expect(readQueue(path).map(({ code }) => code)).toEqual(codes);
+    await reporter.flush();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(readBatch(fetcher.mock.calls[0]?.[1]).map(({ code }) => code)).toEqual(codes);
+  },
+);
 
 it("replays persisted receipts after restart and retains only unacknowledged records", async () => {
   vi.useFakeTimers();
@@ -269,6 +294,7 @@ it("drops invalid, expired, future, and cross-channel records from persisted dat
     { ...valid, id: randomUUID(), appVersion: "1.5.1+private" },
     { ...valid, id: randomUUID(), code: "private description" },
     { ...valid, id: randomUUID(), channel: "beta" },
+    { ...valid, id: randomUUID(), code: "remote.admission_refused" },
     { ...valid, id: randomUUID(), day: "2000-01-01" },
     { ...valid, id: randomUUID(), day: "2999-01-01" },
   ];
