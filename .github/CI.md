@@ -639,6 +639,45 @@ measured with `process.uptime()` in the child), which hosted Linux does not
 have. `browserVault.test.ts` deliberately uses the production scrypt cost and
 is left as it is.
 
+### Web Unit pre-bundles Effect and contracts
+
+Each Web Unit test file used to evaluate Effect and `@synara/contracts`
+module by module. The `web` and `web-local-time` projects now load both from
+a Vite optimizer bundle built once per run (`deps.optimizer.ssr`). The
+`web-compiler` project in the Core lane is unchanged.
+`apps/web/scripts/unit-test-deps.ts` builds the include list on each run from
+the contracts `exports` map and every `effect` or `effect/…` path imported
+under `apps/web`, `packages/shared` and `packages/profile-ui`.
+
+A module in the bundle must not also load from source, because a second
+copy keeps separate module state. The guard plugin fails the importing test
+file when an `effect`, `@effect/*` or `@synara/contracts` import would
+resolve to source beside the bundle. It also drops Vite's `?v=` query from
+bundle entries. Without that, `@synara/contracts/uiLocale` loaded once under
+the query URL and once more through the bundled index, which gave two
+different `UI_LOCALES` arrays. `scripts/unit-test-deps.test.ts` covers both
+failures. With the plugin removed, its three guard cases fail.
+
+Mac mini timings used 4 workers, the CI config and the two projects. Each
+row compares runs with the same shuffle seed:
+
+| Shuffle seed    |  Before |   After | Vitest import sum |
+| --------------- | ------: | ------: | ----------------: |
+| `3113`          | 39.49 s | 28.45 s |   98.6 s → 66.1 s |
+| `7301`          | 38.47 s | 28.58 s |   98.0 s → 65.4 s |
+| `1795008673311` | 36.44 s | 27.43 s |   93.0 s → 63.2 s |
+
+For each seed, all 6,279 previous cases matched by name, outcome and
+multiplicity (6,271 passed, 8 skipped). The 7 new guard cases also passed.
+
+`force: true` rebuilds the bundle on every run, because Vite's optimizer hash
+does not cover linked workspace source and could otherwise serve stale
+contracts. The two project bundles build at the same time in 83–90 ms each.
+Scanning for the include list takes 53–67 ms. Under seed `3113`, two runs that
+reused the bundle took 27.51 s and 27.31 s, and two forced runs took 27.58 s
+and 28.06 s. That difference is within run-to-run noise, so the measured
+saving is net of the rebuild. Hosted timing is unverified.
+
 ## November 2026 critical-path rebalance
 
 An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall
