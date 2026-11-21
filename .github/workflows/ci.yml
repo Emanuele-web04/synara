@@ -74,7 +74,7 @@ jobs:
 
       - name: Enforce job budget
         env:
-          CI_JOB_BUDGET_SECONDS: "75"
+          CI_JOB_BUDGET_SECONDS: "1"
         run: node .github/scripts/job-budget.mjs
 
   static-typecheck:
