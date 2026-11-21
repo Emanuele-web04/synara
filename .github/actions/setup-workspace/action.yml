@@ -83,6 +83,13 @@ runs:
           scripts/node_modules
         key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v3-electron-false-${{ inputs.scope != 'full' && format('{0}-', inputs.scope) || '' }}${{ steps.modules-key.outputs.fingerprint }}
 
+    # A lane that rebuilds its dependency archive measures the install, so its
+    # job budget is reported without being enforced (.github/scripts/job-budget.mjs).
+    - name: Mark cold dependency cache
+      if: ${{ steps.modules.outcome == 'success' && steps.modules.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: echo "CI_COLD_CACHE=node_modules" >> "$GITHUB_ENV"
+
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
     # do not consume Turbo outputs and must not restore or save this archive.
