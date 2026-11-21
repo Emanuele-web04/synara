@@ -281,6 +281,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
   assert.deepEqual(unitSetup.with, {
     scope: "${{ matrix.scope || 'full' }}",
     "save-modules": "${{ matrix.save-modules || 'false' }}",
+    "web-transform-cache": "${{ matrix.web-transform-cache || '' }}",
   });
   assert.deepEqual(
     jobs.unit.strategy.matrix.include.filter((lane) => lane.scope || lane["save-modules"]),
@@ -483,20 +484,26 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   assert.ok(viteConfig.includes('command === "build" && mode === "production"'));
   assert.ok(viteConfig.includes('process.env.VITEST === "true"'));
   assert.ok(viteConfig.includes("transformCacheSalt(productionBuild)"));
-  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 2);
+  // Browser lanes, Desktop Build, and the Core unit lane's matrix entry and setup.
+  assert.equal(workflow.match(/web-transform-cache:/g)?.length, 4);
   assert.equal(workflow.match(/web-transform-fallback:/g)?.length, 1);
   const browserSetup = jobs.browser.steps.find((step) => step.name === "Setup workspace").with;
   assert.equal(
     browserSetup["web-transform-cache"],
-    "browser-${{ matrix.project }}-${{ strategy.job-index }}",
+    "browser-${{ matrix.cache }}-${{ strategy.job-index }}",
   );
   assert.equal(
     browserSetup["web-transform-fallback"],
     "${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}",
   );
-  const donor = jobs.browser.strategy.matrix.include[5];
-  assert.equal(donor.project, "components");
-  assert.equal(donor.shard, "3/3");
+  // The donor index must stay a components job; the first three ChatView jobs
+  // keep the archive names main already saves.
+  const browserLanes = jobs.browser.strategy.matrix.include;
+  assert.equal(browserLanes[5].cache, "components");
+  assert.deepEqual(
+    browserLanes.slice(0, 3).map(({ cache }) => cache),
+    ["chat-follow", "chat-projects", "chat-workflows"],
+  );
   assert.equal(
     jobs.build.steps.find((step) => step.name === "Setup workspace").with["web-transform-cache"],
     "desktop-production",
@@ -523,6 +530,33 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
     assert.ok(!text.includes("SYNARA_WEB_TRANSFORM_CACHE_DIR"), other);
     assert.ok(!text.includes("SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"), other);
   }
+});
+test("only the Core lane replays hot-path compiler events, keyed by source and toolchain", () => {
+  const cached = jobs.unit.strategy.matrix.include.filter((lane) => lane["web-transform-cache"]);
+  assert.deepEqual(
+    cached.map((lane) => [lane.pkg, lane["web-transform-cache"]]),
+    [["core", "unit-core-compiler"]],
+  );
+  const setupWith = jobs.unit.steps.find((step) => step.name === "Setup workspace").with;
+  assert.equal(setupWith["web-transform-fallback"], undefined);
+  const compiler = jobs.unit.steps
+    .find((step) => step.parallel)
+    .parallel.find(({ name }) => name === "Verify chat hot-path compiler");
+  // The guard reads the directory the setup action exports; nothing overrides it.
+  assert.equal(compiler.env, undefined);
+  const cache = read("../../apps/web/src/test/compilerEventCache.ts");
+  assert.ok(cache.includes("env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim()"));
+  assert.ok(cache.includes('path.join(root, "hot-path-compiler")'));
+  assert.ok(cache.includes(".update(compilerCacheFingerprint(repositoryRoot))"));
+  for (const input of ["toolchain", "path.resolve(input.filePath)", "input.source"])
+    assert.ok(cache.includes(`.update(${input})`), input);
+  for (const file of ["compilerEventCache.ts", "hotPathCompiler.ts", "reactCompiler.ts"])
+    assert.ok(cache.includes(`"src/test/${file}"`), file);
+  for (const name of ["babel-plugin-react-compiler", "@babel/core"])
+    assert.ok(cache.includes(`"${name}"`), name);
+  const guard = read("../../apps/web/src/test/hotPathCompiler.ts");
+  assert.ok(guard.includes("cachedCompilerEvents({"));
+  assert.ok(guard.includes("compile: () => compileReactSource(filePath, source)"));
 });
 test("the Electron runtime cache keys on its own lockfile resolution", () => {
   const steps = Object.fromEntries(
@@ -733,31 +767,42 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   assert.ok(serverConfig.includes("maxWorkers: availableParallelism()"));
   assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
   const browserMatrix = jobs.browser.strategy.matrix.include;
-  const components = browserMatrix.filter(({ project }) => project === "components");
-  assert.deepEqual(components.map(({ shard }) => shard).sort(), ["1/3", "2/3", "3/3"]);
-  // Duplicating a child shard would leave its sibling's tests out of a green gate.
-  assert.deepEqual(components.flatMap(({ shardA, shardB }) => [shardA, shardB]).sort(), [
-    "1/6",
-    "2/6",
-    "3/6",
-    "4/6",
-    "5/6",
-    "6/6",
+  // Nine browser jobs plus the nine other lanes stay inside the account's 20 concurrent jobs.
+  assert.equal(browserMatrix.length, 9);
+  assert.equal(new Set(browserMatrix.map(({ name }) => name)).size, 9);
+  const processes = browserMatrix.flatMap((lane) => [
+    { project: lane.projectA, slice: lane.sliceA, shard: lane.shardA },
+    { project: lane.projectB, slice: lane.sliceB, shard: lane.shardB },
   ]);
+  const owned = (project) => processes.filter((process) => process.project === project);
+  // Duplicating a shard or slice would leave its sibling's tests out of a green gate.
   assert.deepEqual(
-    browserMatrix
-      .filter(({ project }) => project !== "components")
-      .map(({ project, shardA, shardB }) => [project, shardA, shardB]),
-    [
-      ["chat-follow", "1/1", "1/1"],
-      ["chat-projects", "1/1", "1/1"],
-      ["chat-workflows", "1/1", "1/1"],
-    ],
+    owned("components").map(({ shard, slice }) => [shard, slice]),
+    Array.from({ length: 10 }, (_, index) => [`${index + 1}/10`, ""]),
   );
+  const chatConfig = read("../../apps/web/vitest.browser.ci.config.ts");
+  for (const [project, count] of [
+    ["chat-follow", 2],
+    ["chat-projects", 3],
+    ["chat-workflows", 3],
+  ]) {
+    assert.ok(chatConfig.includes(`"${project}": ${count},`), project);
+    assert.deepEqual(
+      owned(project)
+        .map(({ slice, shard }) => [slice, shard])
+        .toSorted(),
+      Array.from({ length: count }, (_, index) => [`${index + 1}/${count}`, "1/1"]),
+      project,
+    );
+  }
+  assert.equal(processes.length, 18);
   const browserPair = jobs.browser.steps.find((step) => step.parallel)?.parallel;
   assert.deepEqual(
-    browserPair?.map((step) => step.env.VITEST_BROWSER_CHAT_SLICE),
-    ["a", "b"],
+    browserPair?.map((step) => [step.env.VITEST_BROWSER_CHAT_SLICE, step.run]),
+    ["A", "B"].map((half) => [
+      `\${{ matrix.slice${half} }}`,
+      `bun run --cwd apps/web test:browser:ci -- --project=\${{ matrix.project${half} }} --shard=\${{ matrix.shard${half} }}`,
+    ]),
   );
   assert.deepEqual(
     browserPair?.map((step) => step.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED),
@@ -784,7 +829,7 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   assert.equal(save.uses, "actions/cache/save@v5");
   assert.equal(save.with.path, cache.with.path);
   assert.equal(save.with.key, "${{ steps.chromium-cache.outputs.cache-primary-key }}");
-  assert.match(save.if, /matrix\.project == 'chat-follow'/);
+  assert.match(save.if, /matrix\.name == 'chat-follow'/);
   assert.match(save.if, /steps\.chromium-cache\.outputs\.cache-hit != 'true'/);
   assert.match(save.if, /steps\.chromium-cache\.outputs\.cache-primary-key != ''/);
   assert.ok(runtime.run.includes("./node_modules/.bin/playwright install chromium --only-shell"));

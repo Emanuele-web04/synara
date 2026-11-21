@@ -2,7 +2,7 @@
 
 The required check remains **Format, Lint, Typecheck, Test, Browser Test, Build**.
 It aggregates results only. Static checks start independently. Normal code
-changes run typechecking, five unit partitions, six stable browser partitions,
+changes run typechecking, five unit partitions, nine stable browser jobs,
 desktop build, native Windows regression and migration lineage. Nightly geometry
 ownership is unchanged.
 
@@ -408,6 +408,40 @@ and workflows 55.72 s and 44.36 s. The slowest ChatView lane fell from
 quarantined cases still run in the geometry lane. GitHub schedules six
 browser jobs. The final layout has yet to run on hosted Linux.
 
+### Nine browser jobs
+
+The six browser jobs were the slowest lanes of every run: 170–178 s at the
+median in the 58 most recent runs, against 147–148 s for the next lanes. In
+[run 44935499084](https://github.com/Emanuele-web04/synara/actions/runs/44935499084)
+the twelve browser processes took 77–167 s each. A component process spent
+47–87 s on per-file module loading and 51–65 s in tests for about 42 files. A
+ChatView process spent 60–101 s in tests.
+
+The browser lane is now nine jobs of two processes each. The component files run
+as ten native Vitest shards on five runners instead of six shards on three. The six-shard pins are gone because they were
+measured for that layout. In the first two runs of the new layout shard 9/10
+took 109–110 s beside 51–52 s for 10/10: native placement puts
+`EventRouter.browser.tsx` (40 s of tests) on 9. Five files now move from 9 to
+10, which evens the estimated load of the pair at about 72 s each. ChatView
+keeps its three projects and runs as eight processes instead of six.
+
+Each ChatView project is split by the length of the full test name modulo its
+slice count (`VITEST_BROWSER_CHAT_SLICE=2/3`), replacing the keyword pairs. Every
+name has exactly one remainder, so the slices of a project are complete and
+disjoint by construction and a new case needs no keyword. With the per-test
+times of that run the slices hold 56 and 71 s of tests for `chat-follow`,
+62, 50 and 56 s for `chat-projects` and 80, 50 and 56 s for `chat-workflows`,
+against 60–101 s before. `scripts/browser-ci-partitions.test.ts` checks every
+example case against exactly one process and rejects a malformed slice; the CI
+contract test checks that the matrix runs each slice and each shard once.
+
+A run now needs 18 runners at once (nine browser jobs and nine other lanes) of
+the account's 20, up from 15. Two overlapping runs already queued before; they
+queue for longer now. The first three ChatView jobs and the first two component
+jobs keep the compiler archive names main already saves. The other four jobs
+borrow the component donor archive on a pull request and seed their own on
+main.
+
 ### Desktop lifecycle smoke during the build
 
 The lifecycle smoke bundles its own fixture. The Desktop Build job verifies it
@@ -533,6 +567,77 @@ workers, against 37.8 s for the single file and 44.7 s for both files on one
 worker. ChatView's own compile sets the floor. Hosted, the guard took 123 s
 and 95 s with two workers in runs 44383201899 and 44384792991, and Core took
 170 s and 146 s.
+
+### Hot-path compiler event cache
+
+A CPU profile of the single `ChatView.tsx` compile on the Mac mini spent
+about 92% of its time inside React Compiler's `inferMutationAliasingEffects`
+fixed-point pass (`merge` and `clone` of its abstract state), plus GC. Parsing,
+code generation and the event logger were each under 2%, and skipping code
+generation (`code: false`) did not change the time. The guard already passes
+the same parser options as the production build, so there is nothing avoidable
+on the harness side; the compiler itself was left unpatched.
+
+The guard's result is a pure function of the module's bytes and the
+toolchain, so the Core lane now replays it for unchanged modules.
+`apps/web/src/test/compilerEventCache.ts` stores the events the guard reads
+(kind, function name, bailout reason and description, PipelineError text),
+keyed by:
+
+- the transform cache's fingerprint (`compiler-cache-key.ts`: Node version,
+  normalized lockfile, patches, compiler plugin definition, Vite config),
+- the three harness files,
+- the installed `babel-plugin-react-compiler` and `@babel/core` versions and
+  entry bytes,
+- `BABEL_ENV` and `NODE_ENV`,
+- the module's absolute path and exact source.
+
+A fresh compile and a replay both pass through the same projection and JSON
+round trip, so a hit returns exactly what the compile it recorded returned.
+The cache holds compile results, not verdicts: a recorded bailout fails the
+guard again. An entry whose stored key differs from its file name, whose
+format is unknown, or whose events do not have the expected types is
+recompiled and rewritten. Without `SYNARA_WEB_TRANSFORM_CACHE_DIR` (local runs,
+Web Unit) every call compiles. `compilerEventCache.test.ts` covers edits,
+plugin version and code changes, malformed entries, and real compiler events.
+
+The Core lane owns the `unit-core-compiler` archive under the existing
+ownership rules: pull requests restore the newest matching archive and seed it
+only on a miss, and pushes to `main` save one entry per commit.
+
+Mac mini, both guard files, `--maxWorkers=2`:
+
+```text
+State                                    Wall (s)   User CPU (s)
+No cache directory                         22.60        39.03
+Empty cache (compiles, writes 49 entries)  22.63        38.10
+Warm cache                                  0.66         1.00
+```
+
+With the cache warm, adding a default value to a destructured parameter in
+`chat/useChatWorkLog.ts` failed the guard on that run and the next one
+(`AssignmentPattern`). Restoring the file passed from the cache. The 49 entries
+take 196 KB. A pull request that edits `ChatView.tsx` still compiles it for
+real and keeps the old critical path for that step.
+
+### Cua host test teardown
+
+`apps/desktop/src/cuaDriverHost.test.ts` waits on real child processes, and
+its fake driver models a 30 ms cleanup acknowledgement and a 150 ms graceful
+exit. Every test paid both again in `afterEach` (about 190 ms each), after its
+assertions had run. The fixture now writes a teardown flag before
+`host.dispose()`, and from then on the fake driver answers and exits without
+those delays. Dispose still takes the same cancel, acknowledgement and exit
+path, and a dispose error still fails the test. Test bodies keep every modeled
+delay, including the exit-before-replacement ordering checks.
+
+Mac mini, same 157 cases: the file took 68.4 s and 51.5 s (three runs:
+51.60 / 51.49 / 51.61 s), and the whole Desktop suite 72.7 s and 49.7 s (1,655
+passed, 6 skipped both times). The remaining local per-test time is mostly
+macOS's first-exec check of each freshly written fake driver (about 0.2 s,
+measured with `process.uptime()` in the child), which hosted Linux does not
+have. `browserVault.test.ts` deliberately uses the production scrypt cost and
+is left as it is.
 
 ### Web Unit pre-bundles Effect and contracts
 
