@@ -265,11 +265,13 @@ export function resolveAntigravityCliModelLabel(
 ): string {
   const parsed = parseAntigravityCliModelLabel(model);
   if (!parsed) return model;
-  const effort =
-    parsed.effort ??
-    options?.reasoningEffort?.trim().toLowerCase() ??
-    discoveredDefaultEffort?.trim().toLowerCase() ??
-    DEFAULT_EFFORT_BY_MODEL[parsed.model];
+  // An Orchestrator suffix names a planner. Leave a saved bare selection for the
+  // session to resolve instead of treating discovery's default as an explicit choice.
+  const defaultEffort =
+    parsed.model.toLowerCase() === "orchestrator"
+      ? undefined
+      : (discoveredDefaultEffort?.trim().toLowerCase() ?? DEFAULT_EFFORT_BY_MODEL[parsed.model]);
+  const effort = parsed.effort ?? options?.reasoningEffort?.trim().toLowerCase() ?? defaultEffort;
   // Always rebuild the CLI display label. Returning the raw input would preserve
   // corrupted `slug\tName (Effort)` rows from older discovery parsing.
   return effort ? `${parsed.model} (${effortLabel(effort)})` : parsed.model;
