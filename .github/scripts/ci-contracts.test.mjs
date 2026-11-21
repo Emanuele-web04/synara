@@ -78,13 +78,20 @@ test("no lane waits on another; each detects docs-only changes before any work",
     assert.equal(steps[1].run, "node .github/scripts/detect-code-changes.mjs", name);
     assert.equal(steps[1].if, undefined, name);
     // Every later step, including each member of a parallel group, is skipped
-    // only by this lane's own decision.
+    // only by this lane's own decision. A wait step takes no condition: it
+    // joins a background step that carries one.
     const later = steps.slice(2).flatMap((step) => step.parallel ?? [step]);
-    for (const step of later)
+    for (const step of later) {
+      if (step.wait) {
+        assert.equal(step.if, undefined, `${name}: ${step.name}`);
+        assert.ok(String(steps.find((other) => other.id === step.wait)?.if).startsWith(condition));
+        continue;
+      }
       assert.ok(
         String(step.if).replaceAll(/\s+/g, " ").startsWith(condition),
         `${name}: ${step.name}`,
       );
+    }
     const lane = lanes[heavyJobs.indexOf(name)];
     assert.equal(jobs.quality.steps[0].env[`CODE_${lane}`], `\${{ needs.${name}.outputs.code }}`);
   }

@@ -258,7 +258,6 @@ jobs:
           web-transform-fallback: ${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}
 
       - name: Wait for Chromium cache
-        if: steps.changes.outputs.code == 'true'
         wait: chromium-cache
 
       # GitHub's pinned Ubuntu image already provides the Chromium shared-library
@@ -354,7 +353,6 @@ jobs:
         run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
 
       - name: Wait for the desktop build
-        if: steps.changes.outputs.code == 'true'
         wait: desktop-build
 
       - name: Build analytics dashboard and bundle Worker
