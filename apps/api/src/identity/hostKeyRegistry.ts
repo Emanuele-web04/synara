@@ -50,6 +50,10 @@ function expiredCleanupCutoff(): Date {
   return new Date(Date.now() - EXPIRED_CHALLENGE_GRACE_MS);
 }
 
+// Link-time appVersion was not refreshed on upgrade. Keep every registration
+// seen on or after the day Remote Connections shipped in Synara 1.5.0.
+const FIRST_STABLE_REMOTE_DAY = new Date("2026-11-10T00:00:00Z");
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Grace period before cleaning up a legacy Remote entry with a current replacement. */
 export const SUPERSEDED_HOST_IDLE_MS = 7 * DAY_MS;
@@ -623,11 +627,15 @@ export function createHostKeyRegistry(
       );
     },
 
-    replaceEndpoints(authorization, hostId, endpoints) {
+    replaceEndpoints(authorization, hostId, endpoints, appVersion) {
       return withAuthenticatedHost(authorization, hostId, async (tx) => {
         const [row] = await tx
           .update(hosts)
-          .set({ endpoints: [...endpoints], lastSeenAt: new Date() })
+          .set({
+            endpoints: [...endpoints],
+            lastSeenAt: new Date(),
+            ...(appVersion === undefined ? {} : { appVersion }),
+          })
           .where(eq(hosts.id, hostId))
           .returning();
         if (!row) throw new HostAuthDomainError(404, "host_not_found", "Host not found");
@@ -706,6 +714,7 @@ export function createHostKeyRegistry(
             and(
               isNotNull(hosts.publicKeyJwk),
               isLegacyRemoteHost(hosts.appVersion),
+              lt(hosts.lastSeenAt, FIRST_STABLE_REMOTE_DAY),
               or(abandonedRule, supersededRule),
             ),
           )

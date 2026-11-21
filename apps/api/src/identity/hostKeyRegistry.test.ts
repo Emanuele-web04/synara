@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb } from "../db";
 import { hosts, remoteTunnels, revocationEvents } from "../db/schema";
 import { createIsolatedTestDatabase } from "../testing/isolatedDatabase";
@@ -31,10 +31,13 @@ describe.skipIf(!TEST_DATABASE_URL)("stale host retirement (PostgreSQL)", () => 
     await isolated?.close();
   });
   beforeEach(async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 15));
     await database.db.execute(
       sql`TRUNCATE ${hosts}, ${remoteTunnels}, ${revocationEvents} CASCADE`,
     );
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   async function insertHost(options: {
     ownerUserId: string;
@@ -129,7 +132,8 @@ describe.skipIf(!TEST_DATABASE_URL)("stale host retirement (PostgreSQL)", () => 
   });
 
   it("keeps an older install that was seen recently, as a Mac switched off for a day", async () => {
-    const { old } = await reinstalledMachine(ago(DAY_MS));
+    vi.mocked(Date.now).mockReturnValue(Date.UTC(2026, 10, 12));
+    const { old } = await reinstalledMachine(ago(3 * DAY_MS));
 
     expect(await registry.retireStaleHosts()).toEqual({ superseded: 0, abandoned: 0 });
     expect((await read(old.id)).publicKeyJwk).not.toBeNull();
@@ -189,6 +193,24 @@ describe.skipIf(!TEST_DATABASE_URL)("stale host retirement (PostgreSQL)", () => 
       keyGeneration: old.keyGeneration,
       hostname: "stable.tunnel.example.test",
       tunnelName: "stable",
+      originPort: 4000,
+    });
+
+    expect(await registry.retireStaleHosts()).toEqual({ superseded: 0, abandoned: 0 });
+    expect((await read(old.id)).publicKeyJwk).not.toBeNull();
+  });
+
+  it("preserves a preview registration seen after Stable Remote launched even if its stored version is stale", async () => {
+    vi.mocked(Date.now).mockReturnValue(Date.UTC(2027, 0, 15));
+    const { old } = await reinstalledMachine(new Date("2026-11-11T00:00:00Z"));
+    await database.db.insert(remoteTunnels).values({
+      hostId: old.id,
+      ownerUserId: old.ownerUserId,
+      ownerOrgId: old.ownerOrgId,
+      environmentId: old.environmentId,
+      keyGeneration: old.keyGeneration,
+      hostname: "upgraded.tunnel.example.test",
+      tunnelName: "upgraded",
       originPort: 4000,
     });
 

@@ -288,6 +288,13 @@ export const UpdateHostRequest = Schema.Struct({
 });
 export type UpdateHostRequest = typeof UpdateHostRequest.Type;
 
+export const ReplaceHostEndpointsRequest = Schema.Struct({
+  endpoints: Schema.Array(AccountHostEndpoint).check(
+    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
+  ),
+  appVersion: Schema.optional(AccountAppVersionString),
+});
+
 export const ListHostsResponse = Schema.Struct({
   hosts: Schema.Array(AccountHost),
 });

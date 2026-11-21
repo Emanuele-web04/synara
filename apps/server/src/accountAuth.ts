@@ -1519,7 +1519,7 @@ export interface RefreshHostRegistrationOptions {
 }
 
 /**
- * Re-advertises this machine's reachable endpoints and bumps `lastSeenAt`.
+ * Re-advertises this machine's current build and reachable endpoints.
  *
  * Called once per server start, best effort: a host that was linked before
  * ever starting the server registered with no endpoints at all, and
@@ -1547,7 +1547,12 @@ export async function refreshHostRegistration(
     hostId: credentials.hostId,
     keyGeneration: credentials.hostKeyGeneration,
   });
-  await client.replaceHostEndpoints(hostProof, credentials.hostId, endpoints);
+  await client.replaceHostEndpoints(
+    hostProof,
+    credentials.hostId,
+    endpoints,
+    options.appVersion ?? serverPackageJson.version,
+  );
 }
 
 /**

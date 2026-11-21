@@ -373,6 +373,7 @@ export type HostKeyRegistry = {
     authorization: string | undefined | null,
     hostId: string,
     endpoints: readonly AccountHostEndpoint[],
+    appVersion?: string,
   ): Promise<AccountHost>;
   unlink(hostId: string): Promise<AccountHost>;
   unlinkWithProof(authorization: string | undefined | null, hostId: string): Promise<AccountHost>;
