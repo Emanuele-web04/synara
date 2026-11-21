@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { compilerCacheFingerprint } from "../../apps/web/scripts/compiler-cache-key.ts";
+import { changedPaths, hasCodeChanges, isDocsPath } from "./detect-code-changes.mjs";
 import { lockfilePackageFingerprint } from "./lockfile-package-key.mjs";
 import { workspaceInstallFingerprint } from "../../scripts/ci-install-key.ts";
 
@@ -24,55 +25,122 @@ const code = gate
   .map((line) => line.replace(/^          /, ""))
   .join("\n");
 const lanes = ["TYPECHECK", "UNIT", "BROWSER", "BUILD", "WINDOWS_PROCESS"];
+const heavyJobs = ["static-typecheck", "unit", "browser", "build", "windows_process"];
+const decisions = (code) => Object.fromEntries(lanes.map((lane) => [`CODE_${lane}`, code]));
 const runGate = (overrides = {}) =>
   spawnSync("bash", ["-e", "-c", code], {
     encoding: "utf8",
     env: {
       ...process.env,
-      CHANGES: "success",
-      CODE: "true",
       STATIC_FAST: "success",
       ...Object.fromEntries(lanes.map((lane) => [lane, "success"])),
+      ...decisions("true"),
       ...overrides,
     },
   }).status;
 
-test("full validation and deliberate docs-only skips pass the exact aggregate", () => {
+test("full validation and docs-only runs pass the exact aggregate", () => {
   assert.equal(runGate(), 0);
-  assert.equal(
-    runGate({ CODE: "false", ...Object.fromEntries(lanes.map((lane) => [lane, "skipped"])) }),
-    0,
-  );
+  assert.equal(runGate(decisions("false")), 0);
 });
 for (const lane of lanes) {
-  test(`${lane}: failure, cancellation and unexpected skip cannot pass`, () => {
-    for (const status of ["failure", "cancelled", "skipped", ""])
+  test(`${lane}: failure, cancellation and skip cannot pass, docs-only or not`, () => {
+    for (const status of ["failure", "cancelled", "skipped", ""]) {
       assert.notEqual(runGate({ [lane]: status }), 0);
+      assert.notEqual(runGate({ ...decisions("false"), [lane]: status }), 0);
+    }
+  });
+  test(`${lane}: a missing, invalid or disagreeing docs-only decision fails closed`, () => {
+    for (const value of ["", "undefined", "TRUE", "false"])
+      assert.notEqual(runGate({ [`CODE_${lane}`]: value }), 0);
+    assert.notEqual(runGate({ ...decisions("false"), [`CODE_${lane}`]: "true" }), 0);
   });
 }
-test("planning failures, invalid output and static failures fail closed", () => {
-  for (const status of ["failure", "cancelled", "skipped", ""]) {
-    assert.notEqual(runGate({ CHANGES: status }), 0);
+test("static failures fail closed", () => {
+  for (const status of ["failure", "cancelled", "skipped", ""])
     assert.notEqual(runGate({ STATIC_FAST: status }), 0);
+});
+test("no lane waits on another; each detects docs-only changes before any work", () => {
+  assert.equal(jobs.changes, undefined);
+  for (const [name, job] of Object.entries(jobs)) {
+    if (name === "quality") continue;
+    assert.equal(job.needs, undefined, name);
+    assert.equal(job.if, undefined, name);
   }
-  for (const value of ["", "undefined", "TRUE"]) assert.notEqual(runGate({ CODE: value }), 0);
+  assert.deepEqual(jobs.quality.needs, ["static-fast", ...heavyJobs]);
+  const condition = "steps.changes.outputs.code == 'true'";
+  for (const name of heavyJobs) {
+    const { steps, outputs } = jobs[name];
+    assert.deepEqual(outputs, { code: "${{ steps.changes.outputs.code }}" }, name);
+    assert.ok(steps[0].uses.startsWith("actions/checkout@"), name);
+    assert.equal(steps[0].if, undefined, name);
+    assert.equal(steps[1].id, "changes", name);
+    assert.equal(steps[1].run, "node .github/scripts/detect-code-changes.mjs", name);
+    assert.equal(steps[1].if, undefined, name);
+    // Every later step, including each member of a parallel group, is skipped
+    // only by this lane's own decision. A wait step takes no condition: it
+    // joins a background step that carries one.
+    const later = steps.slice(2).flatMap((step) => step.parallel ?? [step]);
+    for (const step of later) {
+      if (step.wait) {
+        assert.equal(step.if, undefined, `${name}: ${step.name}`);
+        assert.ok(String(steps.find((other) => other.id === step.wait)?.if).startsWith(condition));
+        continue;
+      }
+      assert.ok(
+        String(step.if).replaceAll(/\s+/g, " ").startsWith(condition),
+        `${name}: ${step.name}`,
+      );
+    }
+    const lane = lanes[heavyJobs.indexOf(name)];
+    assert.equal(jobs.quality.steps[0].env[`CODE_${lane}`], `\${{ needs.${name}.outputs.code }}`);
+  }
 });
-test("PR change detection uses inline rules and retains Git checkout for pushes", () => {
-  const { steps, permissions } = jobs.changes;
-  const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
-  const filter = steps.find((step) => step.id === "filter");
-  assert.equal(checkout?.if, "github.event_name != 'pull_request'");
-  assert.equal(permissions["pull-requests"], "read");
-  assert.equal(filter?.if, undefined);
-  const rules = filter?.with?.filters;
-  assert.equal(typeof rules, "string");
-  assert.ok(Array.isArray(requireFromScripts("yaml").parse(rules)?.code));
+test("docs-only detection keeps code in docs-like trees on the code path", () => {
+  for (const path of [
+    "README.md",
+    "docs/release.md",
+    "docs/img/a.png",
+    "apps/web/notes.mdx",
+    "apps/marketing/content/post.json",
+    ".github/evidence/shot.png",
+  ])
+    assert.ok(isDocsPath(path), path);
+  for (const path of [
+    "apps/marketing/src/docs/page.tsx",
+    "apps/web/src/assets/icons.ts",
+    "apps/web/public/icon.png",
+    ".github/workflows/ci.yml",
+    "README.md.ts",
+    "package.json",
+  ])
+    assert.ok(!isDocsPath(path), path);
+  assert.equal(hasCodeChanges(["README.md", "docs/a.md"]), false);
+  assert.equal(hasCodeChanges(["README.md", "apps/web/src/a.ts"]), true);
+  assert.equal(hasCodeChanges([]), true);
 });
-test("docs-only cannot hide a failing or unexpectedly executed heavy lane", () => {
-  const docs = { CODE: "false", ...Object.fromEntries(lanes.map((lane) => [lane, "skipped"])) };
-  for (const lane of lanes)
-    for (const status of ["success", "failure", "cancelled", ""])
-      assert.notEqual(runGate({ ...docs, [lane]: status }), 0);
+test("change lists that are unavailable or may be truncated run every lane", async () => {
+  const pull = { eventName: "pull_request", event: { pull_request: { number: 7 } } };
+  const page = (count, filename) => Array.from({ length: count }, () => ({ filename }));
+  assert.deepEqual(
+    await changedPaths({
+      ...pull,
+      request: async (_api, path) =>
+        path.endsWith("page=1")
+          ? page(100, "a.md")
+          : [{ filename: "b.md", previous_filename: "b.ts" }],
+    }),
+    [...page(100, "a.md").map((file) => file.filename), "b.md", "b.ts"],
+  );
+  assert.equal(await changedPaths({ ...pull, request: async () => page(100, "a.md") }), null);
+  const push = (event, files) =>
+    changedPaths({ eventName: "push", event, request: async () => ({ files }) });
+  assert.deepEqual(await push({ before: "abc", after: "def" }, page(1, "a.md")), ["a.md"]);
+  assert.equal(await push({ before: "abc", after: "def" }, page(300, "a.md")), null);
+  assert.equal(await push({ before: "0000000", after: "def" }, page(1, "a.md")), null);
+  assert.equal(await push({ before: "abc", after: "def", forced: true }, page(1, "a.md")), null);
+  for (const eventName of ["merge_group", "workflow_dispatch", "schedule"])
+    assert.equal(await changedPaths({ eventName, event: {}, request: async () => [] }), null);
 });
 test("required check and independent static lane stay intact", () => {
   assert.ok(workflow.includes("name: Format, Lint, Typecheck, Test, Browser Test, Build"));
@@ -92,7 +160,8 @@ test("the required Typecheck lane also fails on missing release tags or broken m
   assert.ok(!jobs.migration_lineage);
   const lineage = checks.find((step) => step.name === "Verify released migration lineage");
   assert.ok(lineage);
-  assert.equal(lineage.if, undefined);
+  // Skipped only by the lane's own docs-only decision, never by another condition.
+  assert.equal(lineage.if, "steps.changes.outputs.code == 'true'");
   assert.ok(lineage.run.includes("git tag --list 'v[0-9]*'"));
   assert.ok(lineage.run.includes("node scripts/check-migration-lineage.ts"));
   const run = (gitBody, nodeBody) =>
@@ -643,7 +712,7 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const compiler = unitSteps.find(({ name }) => name === "Verify chat hot-path compiler");
   // Web Unit selects the two other projects. A missing compiler file must
   // therefore fail the Core lane instead of silently passing the required gate.
-  assert.equal(compiler?.if, "matrix.pkg == 'core'");
+  assert.equal(compiler?.if, "steps.changes.outputs.code == 'true' && matrix.pkg == 'core'");
   assert.ok(compiler.run.includes("--project=web-compiler --no-passWithNoTests --maxWorkers=2"));
   // ChatView compiles in its own file so both files can run at once.
   const unitConfig = read("../../apps/web/vitest.unit.ci.config.ts");
