@@ -102,7 +102,9 @@ with the same bots, chats, cards and Merge.
 ## Mascot artwork
 
 The [SVG artwork](../apps/web/src/components/synbot/kit/synbot-mascots.svg) has separate
-layers for the creature, its eyes, and each outfit. The outfit follows the creature's motion.
+layers for the profile, its visible eye, and each outfit. The angled horns echo the Synara mark,
+and the dot nose and flat shadows stay part of the profile as the eye blinks. The outfit follows
+the creature's motion.
 The saved mascot IDs still select the same slot in the picker. Frontend starts with the
 designer, Backend with the terminal, QA with the inspector, Docs with the archivist, and iOS
 with the mobile outfit. The main SynBot wears the captain's uniform.
