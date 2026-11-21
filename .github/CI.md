@@ -2,7 +2,7 @@
 
 The required check remains **Format, Lint, Typecheck, Test, Browser Test, Build**.
 It aggregates results only. Static checks start independently. Normal code
-changes run typechecking, five unit partitions, six stable browser partitions,
+changes run typechecking, five unit partitions, nine stable browser jobs,
 desktop build, native Windows regression and migration lineage. Nightly geometry
 ownership is unchanged.
 
@@ -407,6 +407,40 @@ and workflows 55.72 s and 44.36 s. The slowest ChatView lane fell from
 64.96 s to 51.26 s. All 265 stable cases passed once per variant. The four
 quarantined cases still run in the geometry lane. GitHub schedules six
 browser jobs. The final layout has yet to run on hosted Linux.
+
+### Nine browser jobs
+
+The six browser jobs were the slowest lanes of every run: 170–178 s at the
+median in the 58 most recent runs, against 147–148 s for the next lanes. In
+[run 44935499084](https://github.com/Emanuele-web04/synara/actions/runs/44935499084)
+the twelve browser processes took 77–167 s each. A component process spent
+47–87 s on per-file module loading and 51–65 s in tests for about 42 files. A
+ChatView process spent 60–101 s in tests.
+
+The browser lane is now nine jobs of two processes each. The component files run
+as ten native Vitest shards on five runners instead of six shards on three. The six-shard pins are gone because they were
+measured for that layout. In the first two runs of the new layout shard 9/10
+took 109–110 s beside 51–52 s for 10/10: native placement puts
+`EventRouter.browser.tsx` (40 s of tests) on 9. Five files now move from 9 to
+10, which evens the estimated load of the pair at about 72 s each. ChatView
+keeps its three projects and runs as eight processes instead of six.
+
+Each ChatView project is split by the length of the full test name modulo its
+slice count (`VITEST_BROWSER_CHAT_SLICE=2/3`), replacing the keyword pairs. Every
+name has exactly one remainder, so the slices of a project are complete and
+disjoint by construction and a new case needs no keyword. With the per-test
+times of that run the slices hold 56 and 71 s of tests for `chat-follow`,
+62, 50 and 56 s for `chat-projects` and 80, 50 and 56 s for `chat-workflows`,
+against 60–101 s before. `scripts/browser-ci-partitions.test.ts` checks every
+example case against exactly one process and rejects a malformed slice; the CI
+contract test checks that the matrix runs each slice and each shard once.
+
+A run now needs 18 runners at once (nine browser jobs and nine other lanes) of
+the account's 20, up from 15. Two overlapping runs already queued before; they
+queue for longer now. The first three ChatView jobs and the first two component
+jobs keep the compiler archive names main already saves. The other four jobs
+borrow the component donor archive on a pull request and seed their own on
+main.
 
 ### Desktop lifecycle smoke during the build
 
