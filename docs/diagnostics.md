@@ -104,11 +104,12 @@ failures, automatic crash continuation accepted/skipped/failed, shutdown event
 drain timeouts, restart reconciliation failures, uncertain chat delivery, account
 renewal failures, revoked device enrollment, billing redirects, migration startup
 blocks/recovery failures, provider turn-start failures, and event retries/quarantine.
-They also include handled remote-ingress/tunnel socket errors, refused remote
-admissions, failed host authorization reads (outage, ownership denial or missing
-subscription), failed tunnel provisioning, unexpected tunnel connector exits and
-event-loop stalls. Peer-driven socket and admission reports are limited to one per
-category per thirty seconds in each backend, and authorization, provisioning and
+They also include handled remote-ingress/tunnel socket errors and event-loop stalls.
+With explicit consent, Desktop Beta also reports refused remote admissions, failed host
+authorization reads (outage, ownership denial or missing subscription), failed tunnel
+provisioning and unexpected tunnel connector exits. The sender and receiver restrict
+those six codes to Beta. Peer-driven socket and admission reports are limited to one
+per category per thirty seconds in each backend, and authorization, provisioning and
 connector reports to one per category per ten minutes, so connection churn and retry
 loops cannot flood desktop IPC or its durable spool.
 Stall observations use the existing monitor's two-second threshold and thirty-second
@@ -188,8 +189,9 @@ Release dependency: deploy additive migration `0010_product_host_usage.sql` and
 the receiving Worker before shipping the host-usage client. Apply additive migration
 `0014_product_turn_failures.sql` before deploying the Worker that writes turn
 failure categories. Apply `0015_product_connection_detail.sql` before the Worker that writes
-connection network and route. Ship the connection telemetry clients after that Worker,
-since an older receiver rejects the new connection failure values. See
+connection network and route. Ship updated iPhone/iPad clients and Desktop Beta after
+that Worker. An older receiver rejects the new mobile connection failure values
+and the new Desktop Beta reliability codes. See
 [analytics deployment order](../apps/analytics/README.md#deployment). `/v1/crash` remains
 retired with HTTP 410 in every flavor. `/v1/events` accepts Beta and
 Remote diagnostics; Remote events follow the sharing switch.

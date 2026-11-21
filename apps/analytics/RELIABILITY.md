@@ -59,7 +59,11 @@ For remote-access interruptions, also compare `remote.ingress_socket_error`,
 handled connection failures; a count does not mean the backend crashed. Stall
 counts use the existing monitor's throttling and do not attribute a slow query.
 
-The host side of a phone that cannot reach its computer:
+The following host reports require Desktop Beta and explicit product-sharing
+consent. Apply D1 migration `0015_product_connection_detail.sql` and deploy the
+updated Analytics Worker before releasing these codes in Desktop Beta or the
+matching connection fields on iPhone/iPad. The previous Worker rejects a batch
+containing a new reliability code.
 
 | Code                                         | Meaning                                                                                                               |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |

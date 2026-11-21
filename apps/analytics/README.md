@@ -85,8 +85,9 @@ procedure and order: bookmark, apply only this file, record it in `d1_migrations
 check `PRAGMA table_info(product_events)` shows `network` and `route`, then deploy the
 receiver. `0014` must already be applied. A receiver deployed before `0015` fails every
 product-event insert with 500. The previous receiver works against the migrated schema,
-but rejects the new connection failure values. Ship the updated clients after the receiver.
-To undo the schema, drop the two columns.
+but rejects the new iPhone/iPad connection failure values and Desktop Beta
+host reliability codes. Ship these client updates after the receiver. To undo
+the schema, drop the two columns.
 
 `POST /v1/product-events` accepts bounded, consented desktop/iOS/iPadOS reports;
 `GET /api/product` requires dashboard authentication. Raw product events expire

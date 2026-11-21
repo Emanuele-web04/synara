@@ -155,7 +155,7 @@ describe("analytics ingest and D1 storage", () => {
     expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
   });
 
-  it("stores every remote ingress reliability code in the daily totals", async () => {
+  it("stores new host reliability codes only for Beta and keeps legacy Stable ingress totals", async () => {
     const codes = [
       "remote.admission_refused",
       "remote.authorization_failed",
@@ -164,7 +164,17 @@ describe("analytics ingest and D1 storage", () => {
       "remote.tunnel_provision_failed",
       "remote.connector_exited",
     ];
-    const events = codes.map((code) => reliabilityRecord({ code }));
+    for (const channel of ["stable", "remote"]) {
+      const events = codes.map((code) => reliabilityRecord({ channel, code }));
+      expect((await postReliability({ events })).status).toBe(400);
+    }
+    const stable = reliabilityRecord({ code: "remote.ingress_socket_error" });
+    const events = [
+      stable,
+      ...codes.map((code) =>
+        reliabilityRecord({ channel: "beta", appVersion: "1.6.4-beta.1", code }),
+      ),
+    ];
     const response = await postReliability({ events });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -177,7 +187,7 @@ describe("analytics ingest and D1 storage", () => {
           "SELECT code, count FROM reliability_daily WHERE code LIKE 'remote.%' ORDER BY code",
         )
         .all(),
-    ).toEqual(codes.toSorted().map((code) => ({ code, count: 1 })));
+    ).toEqual([...codes, stable.code].toSorted().map((code) => ({ code, count: 1 })));
     const invalid = reliabilityRecord({ code: "remote.authorization_failed: 503 from host" });
     expect((await postReliability({ events: [invalid] })).status).toBe(400);
   });
