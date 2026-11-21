@@ -480,7 +480,8 @@ function reasoningSummaryBufferKey(
   if (
     (event.provider !== "codex" &&
       event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
+      event.provider !== "claudeAgent" &&
+      event.provider !== "opencode") ||
     !event.itemId
   ) {
     return null;
@@ -488,7 +489,9 @@ function reasoningSummaryBufferKey(
   if (
     event.type === "content.delta" &&
     (event.payload.streamKind === "reasoning_summary_text" ||
-      ((event.provider === "antigravity" || event.provider === "claudeAgent") &&
+      ((event.provider === "antigravity" ||
+        event.provider === "claudeAgent" ||
+        event.provider === "opencode") &&
         event.payload.streamKind === "reasoning_text"))
   ) {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
@@ -1586,7 +1589,8 @@ const make = Effect.gen(function* () {
                   ),
                   threadId,
                   type: "item.completed",
-                  ...(summary.sourceEvent.provider === "claudeAgent"
+                  ...(summary.sourceEvent.provider === "claudeAgent" ||
+                  summary.sourceEvent.provider === "opencode"
                     ? { createdAt: summary.createdAt }
                     : {}),
                   payload: {

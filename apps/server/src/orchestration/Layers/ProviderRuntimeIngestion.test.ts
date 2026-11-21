@@ -4868,6 +4868,63 @@ describe("ProviderRuntimeIngestion", () => {
     expect(settled?.messages).toHaveLength(0);
   });
 
+  it("retains OpenCode reasoning from streamed deltas when the turn ends", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const base = {
+      provider: "opencode" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-opencode-reasoning"),
+      itemId: asItemId("opencode-thought-1"),
+    };
+    const activityId = "provider-reasoning:thread-1:opencode-thought-1";
+    const firstAt = "2026-10-03T10:00:30.000Z";
+    const appendDelta = (eventId: string, createdAt: string, delta: string) =>
+      Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          ...base,
+          type: "content.delta",
+          eventId: asEventId(eventId),
+          createdAt,
+          payload: { streamKind: "reasoning_text", delta },
+        }),
+      );
+
+    await appendDelta("opencode-reasoning-1", firstAt, "Reading the adapter ");
+    await appendDelta("opencode-reasoning-2", "2026-10-03T10:00:30.100Z", "boundary.");
+    await harness.startIngestion();
+    await harness.drain();
+    // OpenCode publishes no live reasoning preview; its text waits for the turn end.
+    expect(
+      (await harness.readProjectedThread())?.activities.find(
+        (activity) => activity.id === activityId,
+      ),
+    ).toBeUndefined();
+
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("opencode-reasoning-turn-completed"),
+        createdAt: "2026-10-03T10:00:31.000Z",
+        payload: { state: "completed" },
+      }),
+    );
+    await harness.drain();
+    const thread = await harness.readProjectedThread();
+    const thoughts = thread?.activities.filter((activity) => activity.id === activityId);
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts?.[0]).toMatchObject({
+      createdAt: firstAt,
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail: "Reading the adapter boundary.",
+      },
+    });
+    expect(thread?.messages).toHaveLength(0);
+  });
+
   it.each([
     { type: "turn.aborted", payload: { reason: "User interrupted" }, status: "failed" },
     { type: "runtime.error", payload: { message: "Provider disconnected" }, status: "failed" },
