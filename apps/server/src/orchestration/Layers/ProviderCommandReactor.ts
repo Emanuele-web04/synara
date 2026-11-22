@@ -84,6 +84,7 @@ import { claudeSelectionRequiresRestart, resolveApiModelId } from "@synara/share
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { claudeCacheForModel } from "../../provider/claudeCacheObservation.ts";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import { resolveExecutionWorkingDirectory, resolveWslWorkspace } from "@synara/shared/wslBridge";
 import {
   formatProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
@@ -3715,6 +3716,11 @@ const make = Effect.gen(function* () {
     // budget below already reserves room for it.
     // A worktree chat edits the primary folder in its worktree, so point the model there.
     const threadProject = yield* resolveThreadWorkspaceProject(thread);
+    let selectedProvider =
+      input.modelSelection?.provider ??
+      threadSessionModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
     const threadWorktreePath =
       resolveThreadWorkspaceState({
         envMode: thread.envMode,
@@ -3722,13 +3728,28 @@ const make = Effect.gen(function* () {
       }) === "worktree-ready"
         ? thread.worktreePath
         : null;
-    const projectFoldersPreamble = threadProject
-      ? buildProjectFoldersPreamble({
-          primaryFolder: threadWorktreePath ?? threadProject.workspaceRoot,
-          additionalFolders: threadProject.additionalFolders ?? [],
-          worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
-        })
-      : null;
+    const projectCwd = threadWorktreePath ?? threadProject?.workspaceRoot;
+    const guestFolderPaths =
+      (threadProject?.additionalFolders?.length ?? 0) > 0 &&
+      selectedProvider === "antigravity" &&
+      projectCwd !== undefined &&
+      resolveWslWorkspace(projectCwd) !== null;
+    // The adapter validates distro membership before sending this context to the process.
+    const projectFoldersPreamble =
+      threadProject && projectCwd
+        ? buildProjectFoldersPreamble({
+            primaryFolder: guestFolderPaths
+              ? resolveExecutionWorkingDirectory(projectCwd)
+              : projectCwd,
+            additionalFolders: guestFolderPaths
+              ? (threadProject.additionalFolders ?? []).map((path) =>
+                  resolveExecutionWorkingDirectory(path),
+                )
+              : (threadProject.additionalFolders ?? []),
+            // The original checkout is provenance, not a granted workspace root.
+            worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
+          })
+        : null;
     const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
       .filter((block) => block.trim().length > 0)
       .join("\n\n");
@@ -3921,11 +3942,6 @@ const make = Effect.gen(function* () {
     });
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
-    let selectedProvider =
-      input.modelSelection?.provider ??
-      threadSessionModelSelections.get(input.threadId)?.provider ??
-      thread.session?.providerName ??
-      thread.modelSelection.provider;
     const registerPriorTranscriptBootstrapOnFreshStart =
       selectedProvider === "opencode" &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;

@@ -620,6 +620,9 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             },
             childProcessSpawner,
             cwd,
+            ...(input.additionalDirectories !== undefined
+              ? { additionalDirectories: input.additionalDirectories }
+              : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             // Antigravity asks clarifying questions as ACP form elicitations when
             // the client supports them, and as plain chat text otherwise.
