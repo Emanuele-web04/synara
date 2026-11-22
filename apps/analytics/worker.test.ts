@@ -261,6 +261,76 @@ describe("normalizeProductEvent", () => {
     ).toBeNull();
   });
 
+  it("accepts a fixed connection failure, network and route only on connection events", () => {
+    const now = Date.parse(productEvent.ts);
+    const attempt = {
+      ...productEvent,
+      surface: "ios",
+      platform: "ios",
+      event: "connection.reconnect",
+      feature: undefined,
+      mode: "remote",
+    };
+    expect(
+      normalizeProductEvent(
+        {
+          ...attempt,
+          outcome: "failed",
+          failure: "route_upgrade",
+          httpStatus: 502,
+          network: "cellular",
+          route: "tunnel",
+        },
+        now,
+      ),
+    ).toMatchObject({
+      failure: "route_upgrade",
+      httpStatus: 502,
+      network: "cellular",
+      route: "tunnel",
+    });
+    for (const event of ["connection.pair", "connection.connect"]) {
+      expect(
+        normalizeProductEvent(
+          { ...attempt, event, outcome: "failed", failure: "subscription_required" },
+          now,
+        ),
+      ).toMatchObject({ event, failure: "subscription_required", network: null, route: null });
+    }
+    // Network and route also describe attempts that started or succeeded.
+    expect(
+      normalizeProductEvent(
+        { ...attempt, outcome: "succeeded", network: "wifi", route: "local" },
+        now,
+      ),
+    ).toMatchObject({ failure: null, network: "wifi", route: "local" });
+    expect(normalizeProductEvent(attempt, now)).toMatchObject({ network: null, route: null });
+    for (const patch of [
+      { outcome: "failed", failure: "connection refused by 203.0.113.7" },
+      // Each event family keeps its own category set.
+      { outcome: "failed", failure: "edge_blocked" },
+      { outcome: "succeeded", failure: "timeout" },
+      { outcome: "cancelled", failure: "timeout" },
+      { outcome: "failed", httpStatus: 502 },
+      { outcome: "failed", failure: "route_upgrade", httpStatus: 600 },
+      { network: "5g" },
+      { network: null },
+      { route: "relay" },
+      { route: "host.example.test" },
+    ]) {
+      expect(normalizeProductEvent({ ...attempt, ...patch }, now)).toBeNull();
+    }
+    const turn = { ...productEvent, event: "turn.completed", feature: undefined };
+    for (const patch of [
+      { outcome: "failed", failure: "tls_handshake" },
+      { network: "wifi" },
+      { route: "direct" },
+    ]) {
+      expect(normalizeProductEvent({ ...turn, ...patch }, now)).toBeNull();
+    }
+    expect(normalizeProductEvent({ ...productEvent, network: "wifi" }, now)).toBeNull();
+  });
+
   it("rejects timestamps outside the 7-day and 5-minute ingest window", () => {
     const now = Date.parse(productEvent.ts);
     expect(

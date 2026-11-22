@@ -15,11 +15,11 @@ Cards show the app's icon when recognized, its name and connection status. A **C
 
 After connecting, start a new provider session to receive the connector's tools. Existing sessions keep the set they started with. Mention a connected service in the composer to point the agent toward it; the provider still decides how to use its available tools. Third-party tool calls retain the provider's normal approval flow.
 
-| Provider                      | Availability                                                |
-| ----------------------------- | ----------------------------------------------------------- |
-| Claude, Codex, OpenCode       | Remote HTTP, local HTTP and stdio connectors are supported. |
-| Cursor, Grok, Droid, Oh My Pi | Uses ACP HTTP support or Synara's stdio proxy.              |
-| Pi, Devin, Antigravity        | Connectors are unavailable.                                 |
+| Provider                                   | Availability                                                |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| Claude, Codex, OpenCode                    | Remote HTTP, local HTTP and stdio connectors are supported. |
+| Cursor, Grok, Droid, Oh My Pi, Antigravity | Uses ACP HTTP support or Synara's stdio proxy.              |
+| Pi, Devin                                  | Connectors are unavailable.                                 |
 
 Codex keeps user-configured servers: a connector with a conflicting server name is omitted. If its effective configuration cannot be checked, connectors are omitted for that session. OpenCode skips a connector that fails to start. A catalog entry does not guarantee that the service accepts your account or client registration.
 

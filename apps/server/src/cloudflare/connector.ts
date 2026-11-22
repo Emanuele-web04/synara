@@ -1,6 +1,7 @@
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { spawnParentBoundProcess } from "@synara/shared/parentBoundProcess";
+import { reportReliabilityIssue } from "../reliability";
 
 async function metricsPort(): Promise<number> {
   const server = net.createServer();
@@ -97,6 +98,8 @@ export function startCloudflareConnector(options: {
         }
       } finally {
         options.ready(false);
+        // The child left on its own; a stop or replacement is not an exit.
+        if (exited && !signal.aborted) reportReliabilityIssue("remote.connector_exited");
         // A teardown failure rejects done and prevents spawning another child.
         await owned.stop();
       }

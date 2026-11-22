@@ -123,7 +123,8 @@ describe("connector mentions", () => {
   it("offers connectors only to providers whose sessions receive them", () => {
     expect(providerSupportsMcpConnectors("claudeAgent")).toBe(true);
     expect(providerSupportsMcpConnectors("codex")).toBe(true);
-    for (const provider of ["pi", "devin", "antigravity"]) {
+    expect(providerSupportsMcpConnectors("antigravity")).toBe(true);
+    for (const provider of ["pi", "devin"]) {
       expect(providerSupportsMcpConnectors(provider)).toBe(false);
     }
   });

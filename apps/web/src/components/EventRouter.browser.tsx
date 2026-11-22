@@ -112,6 +112,7 @@ let shellStreamRequestId: string | null = null;
 let shellStreamClient: EffectRpcWebSocketClient | null = null;
 let serverLifecycleRequestId: string | null = null;
 let serverLifecycleClient: EffectRpcWebSocketClient | null = null;
+let serverConfigStream: { client: EffectRpcWebSocketClient; requestId: string } | null = null;
 let suppressNextShellSnapshot = false;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
@@ -385,6 +386,7 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerConfig) {
+        serverConfigStream = { client, requestId: request.id };
         sendEffectRpcChunk(client, request.id, {
           type: "snapshot",
           config: fixture.serverConfig,
@@ -655,6 +657,7 @@ describe("EventRouter scoped orchestration sync", () => {
     shellStreamClient = null;
     serverLifecycleRequestId = null;
     serverLifecycleClient = null;
+    serverConfigStream = null;
     suppressNextShellSnapshot = false;
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
@@ -708,6 +711,37 @@ describe("EventRouter scoped orchestration sync", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.body.innerHTML = "";
+  });
+
+  it("shows a warning toast when keybinding config has issues", async () => {
+    const mounted = await mountApp();
+    try {
+      const { client, requestId } = await vi.waitFor(
+        () => {
+          if (!serverConfigStream) throw new Error("Server config stream is not connected");
+          return serverConfigStream;
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      sendEffectRpcChunk(client, requestId, {
+        type: "configUpdated",
+        payload: {
+          issues: [{ kind: "keybindings.malformed-config", message: "Expected JSON array" }],
+          providers: fixture.serverConfig.providers,
+        },
+      });
+      await vi.waitFor(
+        () =>
+          expect(
+            [...document.querySelectorAll('[data-slot="toast-title"]')].some(
+              (element) => element.textContent === "Invalid keybindings configuration",
+            ),
+          ).toBe(true),
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it("surfaces exhausted shell overflow and retries only the shell subscription", async () => {

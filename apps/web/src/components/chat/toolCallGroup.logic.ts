@@ -1,7 +1,7 @@
 // FILE: toolCallGroup.logic.ts
 // Purpose: Summarizes a settled run of tool-call work entries into one compact
-//          verb label ("Read 2 files, ran 3 commands") plus a failed count for
-//          the collapsed tool-group disclosure in the transcript.
+//          verb label ("Read 2 files, ran 3 commands") plus failed and running
+//          counts for the collapsed tool-group disclosure in the transcript.
 // Layer: Web chat presentation helpers
 // Exports: MIN_COLLAPSIBLE_TOOL_GROUP_SIZE, workEntryRowCount,
 //          multiFileEditLabel, ToolCallSummaryCategory,
@@ -42,6 +42,7 @@ export type ToolCallSummaryCategory =
   | "read"
   | "edit"
   | "search"
+  | "web-search"
   | "command"
   | "fetch"
   | "agent"
@@ -61,9 +62,11 @@ export interface ToolCallGroupSummary {
   // Calls that failed; the row appends `failedLabel` in the error tone.
   failedCount: number;
   failedLabel: string | null;
+  // Calls still in flight; the row appends `runningLabel` so a folded group
+  // with live work never reads as settled.
+  runningCount: number;
+  runningLabel: string | null;
   entryCount: number;
-  // A group with in-flight work must never present itself as settled.
-  hasRunningEntry: boolean;
   // The one kind every summarized call shares, or "mixed": the collapsed row
   // wears that kind's glyph instead of borrowing an arbitrary entry's.
   iconCategory: ToolCallSummaryCategory | "mixed";
@@ -110,7 +113,6 @@ const READ_TOOL_NAMES = new Set([
 const SEARCH_TOOL_NAMES = new Set([
   "grep",
   "glob",
-  "websearch",
   "search",
   "searching",
   "searched",
@@ -147,6 +149,14 @@ export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSu
   const toolName = normalizedToolName(entry);
   if (entry.requestKind === "file-read" || READ_TOOL_NAMES.has(toolName)) {
     return "read";
+  }
+  // Web searches read differently from code searches. Some agents report their
+  // native grep/find as a web_search item, so a code-search name wins.
+  if (
+    toolName === "websearch" ||
+    (entry.itemType === "web_search" && !SEARCH_TOOL_NAMES.has(toolName))
+  ) {
+    return "web-search";
   }
   if (entry.itemType === "web_search" || SEARCH_TOOL_NAMES.has(toolName)) {
     return "search";
@@ -215,10 +225,11 @@ function entryFileKeys(entry: WorkLogEntry): ReadonlyArray<string> {
   return [];
 }
 
-// Most groups name two or three kinds; past that the tail folds into one
-// "N other actions" part so the line stays readable.
-const MAX_NAMED_SUMMARY_PARTS = 3;
-const NAMED_PARTS_BEFORE_OVERFLOW = 2;
+// Every kind is named so the line says exactly what happened. Only a run of
+// more than five kinds folds its tail into one "N other actions" part, keeping
+// the line to five phrases.
+const MAX_NAMED_SUMMARY_PARTS = 5;
+const NAMED_PARTS_BEFORE_OVERFLOW = 4;
 
 function countPhrase(count: number, noun: string): string {
   return `${count} ${pluralize(count, noun)}`;
@@ -228,6 +239,12 @@ function searchPhrase(count: number, translate: typeof t): string {
   if (count === 1) return translate("chat:searchedOnce");
   if (count === 2) return translate("chat:searchedTwice");
   return translate("chat:searchedTimes", { value0: count });
+}
+
+function webSearchPhrase(count: number, translate: typeof t): string {
+  if (count === 1) return translate("chat:searchedTheWebOnce");
+  if (count === 2) return translate("chat:searchedTheWebTwice");
+  return translate("chat:searchedTheWebTimes", { value0: count });
 }
 
 // Lowercase verb phrase; the label capitalizes only its first part.
@@ -244,6 +261,8 @@ function summaryPartPhrase(
       return translate("chat:edited", { value0: countPhrase(count, "file") });
     case "search":
       return searchPhrase(count, translate);
+    case "web-search":
+      return webSearchPhrase(count, translate);
     case "command":
       return translate("chat:ran2", { value0: countPhrase(count, "command") });
     case "fetch":
@@ -309,12 +328,12 @@ export function summarizeToolCallGroup(
   // agent did the work.
   const countByCategory = new Map<ToolCallSummaryCategory, number>();
   const distinctFilesByCategory = new Map<ToolCallSummaryCategory, Set<string>>();
-  let hasRunningEntry = false;
+  let runningCount = 0;
   let failedCount = 0;
 
   for (const entry of summarizable) {
     if (entry.toolStatus === "running") {
-      hasRunningEntry = true;
+      runningCount += 1;
     }
     if (entry.toolStatus === "failed" || entry.backgroundTask?.status === "failed") {
       failedCount += 1;
@@ -357,8 +376,12 @@ export function summarizeToolCallGroup(
       failedCount > 0
         ? translate("chat:failed", { value0: failedCount, count: failedCount })
         : null,
+    runningCount,
+    runningLabel:
+      runningCount > 0
+        ? translate("chat:toolsRunning", { value0: runningCount, count: runningCount })
+        : null,
     entryCount: summarizable.length,
-    hasRunningEntry,
     iconCategory: parts.length === 1 ? parts[0]!.category : "mixed",
     iconEntry: summarizable[0]!,
   };

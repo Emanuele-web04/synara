@@ -177,6 +177,8 @@ export const ServerSettings = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
     Schema.withDecodingDefault(() => ""),
   ),
+  // Ends the description of a pull request Synara creates with a "Created with Synara" link.
+  gitAttributionEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -240,6 +242,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
   sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
+  gitAttributionEnabled: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({

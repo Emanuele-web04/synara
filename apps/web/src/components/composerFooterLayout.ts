@@ -34,6 +34,8 @@ export interface ComposerFooterControlsPlan {
 // Tier 0 = everything visible ... tier 3 = icons only, tier 4 = leading
 // controls move below the input.
 export const COMPOSER_FOOTER_MAX_TIER = 4;
+// Keep roughly a short model name visible before falling back to the provider icon.
+export const COMPOSER_MODEL_LABEL_MIN_VISIBLE_WIDTH_PX = 52;
 // Extra width (px) required beyond the recorded overflow point before stepping
 // back to a richer tier, so a 1px resize cannot oscillate between tiers.
 export const COMPOSER_FOOTER_TIER_PROMOTION_SLACK_PX = 32;

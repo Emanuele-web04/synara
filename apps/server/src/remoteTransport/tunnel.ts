@@ -139,13 +139,15 @@ export class RemoteTlsServer {
         upgrade();
         return;
       }
-      void options.admit(request.url, context).then(
-        (admitted) => {
-          if (admitted && !socket.destroyed && !this.#closed) upgrade();
-          else socket.destroy();
-        },
-        () => socket.destroy(),
-      );
+      const refuse = () => {
+        if (!this.#closed) reportReliabilityIssue("remote.admission_refused");
+        socket.destroy();
+      };
+      void options.admit(request.url, context).then((admitted) => {
+        if (!admitted) refuse();
+        else if (!socket.destroyed && !this.#closed) upgrade();
+        else socket.destroy();
+      }, refuse);
     });
   }
 

@@ -5,9 +5,13 @@ import http from "node:http";
 import { Worker } from "node:worker_threads";
 import { startCloudflareIngress } from "./ingress";
 import type { RemoteTlsServer } from "../remoteTransport/tunnel";
+import { reportReliabilityIssue } from "../reliability";
+
+vi.mock("../reliability", () => ({ reportReliabilityIssue: vi.fn() }));
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0)) await close();
+  vi.mocked(reportReliabilityIssue).mockClear();
 });
 
 function probe(port: number, path: string, headers: Record<string, string>): Promise<number> {
@@ -63,6 +67,33 @@ it("denies unknown hosts, admin paths and spoofed forwarded headers on the dedic
   expect(accept).toHaveBeenCalledWith(expect.anything(), { via: "cloudflare" });
   ready = false;
   expect(await probe(ingress.port, "/health", headers)).toBe(404);
+});
+
+function upgradeStatus(port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/host/v2`, { headers: { host } });
+    socket.on("unexpected-response", (_request, response) => {
+      resolve(response.statusCode!);
+      socket.terminate();
+    });
+    socket.on("open", () => reject(new Error("A refused stream was upgraded")));
+    socket.on("error", () => {});
+  });
+}
+
+it("counts refused streams addressed to this host but not stray probes", async () => {
+  const accept = vi.fn();
+  const ingress = await startCloudflareIngress(
+    { accept } as unknown as RemoteTlsServer,
+    () => false,
+  );
+  cleanups.push(ingress.close);
+  ingress.setHostname("assigned.example.test");
+  expect(await upgradeStatus(ingress.port, "wrong.example.test")).toBe(404);
+  expect(reportReliabilityIssue).not.toHaveBeenCalled();
+  expect(await upgradeStatus(ingress.port, "assigned.example.test")).toBe(404);
+  expect(reportReliabilityIssue).toHaveBeenCalledExactlyOnceWith("remote.admission_refused");
+  expect(accept).not.toHaveBeenCalled();
 });
 
 it("keeps serving after a peer resets during a paused lease upgrade", async () => {

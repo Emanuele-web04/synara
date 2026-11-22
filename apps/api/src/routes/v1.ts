@@ -24,8 +24,6 @@ import {
   RemoteTunnelRequest,
   type AccountErrorBody,
   type AccountErrorCode,
-  ACCOUNT_HOST_ENDPOINTS_MAX,
-  AccountHostEndpoint,
   AuthorizeTokenRequest,
   AuthorizeUrlRequest,
   type AuthorizeUrlResponse,
@@ -71,6 +69,7 @@ import {
   SESSION_CREDENTIAL_MAX_AGE_SECONDS,
   RefreshTokenRequest,
   type RefreshTokenResponse,
+  ReplaceHostEndpointsRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
@@ -244,12 +243,6 @@ function secretHeaderMatches(expected: string, presented: string | undefined): b
     expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
   );
 }
-
-const ReplaceHostEndpointsRequest = Schema.Struct({
-  endpoints: Schema.Array(AccountHostEndpoint).check(
-    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
-  ),
-});
 
 type ProfileRow = typeof profiles.$inferSelect;
 
@@ -1928,7 +1921,12 @@ export function createV1Routes(deps: {
       );
     try {
       return c.json({
-        host: await hostKeys.replaceEndpoints(c.req.header("authorization"), id, parsed.endpoints),
+        host: await hostKeys.replaceEndpoints(
+          c.req.header("authorization"),
+          id,
+          parsed.endpoints,
+          parsed.appVersion,
+        ),
       });
     } catch (error) {
       return hostDomainError(c, error);

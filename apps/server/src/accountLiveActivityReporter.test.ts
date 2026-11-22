@@ -7,7 +7,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { expect, it, vi } from "vitest";
 import { jwtVerify, importJWK } from "jose";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
-import { writeAccountCredentials } from "./accountAuth";
+import { resolveEnvironmentId, writeAccountCredentials } from "./accountAuth";
 import { generateAndPersistHostIdentity } from "./hostIdentity";
 import { createAccountLiveActivityReporter } from "./accountLiveActivityReporter";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
@@ -305,6 +305,15 @@ async function waitForIo(ms = 50) {
   while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
 }
 
+async function advancePollClock(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  // The poll schedules its next timer after file I/O and response handling finish.
+  const until = Date.now() + 2_000;
+  while (vi.getTimerCount() === 0 && Date.now() < until)
+    await new Promise((resolve) => setImmediate(resolve));
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+}
+
 async function cadenceFixture() {
   const home = await mkdtemp(join(tmpdir(), "synara-activity-cadence-"));
   const identityPath = join(home, "host-identity.json");
@@ -321,6 +330,7 @@ async function cadenceFixture() {
     accessToken: "test-access",
     refreshToken: "test-refresh",
   });
+  await resolveEnvironmentId(home);
   return { home, identityPath };
 }
 
@@ -342,14 +352,12 @@ it("asks for watches only once remote access was ever set up on this host", asyn
     },
   });
   try {
-    await vi.advanceTimersByTimeAsync(1_000);
-    await waitForIo();
+    await advancePollClock(1_000);
     expect(hasIdentity).toHaveBeenCalledTimes(1);
     expect(fetch).not.toHaveBeenCalled();
     // The first approval is noticed on the next 15 s cycle, as an empty watch list is today.
     setUp = true;
-    await vi.advanceTimersByTimeAsync(15_000);
-    await waitForIo();
+    await advancePollClock(15_000);
     expect(fetch).toHaveBeenCalledTimes(1);
   } finally {
     reporter.stop();
@@ -397,33 +405,29 @@ it("backs off refused reads and reads again whenever a device connects", async (
     sql: {} as SqlClient.SqlClient,
     remoteSessions: devices.remoteSessions,
   });
-  const advance = async (ms: number) => {
-    await vi.advanceTimersByTimeAsync(ms);
-    await waitForIo();
-  };
   try {
-    await advance(1_000);
+    await advancePollClock(1_000);
     expect(fetch).toHaveBeenCalledTimes(1);
     // One minute after the first refusal, as before; then two.
-    await advance(59_000);
+    await advancePollClock(59_000);
     expect(fetch).toHaveBeenCalledTimes(1);
-    await advance(1_000);
+    await advancePollClock(1_000);
     expect(fetch).toHaveBeenCalledTimes(2);
-    await advance(119_000);
+    await advancePollClock(119_000);
     expect(fetch).toHaveBeenCalledTimes(2);
-    await advance(1_000);
+    await advancePollClock(1_000);
     expect(fetch).toHaveBeenCalledTimes(3);
     // A device connecting means access may be back: read within the watched
     // cadence of the last read, not in four minutes.
     devices.connect();
-    await advance(5_000);
+    await advancePollClock(5_000);
     expect(fetch).toHaveBeenCalledTimes(4);
     // Still refused: the backoff continues while that device stays connected...
-    await advance(60_000);
+    await advancePollClock(60_000);
     expect(fetch).toHaveBeenCalledTimes(4);
     // ...and a second device connecting wakes it again.
     devices.connect();
-    await advance(0);
+    await advancePollClock(0);
     expect(fetch).toHaveBeenCalledTimes(5);
   } finally {
     reporter.stop();
@@ -450,12 +454,7 @@ it("reads the watch list while devices connect and, after a grace window, once a
   // One cadence per step: each read finishes real file I/O before it schedules the next.
   const advance = async (ms: number) => {
     for (let left = ms; left >= 0; left -= 15_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(left, 15_000));
-      // A finished read schedules the next one: wait for that timer, not a fixed delay.
-      const until = Date.now() + 2_000;
-      while (vi.getTimerCount() === 0 && Date.now() < until)
-        await new Promise((resolve) => setImmediate(resolve));
-      await waitForIo(10);
+      await advancePollClock(Math.min(left, 15_000));
       if (left <= 15_000) break;
     }
   };
