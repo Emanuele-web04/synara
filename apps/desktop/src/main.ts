@@ -113,6 +113,11 @@ import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/static
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import {
+  buildDesktopServeEnv,
+  extractDesktopServeCliArgs,
+  runDesktopServeCli,
+} from "./desktopServeCli";
+import {
   retainLiveBackendAfterShutdownFailure,
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
@@ -477,9 +482,10 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // Electron's single-instance lock is scoped through userData on Windows/Linux.
 // Set the flavor-specific profile first so Stable, Dev, and Canary never contend
 // for the same lock even when they use the same Electron executable.
+const desktopServeArgs = extractDesktopServeCliArgs(process.argv, app.isPackaged);
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock = desktopServeArgs === null && app.requestSingleInstanceLock();
 
 // Remote shares usage and diagnostics by default; Settings turns both off.
 // Stable stays opt-in for product events and never runs diagnostics.
@@ -6495,29 +6501,79 @@ function configureMediaPermissions(): void {
   }
 }
 
+function launchDesktopServeCli(serveArgs: ReadonlyArray<string>): void {
+  const backendEntry = resolveBackendEntry();
+  if (!FS.existsSync(backendEntry)) {
+    process.stderr.write(`Synara server entry not found at ${backendEntry}.\n`);
+    app.exit(1);
+    return;
+  }
+
+  let servedStaticRoot: ServedStaticRoot | null = null;
+  if (!process.env.SYNARA_STATIC_DIR?.trim()) {
+    try {
+      servedStaticRoot = resolveServedStaticRoot();
+    } catch (error) {
+      safeConsoleError(
+        `[desktop] Failed to prepare static asset snapshot for serve: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  const env = buildDesktopServeEnv({
+    baseEnv: process.env,
+    backendEntry,
+    defaultHomeDir: BASE_DIR,
+    desktopBundleId: desktopIdentity.bundleId,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    staticDir: servedStaticRoot?.snapshotted ? servedStaticRoot.dir : null,
+    migrationSourceDigest: embeddedDesktopMigrationRuntimeSourceDigest(),
+    compileCacheEnv: backendCompileCacheEnv(process.env, backendCompileCacheDir()),
+  });
+
+  runDesktopServeCli({
+    execPath: process.execPath,
+    nodeArgs: backendNodeArgs(),
+    backendEntry,
+    serveArgs,
+    cwd: process.cwd(),
+    env,
+    onExit: (exitCode) => app.exit(exitCode),
+    onErrorMessage: (message) => {
+      process.stderr.write(`${message}\n`);
+    },
+  });
+}
+
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
-if (hasSingleInstanceLock) {
-  repairBrowserProfileBeforeElectronReady(userDataPath);
-}
-
-configureAppIdentity();
-configureElectronNetwork();
-
-const browserEngineFeatures = new Set([
-  ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),
-  "WebMCPTesting",
-  "DevToolsWebMCPSupport",
-]);
-app.commandLine.appendSwitch("enable-features", [...browserEngineFeatures].join(","));
-
-if (!hasSingleInstanceLock) {
-  app.quit();
+if (desktopServeArgs !== null) {
+  app.dock?.hide();
+  launchDesktopServeCli(desktopServeArgs);
 } else {
-  app.on("second-instance", () => {
-    focusMainWindow();
-  });
+  if (hasSingleInstanceLock) {
+    repairBrowserProfileBeforeElectronReady(userDataPath);
+  }
+
+  configureAppIdentity();
+  configureElectronNetwork();
+
+  const browserEngineFeatures = new Set([
+    ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),
+    "WebMCPTesting",
+    "DevToolsWebMCPSupport",
+  ]);
+  app.commandLine.appendSwitch("enable-features", [...browserEngineFeatures].join(","));
+
+  if (!hasSingleInstanceLock) {
+    app.quit();
+  } else {
+    app.on("second-instance", () => {
+      focusMainWindow();
+    });
+  }
 }
 
 // Restores the imported browser session's cookies. Never rejects: a failure or timeout
@@ -6858,7 +6914,7 @@ app.on("window-all-closed", () => {
   }
 });
 
-if (process.platform !== "win32") {
+if (desktopServeArgs === null && process.platform !== "win32") {
   process.on("uncaughtException", (error: unknown) => {
     if (!isBrokenPipeError(error)) {
       throw error;

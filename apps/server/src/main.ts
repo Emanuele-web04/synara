@@ -123,6 +123,7 @@ import { RecapStatsQuery } from "./recapStats";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { ACCOUNT_INBOX_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
+import { formatServeStartupSummary } from "./serveStartupSummary";
 import {
   embeddedMigrationRuntimeSourceDigest,
   verifyMigrationRuntimeIdentity,
@@ -478,7 +479,11 @@ export function makeServerStartupLogData(config: ServerConfigShape): Record<stri
   };
 }
 
-const makeServerProgram = (input: CliInput) =>
+interface MakeServerProgramOptions {
+  readonly printServeSummary?: boolean;
+}
+
+const makeServerProgram = (input: CliInput, options?: MakeServerProgramOptions) =>
   Effect.gen(function* () {
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
@@ -709,6 +714,20 @@ const makeServerProgram = (input: CliInput) =>
     );
 
     yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
+    if (options?.printServeSummary) {
+      process.stdout.write(
+        `${formatServeStartupSummary({
+          host: config.host,
+          port: config.port,
+          baseDir: config.baseDir,
+          staticDir: config.staticDir,
+          devUrl: config.devUrl,
+          publicUrl: config.publicUrl,
+          allowInsecureRemote: config.allowInsecureRemote,
+          startupPairingUrl,
+        })}\n`,
+      );
+    }
     if (startupPairingUrl) {
       if (config.allowInsecureRemote && !config.publicUrl) {
         yield* Effect.logWarning(
@@ -1171,9 +1190,53 @@ const remoteCommand = Command.make("remote").pipe(
   ]),
 );
 
+const serveCommand = Command.make("serve", {}, () =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    if (Option.isSome(parent.mode) && parent.mode.value === "desktop") {
+      return yield* new StartupError({
+        message:
+          "`synara serve` always runs in web mode. Omit `--mode desktop` or run `synara --mode desktop` directly.",
+      });
+    }
+    yield* makeServerProgram(
+      {
+        ...parent,
+        mode: Option.some("web"),
+      },
+      { printServeSummary: true },
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "Start the Synara server and serve the web app. Accepts root server flags (--port, --host, --home-dir, --no-browser, --auth-token, --public-url, --allow-insecure-remote); run `synara --help` for the full list.",
+  ),
+  Command.withExamples([
+    {
+      command: "synara serve",
+      description: "Serve the web app on localhost and open it in the browser",
+    },
+    {
+      command: "synara serve --port 3773 --no-browser",
+      description: "Serve on a fixed local port without auto-opening a browser",
+    },
+    {
+      command:
+        'synara serve --host 0.0.0.0 --auth-token "$SYNARA_AUTH_TOKEN" --public-url https://synara.example.com --no-browser',
+      description: "Serve behind an HTTPS reverse proxy with one-time owner pairing",
+    },
+    {
+      command:
+        'synara serve --host 0.0.0.0 --auth-token "$SYNARA_AUTH_TOKEN" --allow-insecure-remote --no-browser',
+      description: "Serve on a trusted LAN with explicit unencrypted remote opt-in",
+    },
+  ]),
+);
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
   Command.withSubcommands([
+    serveCommand,
     serverToolsCommand,
     mcpCommand,
     authCommand,
