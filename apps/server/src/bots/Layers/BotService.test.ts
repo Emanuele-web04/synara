@@ -1121,3 +1121,59 @@ it.effect("proposing the same bot again after Not now creates a fresh answerable
     assert.notStrictEqual(second.cardId, first.cardId);
   }).pipe(Effect.provide(makeLayer(world)));
 });
+
+// ── The Alto gate ────────────────────────────────────────────────────
+
+it.effect("turns in chats that are not bots never reach the Alto check", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    // A plain Hub: a coordinator thread with no bot profile.
+    const hubThread = ThreadId.makeUnsafe("thread-plain-hub");
+    yield* (yield* ProjectAgentRepository).saveConfig(
+      {
+        projectId: ProjectId.makeUnsafe("plain-hub"),
+        coordinatorThreadId: hubThread,
+        coordinatorName: "Hub",
+        coordinatorModelSelection: model,
+        limits: DEFAULT_PROJECT_AGENT_LIMITS,
+        captureEnabled: true,
+        enabled: true,
+        automationId: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        disabledAt: null,
+      },
+      null,
+    );
+    gate.requiresAlto = true;
+    gate.granted = false;
+    const bots = yield* BotService;
+    for (const threadId of [ThreadId.makeUnsafe("thread-user-chat"), hubThread]) {
+      assert.strictEqual(yield* bots.formatContextForTurn({ threadId, messageId: "m-1" }), "");
+      assert.strictEqual(yield* bots.resolveCaller({ threadId, turnId: null }), null);
+      assert.strictEqual(
+        yield* bots.fullControlFor({ callerThreadId: threadId, targetThreadId: MAIN.threadId }),
+        null,
+      );
+      yield* bots.noteControl({
+        callerThreadId: threadId,
+        targetThreadId: MAIN.threadId,
+        action: "send",
+      } as never);
+    }
+    assert.strictEqual(gate.checks, 0);
+
+    // A bot's own chat is checked, and refused with the reason.
+    assert.strictEqual(
+      yield* bots.formatContextForTurn({ threadId: MAIN.threadId, messageId: "m-1" }),
+      "",
+    );
+    const locked = yield* Effect.flip(
+      bots.resolveCaller({ threadId: MAIN.threadId, turnId: null }),
+    );
+    assert.strictEqual(locked.code, "subscription-required");
+    assert.isAbove(gate.checks, 0);
+  }).pipe(Effect.provide(makeLayer(world)));
+});

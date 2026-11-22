@@ -1099,14 +1099,24 @@ const make = Effect.gen(function* () {
       return base;
     });
 
+  /**
+   * The bot whose chat is `threadId`; null for every other thread. This runs for every turn of
+   * every chat, so the cheap bot lookup comes first and only a bot's own chat reaches the Alto
+   * check, which fails with `subscription-required` when the host requires Alto and lacks it.
+   */
   const botForThread = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return null;
+      if (!isServerSynbotEnabled()) return null;
       const config = yield* projectAgentRepository
         .getConfigByCoordinatorThread(threadId)
         .pipe(Effect.orElseSucceed(() => Option.none<ProjectAgentConfig>()));
       if (Option.isNone(config)) return null;
-      return yield* loadBot(config.value.projectId).pipe(Effect.orElseSucceed(() => null));
+      const profile = yield* repository
+        .getProfile(config.value.projectId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (!profile) return null;
+      yield* requireEnabled;
+      return yield* assembleBot(profile).pipe(Effect.orElseSucceed(() => null));
     });
 
   const resolveCaller: BotServiceShape["resolveCaller"] = (input) =>
@@ -1126,7 +1136,8 @@ const make = Effect.gen(function* () {
 
   const formatContextForTurn: BotServiceShape["formatContextForTurn"] = (input) =>
     Effect.gen(function* () {
-      const bot = yield* botForThread(input.threadId);
+      // A locked bot gets no SynBot context; its tools answer why.
+      const bot = yield* botForThread(input.threadId).pipe(Effect.orElseSucceed(() => null));
       if (!bot) return "";
       const caller = yield* callerFromMessage(bot, null, input.messageId);
       const bots = yield* listBots();
@@ -2157,10 +2168,12 @@ const make = Effect.gen(function* () {
 
   const onProjectCreated: BotServiceShape["onProjectCreated"] = (projectId) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return;
+      if (!isServerSynbotEnabled()) return;
       const project = yield* snapshotQuery.getProjectShellById(projectId);
       if (Option.isNone(project) || !isOrdinary(project.value)) return;
       const profiles = yield* repository.listProfiles();
+      // Without bots there is nothing to link or suggest: skip the Alto check entirely.
+      if (profiles.length === 0 || !(yield* hasSynbotAccess)) return;
       for (const profile of profiles) {
         if (profile.scope.projects === "all")
           yield* syncScopeLinks(profile.projectId, profile.scope);
@@ -2180,7 +2193,7 @@ const make = Effect.gen(function* () {
 
   const fullControlFor: BotServiceShape["fullControlFor"] = (input) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return null;
+      if (!isServerSynbotEnabled()) return null;
       const settings = yield* getSettings();
       if (!settings.controlWithoutAsking) return null;
       const shell = yield* snapshotQuery
@@ -2188,20 +2201,24 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
       if (Option.isNone(shell)) return null;
       const turnId = shell.value.session?.activeTurnId ?? shell.value.latestTurn?.turnId ?? null;
-      const caller = yield* resolveCaller({ threadId: input.callerThreadId, turnId });
+      // Only a bot's own chat reaches the Alto check, inside resolveCaller.
+      const caller = yield* resolveCaller({ threadId: input.callerThreadId, turnId }).pipe(
+        Effect.orElseSucceed(() => null),
+      );
       if (!caller || !caller.humanRooted) return null;
       return { botId: caller.bot.id, botName: caller.bot.name };
     });
 
   const noteControl: BotServiceShape["noteControl"] = (input) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess) || input.callerThreadId === input.targetThreadId) return;
+      if (!isServerSynbotEnabled() || input.callerThreadId === input.targetThreadId) return;
       const config = yield* projectAgentRepository.getConfigByCoordinatorThread(
         input.callerThreadId,
       );
       if (Option.isNone(config)) return;
       const profile = yield* repository.getProfile(config.value.projectId);
       if (!profile) return;
+      if (!(yield* hasSynbotAccess)) return;
       // A bot steering its own task needs no label; the task card already says whose it is.
       const owned = yield* hubWorkRepository.findByWorker(input.targetThreadId);
       if (owned?.projectId === profile.projectId) return;
