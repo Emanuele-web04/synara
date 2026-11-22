@@ -17,6 +17,7 @@ import {
 } from "@synara/contracts";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { beforeEach, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -35,6 +36,31 @@ import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BotService } from "../Services/BotService.ts";
 import { BotServiceLive } from "./BotService.ts";
+
+/**
+ * The Alto gate as these tests see it. A Vitest worker has no desktop flavor, which the real gate
+ * treats as a host that requires Alto; tests run as a free host unless they say otherwise, and
+ * count the entitlement checks that reach the Account API.
+ */
+const gate = vi.hoisted(() => ({ requiresAlto: false, granted: true, checks: 0 }));
+vi.mock("../synbotGate.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../synbotGate.ts")>();
+  return {
+    ...actual,
+    requiresServerSynbotAlto: () => gate.requiresAlto,
+    checkServerSynbotAltoAccess: async () => {
+      if (!gate.requiresAlto) return true;
+      gate.checks += 1;
+      return gate.granted;
+    },
+  };
+});
+
+beforeEach(() => {
+  gate.requiresAlto = false;
+  gate.granted = true;
+  gate.checks = 0;
+});
 
 const now = "2026-11-05T10:00:00.000Z";
 const model = { provider: "codex", model: "gpt-6-luna" } as unknown as ModelSelection;

@@ -12,7 +12,12 @@ import {
   optionalBooleanFlag,
   type BooleanFlagInput,
 } from "@synara/shared/cli";
-import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+  SYNARA_DEVELOPMENT_BUNDLE_ID,
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
 import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -259,6 +264,12 @@ export function createDevRunnerEnv({
     if (mode === "dev:server" || mode === "dev:web") {
       output.SYNARA_MODE = "web";
       delete output.SYNARA_DESKTOP_WS_URL;
+    }
+
+    // A web-mode server has no desktop shell to name its flavor. Name it Dev, so host gates see
+    // local development (SynBot is free there) rather than an unknown host, which fails closed.
+    if (mode !== "dev:desktop") {
+      output[SYNARA_DESKTOP_BUNDLE_ID_ENV] ??= SYNARA_DEVELOPMENT_BUNDLE_ID;
     }
 
     return output;

@@ -1,7 +1,8 @@
 // FILE: synbotGate.ts
-// Purpose: The server's authoritative SynBot gate. Ships in Stable under Synara Alto (Pro) —
-//          verified server-side against the Account API with fail-closed behavior — and unlocked
-//          in non-Stable flavors (Beta, Canary, Dev, tests) where billing is not enabled.
+// Purpose: The server's authoritative SynBot gate. Every host requires Synara Alto (Pro) —
+//          verified server-side against the Account API with fail-closed behavior — except the
+//          Beta, Canary and Dev desktop flavors, which name themselves explicitly. A host with no
+//          desktop flavor (the npx CLI, a headless server) or any other flavor requires Alto.
 // Layer: Runtime gate
 // Exports: SYNBOT_UNAVAILABLE_MESSAGE, SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE,
 //          isServerSynbotEnabled, requiresServerSynbotAlto, checkServerSynbotAltoAccess,
@@ -22,8 +23,16 @@ export const SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE =
 export const isServerSynbotEnabled = (): boolean =>
   isServerBetaFeatureEnabled(SYNBOT_BETA_FEATURE) && isServerGroupsEnabled();
 
-/** Stable desktop builds enforce Synara Alto (Pro) server-side with no local bypass. */
-export const requiresServerSynbotAlto = (): boolean => SERVER_DESKTOP_FLAVOR === "production";
+/**
+ * The flavors where SynBot is free. Everything else, "unknown" included, requires Alto: a host
+ * opts out only by naming one of these (the dev runner and the scenario harness use the Dev
+ * flavor), never by leaving the flavor unset.
+ */
+const SYNBOT_FREE_FLAVORS: ReadonlySet<string> = new Set(["beta", "canary", "development"]);
+
+/** Whether this host enforces Synara Alto (Pro) server-side; fails closed for unknown hosts. */
+export const requiresServerSynbotAlto = (): boolean =>
+  !SYNBOT_FREE_FLAVORS.has(SERVER_DESKTOP_FLAVOR);
 
 const GRANTED_CACHE_TTL_MS = 60_000;
 const DENIED_COALESCE_TTL_MS = 5_000;

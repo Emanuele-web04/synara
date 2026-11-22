@@ -23,3 +23,6 @@ export const { STATE_DIR, DEMO_REPO, HOME, SYNARA_HOME, WORKTREES_DIR } = runPat
 
 /** The Stable gate run (e2e.stable.config.ts) keeps its own state next to the default run's. */
 export const STABLE = runPaths(`${RUN_DIR}-stable`);
+
+/** The flavorless (CLI-like) gate run (e2e.cli.config.ts) keeps its own state too. */
+export const CLI = runPaths(`${RUN_DIR}-cli`);
