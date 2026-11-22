@@ -391,14 +391,20 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds only `synbot` (SynBot, see [docs/synbot.md](docs/synbot.md)).
-Account profiles, saved Inbox history, MCP Connectors and the native editor are available
-in Stable and Beta. Remote connections use their separate runtime activation policy.
+The list is currently empty. Account profiles, saved Inbox history, MCP Connectors, the native
+editor and SynBot are available in Stable and Beta. Remote connections use their separate runtime
+activation policy.
 
-SynBot (`synbot`) runs on the Hubs engine next to Hubs: Beta shows both the Hubs UI and the
-SynBot page. A bot is a Hub that only the SynBot page lists; the Hubs UI skips it. Stable keeps
-Hubs unchanged and refuses every `bots.*` RPC and bot gateway tool. Its tables (migration 145)
-are additive.
+SynBot (`synbot`, see [docs/synbot.md](docs/synbot.md)) runs on the Hubs engine next to Hubs: a
+bot is a Hub that only the SynBot page lists; the Hubs UI skips it. It is not Beta-only, but it
+has its own entitlement gate on the server (`apps/server/src/bots/synbotGate.ts`): every host
+requires a verified Synara Alto (Pro) subscription, checked against the Account API and failing
+closed, except the Beta, Canary and Dev desktop flavors, where SynBot is free. A host with no
+desktop flavor (the `npx` CLI, a headless server), Synara Remote and any other flavor require
+Alto. Without it the server refuses every `bots.*` RPC that starts or accepts work, the
+`bots.subscribe` stream and the bot gateway tools with `SUBSCRIPTION_REQUIRED`; stopping,
+cancelling and Not now keep working so running bots can always be stopped. The dev runner names
+the Dev flavor for its web-mode servers. Its tables (migration 145) are additive.
 
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:
