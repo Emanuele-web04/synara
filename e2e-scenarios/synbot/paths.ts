@@ -26,3 +26,9 @@ export const STABLE = runPaths(`${RUN_DIR}-stable`);
 
 /** The flavorless (CLI-like) gate run (e2e.cli.config.ts) keeps its own state too. */
 export const CLI = runPaths(`${RUN_DIR}-cli`);
+
+/** The Beta flavor run (e2e.beta.config.ts). */
+export const BETA = runPaths(`${RUN_DIR}-beta`);
+
+/** The run against a host without SynBot (e2e.old-host.config.ts). */
+export const OLD_HOST = runPaths(`${RUN_DIR}-old-host`);

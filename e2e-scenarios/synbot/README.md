@@ -9,11 +9,14 @@ npm install                  # once, inside this folder (not part of the Bun wor
 npx e2e run                  # all scenarios, about 10 minutes
 npx e2e run scenarios/delegation-direct.e2e.ts --headed
 npx e2e run --config e2e.stable.config.ts   # the Stable gate, separate (about 1 minute)
-npx e2e run --config e2e.cli.config.ts      # a server with no desktop flavor, separate (about 10 s)
+npx e2e run --config e2e.cli.config.ts --output .e2e/cli   # a server with no desktop flavor (about 10 s)
+npx e2e run --config e2e.stable-alto.config.ts --output .e2e/stable-alto   # about 4 minutes
+npx e2e run --config e2e.beta.config.ts --output .e2e/beta
+npx e2e run --config e2e.old-host.config.ts --output .e2e/old-host
 ```
 
-Set `SYNBOT_SCENARIO_DIR` to a folder of your own when another run may be going on: each run wipes
-its folder.
+Another run of this suite on the same machine shares the default scenario folder and wipes it:
+give every concurrent run its own `SYNBOT_SCENARIO_DIR`.
 
 ## How it works
 
@@ -44,6 +47,30 @@ all still works after Alto lapses, that bot tools say `SUBSCRIPTION_REQUIRED`, a
 The default run names the Dev desktop flavor, where SynBot is free. `e2e.cli.config.ts` runs
 `cli-gate/` against a server with no desktop flavor (as `npx synara` runs) in
 `<scenario folder>-cli`: it requires Synara Alto like Stable.
+
+## More flavors
+
+Each runs its own isolated app in its own folder next to the default run's; keep them out of the
+default run.
+
+| Config                      | Starts                            | Scenarios      | Covers                                                                                                                  |
+| --------------------------- | --------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `e2e.stable-alto.config.ts` | `start-app.ts --stable --alto-ui` | `stable-alto/` | Paywall signed out and on Free, View Alto plans, checkout and Refresh unlocking SynBot, cancellation, sign-out, offline |
+| `e2e.beta.config.ts`        | `start-app.ts --beta`             | `beta/`        | Beta out of the box: no account, no billing                                                                             |
+| `e2e.old-host.config.ts`    | `start-app.ts --old-host`         | `old-host/`    | A host built before SynBot (cross-version remote host)                                                                  |
+
+- `--alto-ui` turns on the sandbox billing UI and puts `fake-account-switch.ts` in front of the fake
+  Account API: it adds checkout links (a fixed Polar sandbox URL the page never loads; `window.open`
+  is stubbed) and a network switch, `POST /__scenario/network {"up": false}`. The lapse scenarios
+  wait out the server's 60 s Alto cache once each.
+- `--old-host` puts `old-host-proxy.ts` (run with Bun) between the web app and the server. It
+  renames every `bots.*` request to a method the server does not know, so the real server answers
+  the way a host without those methods does. `POST /__scenario/mode {"renameBots": false}` makes it
+  a plain pass-through (the control scenario).
+- Every flavor's server finds `fake-gh/bin/gh` first on its PATH (`SYNARA_PATH_HYDRATED=1` keeps
+  the login shell's PATH, and the real `gh`, behind it). Without `<state>/gh.json` it acts signed
+  out; `scenarios/merge-proof.e2e.ts` scripts pull requests, checks and patches through it, and
+  its `proof-app` project has a GitHub remote whose fetches go to a dead local port.
 
 ## Limits
 
