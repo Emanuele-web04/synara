@@ -1,0 +1,3 @@
+#!/bin/sh
+# Every scenario server finds this `gh` first on its PATH (start-app.ts). See ../fake-gh.ts.
+exec "${SYNBOT_NODE:-node}" "$(dirname "$0")/../fake-gh.ts" "$@"

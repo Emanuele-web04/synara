@@ -58,6 +58,9 @@ export const WS_USAGE_LIMIT_RECOVERY_CAPABILITY = "orchestration.usage-limit-rec
 export const WS_THREAD_GOAL_VISIBLE_START_CAPABILITY = "orchestration.thread-goal-visible-start";
 export const WS_SERVER_RUNTIME_STATUS_CAPABILITY = "server.runtime-status";
 export const WS_GIT_ACTION_RECOVERY_CAPABILITY = "git.action-recovery";
+// The host knows the `bots.*` methods. A host built before SynBot answers an unknown method with a
+// connection-wide RPC defect, so clients only send `bots.*` to hosts that advertise this.
+export const WS_SYNBOT_CAPABILITY = "bots.synbot";
 
 // Capabilities the current client refuses to run without. Kept separate from
 // the advertised server list so a newer client can still negotiate with an
@@ -85,6 +88,7 @@ export const WS_SERVER_CAPABILITIES = [
   WS_USAGE_LIMIT_RECOVERY_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WS_SERVER_RUNTIME_STATUS_CAPABILITY,
+  WS_SYNBOT_CAPABILITY,
   // Single-handshake connect: negotiation is available over plain HTTP at
   // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
   "transport.http-negotiate",

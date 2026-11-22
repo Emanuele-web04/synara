@@ -58,6 +58,7 @@ import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import { MEMORY_AUTO_DOCUMENT_PATH } from "@synara/shared/projectAgent";
 import {
   Cause,
+  Deferred,
   Effect,
   FileSystem,
   Layer,
@@ -113,6 +114,7 @@ import {
   SYNBOT_UNAVAILABLE_MESSAGE,
   checkServerSynbotAltoAccess,
   isServerSynbotEnabled,
+  onServerAltoAccessRevoked,
   requiresServerSynbotAlto,
 } from "../synbotGate.ts";
 
@@ -127,12 +129,21 @@ const TASKS_PER_BOT = 40;
 const RECENT_TASK_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_TURN_START_POLL_MS = 100;
 const PENDING_TURN_START_MAX_POLLS = 100;
+/** How often an open SynBot stream on a host that requires Alto confirms the access it opened with. */
+const STREAM_ALTO_RECHECK_MS = 5 * 60_000;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
+/** The answers that turn a card down without doing anything. */
+const DISMISS_OPTION_IDS = new Set(["dismiss", "not-now"]);
 const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
 /** A task whose worker these states hold is stopped by interrupting that worker's turn; a
  * worker waiting on the user (an approval or a question) is mid-turn too. */
 const INTERRUPTIBLE_ITEM_STATES = new Set([...ACTIVE_ITEM_STATES, "waiting"]);
 /** Saved but never delivered: sent without a start, or still waiting for the user's Start. */
+/** The delegations a thread's event concerns: those to or from it; all of them for a sweep. */
+const relevantTo = (records: readonly BotDelegationRecord[], threadId: ThreadId | undefined) =>
+  threadId
+    ? records.filter((record) => record.toThreadId === threadId || record.fromThreadId === threadId)
+    : records;
 const isUndelivered = (record: BotDelegationRecord) =>
   record.settledAt === null &&
   ((record.state === "sent" && record.startedAt === null) || record.state === "awaiting-start");
@@ -218,10 +229,18 @@ const make = Effect.gen(function* () {
     if (!requiresServerSynbotAlto()) return Effect.succeed(true);
     return Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
   });
+  /**
+   * SynBot exists on this host. Enough for stopping, cancelling and dismissing: ending work never
+   * needs an entitlement, so a user who signed out or lost Alto can still stop running bots.
+   */
+  const requireAvailable = Effect.suspend(() =>
+    isServerSynbotEnabled()
+      ? Effect.void
+      : Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable")),
+  );
+  /** SynBot exists and this host's entitlement allows starting or accepting work. */
   const requireEnabled = Effect.gen(function* () {
-    if (!isServerSynbotEnabled()) {
-      return yield* Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable"));
-    }
+    yield* requireAvailable;
     if (requiresServerSynbotAlto()) {
       const granted = yield* Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
       if (!granted) {
@@ -1099,14 +1118,24 @@ const make = Effect.gen(function* () {
       return base;
     });
 
+  /**
+   * The bot whose chat is `threadId`; null for every other thread. This runs for every turn of
+   * every chat, so the cheap bot lookup comes first and only a bot's own chat reaches the Alto
+   * check, which fails with `subscription-required` when the host requires Alto and lacks it.
+   */
   const botForThread = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return null;
+      if (!isServerSynbotEnabled()) return null;
       const config = yield* projectAgentRepository
         .getConfigByCoordinatorThread(threadId)
         .pipe(Effect.orElseSucceed(() => Option.none<ProjectAgentConfig>()));
       if (Option.isNone(config)) return null;
-      return yield* loadBot(config.value.projectId).pipe(Effect.orElseSucceed(() => null));
+      const profile = yield* repository
+        .getProfile(config.value.projectId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (!profile) return null;
+      yield* requireEnabled;
+      return yield* assembleBot(profile).pipe(Effect.orElseSucceed(() => null));
     });
 
   const resolveCaller: BotServiceShape["resolveCaller"] = (input) =>
@@ -1126,7 +1155,8 @@ const make = Effect.gen(function* () {
 
   const formatContextForTurn: BotServiceShape["formatContextForTurn"] = (input) =>
     Effect.gen(function* () {
-      const bot = yield* botForThread(input.threadId);
+      // A locked bot gets no SynBot context; its tools answer why.
+      const bot = yield* botForThread(input.threadId).pipe(Effect.orElseSucceed(() => null));
       if (!bot) return "";
       const caller = yield* callerFromMessage(bot, null, input.messageId);
       const bots = yield* listBots();
@@ -1184,7 +1214,38 @@ const make = Effect.gen(function* () {
 
   const roster: BotServiceShape["roster"] = () => requireEnabled.pipe(Effect.andThen(listBots()));
 
+  /**
+   * Delegations whose first turn start is being dispatched right now. Saved as `sent` with no
+   * start until the dispatch lands, they look like an abandoned delivery; this tells them apart.
+   * In memory on purpose: after a restart nothing is mid-dispatch.
+   */
+  const delivering = new Set<string>();
+
+  /**
+   * A delivery that failed and can no longer be retried: saved but never started, not being
+   * dispatched, and its asker is no longer in the turn that could ask again (with no known turn,
+   * no longer in any turn).
+   */
+  const isAbandonedDelivery = (
+    record: BotDelegationRecord,
+    requesterShell: OrchestrationThreadShell | null,
+  ) => {
+    if (record.settledAt !== null || record.state !== "sent" || record.startedAt !== null)
+      return false;
+    if (delivering.has(record.id)) return false;
+    const activeTurnId = requesterShell?.session?.activeTurnId ?? null;
+    return record.fromTurnId !== null ? activeTurnId !== record.fromTurnId : activeTurnId === null;
+  };
+
   const dispatchDelegation = (record: BotDelegationRecord) =>
+    Effect.suspend(() => {
+      delivering.add(record.id);
+      return dispatchDelegationNow(record).pipe(
+        Effect.ensuring(Effect.sync(() => delivering.delete(record.id))),
+      );
+    });
+
+  const dispatchDelegationNow = (record: BotDelegationRecord) =>
     Effect.gen(function* () {
       const from = yield* loadBot(record.fromBotId);
       yield* startTurn({
@@ -1573,10 +1634,32 @@ const make = Effect.gen(function* () {
       return { shell: shell.value, messages, items, result };
     });
 
+  const requesterShellOf = (record: BotDelegationRecord) =>
+    snapshotQuery.getThreadShellById(record.fromThreadId).pipe(
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    );
+
   const settleOne = (record: BotDelegationRecord, nowMs: number) =>
     Effect.gen(function* () {
       if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state))
         return record;
+      if (isAbandonedDelivery(record, yield* requesterShellOf(record))) {
+        // The asker saw the delivery fail in its turn, so this is not reported again; settling it
+        // stops the sweep re-reading it and the UI showing it as sent.
+        const at = isoNow();
+        const failed: BotDelegationRecord = {
+          ...record,
+          state: "failed",
+          resultSummary: "The hand-off could not be started.",
+          settledAt: at,
+          reportedAt: at,
+          updatedAt: at,
+        };
+        yield* repository.saveDelegation(failed);
+        yield* publishDelegation(failed);
+        return failed;
+      }
       const assessed = yield* assessDelegation(record, nowMs);
       if (assessed === null) {
         const failed: BotDelegationRecord = {
@@ -1626,20 +1709,23 @@ const make = Effect.gen(function* () {
       return next;
     });
 
+  /**
+   * The settle sweep. It runs every 10 s and on every thread event, so it costs nothing when no
+   * delegation concerns it: the Alto check comes only after that, and outside `settleLock`, so a
+   * slow Account API never holds up Stop or a cancel waiting on the lock.
+   */
   const evaluateDelegations: BotServiceShape["evaluateDelegations"] = (reason) =>
-    settleLock
-      .withPermits(1)(
+    Effect.gen(function* () {
+      if (!isServerSynbotEnabled()) return;
+      const pending = yield* repository.listActiveDelegations();
+      if (relevantTo(pending, reason.threadId).length === 0) return;
+      if (!(yield* hasSynbotAccess)) return;
+      yield* settleLock.withPermits(1)(
         Effect.gen(function* () {
-          if (!(yield* hasSynbotAccess)) return;
           const active = yield* repository.listActiveDelegations();
           if (active.length === 0) return;
           const nowMs = Date.now();
-          const relevant = reason.threadId
-            ? active.filter(
-                (record) =>
-                  record.toThreadId === reason.threadId || record.fromThreadId === reason.threadId,
-              )
-            : active;
+          const relevant = relevantTo(active, reason.threadId);
           const updated = new Map<string, BotDelegationRecord>();
           for (const record of relevant) {
             const next = yield* settleOne(record, nowMs).pipe(
@@ -1661,20 +1747,13 @@ const make = Effect.gen(function* () {
             if (settings?.recapMode !== "task") {
               const siblings = yield* repository.listDelegationsByRequest(key);
               const fresh = siblings.map((sibling) => updated.get(sibling.id) ?? sibling);
-              const requester = records[0]!;
-              const requesterShell = yield* snapshotQuery
-                .getThreadShellById(requester.fromThreadId)
-                .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
-              const requesterTurnActive =
-                Option.isSome(requesterShell) &&
-                requester.fromTurnId !== null &&
-                requesterShell.value.session?.activeTurnId === requester.fromTurnId;
+              const requesterShell = yield* requesterShellOf(records[0]!);
               const allSettled = fresh.every(
                 (sibling) =>
                   sibling.settledAt !== null ||
-                  // A sibling whose startTurn failed and whose requester turn already ended can
-                  // never be retried; do not let it block completed siblings from recapping.
-                  (!requesterTurnActive && sibling.state === "sent" && sibling.startedAt === null),
+                  // An abandoned delivery (settled on its own sweep) can never be retried; it
+                  // must not hold completed siblings back from their recap.
+                  isAbandonedDelivery(sibling, requesterShell),
               );
               // One recap per request; a failure is reported at once instead of waiting.
               const now = allSettled
@@ -1686,12 +1765,12 @@ const make = Effect.gen(function* () {
             yield* deliverReport(records);
           }
         }),
-      )
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("SynBot delegation evaluation failed", { cause: Cause.pretty(cause) }),
-        ),
       );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("SynBot delegation evaluation failed", { cause: Cause.pretty(cause) }),
+      ),
+    );
 
   /**
    * Ends an open delegation: stops the target's turns for it and its tasks, then records the
@@ -1705,6 +1784,7 @@ const make = Effect.gen(function* () {
       | { readonly state: "cancelled" }
       | { readonly state: "failed"; readonly resultSummary: string },
     visited: Set<string> = new Set(),
+    options: { readonly cascade: boolean } = { cascade: true },
   ): Effect.Effect<BotDelegationRecord, BotServiceError> =>
     Effect.gen(function* () {
       if (visited.has(record.id)) return record;
@@ -1740,8 +1820,9 @@ const make = Effect.gen(function* () {
         }
       }
       // Cancelling an intermediate delegation also cancels open child delegations it handed on,
-      // so downstream bots stop and cannot wake the cancelled bot later.
-      if (end.state === "cancelled") {
+      // so downstream bots stop and cannot wake the cancelled bot later. `visited` collects every
+      // delegation ended this way.
+      if (end.state === "cancelled" && options.cascade) {
         const onward = yield* repository
           .listDelegationsFromThread({ fromThreadId: record.toThreadId, since: record.createdAt })
           .pipe(Effect.orElseSucceed(() => [] as readonly BotDelegationRecord[]));
@@ -1753,9 +1834,13 @@ const make = Effect.gen(function* () {
           ) {
             continue;
           }
+          // A child names the turn that handed it on. Only one that does not falls back to its
+          // place in the chain: the same root, exactly one hop further. A deeper child of the
+          // same root came from another branch that passed through this bot.
           const belongsToChain =
-            (child.fromTurnId !== null && assessedTurnIds.includes(child.fromTurnId)) ||
-            (child.rootId === record.rootId && child.depth > record.depth);
+            child.fromTurnId !== null
+              ? assessedTurnIds.includes(child.fromTurnId)
+              : child.rootId === record.rootId && child.depth === record.depth + 1;
           if (!belongsToChain) continue;
           yield* endDelegation(child, { state: "cancelled" }, visited).pipe(
             Effect.catch(() => Effect.void),
@@ -1790,7 +1875,7 @@ const make = Effect.gen(function* () {
 
   const cancelDelegation: BotServiceShape["cancelDelegation"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      yield* requireAvailable;
       return yield* settleLock.withPermits(1)(
         Effect.gen(function* () {
           const record = yield* repository
@@ -1870,11 +1955,15 @@ const make = Effect.gen(function* () {
 
   const cardAction: BotServiceShape["cardAction"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      // "Not now" starts nothing, so it needs no entitlement; every other answer starts or
+      // accepts work. Refuse those before reading the card at all.
+      const dismissing = DISMISS_OPTION_IDS.has(input.optionId);
+      yield* dismissing ? requireAvailable : requireEnabled;
       const { card, resolved } = yield* findCard(input.threadId, input.cardId);
       if (resolved) return yield* Effect.fail(fail("This card was already answered.", "conflict"));
       const option = card.options.find((entry) => entry.id === input.optionId);
       if (!option) return yield* Effect.fail(fail("Unknown answer.", "invalid"));
+      if (dismissing && option.tone !== "dismiss") yield* requireEnabled;
       const createdBotIds: ProjectId[] = [];
       switch (card.kind) {
         case "bot-suggestions":
@@ -1987,22 +2076,29 @@ const make = Effect.gen(function* () {
 
   /**
    * Returns `baseId` while it is still open (preserving idempotency), or picks a fresh
-   * suffixed id when an earlier card with `baseId` was already answered (e.g. "Not now").
+   * suffixed id when an earlier card with that id was already answered. With `freshAfter:
+   * "dismissed"` only a "Not now" frees a new card: an accepted card keeps its id, so asking
+   * again answers with the card that already did the work instead of a second one.
    */
-  const nextCardId = (threadId: ThreadId, baseId: string) =>
+  const nextCardId = (
+    threadId: ThreadId,
+    baseId: string,
+    freshAfter: "answered" | "dismissed" = "answered",
+  ) =>
     snapshotQuery.getThreadDetailById(threadId).pipe(
       Effect.map((detail) => {
         if (Option.isNone(detail)) return baseId;
-        const resolvedIds = new Set(
-          detail.value.activities
-            .filter((activity) => activity.kind === BOT_CARD_RESOLVED_ACTIVITY_KIND)
-            .map((activity) => (activity.payload as { cardId?: unknown } | null)?.cardId)
-            .filter((id): id is string => typeof id === "string"),
-        );
-        if (!resolvedIds.has(baseId)) return baseId;
-        for (let attempt = 2; ; attempt += 1) {
-          const candidate = `${baseId}:${attempt}`;
-          if (!resolvedIds.has(candidate)) return candidate;
+        const answers = new Map<string, unknown>();
+        for (const activity of detail.value.activities) {
+          if (activity.kind !== BOT_CARD_RESOLVED_ACTIVITY_KIND) continue;
+          const payload = activity.payload as { cardId?: unknown; optionId?: unknown } | null;
+          if (typeof payload?.cardId === "string") answers.set(payload.cardId, payload.optionId);
+        }
+        for (let attempt = 1; ; attempt += 1) {
+          const candidate = attempt === 1 ? baseId : `${baseId}:${attempt}`;
+          if (!answers.has(candidate)) return candidate;
+          const dismissed = DISMISS_OPTION_IDS.has(String(answers.get(candidate)));
+          if (freshAfter === "dismissed" && !dismissed) return candidate;
         }
       }),
       Effect.orElseSucceed(() => baseId),
@@ -2054,6 +2150,7 @@ const make = Effect.gen(function* () {
       const cardId = yield* nextCardId(
         input.caller.bot.threadId,
         `synbot:card:propose:${stableGatewayDigest({ bot: input.caller.bot.id, draft: input.draft }, 20)}`,
+        "dismissed",
       );
       yield* postCard({
         threadId: input.caller.bot.threadId,
@@ -2157,10 +2254,12 @@ const make = Effect.gen(function* () {
 
   const onProjectCreated: BotServiceShape["onProjectCreated"] = (projectId) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return;
+      if (!isServerSynbotEnabled()) return;
       const project = yield* snapshotQuery.getProjectShellById(projectId);
       if (Option.isNone(project) || !isOrdinary(project.value)) return;
       const profiles = yield* repository.listProfiles();
+      // Without bots there is nothing to link or suggest: skip the Alto check entirely.
+      if (profiles.length === 0 || !(yield* hasSynbotAccess)) return;
       for (const profile of profiles) {
         if (profile.scope.projects === "all")
           yield* syncScopeLinks(profile.projectId, profile.scope);
@@ -2180,7 +2279,7 @@ const make = Effect.gen(function* () {
 
   const fullControlFor: BotServiceShape["fullControlFor"] = (input) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess)) return null;
+      if (!isServerSynbotEnabled()) return null;
       const settings = yield* getSettings();
       if (!settings.controlWithoutAsking) return null;
       const shell = yield* snapshotQuery
@@ -2188,20 +2287,24 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
       if (Option.isNone(shell)) return null;
       const turnId = shell.value.session?.activeTurnId ?? shell.value.latestTurn?.turnId ?? null;
-      const caller = yield* resolveCaller({ threadId: input.callerThreadId, turnId });
+      // Only a bot's own chat reaches the Alto check, inside resolveCaller.
+      const caller = yield* resolveCaller({ threadId: input.callerThreadId, turnId }).pipe(
+        Effect.orElseSucceed(() => null),
+      );
       if (!caller || !caller.humanRooted) return null;
       return { botId: caller.bot.id, botName: caller.bot.name };
     });
 
   const noteControl: BotServiceShape["noteControl"] = (input) =>
     Effect.gen(function* () {
-      if (!(yield* hasSynbotAccess) || input.callerThreadId === input.targetThreadId) return;
+      if (!isServerSynbotEnabled() || input.callerThreadId === input.targetThreadId) return;
       const config = yield* projectAgentRepository.getConfigByCoordinatorThread(
         input.callerThreadId,
       );
       if (Option.isNone(config)) return;
       const profile = yield* repository.getProfile(config.value.projectId);
       if (!profile) return;
+      if (!(yield* hasSynbotAccess)) return;
       // A bot steering its own task needs no label; the task card already says whose it is.
       const owned = yield* hubWorkRepository.findByWorker(input.targetThreadId);
       if (owned?.projectId === profile.projectId) return;
@@ -2351,7 +2454,7 @@ const make = Effect.gen(function* () {
 
   const stopAll: BotServiceShape["stopAll"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      yield* requireAvailable;
       const only = input?.botId ?? null;
       const onlyTaskId = input?.taskId ?? null;
       if (only !== null) yield* requireBot(only);
@@ -2372,6 +2475,15 @@ const make = Effect.gen(function* () {
             yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
               Effect.tap(() => Effect.sync(() => cancelledTaskIds.push(item.id))),
               Effect.catch(() => Effect.void),
+            );
+          } else if (INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
+            // Its worker is still being created: there is nothing to interrupt yet, and the
+            // creation cannot be called back halfway. Say so instead of reporting a Stop.
+            return yield* Effect.fail(
+              fail(
+                "This task is still starting. Stop it again once its chat has opened.",
+                "conflict",
+              ),
             );
           }
         }
@@ -2409,10 +2521,27 @@ const make = Effect.gen(function* () {
           }
           continue;
         }
-        // One bot stops the work handed to it; what it handed to others keeps going.
+        // One bot stops the work handed to it; what it handed to others keeps going. Stop all
+        // ends everything, so it may follow each hand-off down its chain.
         if (only !== null && record.toBotId !== only) continue;
-        yield* cancelDelegation({ delegationId: record.id }).pipe(Effect.catch(() => Effect.void));
-        cancelledDelegationIds.push(record.id);
+        if (cancelledDelegationIds.includes(record.id)) continue;
+        const ended = new Set<string>();
+        yield* settleLock
+          .withPermits(1)(
+            Effect.gen(function* () {
+              const latest = yield* repository
+                .getDelegation(record.id)
+                .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
+              if (!latest || BOT_DELEGATION_TERMINAL_STATES.has(latest.state)) return;
+              yield* endDelegation(latest, { state: "cancelled" }, ended, {
+                cascade: only === null,
+              });
+            }),
+          )
+          .pipe(Effect.catch(() => Effect.void));
+        for (const id of ended) {
+          if (!cancelledDelegationIds.includes(id)) cancelledDelegationIds.push(id);
+        }
       }
       for (const bot of yield* listBots()) {
         if (only !== null && bot.id !== only) continue;
@@ -2452,10 +2581,37 @@ const make = Effect.gen(function* () {
 
   // ── Stream ─────────────────────────────────────────────────────────
 
+  /**
+   * The live SynBot stream. On a host that requires Alto it ends with `subscription-required`
+   * as soon as access is gone: on sign-out or account deletion, when any billing read or check
+   * finds no grant, and at the latest on its own periodic re-check.
+   */
   const streamEvents: BotServiceShape["streamEvents"] = () =>
     Stream.unwrap(
       Effect.gen(function* () {
+        const revoked = yield* Deferred.make<void, BotServiceError>();
+        const revoke = () =>
+          Deferred.doneUnsafe(
+            revoked,
+            Effect.fail(fail(SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE, "subscription-required")),
+          );
+        const altoRequired = requiresServerSynbotAlto();
+        if (altoRequired) {
+          // Listen before the admission check, so a sign-out during it is not missed.
+          const unsubscribe = onServerAltoAccessRevoked((dir) => {
+            if (dir === credentialDir) revoke();
+          });
+          yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+        }
         yield* requireEnabled;
+        if (altoRequired) {
+          yield* Effect.gen(function* () {
+            for (;;) {
+              yield* Effect.sleep(STREAM_ALTO_RECHECK_MS);
+              if (!(yield* hasSynbotAccess)) revoke();
+            }
+          }).pipe(Effect.forkScoped);
+        }
         const liveQueue = yield* Queue.bounded<BotStreamEvent, Cause.Done>(256);
         // Stream.fromPubSub does not deliver under this runtime; subscribe in the stream's scope.
         const subscription = yield* PubSub.subscribe(events);
@@ -2467,7 +2623,7 @@ const make = Effect.gen(function* () {
         return Stream.concat(
           Stream.succeed({ type: "snapshot" as const, snapshot: initial }),
           Stream.fromQueue(liveQueue),
-        );
+        ).pipe(Stream.interruptWhen(Deferred.await(revoked)));
       }),
     );
 

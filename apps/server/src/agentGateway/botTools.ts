@@ -46,15 +46,19 @@ export function makeBotTools(dependencies: {
   const { bots } = dependencies;
 
   const resolveCaller = (context: Pick<ToolContext, "callerThreadId" | "callerTurnId">) =>
-    bots
-      .resolveCaller({
-        threadId: ThreadId.makeUnsafe(context.callerThreadId),
-        turnId: context.callerTurnId,
-      })
-      .pipe(Effect.orElseSucceed(() => null));
+    bots.resolveCaller({
+      threadId: ThreadId.makeUnsafe(context.callerThreadId),
+      turnId: context.callerTurnId,
+    });
 
+  /** A bot chat locked by the Alto gate hears why, with the code a client can match. */
   const requireCaller = (context: ToolContext) =>
     resolveCaller(context).pipe(
+      Effect.mapError((error) =>
+        error.code === "subscription-required"
+          ? new ToolInputError(`SUBSCRIPTION_REQUIRED: ${error.message}`)
+          : error,
+      ),
       Effect.flatMap((caller) =>
         caller
           ? Effect.succeed(caller)
@@ -63,7 +67,10 @@ export function makeBotTools(dependencies: {
     );
 
   const advertisedTo = (context: Omit<ToolContext, "jsonRpcRequestId">) =>
-    resolveCaller(context).pipe(Effect.map((caller) => caller !== null));
+    resolveCaller(context).pipe(
+      Effect.map((caller) => caller !== null),
+      Effect.orElseSucceed(() => false),
+    );
 
   const run = (
     context: ToolContext,

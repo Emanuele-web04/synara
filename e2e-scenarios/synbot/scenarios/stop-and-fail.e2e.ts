@@ -38,7 +38,8 @@ test("Stop all stops a bot that is still working", async ({ synbot, screen, brow
   await app.screenshot("slow-working");
 
   await screen.getByRole("button", "Stop all").tap();
-  const dialog = screen.getByRole("dialog");
+  // A bot's "finished" notice is a dialog too: pick the confirmation by its title.
+  const dialog = screen.getByRole("dialog", "Stop every bot?");
   await expect(dialog).toBeVisible();
   await app.screenshot("stop-all-dialog");
   await dialog.getByRole("button", "Stop all").tap();

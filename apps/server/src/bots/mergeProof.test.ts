@@ -1,4 +1,5 @@
-import { ProjectId, ThreadId, type PullRequestDetail } from "@synara/contracts";
+import { BotMergeProof, ProjectId, ThreadId, type PullRequestDetail } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { evaluateMergeProof, findMergeRedFlags } from "./mergeProof";
@@ -174,5 +175,38 @@ describe("findMergeRedFlags", () => {
     });
     expect(proof.ready).toBe(true);
     expect(proof.redFlags.map((flag) => flag.kind)).toEqual(["outside-scope"]);
+  });
+
+  it("keeps a long scope within the contract and test flags ahead of out-of-scope files", () => {
+    const scopePaths = Array.from({ length: 40 }, (_, index) => `packages/module-${index}/**`);
+    const outside = Array.from({ length: 30 }, (_, index) => [
+      `diff --git a/apps/app-${index}/x.ts b/apps/app-${index}/x.ts`,
+      "+export const x = 1;",
+    ]).flat();
+    const patch = [
+      ...outside,
+      "diff --git a/packages/module-0/a.test.ts b/packages/module-0/a.test.ts",
+      "deleted file mode 100644",
+      "-expect(1).toBe(1)",
+      "diff --git a/packages/module-1/b.test.ts b/packages/module-1/b.test.ts",
+      "-  expect(sum(1, 2)).toBe(3);",
+    ].join("\n");
+    const flags = findMergeRedFlags(patch, scopePaths);
+    expect(flags).toHaveLength(24);
+    expect(flags.slice(0, 2).map((flag) => flag.kind)).toEqual([
+      "test-removed",
+      "assertion-removed",
+    ]);
+    for (const flag of flags) expect(flag.detail.length).toBeLessThanOrEqual(400);
+    const proof = evaluateMergeProof({
+      threadId: ThreadId.makeUnsafe("t-wide"),
+      detail: detail(),
+      patch,
+      patchComplete: true,
+      scopePaths,
+      checkedAt: "2026-08-01T00:00:00.000Z",
+    });
+    // The proof goes over the wire: it must encode.
+    expect(() => Schema.encodeUnknownSync(BotMergeProof)(proof)).not.toThrow();
   });
 });

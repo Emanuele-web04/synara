@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { assert, describe, it } from "@effect/vitest";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DEVELOPMENT_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
 import { Effect } from "effect";
 
 import {
@@ -32,6 +36,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       "SYNARA_HOST",
       "SYNARA_LOG_WS_EVENTS",
       "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+      "SYNARA_DESKTOP_BUNDLE_ID",
       "VITE_WS_URL",
       "VITE_DEV_SERVER_URL",
     ]) {
@@ -217,6 +222,22 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.SYNARA_HOST, "0.0.0.0");
         assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:4222");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
+      }),
+    );
+
+    it.effect("names the Dev flavor for web-mode servers and leaves the desktop to its shell", () =>
+      Effect.gen(function* () {
+        for (const mode of ["dev", "dev:server", "dev:web"] as const) {
+          const env = yield* createDevRunnerEnv({ ...defaults, mode });
+          assert.equal(env.SYNARA_DESKTOP_BUNDLE_ID, SYNARA_DEVELOPMENT_BUNDLE_ID);
+        }
+        const kept = yield* createDevRunnerEnv({
+          ...defaults,
+          baseEnv: { SYNARA_DESKTOP_BUNDLE_ID: SYNARA_BETA_BUNDLE_ID },
+        });
+        assert.equal(kept.SYNARA_DESKTOP_BUNDLE_ID, SYNARA_BETA_BUNDLE_ID);
+        const desktop = yield* createDevRunnerEnv({ ...defaults, mode: "dev:desktop" });
+        assert.equal(desktop.SYNARA_DESKTOP_BUNDLE_ID, undefined);
       }),
     );
 

@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMPTY_SYNBOT_DATA,
+  altoGrantRetry,
   applyBotStreamEvent,
   botByThreadId,
   delegationsTouchingThread,
@@ -107,5 +108,26 @@ describe("orderedBots", () => {
     expect(botByThreadId({ ...EMPTY_SYNBOT_DATA, bots: [bot({})] }, "thread-a")?.name).toBe(
       "Frontend",
     );
+  });
+});
+
+describe("altoGrantRetry", () => {
+  it("re-opens SynBot once per grant, however often the server keeps refusing", () => {
+    let retried = false;
+    let retries = 0;
+    // The page's status cycles refused -> loading -> refused while the plan shows Alto.
+    for (const status of ["refused", "loading", "refused", "loading", "refused"]) {
+      const next = altoGrantRetry({
+        granted: true,
+        subscriptionRequired: status === "refused",
+        retried,
+      });
+      retried = next.retried;
+      if (next.retry) retries += 1;
+    }
+    expect(retries).toBe(1);
+    // Losing Alto and getting it back allows one more.
+    retried = altoGrantRetry({ granted: false, subscriptionRequired: true, retried }).retried;
+    expect(altoGrantRetry({ granted: true, subscriptionRequired: true, retried }).retry).toBe(true);
   });
 });

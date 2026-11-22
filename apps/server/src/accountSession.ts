@@ -1219,6 +1219,7 @@ export function createAccountSession(
       if (credentials) {
         noteServerAltoAccess(credentialDir, {
           accountUrl: credentials.accountUrl,
+          organizationId: credentials.organizationId,
           ...(credentials.userId ? { userId: credentials.userId } : {}),
           granted: status.available === true && granted,
         });

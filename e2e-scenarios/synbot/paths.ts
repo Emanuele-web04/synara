@@ -5,8 +5,30 @@ import * as nodePath from "node:path";
 
 export const RUN_DIR =
   process.env.SYNBOT_SCENARIO_DIR ?? nodePath.join(nodeOs.tmpdir(), "synbot-scenarios");
-export const STATE_DIR = nodePath.join(RUN_DIR, "agent");
-export const DEMO_REPO = nodePath.join(RUN_DIR, "repos/demo-app");
-export const HOME = nodePath.join(RUN_DIR, "home");
-export const SYNARA_HOME = nodePath.join(RUN_DIR, "synara-home");
-export const WORKTREES_DIR = nodePath.join(SYNARA_HOME, "worktrees");
+
+/** The folders of one run rooted at `root`. */
+export const runPaths = (root: string) => {
+  const synaraHome = nodePath.join(root, "synara-home");
+  return {
+    RUN_DIR: root,
+    STATE_DIR: nodePath.join(root, "agent"),
+    DEMO_REPO: nodePath.join(root, "repos/demo-app"),
+    HOME: nodePath.join(root, "home"),
+    SYNARA_HOME: synaraHome,
+    WORKTREES_DIR: nodePath.join(synaraHome, "worktrees"),
+  };
+};
+
+export const { STATE_DIR, DEMO_REPO, HOME, SYNARA_HOME, WORKTREES_DIR } = runPaths(RUN_DIR);
+
+/** The Stable gate run (e2e.stable.config.ts) keeps its own state next to the default run's. */
+export const STABLE = runPaths(`${RUN_DIR}-stable`);
+
+/** The flavorless (CLI-like) gate run (e2e.cli.config.ts) keeps its own state too. */
+export const CLI = runPaths(`${RUN_DIR}-cli`);
+
+/** The Beta flavor run (e2e.beta.config.ts). */
+export const BETA = runPaths(`${RUN_DIR}-beta`);
+
+/** The run against a host without SynBot (e2e.old-host.config.ts). */
+export const OLD_HOST = runPaths(`${RUN_DIR}-old-host`);

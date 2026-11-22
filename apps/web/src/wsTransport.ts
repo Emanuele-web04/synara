@@ -31,6 +31,8 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SYNBOT_CAPABILITY,
+  WsRpcError,
   type ClientOrchestrationCommand,
   type OrchestrationSettleTurnDispatchResult,
   DEVICE_WS_CHANNELS,
@@ -674,6 +676,27 @@ function makeProtocolLayer(url: string, hooks?: ProtocolLayerHooks) {
       }),
     ),
   ).pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
+}
+
+const SYNBOT_METHOD_PREFIX = "bots.";
+const SYNBOT_HOST_UNAVAILABLE_MESSAGE = "SynBot is not available on this host.";
+
+/**
+ * A host built before SynBot answers `bots.*` with a connection-wide RPC defect, which would tear
+ * down every request on the socket. Such a host does not advertise the SynBot capability, so the
+ * client refuses the call locally with the same FEATURE_UNAVAILABLE a SynBot-less host sends.
+ */
+export function synbotRefusalForHost(
+  method: string,
+  capabilities: ReadonlyArray<string> | undefined,
+): WsRpcError | null {
+  if (!method.startsWith(SYNBOT_METHOD_PREFIX)) return null;
+  if (capabilities?.includes(WS_SYNBOT_CAPABILITY)) return null;
+  return new WsRpcError({
+    message: SYNBOT_HOST_UNAVAILABLE_MESSAGE,
+    code: "FEATURE_UNAVAILABLE",
+    retryable: false,
+  });
 }
 
 function causeToError(cause: Cause.Cause<unknown>): Error {
@@ -1345,6 +1368,8 @@ export class WsTransport {
       try {
         sendAdmitted = true;
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        const synbotRefusal = synbotRefusalForHost(method, this.compatibility?.capabilities);
+        if (synbotRefusal) throw synbotRefusal;
         if (
           method === ORCHESTRATION_WS_METHODS.settleTurnDispatch &&
           !this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
@@ -2546,6 +2571,9 @@ export class WsTransport {
             restartChannel,
           );
         } else if (channel === WS_CHANNELS.botsEvent) {
+          // A host without SynBot cannot answer bots.subscribe; its unary bots.* calls are refused
+          // locally with FEATURE_UNAVAILABLE, which is how the SynBot page learns it.
+          if (!this.compatibility?.capabilities.includes(WS_SYNBOT_CAPABILITY)) return;
           this.startStream(
             client,
             "bots.events",

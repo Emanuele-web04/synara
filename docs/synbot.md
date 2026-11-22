@@ -1,10 +1,12 @@
-# SynBot (Beta)
+# SynBot
 
 SynBot is a layer above every chat. You talk to **SynBot**; it hands work to **bots**, each bot
 starts **tasks** in their own worktree, and when the work is done you get one short recap.
 
-> **Synara Beta only.** SynBot runs next to [Hubs](hubs.md) in Synara Beta; bots are listed here,
-> not in the Hubs sidebar section. Synara Stable has Hubs only.
+> **Synara Alto.** SynBot needs a Synara Alto (Pro) subscription in Synara Stable and when Synara
+> runs from the command line; it is free in Synara Beta. It runs next to [Hubs](hubs.md); bots are
+> listed here, not in the Hubs sidebar section. Without Alto you can still stop bots that are
+> running.
 
 ## Bots
 

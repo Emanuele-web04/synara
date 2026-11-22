@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  BOT_CARD_RESOLVED_ACTIVITY_KIND,
   BOT_DELEGATION_MESSAGE_PREFIX,
   BotCard,
   BOT_REPORT_MESSAGE_PREFIX,
@@ -17,7 +18,9 @@ import {
 } from "@synara/contracts";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { beforeEach, vi } from "vitest";
 
+import { accountStateDirectory } from "../../accountAuth.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -34,7 +37,41 @@ import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentSer
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BotService } from "../Services/BotService.ts";
+import { clearServerAltoAccess } from "../synbotGate.ts";
 import { BotServiceLive } from "./BotService.ts";
+
+/**
+ * The Alto gate as these tests see it. A Vitest worker has no desktop flavor, which the real gate
+ * treats as a host that requires Alto; tests run as a free host unless they say otherwise, and
+ * count the entitlement checks that reach the Account API.
+ */
+const gate = vi.hoisted(() => ({
+  requiresAlto: false,
+  granted: true,
+  checks: 0,
+  /** While set, every entitlement check waits for it, as a slow Account API would. */
+  hold: null as Promise<void> | null,
+}));
+vi.mock("../synbotGate.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../synbotGate.ts")>();
+  return {
+    ...actual,
+    requiresServerSynbotAlto: () => gate.requiresAlto,
+    checkServerSynbotAltoAccess: async () => {
+      if (!gate.requiresAlto) return true;
+      gate.checks += 1;
+      if (gate.hold) await gate.hold;
+      return gate.granted;
+    },
+  };
+});
+
+beforeEach(() => {
+  gate.requiresAlto = false;
+  gate.granted = true;
+  gate.checks = 0;
+  gate.hold = null;
+});
 
 const now = "2026-11-05T10:00:00.000Z";
 const model = { provider: "codex", model: "gpt-6-luna" } as unknown as ModelSelection;
@@ -1038,6 +1075,13 @@ it.effect(
       );
       yield* bots.evaluateDelegations({});
       assert.lengthOf(reportsTo(world, MAIN.threadId), 1);
+      // The abandoned one is settled, not left open for every sweep to re-read.
+      const snapshot = yield* bots.snapshot();
+      const failed = snapshot.delegations.find((entry) => entry.toBotId === QA.projectId);
+      assert.strictEqual(failed?.state, "failed");
+      assert.isNotNull(failed?.settledAt);
+      yield* bots.evaluateDelegations({});
+      assert.lengthOf(reportsTo(world, MAIN.threadId), 1);
     }).pipe(Effect.provide(makeLayer(world)));
   },
 );
@@ -1093,5 +1137,385 @@ it.effect("proposing the same bot again after Not now creates a fresh answerable
     });
     const second = yield* bots.propose({ caller: main, draft });
     assert.notStrictEqual(second.cardId, first.cardId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+// ── The Alto gate ────────────────────────────────────────────────────
+
+it.effect("turns in chats that are not bots never reach the Alto check", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    // A plain Hub: a coordinator thread with no bot profile.
+    const hubThread = ThreadId.makeUnsafe("thread-plain-hub");
+    yield* (yield* ProjectAgentRepository).saveConfig(
+      {
+        projectId: ProjectId.makeUnsafe("plain-hub"),
+        coordinatorThreadId: hubThread,
+        coordinatorName: "Hub",
+        coordinatorModelSelection: model,
+        limits: DEFAULT_PROJECT_AGENT_LIMITS,
+        captureEnabled: true,
+        enabled: true,
+        automationId: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        disabledAt: null,
+      },
+      null,
+    );
+    gate.requiresAlto = true;
+    gate.granted = false;
+    const bots = yield* BotService;
+    for (const threadId of [ThreadId.makeUnsafe("thread-user-chat"), hubThread]) {
+      assert.strictEqual(yield* bots.formatContextForTurn({ threadId, messageId: "m-1" }), "");
+      assert.strictEqual(yield* bots.resolveCaller({ threadId, turnId: null }), null);
+      assert.strictEqual(
+        yield* bots.fullControlFor({ callerThreadId: threadId, targetThreadId: MAIN.threadId }),
+        null,
+      );
+      yield* bots.noteControl({
+        callerThreadId: threadId,
+        targetThreadId: MAIN.threadId,
+        action: "send",
+      } as never);
+    }
+    assert.strictEqual(gate.checks, 0);
+
+    // A bot's own chat is checked, and refused with the reason.
+    assert.strictEqual(
+      yield* bots.formatContextForTurn({ threadId: MAIN.threadId, messageId: "m-1" }),
+      "",
+    );
+    const locked = yield* Effect.flip(
+      bots.resolveCaller({ threadId: MAIN.threadId, turnId: null }),
+    );
+    assert.strictEqual(locked.code, "subscription-required");
+    assert.isAbove(gate.checks, 0);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("the settle sweep makes no Alto check while no delegation concerns it", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    gate.requiresAlto = true;
+    gate.granted = false;
+    const bots = yield* BotService;
+    yield* bots.evaluateDelegations({});
+    yield* bots.evaluateDelegations({ threadId: FRONTEND.threadId });
+    assert.strictEqual(gate.checks, 0);
+
+    gate.granted = true;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "x",
+      requestId: "x",
+    });
+    gate.checks = 0;
+    // An event in a chat no delegation involves costs nothing either.
+    yield* bots.evaluateDelegations({ threadId: ThreadId.makeUnsafe("thread-user-chat") });
+    assert.strictEqual(gate.checks, 0);
+    yield* bots.evaluateDelegations({});
+    assert.strictEqual(gate.checks, 1);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+/** Fails if `effect` has not finished within `ms` of real time (the test clock stays put). */
+const within = <A, E, R>(ms: number, effect: Effect.Effect<A, E, R>) =>
+  Effect.raceFirst(
+    effect,
+    Effect.promise(() => new Promise((resolve) => setTimeout(resolve, ms))).pipe(
+      Effect.andThen(Effect.die(new Error(`did not finish within ${ms} ms`))),
+    ),
+  );
+
+it.effect("after Alto lapses, Stop, cancel and Not now still work; starting work does not", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Build it",
+      requestId: "frontend",
+    });
+    const toQa = yield* bots.delegate({
+      caller: main,
+      targetBotId: QA.projectId,
+      brief: "Check it",
+      requestId: "qa",
+    });
+    const proposal = yield* bots.propose({
+      caller: main,
+      draft: { name: "Docs", role: "Docs", scope: { projects: "all", paths: [] } },
+    });
+    const accept = yield* bots.propose({
+      caller: main,
+      draft: { name: "Ops", role: "Ops", scope: { projects: "all", paths: [] } },
+    });
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(toFrontend.id), null);
+    world.shells.set(FRONTEND.threadId, {
+      ...world.shells.get(FRONTEND.threadId),
+      session: { activeTurnId: TurnId.makeUnsafe("turn-frontend") },
+    });
+
+    gate.requiresAlto = true;
+    gate.granted = false;
+    // A slow Account API: a sweep stuck on the check must not hold up Stop.
+    let release!: () => void;
+    gate.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sweep = yield* Effect.forkChild(bots.evaluateDelegations({}));
+    for (let spin = 0; spin < 1_000 && gate.checks === 0; spin += 1) yield* Effect.yieldNow;
+    assert.strictEqual(gate.checks, 1);
+
+    const cancelled = yield* within(2_000, bots.cancelDelegation({ delegationId: toQa.id }));
+    assert.strictEqual(cancelled.state, "cancelled");
+    const stopped = yield* within(2_000, bots.stopAll({ botId: FRONTEND.projectId }));
+    assert.deepStrictEqual(stopped.cancelledDelegationIds, [toFrontend.id]);
+    assert.include(interruptedThreads(world), FRONTEND.threadId);
+    const dismissed = yield* bots.cardAction({
+      threadId: MAIN.threadId,
+      cardId: proposal.cardId,
+      optionId: "dismiss",
+    });
+    assert.deepStrictEqual(dismissed.createdBotIds, []);
+    assert.strictEqual(gate.checks, 1);
+
+    release();
+    yield* Fiber.join(sweep);
+    // Accepting or starting work stays locked.
+    const created = yield* Effect.flip(
+      bots.cardAction({ threadId: MAIN.threadId, cardId: accept.cardId, optionId: "create:0" }),
+    );
+    assert.strictEqual(created.code, "subscription-required");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("stopping one bot leaves what it handed on running and reports every id", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Build and test",
+      requestId: "frontend",
+    });
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(toFrontend.id), null);
+    const frontend = (yield* bots.resolveCaller({
+      threadId: FRONTEND.threadId,
+      turnId: "turn-frontend",
+    }))!;
+    const toQa = yield* bots.delegate({
+      caller: frontend,
+      targetBotId: QA.projectId,
+      brief: "Run QA",
+      requestId: "qa",
+    });
+
+    const one = yield* bots.stopAll({ botId: FRONTEND.projectId });
+    assert.deepStrictEqual(one.cancelledDelegationIds, [toFrontend.id]);
+    const after = yield* bots.snapshot();
+    assert.strictEqual(after.delegations.find((entry) => entry.id === toQa.id)?.state, "sent");
+    const all = yield* bots.stopAll();
+    assert.deepStrictEqual(all.cancelledDelegationIds, [toQa.id]);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("cancelling a hand-off leaves a same-root hand-off from another turn running", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const repository = yield* BotRepository;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Build it",
+      requestId: "frontend",
+    });
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(toFrontend.id), null);
+    const parent = (yield* repository.getDelegation(toFrontend.id))!;
+    // Frontend handed this on from another turn: another branch of the same root reached it.
+    const other = {
+      ...parent,
+      id: "d-other-branch",
+      requestId: `${FRONTEND.threadId}:turn-elsewhere`,
+      depth: 3,
+      fromBotId: FRONTEND.projectId,
+      fromThreadId: FRONTEND.threadId,
+      fromTurnId: "turn-elsewhere",
+      toBotId: QA.projectId,
+      toThreadId: QA.threadId,
+      messageId: delegationMessage("d-other-branch"),
+      state: "sent" as const,
+      startedAt: parent.createdAt,
+    };
+    yield* repository.insertDelegation(other);
+
+    yield* bots.cancelDelegation({ delegationId: toFrontend.id });
+    const snapshot = yield* bots.snapshot();
+    assert.strictEqual(snapshot.delegations.find((entry) => entry.id === other.id)?.state, "sent");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("stopping a task whose chat is still being created says so", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    yield* (yield* HubWorkRepository).submit({
+      projectId: FRONTEND.projectId,
+      requestId: "frontend-work",
+      scopeKey: "frontend-source",
+      fingerprint: "frontend-plan",
+      records: [frontendTask("work-starting", 0, "starting", null)],
+    });
+    const bots = yield* BotService;
+    const refused = yield* Effect.flip(bots.stopAll({ taskId: "work-starting" }));
+    assert.strictEqual(refused.code, "conflict");
+    assert.include(refused.message, "still starting");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("an open SynBot stream ends with SUBSCRIPTION_REQUIRED once Alto access is gone", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    gate.requiresAlto = true;
+    gate.granted = true;
+    const bots = yield* BotService;
+    const config = yield* ServerConfig;
+    const credentialDir = accountStateDirectory(config.baseDir, config.devUrl);
+    const collect = () =>
+      Effect.forkChild(
+        bots.streamEvents().pipe(
+          Stream.runCollect,
+          Effect.map((events) => ({ ok: true as const, events })),
+          Effect.catch((error) => Effect.succeed({ ok: false as const, code: error.code })),
+        ),
+      );
+
+    // Sign-out ends it at once.
+    const signedOut = yield* collect();
+    for (let spin = 0; spin < 1_000 && gate.checks === 0; spin += 1) yield* Effect.yieldNow;
+    yield* Effect.yieldNow;
+    clearServerAltoAccess(credentialDir);
+    assert.deepStrictEqual(yield* Fiber.join(signedOut), {
+      ok: false,
+      code: "subscription-required",
+    });
+
+    // So does a lapse found by its periodic re-check.
+    const lapsed = yield* collect();
+    for (let spin = 0; spin < 1_000 && gate.checks < 2; spin += 1) yield* Effect.yieldNow;
+    gate.granted = false;
+    yield* TestClock.adjust("5 minutes");
+    assert.deepStrictEqual(yield* Fiber.join(lapsed), {
+      ok: false,
+      code: "subscription-required",
+    });
+
+    // A host that does not require Alto keeps its stream.
+    gate.requiresAlto = false;
+    const free = yield* collect();
+    yield* Effect.yieldNow;
+    clearServerAltoAccess(credentialDir);
+    yield* TestClock.adjust("10 minutes");
+    yield* Effect.yieldNow;
+    assert.isUndefined(free.pollUnsafe());
+    yield* Fiber.interrupt(free);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("proposing an accepted bot again answers with the same card, not a second bot", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const draft = {
+      name: "Docs",
+      role: "Documentation",
+      scope: { projects: "all" as const, paths: [] },
+    };
+    const first = yield* bots.propose({ caller: main, draft });
+    // The user pressed Create bot (recorded as the card's answer; creating the Hub is out of
+    // this fixture's reach).
+    world.dispatched.push({
+      type: "thread.activity.append",
+      threadId: MAIN.threadId,
+      activity: {
+        id: `${first.cardId}:resolved`,
+        kind: BOT_CARD_RESOLVED_ACTIVITY_KIND,
+        payload: { cardId: first.cardId, optionId: "create:0" },
+      },
+    } as never);
+    const again = yield* bots.propose({ caller: main, draft });
+    assert.strictEqual(again.cardId, first.cardId);
+    const answered = yield* Effect.flip(
+      bots.cardAction({ threadId: MAIN.threadId, cardId: again.cardId, optionId: "create:0" }),
+    );
+    assert.strictEqual(answered.code, "conflict");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("a sibling still being dispatched is not taken for an abandoned one", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Frontend part",
+      requestId: "frontend",
+    });
+    // QA's thread still holds another pending start, so this dispatch waits for it.
+    world.pendingStarts.set(QA.threadId, "msg-earlier");
+    const toQa = yield* Effect.forkChild(
+      bots.delegate({ caller: main, targetBotId: QA.projectId, brief: "QA part", requestId: "qa" }),
+    );
+    yield* TestClock.adjust("200 millis");
+    assert.lengthOf(turnStarts(world, QA.threadId), 0);
+
+    // The asker's turn has ended and Frontend finished: QA is mid-dispatch, not abandoned.
+    putTurn(world, FRONTEND.threadId, "turn-fe", delegationMessage(toFrontend.id), "Done.");
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+    const during = yield* bots.snapshot();
+    assert.strictEqual(
+      during.delegations.find((entry) => entry.toBotId === QA.projectId)?.state,
+      "sent",
+    );
+
+    world.pendingStarts.delete(QA.threadId);
+    yield* TestClock.adjust("200 millis");
+    const qa = yield* Fiber.join(toQa);
+    assert.lengthOf(turnStarts(world, QA.threadId), 1);
+    putTurn(world, QA.threadId, "turn-qa", delegationMessage(qa.id), "Checked.");
+    yield* bots.evaluateDelegations({});
+    const reports = reportsTo(world, MAIN.threadId);
+    assert.lengthOf(reports, 1);
+    assert.include(reports[0]!.message.text, "Checked.");
   }).pipe(Effect.provide(makeLayer(world)));
 });

@@ -61,7 +61,11 @@ const clip = (text: string) => {
   return trimmed.length > 160 ? `${trimmed.slice(0, 159)}…` : trimmed;
 };
 
-/** Diff-based red flags: shown on the card, never used to hide anything. */
+/**
+ * Diff-based red flags: shown on the card, never used to hide anything. Signs that tests were
+ * weakened come first; files outside the bot's scope only fill what room is left, so a wide
+ * change cannot crowd them out.
+ */
 export function findMergeRedFlags(
   patch: string,
   scopePaths?: readonly string[],
@@ -71,19 +75,6 @@ export function findMergeRedFlags(
     if (flags.length < MAX_RED_FLAGS) flags.push(flag);
   };
   const parsed = parsePatch(patch);
-  if (scopePaths && scopePaths.length > 0) {
-    const outside = filesOutsideBotScope(
-      parsed.map((file) => file.path).filter((path) => path.length > 0),
-      scopePaths,
-    );
-    for (const file of outside) {
-      push({
-        kind: "outside-scope",
-        file,
-        detail: `Outside ${scopePaths.join(", ")}`,
-      });
-    }
-  }
   for (const file of parsed) {
     const isTest = TEST_FILE.test(file.path);
     if (isTest && file.deleted) {
@@ -116,6 +107,15 @@ export function findMergeRedFlags(
         push({ kind: "ci-step-removed", file: file.path, detail: clip(removedSteps[0]!) });
       }
     }
+  }
+  if (scopePaths && scopePaths.length > 0) {
+    const outside = filesOutsideBotScope(
+      parsed.map((file) => file.path).filter((path) => path.length > 0),
+      scopePaths,
+    );
+    // The scope can list many paths; the contract caps a flag's detail.
+    const detail = clip(`Outside ${scopePaths.join(", ")}`);
+    for (const file of outside) push({ kind: "outside-scope", file, detail });
   }
   return flags;
 }

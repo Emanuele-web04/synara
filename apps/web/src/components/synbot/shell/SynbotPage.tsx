@@ -15,7 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAccount } from "~/hooks/useAccount";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
-import { botById, orderedBots } from "~/synbot/synbotState.logic";
+import { altoGrantRetry, botById, orderedBots } from "~/synbot/synbotState.logic";
 import {
   ensureSynbotMain,
   restartSynbotLiveSync,
@@ -107,12 +107,19 @@ export default function SynbotPage() {
     }
     void ensureSynbotMain();
   }, []);
-  // When a previously locked user subscribes to Alto, re-open the stream immediately.
+  // When a previously locked user subscribes to Alto, re-open the stream immediately, once:
+  // a server that still refuses must not be retried in a loop.
+  const retriedForGrant = useRef(false);
   useEffect(() => {
-    if (status === "subscription_required" && plan?.granted) {
-      restartSynbotLiveSync();
-      void ensureSynbotMain();
-    }
+    const next = altoGrantRetry({
+      granted: plan?.granted === true,
+      subscriptionRequired: status === "subscription_required",
+      retried: retriedForGrant.current,
+    });
+    retriedForGrant.current = next.retried;
+    if (!next.retry) return;
+    restartSynbotLiveSync();
+    void ensureSynbotMain();
   }, [plan?.granted, status]);
   // Step one chose this computer on another computer's page: go on from the Bot step.
   const navigate = useNavigate();

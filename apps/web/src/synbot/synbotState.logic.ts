@@ -3,7 +3,8 @@
 //          what the page shows (sidebar order, attention counts, a bot's tasks and delegations).
 // Layer: Web domain logic (no React, no I/O)
 // Exports: SynbotData, EMPTY_SYNBOT_DATA, applyBotStreamEvent, orderedBots, botNeedsYou,
-//          synbotNeedsYouCount, tasksForBot, delegationsTouchingThread, delegationById
+//          synbotNeedsYouCount, tasksForBot, delegationsTouchingThread, delegationById,
+//          altoGrantRetry
 
 import type {
   Bot,
@@ -146,4 +147,20 @@ export function botById(data: SynbotData, id: string | null | undefined): Bot | 
 export function botByThreadId(data: SynbotData, threadId: string | null | undefined): Bot | null {
   if (!threadId) return null;
   return data.bots.find((bot) => bot.threadId === threadId) ?? null;
+}
+
+/**
+ * Whether the SynBot page re-opens its stream because the account's plan now shows Alto while
+ * the server still says a subscription is required. Once per grant: if the server keeps refusing
+ * (its own check failed, or it disagrees), retrying on every refusal would loop with no pause.
+ * `retried` is the caller's memory; a plan that loses Alto clears it.
+ */
+export function altoGrantRetry(input: {
+  readonly granted: boolean;
+  readonly subscriptionRequired: boolean;
+  readonly retried: boolean;
+}): { readonly retry: boolean; readonly retried: boolean } {
+  if (!input.granted) return { retry: false, retried: false };
+  if (!input.subscriptionRequired || input.retried) return { retry: false, retried: input.retried };
+  return { retry: true, retried: true };
 }
