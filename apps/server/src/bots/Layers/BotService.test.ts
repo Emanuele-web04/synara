@@ -19,6 +19,7 @@ import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { beforeEach, vi } from "vitest";
 
+import { accountStateDirectory } from "../../accountAuth.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -35,6 +36,7 @@ import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentSer
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BotService } from "../Services/BotService.ts";
+import { clearServerAltoAccess } from "../synbotGate.ts";
 import { BotServiceLive } from "./BotService.ts";
 
 /**
@@ -1380,5 +1382,55 @@ it.effect("stopping a task whose chat is still being created says so", () => {
     const refused = yield* Effect.flip(bots.stopAll({ taskId: "work-starting" }));
     assert.strictEqual(refused.code, "conflict");
     assert.include(refused.message, "still starting");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("an open SynBot stream ends with SUBSCRIPTION_REQUIRED once Alto access is gone", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    gate.requiresAlto = true;
+    gate.granted = true;
+    const bots = yield* BotService;
+    const config = yield* ServerConfig;
+    const credentialDir = accountStateDirectory(config.baseDir, config.devUrl);
+    const collect = () =>
+      Effect.forkChild(
+        bots.streamEvents().pipe(
+          Stream.runCollect,
+          Effect.map((events) => ({ ok: true as const, events })),
+          Effect.catch((error) => Effect.succeed({ ok: false as const, code: error.code })),
+        ),
+      );
+
+    // Sign-out ends it at once.
+    const signedOut = yield* collect();
+    for (let spin = 0; spin < 1_000 && gate.checks === 0; spin += 1) yield* Effect.yieldNow;
+    yield* Effect.yieldNow;
+    clearServerAltoAccess(credentialDir);
+    assert.deepStrictEqual(yield* Fiber.join(signedOut), {
+      ok: false,
+      code: "subscription-required",
+    });
+
+    // So does a lapse found by its periodic re-check.
+    const lapsed = yield* collect();
+    for (let spin = 0; spin < 1_000 && gate.checks < 2; spin += 1) yield* Effect.yieldNow;
+    gate.granted = false;
+    yield* TestClock.adjust("5 minutes");
+    assert.deepStrictEqual(yield* Fiber.join(lapsed), {
+      ok: false,
+      code: "subscription-required",
+    });
+
+    // A host that does not require Alto keeps its stream.
+    gate.requiresAlto = false;
+    const free = yield* collect();
+    yield* Effect.yieldNow;
+    clearServerAltoAccess(credentialDir);
+    yield* TestClock.adjust("10 minutes");
+    yield* Effect.yieldNow;
+    assert.isUndefined(free.pollUnsafe());
+    yield* Fiber.interrupt(free);
   }).pipe(Effect.provide(makeLayer(world)));
 });

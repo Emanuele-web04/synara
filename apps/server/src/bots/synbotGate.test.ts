@@ -49,6 +49,7 @@ import {
   checkServerSynbotAltoAccess,
   clearServerAltoAccess,
   noteServerAltoAccess,
+  onServerAltoAccessRevoked,
   requiresServerSynbotAlto,
 } from "./synbotGate";
 
@@ -204,5 +205,29 @@ describe("synbotGate Alto entitlement", () => {
     state.billingResult = { available: true, access: "none" };
     expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
     expect(state.billingCalls).toBe(2);
+  });
+
+  it("tells listeners when access is gone, and only then", async () => {
+    const revoked: string[] = [];
+    const stop = onServerAltoAccessRevoked((credentialDir) => revoked.push(credentialDir));
+    try {
+      signedIn();
+      state.billingResult = { available: true, access: "granted" };
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+      noteServerAltoAccess(dir, { accountUrl: "https://api.trysynara.com", granted: true });
+      expect(revoked).toEqual([]);
+
+      noteServerAltoAccess(dir, { accountUrl: "https://api.trysynara.com", granted: false });
+      expect(revoked).toEqual([dir]);
+      clearServerAltoAccess(dir);
+      expect(revoked).toEqual([dir, dir]);
+      state.billingResult = { available: true, access: "none" };
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
+      expect(revoked).toEqual([dir, dir, dir]);
+    } finally {
+      stop();
+    }
+    clearServerAltoAccess(dir);
+    expect(revoked).toHaveLength(3);
   });
 });

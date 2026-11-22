@@ -58,6 +58,7 @@ import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import { MEMORY_AUTO_DOCUMENT_PATH } from "@synara/shared/projectAgent";
 import {
   Cause,
+  Deferred,
   Effect,
   FileSystem,
   Layer,
@@ -113,6 +114,7 @@ import {
   SYNBOT_UNAVAILABLE_MESSAGE,
   checkServerSynbotAltoAccess,
   isServerSynbotEnabled,
+  onServerAltoAccessRevoked,
   requiresServerSynbotAlto,
 } from "../synbotGate.ts";
 
@@ -127,6 +129,8 @@ const TASKS_PER_BOT = 40;
 const RECENT_TASK_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_TURN_START_POLL_MS = 100;
 const PENDING_TURN_START_MAX_POLLS = 100;
+/** How often an open SynBot stream on a host that requires Alto confirms the access it opened with. */
+const STREAM_ALTO_RECHECK_MS = 5 * 60_000;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
 const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
 /** A task whose worker these states hold is stopped by interrupting that worker's turn; a
@@ -2521,10 +2525,37 @@ const make = Effect.gen(function* () {
 
   // ── Stream ─────────────────────────────────────────────────────────
 
+  /**
+   * The live SynBot stream. On a host that requires Alto it ends with `subscription-required`
+   * as soon as access is gone: on sign-out or account deletion, when any billing read or check
+   * finds no grant, and at the latest on its own periodic re-check.
+   */
   const streamEvents: BotServiceShape["streamEvents"] = () =>
     Stream.unwrap(
       Effect.gen(function* () {
+        const revoked = yield* Deferred.make<void, BotServiceError>();
+        const revoke = () =>
+          Deferred.doneUnsafe(
+            revoked,
+            Effect.fail(fail(SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE, "subscription-required")),
+          );
+        const altoRequired = requiresServerSynbotAlto();
+        if (altoRequired) {
+          // Listen before the admission check, so a sign-out during it is not missed.
+          const unsubscribe = onServerAltoAccessRevoked((dir) => {
+            if (dir === credentialDir) revoke();
+          });
+          yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+        }
         yield* requireEnabled;
+        if (altoRequired) {
+          yield* Effect.gen(function* () {
+            for (;;) {
+              yield* Effect.sleep(STREAM_ALTO_RECHECK_MS);
+              if (!(yield* hasSynbotAccess)) revoke();
+            }
+          }).pipe(Effect.forkScoped);
+        }
         const liveQueue = yield* Queue.bounded<BotStreamEvent, Cause.Done>(256);
         // Stream.fromPubSub does not deliver under this runtime; subscribe in the stream's scope.
         const subscription = yield* PubSub.subscribe(events);
@@ -2536,7 +2567,7 @@ const make = Effect.gen(function* () {
         return Stream.concat(
           Stream.succeed({ type: "snapshot" as const, snapshot: initial }),
           Stream.fromQueue(liveQueue),
-        );
+        ).pipe(Stream.interruptWhen(Deferred.await(revoked)));
       }),
     );
 

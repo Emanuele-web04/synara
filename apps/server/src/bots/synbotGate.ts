@@ -6,7 +6,7 @@
 // Layer: Runtime gate
 // Exports: SYNBOT_UNAVAILABLE_MESSAGE, SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE,
 //          isServerSynbotEnabled, requiresServerSynbotAlto, checkServerSynbotAltoAccess,
-//          noteServerAltoAccess, clearServerAltoAccess
+//          noteServerAltoAccess, clearServerAltoAccess, onServerAltoAccessRevoked
 
 import { SYNBOT_BETA_FEATURE } from "@synara/shared/betaFeatures";
 
@@ -61,6 +61,31 @@ const nextEpoch = (credentialDir: string) => {
   epochByDir.set(credentialDir, epochOf(credentialDir) + 1);
 };
 
+type AltoAccessRevokedListener = (credentialDir: string) => void;
+const revokedListeners = new Set<AltoAccessRevokedListener>();
+
+/**
+ * Calls `listener` whenever this host learns that Alto access for a credential directory is
+ * gone: sign-out, account deletion, or a billing read or check that finds no grant. Open SynBot
+ * streams use it to end. Returns the unsubscribe.
+ */
+export function onServerAltoAccessRevoked(listener: AltoAccessRevokedListener): () => void {
+  revokedListeners.add(listener);
+  return () => {
+    revokedListeners.delete(listener);
+  };
+}
+
+const notifyRevoked = (credentialDir: string) => {
+  for (const listener of [...revokedListeners]) {
+    try {
+      listener(credentialDir);
+    } catch {
+      // A listener's failure must not stop the others or the caller.
+    }
+  }
+};
+
 /** Billing is per organization: a token is scoped to one, so the cache is too. */
 const accountKeyOf = (input: {
   readonly accountUrl: string;
@@ -84,6 +109,7 @@ export function noteServerAltoAccess(
     granted: input.granted,
     checkedAtMs: Date.now(),
   });
+  if (!input.granted) notifyRevoked(credentialDir);
 }
 
 /** Clears cached Alto access immediately on sign-out or account deletion. */
@@ -91,6 +117,7 @@ export function clearServerAltoAccess(credentialDir: string): void {
   nextEpoch(credentialDir);
   altoCacheByDir.delete(credentialDir);
   inflightByDir.delete(credentialDir);
+  notifyRevoked(credentialDir);
 }
 
 const freshCached = (credentialDir: string, accountKey: string, nowMs: number) => {
@@ -110,6 +137,7 @@ export async function checkServerSynbotAltoAccess(credentialDir: string): Promis
   const credentials = await readAccountCredentials(credentialDir).catch(() => null);
   if (!credentials) {
     altoCacheByDir.delete(credentialDir);
+    notifyRevoked(credentialDir);
     return false;
   }
   const key = accountKeyOf(credentials);
@@ -137,6 +165,7 @@ export async function checkServerSynbotAltoAccess(credentialDir: string): Promis
       return freshCached(credentialDir, key, Date.now()) ?? false;
     }
     altoCacheByDir.set(credentialDir, { accountKey: key, granted, checkedAtMs: Date.now() });
+    if (!granted) notifyRevoked(credentialDir);
     return granted;
   })().finally(() => {
     if (inflightByDir.get(credentialDir) === check) inflightByDir.delete(credentialDir);
