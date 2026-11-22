@@ -132,6 +132,8 @@ const PENDING_TURN_START_MAX_POLLS = 100;
 /** How often an open SynBot stream on a host that requires Alto confirms the access it opened with. */
 const STREAM_ALTO_RECHECK_MS = 5 * 60_000;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
+/** The answers that turn a card down without doing anything. */
+const DISMISS_OPTION_IDS = new Set(["dismiss", "not-now"]);
 const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
 /** A task whose worker these states hold is stopped by interrupting that worker's turn; a
  * worker waiting on the user (an approval or a question) is mid-turn too. */
@@ -2028,22 +2030,29 @@ const make = Effect.gen(function* () {
 
   /**
    * Returns `baseId` while it is still open (preserving idempotency), or picks a fresh
-   * suffixed id when an earlier card with `baseId` was already answered (e.g. "Not now").
+   * suffixed id when an earlier card with that id was already answered. With `freshAfter:
+   * "dismissed"` only a "Not now" frees a new card: an accepted card keeps its id, so asking
+   * again answers with the card that already did the work instead of a second one.
    */
-  const nextCardId = (threadId: ThreadId, baseId: string) =>
+  const nextCardId = (
+    threadId: ThreadId,
+    baseId: string,
+    freshAfter: "answered" | "dismissed" = "answered",
+  ) =>
     snapshotQuery.getThreadDetailById(threadId).pipe(
       Effect.map((detail) => {
         if (Option.isNone(detail)) return baseId;
-        const resolvedIds = new Set(
-          detail.value.activities
-            .filter((activity) => activity.kind === BOT_CARD_RESOLVED_ACTIVITY_KIND)
-            .map((activity) => (activity.payload as { cardId?: unknown } | null)?.cardId)
-            .filter((id): id is string => typeof id === "string"),
-        );
-        if (!resolvedIds.has(baseId)) return baseId;
-        for (let attempt = 2; ; attempt += 1) {
-          const candidate = `${baseId}:${attempt}`;
-          if (!resolvedIds.has(candidate)) return candidate;
+        const answers = new Map<string, unknown>();
+        for (const activity of detail.value.activities) {
+          if (activity.kind !== BOT_CARD_RESOLVED_ACTIVITY_KIND) continue;
+          const payload = activity.payload as { cardId?: unknown; optionId?: unknown } | null;
+          if (typeof payload?.cardId === "string") answers.set(payload.cardId, payload.optionId);
+        }
+        for (let attempt = 1; ; attempt += 1) {
+          const candidate = attempt === 1 ? baseId : `${baseId}:${attempt}`;
+          if (!answers.has(candidate)) return candidate;
+          const dismissed = DISMISS_OPTION_IDS.has(String(answers.get(candidate)));
+          if (freshAfter === "dismissed" && !dismissed) return candidate;
         }
       }),
       Effect.orElseSucceed(() => baseId),
@@ -2095,6 +2104,7 @@ const make = Effect.gen(function* () {
       const cardId = yield* nextCardId(
         input.caller.bot.threadId,
         `synbot:card:propose:${stableGatewayDigest({ bot: input.caller.bot.id, draft: input.draft }, 20)}`,
+        "dismissed",
       );
       yield* postCard({
         threadId: input.caller.bot.threadId,

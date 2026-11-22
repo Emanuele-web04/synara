@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  BOT_CARD_RESOLVED_ACTIVITY_KIND,
   BOT_DELEGATION_MESSAGE_PREFIX,
   BotCard,
   BOT_REPORT_MESSAGE_PREFIX,
@@ -1432,5 +1433,38 @@ it.effect("an open SynBot stream ends with SUBSCRIPTION_REQUIRED once Alto acces
     yield* Effect.yieldNow;
     assert.isUndefined(free.pollUnsafe());
     yield* Fiber.interrupt(free);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("proposing an accepted bot again answers with the same card, not a second bot", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const draft = {
+      name: "Docs",
+      role: "Documentation",
+      scope: { projects: "all" as const, paths: [] },
+    };
+    const first = yield* bots.propose({ caller: main, draft });
+    // The user pressed Create bot (recorded as the card's answer; creating the Hub is out of
+    // this fixture's reach).
+    world.dispatched.push({
+      type: "thread.activity.append",
+      threadId: MAIN.threadId,
+      activity: {
+        id: `${first.cardId}:resolved`,
+        kind: BOT_CARD_RESOLVED_ACTIVITY_KIND,
+        payload: { cardId: first.cardId, optionId: "create:0" },
+      },
+    } as never);
+    const again = yield* bots.propose({ caller: main, draft });
+    assert.strictEqual(again.cardId, first.cardId);
+    const answered = yield* Effect.flip(
+      bots.cardAction({ threadId: MAIN.threadId, cardId: again.cardId, optionId: "create:0" }),
+    );
+    assert.strictEqual(answered.code, "conflict");
   }).pipe(Effect.provide(makeLayer(world)));
 });
