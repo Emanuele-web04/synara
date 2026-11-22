@@ -70,11 +70,14 @@ describe("synbotGate Alto entitlement", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["beta", "canary", "development"])("leaves SynBot free on the %s flavor", async (flavor) => {
-    state.flavor = flavor;
-    expect(requiresServerSynbotAlto()).toBe(false);
-    expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
-  });
+  it.each(["beta", "canary", "development"])(
+    "leaves SynBot free on the %s flavor",
+    async (flavor) => {
+      state.flavor = flavor;
+      expect(requiresServerSynbotAlto()).toBe(false);
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+    },
+  );
 
   it.each(["production", "unknown", "remote", "cua"])(
     "requires Alto on the %s flavor and fails closed when signed out",

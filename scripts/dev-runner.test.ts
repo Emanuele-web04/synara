@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { assert, describe, it } from "@effect/vitest";
-import { SYNARA_BETA_BUNDLE_ID, SYNARA_DEVELOPMENT_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DEVELOPMENT_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
 import { Effect } from "effect";
 
 import {
