@@ -21,9 +21,15 @@ import { ServerConfig } from "./config";
 import { startHostConnectivity, type HostConnectivityOptions } from "./hostConnectivity";
 import { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
 import { remoteTlsIdentityPath } from "./remoteTransport/certificates";
+import { reportReliabilityIssue } from "./reliability";
+
+vi.mock("./reliability", () => ({ reportReliabilityIssue: vi.fn() }));
 
 const temporaryDirectories: string[] = [];
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.mocked(reportReliabilityIssue).mockClear();
+});
 afterAll(() => {
   for (const directory of temporaryDirectories)
     fs.rmSync(directory, { recursive: true, force: true });
@@ -99,8 +105,20 @@ it("persists host linking without creating remote device trust or a TLS root", a
 it.each([
   { name: "owner mismatch", status: 200, enforced: true, code: undefined, mismatchedOwner: true },
   { name: "enforced snapshot", status: 200, enforced: true, code: undefined },
-  { name: "subscription refusal", status: 403, enforced: true, code: "subscription_required" },
-  { name: "billing outage", status: 503, enforced: true, code: "billing_unavailable" },
+  {
+    name: "subscription refusal",
+    status: 403,
+    enforced: true,
+    code: "subscription_required",
+    reliability: "remote.authorization_subscription_required",
+  },
+  {
+    name: "billing outage",
+    status: 503,
+    enforced: true,
+    code: "billing_unavailable",
+    reliability: "remote.authorization_failed",
+  },
   { name: "explicitly disabled snapshot", status: 200, enforced: false, code: undefined },
   { name: "older default-off snapshot", status: 200, enforced: undefined, code: undefined },
 ])("handles $name before a missing TLS root can bypass admission policy", async (scenario) => {
@@ -204,6 +222,10 @@ it.each([
       await expect(startup).rejects.toMatchObject({ status: scenario.status, code: scenario.code });
 
     expect(authenticatedRequests).toEqual([`/api/v1/hosts/${hostId}/authorization`]);
+    // Only a failed authorization read is counted, with its fixed category.
+    if ("reliability" in scenario)
+      expect(reportReliabilityIssue).toHaveBeenCalledExactlyOnceWith(scenario.reliability);
+    else expect(reportReliabilityIssue).not.toHaveBeenCalled();
     expect(fs.existsSync(remoteTlsIdentityPath(config.secretsDir))).toBe(false);
     const stored = await readAccountFile(baseDir);
     if (scenario.enforced === undefined) expect(stored?.remoteBillingPolicy).toBeUndefined();

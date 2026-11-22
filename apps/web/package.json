@@ -1,6 +1,6 @@
 {
   "name": "@synara/web",
-  "version": "1.6.2",
+  "version": "1.6.5",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One command -> one results file.
 //   node benchmarks/desktop-perf/run.mjs --build main [--build <other>] [--label baseline]
-//        [--suites startup,idle,switch,load] [--runs 5] [--max-attempts 10] [--template-set default]
+//        [--suites startup,idle,switch,load,longchat] [--runs 5] [--max-attempts 10] [--template-set default]
 //        [--allow-locked-screen]
 // Builds are prepared first with prepare.mjs. With several --build flags the samples
 // alternate (A, B, B, A, ...) so both builds see the same machine state over time.
@@ -20,7 +20,14 @@ import {
 import { waitForQuietMac } from "./lib/launch.mjs";
 import { machineIdentity, machineState } from "./lib/metrics.mjs";
 import { gap, summarize } from "./lib/stats.mjs";
-import { measureIdle, measureLoad, measureSwitching, SWITCH_PLAN } from "./lib/tests-session.mjs";
+import {
+  LONGCHAT_PLAN,
+  measureIdle,
+  measureLoad,
+  measureLongChat,
+  measureSwitching,
+  SWITCH_PLAN,
+} from "./lib/tests-session.mjs";
 import { measureLaunch } from "./lib/tests-startup.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +37,7 @@ const values = (name) =>
 const builds = values("build").map(buildInfo);
 if (builds.length === 0) {
   console.error(
-    "usage: run.mjs --build <name> [--build <name>] [--label <label>] [--suites startup,idle,switch,load] [--runs 5]",
+    "usage: run.mjs --build <name> [--build <name>] [--label <label>] [--suites startup,idle,switch,load,longchat] [--runs 5]",
   );
   process.exit(1);
 }
@@ -46,7 +53,10 @@ const outFile = join(HERE, "results", `${runId}.json`);
 mkdirSync(dirname(outFile), { recursive: true });
 
 const raw = Object.fromEntries(
-  builds.map((build) => [build.name, { startup: [], idle: [], switching: [], load: [] }]),
+  builds.map((build) => [
+    build.name,
+    { startup: [], idle: [], switching: [], load: [], longchat: [] },
+  ]),
 );
 const log = (message) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${message}`);
 const order = (sample) => (sample % 2 === 0 ? builds : [...builds].reverse());
@@ -134,6 +144,18 @@ await sampleSuite(
   }),
   (record) =>
     `first open 1400 ${Math.round(record.cold["large-1400"].bottomMs)} ms, switch back ${Math.round(record.warm["large-1400"].bottomMs)} ms, scroll gaps ${record.scroll.framesOver33ms}`,
+);
+
+// Opt-in (not in the default list): needs a template set made with --realistic.
+await sampleSuite(
+  "longchat",
+  "longchat",
+  async (build) => ({
+    dataHome: "seeded template with realistic long threads",
+    ...(await measureLongChat({ build, home: freshHomeFromTemplate("seeded") })),
+  }),
+  (record) =>
+    `agent-heavy first open ${Math.round(record.threads["agent-heavy"].cold.bottomMs)} ms, fling p95 ${record.threads["agent-heavy"].fling.frameP95Ms} ms`,
 );
 
 await sampleSuite(
@@ -282,6 +304,27 @@ function tests(name) {
       (r) => r.memoryAfterScroll.byRole.gpu ?? 0,
       "MB",
     );
+  }
+  if (suites.includes("longchat")) {
+    const longchat = data.longchat;
+    for (const [name] of LONGCHAT_PLAN.threads) {
+      add(`LC1/open-first-${name}`, longchat, (r) => r.threads[name].cold.bottomMs, "ms");
+      add(`LC2/switch-back-${name}`, longchat, (r) => r.threads[name].warm.bottomMs, "ms");
+      add(`LC3/scroll-frame-p95-${name}`, longchat, (r) => r.threads[name].scroll.frameP95Ms, "ms");
+      add(
+        `LC3/scroll-gaps-${name}`,
+        longchat,
+        (r) => r.threads[name].scroll.framesOver33ms,
+        "frames over 33 ms",
+      );
+      add(`LC4/fling-frame-p95-${name}`, longchat, (r) => r.threads[name].fling.frameP95Ms, "ms");
+      add(
+        `LC4/fling-gaps-${name}`,
+        longchat,
+        (r) => r.threads[name].fling.framesOver33ms,
+        "frames over 33 ms",
+      );
+    }
   }
   if (suites.includes("load")) {
     const load = data.load;

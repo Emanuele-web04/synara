@@ -383,13 +383,25 @@ function synchronizeProviderProfileWrappers(
   );
 }
 
-function buildManagedZshRc(quotedZshDir: string): string {
+// Restore the user's parameter, including the unset state that makes zsh use HOME.
+function restoreZshDotDir(variable: "SYNARA_ORIGINAL_ZDOTDIR" | "_synara_user_zdotdir"): string {
+  return `if [[ -v ${variable} ]]; then
+  ZDOTDIR="\${${variable}}"
+else
+  unset ZDOTDIR
+fi
+`;
+}
+
+function sourceZshStartupFile(file: ".zshenv" | ".zprofile" | ".zshrc"): string {
+  return `[[ -f "\${ZDOTDIR-$HOME}/${file}" ]] && source "\${ZDOTDIR-$HOME}/${file}"
+`;
+}
+
+function buildManagedZshRc(): string {
   return `# Synara zsh rc wrapper
-_synara_home="\${SYNARA_ORIGINAL_ZDOTDIR:-$HOME}"
-export ZDOTDIR="$_synara_home"
-[[ -f "$_synara_home/.zshrc" ]] && source "$_synara_home/.zshrc"
-export ZDOTDIR=${quotedZshDir}
-if [ -n "\${SYNARA_MANAGED_BIN_DIR:-}" ] && [ -d "\${SYNARA_MANAGED_BIN_DIR}" ]; then
+${restoreZshDotDir("_synara_user_zdotdir")}unset _synara_user_zdotdir
+${sourceZshStartupFile(".zshrc")}if [ -n "\${SYNARA_MANAGED_BIN_DIR:-}" ] && [ -d "\${SYNARA_MANAGED_BIN_DIR}" ]; then
   case ":$PATH:" in
     *:\${SYNARA_MANAGED_BIN_DIR}:*) ;;
     *) export PATH="\${SYNARA_MANAGED_BIN_DIR}:$PATH" ;;
@@ -426,32 +438,31 @@ fi
 
 function ensureManagedZshWrappers(zshDir: string): void {
   ensurePrivateDirectorySync(zshDir);
-  const quotedZshDir = shellQuote(zshDir);
+  // Only the interactive startup stages still need Synara's wrapper directory.
+  // Carry any change made by user code forward, and let zsh use it after .zshrc.
+  const continueToManagedRc = `if [[ -o interactive && -o rcs ]]; then
+  if [[ -v ZDOTDIR ]]; then
+    _synara_user_zdotdir="$ZDOTDIR"
+  else
+    unset _synara_user_zdotdir
+  fi
+  ZDOTDIR=${shellQuote(zshDir)}
+fi
+`;
   writeFileIfChanged(
     path.join(zshDir, ".zshenv"),
     `# Synara zsh env wrapper
-_synara_home="\${SYNARA_ORIGINAL_ZDOTDIR:-$HOME}"
-export ZDOTDIR="$_synara_home"
-[[ -f "$_synara_home/.zshenv" ]] && source "$_synara_home/.zshenv"
-export ZDOTDIR=${quotedZshDir}
-`,
+${restoreZshDotDir("SYNARA_ORIGINAL_ZDOTDIR")}unset SYNARA_ORIGINAL_ZDOTDIR
+${sourceZshStartupFile(".zshenv")}${continueToManagedRc}`,
     PRIVATE_FILE_MODE,
   );
   writeFileIfChanged(
     path.join(zshDir, ".zprofile"),
     `# Synara zsh profile wrapper
-_synara_home="\${SYNARA_ORIGINAL_ZDOTDIR:-$HOME}"
-export ZDOTDIR="$_synara_home"
-[[ -f "$_synara_home/.zprofile" ]] && source "$_synara_home/.zprofile"
-export ZDOTDIR=${quotedZshDir}
-`,
+${restoreZshDotDir("_synara_user_zdotdir")}${sourceZshStartupFile(".zprofile")}${continueToManagedRc}`,
     PRIVATE_FILE_MODE,
   );
-  writeFileIfChanged(
-    path.join(zshDir, ".zshrc"),
-    buildManagedZshRc(quotedZshDir),
-    PRIVATE_FILE_MODE,
-  );
+  writeFileIfChanged(path.join(zshDir, ".zshrc"), buildManagedZshRc(), PRIVATE_FILE_MODE);
 }
 
 export function prepareManagedTerminalWrappers(options: {
@@ -565,7 +576,7 @@ function applyManagedTerminalWrapperEnvState(
   return {
     ...env,
     SYNARA_MANAGED_BIN_DIR: wrapperState.binDir,
-    SYNARA_ORIGINAL_ZDOTDIR: env.ZDOTDIR ?? env.HOME ?? "",
+    ...(env.ZDOTDIR !== undefined ? { SYNARA_ORIGINAL_ZDOTDIR: env.ZDOTDIR } : {}),
     ...(wrapperState.zshDir ? { ZDOTDIR: wrapperState.zshDir } : {}),
     [envPathKey]: currentEntries.join(path.delimiter),
   };

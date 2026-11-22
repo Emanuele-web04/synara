@@ -72,26 +72,54 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
-  it("lets link-only Arabic and English blocks resolve independently", async () => {
-    const markup = await renderAutoDirectionMarkdown(
-      "[مرحبا بالعالم](https://example.com/rtl)\n\n[English text](https://example.com/ltr)",
+  it("gives a block its direction from its dominant script, not its first word", async () => {
+    const persian = await renderAutoDirectionMarkdown(
+      "netkeep وقتی یک rule از نوع `*.github.com` را ارزیابی می‌کند، یک رشته را با نام آن جریان مقایسه می‌کند.",
     );
 
-    expect(markup).toContain('<div class="chat-markdown');
-    expect(markup).toContain('data-direction-mode="auto-blocks"');
-    expect(markup).toContain('<p dir="auto"><a href="https://example.com/rtl"');
-    expect(markup).toContain('<p dir="auto"><a href="https://example.com/ltr"');
-    // The anchor must remain direction-neutral so its label participates in
-    // the parent paragraph's first-strong scan. A dir=auto anchor would create
-    // an isolation boundary and make link-only RTL paragraphs resolve LTR.
-    expect(markup).not.toContain('<a dir="auto"');
+    expect(persian).toContain('data-direction-mode="auto-blocks"');
+    expect(persian).toContain('dir="rtl"');
+    expect(persian).toContain('<p dir="rtl">');
+    expect(persian).toContain('<code dir="ltr">*.github.com</code>');
+
+    const english = await renderAutoDirectionMarkdown("Run `bun run test` before you push.");
+    expect(english).toContain('<p dir="ltr">');
   });
 
-  it("isolates technical inline content without hiding prose direction", async () => {
-    const markup = await renderAutoDirectionMarkdown("[مرحبا](https://example.com) ثم `npm test`");
+  it("keeps Persian and English paragraphs in one message on their own sides", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "این پاراگراف فارسی است و باید راست‌چین بماند.\n\nThis paragraph is English and should stay left aligned.",
+    );
 
-    expect(markup).toContain('<p dir="auto">');
-    expect(markup).toContain('<code dir="ltr">npm test</code>');
+    expect(markup).toContain('<p dir="rtl">');
+    expect(markup).toContain('<p dir="ltr">');
+  });
+
+  it("keeps Latin-first list items and bold labels inside a Persian message RTL", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "- **Stripe، Linear، GitHub:** حالت خالی معمولاً یک جمله و یک دکمه است.\n- **Airbnb و Material Design:** حالت خالی باید کوتاه و عملی باشد.",
+    );
+
+    expect(markup).toContain('<ul dir="rtl">');
+    expect(markup).toContain('<li dir="rtl">');
+  });
+
+  it("keeps table columns in source order while cells resolve their own direction", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "این یک پیام فارسی است.\n\n| بررسی | نتیجه |\n| --- | --- |\n| `cargo test` | پاک |",
+    );
+
+    expect(markup).toMatch(/<table[^>]*dir="ltr"/);
+    expect(markup).toMatch(/<th[^>]*dir="rtl"/);
+    expect(markup).toMatch(/<td[^>]*dir=/);
+  });
+
+  it("leaves direction untouched for consumers that do not opt in", async () => {
+    const markup = await renderMarkdown("سلام دنیا");
+
+    expect(markup).not.toContain("data-direction-mode");
+    expect(markup).not.toContain('dir="rtl"');
+    expect(markup).not.toContain('dir="ltr"');
   });
 
   it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
@@ -606,6 +634,41 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).not.toContain("[[03-Resources");
 });
 
+it("shares a settled parse only between opted-in renders with the same parse inputs", async () => {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const text = "Shared parse: see [[My note]] and **bold**.";
+  const render = (props: { wikiLinkRoot: string; variant?: "user" }) =>
+    renderWithQueryClient(<ChatMarkdown text={text} cwd="/vault/notes" shareParse {...props} />);
+  const first = render({ wikiLinkRoot: "/vault" });
+  const again = render({ wikiLinkRoot: "/vault" });
+  const otherRoot = render({ wikiLinkRoot: "/other" });
+  const user = render({ wikiLinkRoot: "/vault", variant: "user" });
+
+  expect(again).toBe(first);
+  expect(first).toContain('href="/vault/My%20note.md"');
+  expect(otherRoot).toContain('href="/other/My%20note.md"');
+  expect(otherRoot).not.toContain("/vault/");
+  // User messages parse with their own plugins (no wiki links), never the shared tree.
+  expect(user).not.toContain('href="/vault/My%20note.md"');
+});
+
+it("keeps previews, huge messages and streaming text out of the shared parse cache", async () => {
+  const { default: ChatMarkdown, getSharedParseCacheSizeForTests } = await import("./ChatMarkdown");
+  const before = getSharedParseCacheSizeForTests();
+  // Not opted in: file previews, PR bodies and dialogs change or can be huge.
+  renderWithQueryClient(<ChatMarkdown text={"# Preview\n\nbody v1"} cwd="/repo" parseHtml />);
+  renderWithQueryClient(<ChatMarkdown text={"# Preview\n\nbody v2"} cwd="/repo" />);
+  // Opted in, but one entry may not outweigh the rest of the cache.
+  renderWithQueryClient(
+    <ChatMarkdown text={`huge ${"word ".repeat(40_000)}`} cwd="/repo" shareParse />,
+  );
+  renderWithQueryClient(<ChatMarkdown text="streaming reply" cwd="/repo" shareParse isStreaming />);
+  expect(getSharedParseCacheSizeForTests()).toBe(before);
+
+  renderWithQueryClient(<ChatMarkdown text="settled transcript reply" cwd="/repo" shareParse />);
+  expect(getSharedParseCacheSizeForTests()).toBe(before + 1);
+});
+
 it.each(["\n", "\r\n"])(
   "keeps wiki links on the first line of a GitHub alert (%j)",
   async (eol) => {
@@ -836,6 +899,6 @@ describe("ChatMarkdown streaming block split", () => {
     expect(streaming).toBe(complete);
     expect(streaming).toContain(`data-chat-find-start="${String(startOffset)}"`);
     expect(streaming).toContain('data-chat-find-match="active"');
-    expect(streaming).toContain('<h2 dir="auto">');
+    expect(streaming).toContain('<h2 dir="ltr">');
   });
 });

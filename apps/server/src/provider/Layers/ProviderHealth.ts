@@ -153,7 +153,8 @@ const PI_PROVIDER = "pi" as const;
 const OMP_PROVIDER = "omp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
-const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
+// `agy acp`, which Synara drives Antigravity through, shipped in 1.5.0.
+const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.5.0";
 
 const PROVIDERS = [
   CODEX_PROVIDER,

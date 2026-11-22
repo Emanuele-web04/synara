@@ -73,12 +73,11 @@ mind when changing a config shared with other Codex installations.
 
 An MCP HTTP 403 with `subscription_inactive` or `subscription_required` means
 the configured service refused access. Synara leaves the connection, credentials,
-and subscription untouched. A failed MCP startup notification supplies the server
-name and state for the existing runtime-warning history. The anonymous `rmcp`
-worker error remains visible too; its body alone does not identify a server.
-Identical subscription worker errors are collapsed within a startup attempt;
-a later retry or ready update allows them to be reported again. Other transport,
-authorization, and configuration failures remain visible.
+and subscription untouched. The app-server reports the named startup failure
+and can also emit an anonymous `rmcp` worker error on stderr. Synara keeps these
+signals in diagnostics and filters MCP startup failures and app-server stderr
+from Work Performed and the chat timeline, including saved history. MCP tool
+calls that fail during a turn and turn failures remain visible.
 
 For a canceled or missing SuperX subscription, review that service's subscription
 or disable/remove its server in the effective Codex configuration if it is no

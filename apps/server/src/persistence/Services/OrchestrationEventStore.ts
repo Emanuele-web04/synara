@@ -75,6 +75,14 @@ export interface OrchestrationEventStoreShape {
     eventTypes?: ReadonlyArray<string>,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
+  /** Check the cursor and row budget for a thread replay without loading event payloads. */
+  readonly canReplayThreadEventsInRange: (input: {
+    readonly threadId: string;
+    readonly sequenceExclusive: number;
+    readonly throughSequenceInclusive: number;
+    readonly limit: number;
+  }) => Effect.Effect<boolean, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *

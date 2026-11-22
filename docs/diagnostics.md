@@ -105,8 +105,13 @@ drain timeouts, restart reconciliation failures, uncertain chat delivery, accoun
 renewal failures, revoked device enrollment, billing redirects, migration startup
 blocks/recovery failures, provider turn-start failures, and event retries/quarantine.
 They also include handled remote-ingress/tunnel socket errors and event-loop stalls.
-Peer-driven socket reports are limited to one per category per thirty seconds in
-each backend, so connection churn cannot flood desktop IPC or its durable spool.
+With explicit consent, Desktop Beta also reports refused remote admissions, failed host
+authorization reads (outage, ownership denial or missing subscription), failed tunnel
+provisioning and unexpected tunnel connector exits. The sender and receiver restrict
+those six codes to Beta. Peer-driven socket and admission reports are limited to one
+per category per thirty seconds in each backend, and authorization, provisioning and
+connector reports to one per category per ten minutes, so connection churn and retry
+loops cannot flood desktop IPC or its durable spool.
 Stall observations use the existing monitor's two-second threshold and thirty-second
 reporting limit; they do not identify a slow query or upload its text.
 Each producer uses a fixed code at the owning operation, never parses free-form log text.
@@ -158,8 +163,8 @@ Each envelope contains a random per-installation UUID, event UUID, timestamp,
 app version, channel, surface and platform. Additional fields are restricted to
 fixed enums and bounded durations/token counts, including the fixed provider categories
 `codex`, `claude` and `other`. No account identifiers or account-derived hashes, custom model
-names, task/project/repository names, paths, routes, URLs, prompts, chat content, files,
-credentials or error text enter this path. The random UUID is independent of login,
+names, task/project/repository names, paths, URL routes, URLs, hostnames, IP addresses,
+prompts, chat content, files, credentials or error text enter this path. The random UUID is independent of login,
 billing and the Beta diagnostics identity.
 
 Events go to the Cloudflare Worker `/v1/product-events` and a separate D1
@@ -183,9 +188,11 @@ are preserved.
 Release dependency: deploy additive migration `0010_product_host_usage.sql` and
 the receiving Worker before shipping the host-usage client. Apply additive migration
 `0014_product_turn_failures.sql` before deploying the Worker that writes turn
-failure categories, applying only that file as described in
-[the analytics README](../apps/analytics/README.md#deployment); clients may ship first
-because older Workers drop the unknown fields. `/v1/crash` remains
+failure categories. Apply `0015_product_connection_detail.sql` before the Worker that writes
+connection network and route. Ship updated iPhone/iPad clients and Desktop Beta after
+that Worker. An older receiver rejects the new mobile connection failure values
+and the new Desktop Beta reliability codes. See
+[analytics deployment order](../apps/analytics/README.md#deployment). `/v1/crash` remains
 retired with HTTP 410 in every flavor. `/v1/events` accepts Beta and
 Remote diagnostics; Remote events follow the sharing switch.
 
@@ -198,7 +205,13 @@ installation and an existing off choice is preserved. Native iPhone/iPad apps fr
 above, Remote records `app.active` once per UTC day while the app runs, so long
 sessions count as active days. Failed connections, pairings and chat requests can
 carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
-`host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. The
+`host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. A
+failed connection, reconnection or pairing can also carry one fixed `failure` stage
+(for example `no_route`, `route_upgrade`, `tls_handshake`, `session_authorize`,
+`subscription_required`) and its numeric HTTP status. Any connection event can carry
+the network kind (`wifi`, `cellular`, `wired`, `other`, `none`) and the connection
+path (`local` network, account-published `direct` endpoint or managed `tunnel`). These
+are fixed categories, never the address, hostname or network name. The
 dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
 installations that sent a chat request in those windows. These are rolling windows
 ending now, not calendar-day, calendar-week or calendar-month totals. One person using

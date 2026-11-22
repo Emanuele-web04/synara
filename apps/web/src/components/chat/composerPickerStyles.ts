@@ -233,7 +233,7 @@ export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden ro
  *  expose a horizontal scrollbar for the offscreen, closed card. Panels that stack extra
  *  chrome (Environment's bottom rail) extend it. */
 export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col overflow-x-clip p-3";
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex max-w-full flex-col overflow-x-clip p-3";
 
 /** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =

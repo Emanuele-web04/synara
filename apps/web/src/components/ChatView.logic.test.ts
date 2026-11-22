@@ -42,6 +42,7 @@ import {
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   resolveWorkingLabel,
+  isWaitingOnUserWorkingLabel,
   deriveComposerSendState,
   deriveComposerVoiceState,
   editAndResendDispatchFields,
@@ -2391,6 +2392,56 @@ describe("resolveWorkingLabel", () => {
     expect(
       resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
     ).toBe("Thinking");
+  });
+});
+
+describe("resolveWorkingLabel waiting on the user", () => {
+  it("says what the turn waits for instead of Thinking", () => {
+    const running = { isSendBusy: false, turnTakenOver: true };
+    expect(resolveWorkingLabel({ ...running, awaitingApproval: true })).toBe(
+      "Waiting for approval",
+    );
+    expect(resolveWorkingLabel({ ...running, awaitingUserInput: true })).toBe(
+      "Waiting for your answer",
+    );
+    expect(
+      resolveWorkingLabel({ ...running, awaitingApproval: true, awaitingUserInput: true }),
+    ).toBe("Waiting for approval");
+    expect(
+      resolveWorkingLabel({ ...running, awaitingApproval: false, awaitingUserInput: false }),
+    ).toBe("Thinking");
+  });
+
+  it("yields to delivery checks, the local send and provider startup", () => {
+    const waiting = { awaitingApproval: true, awaitingUserInput: true };
+    expect(
+      resolveWorkingLabel({
+        ...waiting,
+        isSendBusy: true,
+        turnTakenOver: false,
+        isSettlingTurnDispatch: true,
+      }),
+    ).toBe("Checking message delivery…");
+    expect(resolveWorkingLabel({ ...waiting, isSendBusy: true, turnTakenOver: false })).toBe(
+      "Loading",
+    );
+    expect(
+      resolveWorkingLabel({
+        ...waiting,
+        isSendBusy: false,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Codex",
+      }),
+    ).toBe("Starting Codex…");
+  });
+
+  it("marks only the waiting labels as a stopped state", () => {
+    expect(isWaitingOnUserWorkingLabel("Waiting for approval")).toBe(true);
+    expect(isWaitingOnUserWorkingLabel("Waiting for your answer")).toBe(true);
+    expect(isWaitingOnUserWorkingLabel("Thinking")).toBe(false);
+    expect(isWaitingOnUserWorkingLabel("Loading")).toBe(false);
+    expect(isWaitingOnUserWorkingLabel(undefined)).toBe(false);
   });
 });
 

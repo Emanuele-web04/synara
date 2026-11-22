@@ -5,6 +5,10 @@
 //
 //   BENCH_SEED_HOME=<home> BENCH_SEED_WORKSPACES=<dir> [BENCH_SEED_SHAPE=<json>] bun .bench/seed-home.ts
 //
+// `realisticThreads: true` in the shape also writes the long threads of
+// seed-realistic-threads.ts; `BENCH_SEED_MODE=append-realistic` writes only those into a
+// home that is already seeded (the generic threads stay byte-for-byte the same).
+//
 // The app must not be running on that home. Output is deterministic for a given shape.
 import { resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -29,6 +33,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/La
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import { seedRealisticThreads } from "./seed-realistic-threads.ts";
 
 interface SeedShape {
   readonly projects: number;
@@ -38,6 +43,8 @@ interface SeedShape {
   readonly smallThreadMessages: number;
   /** Tool calls per assistant message; each writes started, updated and completed rows. */
   readonly toolCallsPerAssistantMessage: number;
+  /** Adds the long threads of seed-realistic-threads.ts to the first project. */
+  readonly realisticThreads?: boolean;
 }
 
 const DEFAULT_SHAPE: SeedShape = {
@@ -274,6 +281,23 @@ const dispatch = (command: Record<string, unknown>) =>
   runtime.runPromise(engine.dispatch(command as never));
 
 const startedAt = Date.now();
+const firstProjectId = ProjectId.makeUnsafe("seed-project-01");
+
+if (process.env.BENCH_SEED_MODE === "append-realistic") {
+  const manifest = await seedRealisticThreads(dispatch, firstProjectId);
+  await runtime.dispose();
+  console.log(
+    JSON.stringify({
+      threads: manifest.length,
+      messages: manifest.reduce((sum, thread) => sum + thread.messages, 0),
+      activities: manifest.reduce((sum, thread) => sum + thread.activities, 0),
+      seconds: Math.round((Date.now() - startedAt) / 100) / 10,
+      manifest,
+    }),
+  );
+  process.exit(0);
+}
+
 const baseTime = Date.parse("2026-09-15T08:00:00.000Z");
 const iso = (offsetMs: number) => new Date(baseTime + offsetMs).toISOString();
 const DAY = 86_400_000;
@@ -404,11 +428,19 @@ for (const [threadIndex, plan] of threadPlan.entries()) {
   }
 }
 
+if (shape.realisticThreads) {
+  for (const thread of await seedRealisticThreads(dispatch, firstProjectId)) {
+    messageTotal += thread.messages;
+    activityTotal += thread.activities;
+    manifest.push(thread);
+  }
+}
+
 await runtime.dispose();
 console.log(
   JSON.stringify({
     projects: projectIds.length,
-    threads: threadPlan.length,
+    threads: manifest.length,
     messages: messageTotal,
     activities: activityTotal,
     seconds: Math.round((Date.now() - startedAt) / 100) / 10,

@@ -371,6 +371,55 @@ export async function measureSwitching({ build, home }) {
   return record;
 }
 
+export const LONGCHAT_PLAN = {
+  threads: [
+    ["prose-300", "real-thread-prose"],
+    ["agent-mid", "real-thread-agent-mid"],
+    ["agent-heavy", "real-thread-agent-heavy"],
+  ],
+  park: "seed-thread-small-016",
+};
+
+/**
+ * Long threads of real shape (template set created with `prepare.mjs --templates
+ * --realistic`): first open, switch back, then wheel scrolling and a fast fling with
+ * frame timing on the real GPU. The headless longchat.mjs suite covers main-thread cost.
+ */
+export async function measureLongChat({ build, home }) {
+  const { app, session } = await startApp({ build, home });
+  const record = { at: new Date().toISOString(), failed: null, threads: {} };
+  try {
+    await sleep(8000);
+    record.window = await windowBounds(session);
+    requireFrontmost(app, "before long chats");
+    for (const [name, threadId] of LONGCHAT_PLAN.threads) {
+      const entry = {};
+      entry.cold = await measureOpen(session, threadId);
+      if (entry.cold.failed) throw new Error(`invalid sample: ${entry.cold.failed}`);
+      await sleep(800);
+      await openThreadFromSidebar(session, LONGCHAT_PLAN.park);
+      await sleep(800);
+      entry.warm = await measureOpen(session, threadId);
+      if (entry.warm.failed) throw new Error(`invalid sample: ${entry.warm.failed}`);
+      await sleep(1500);
+      entry.scroll = await measureScroll(session, app);
+      if (entry.scroll.failed) throw new Error(`invalid sample: ${entry.scroll.failed}`);
+      await sleep(1000);
+      entry.fling = await measureScroll(session, app, { ticks: 40, deltaPx: 1200 });
+      if (entry.fling.failed) throw new Error(`invalid sample: ${entry.fling.failed}`);
+      requireFrontmost(app, `after scrolling ${name}`);
+      record.threads[name] = entry;
+      await openThreadFromSidebar(session, LONGCHAT_PLAN.park);
+      await sleep(800);
+    }
+  } catch (error) {
+    record.failed = error.message.split("\n")[0];
+  }
+  session.close();
+  record.quit = await quitDesktop(app);
+  return record;
+}
+
 // Runs in the page: time from each keydown to the frame after its input event.
 const TYPING_RECORDER = (composerSelector) => {
   const composer = document.querySelector(composerSelector);

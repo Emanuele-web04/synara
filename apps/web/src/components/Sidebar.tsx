@@ -3405,17 +3405,18 @@ export default function Sidebar() {
     [openRenameThreadDialog],
   );
 
-  const { prewarmThreadDetail: prewarmThreadDetailForIntent } = useThreadDetailPrewarm();
+  const { prewarmThreadDetail: prewarmThreadDetailForIntent, prewarmThreadDetailForActivation } =
+    useThreadDetailPrewarm();
 
   const primeThreadActivation = useCallback(
     (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
         return;
       }
-      prewarmThreadDetailForIntent(threadId);
+      prewarmThreadDetailForActivation(threadId);
       setOptimisticActiveThreadId(threadId);
     },
-    [prewarmThreadDetailForIntent, setOptimisticActiveThreadId],
+    [prewarmThreadDetailForActivation, setOptimisticActiveThreadId],
   );
 
   // Segment-switch counterpart of primeThreadActivation: hovering/clicking a
