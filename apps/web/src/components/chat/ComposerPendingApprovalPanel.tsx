@@ -5,7 +5,9 @@
 // surface, spacing, chips, and scoped keyboard shortcuts) so approvals and AskUserQuestion
 // prompts read as one coherent decision surface instead of the old fused-banner look.
 // Layer: Chat composer UI
-// Exports: ComposerPendingApprovalPanel
+// Exports: ComposerPendingApprovalPanel, ApprovalDetail, parseApprovalDetail,
+//          approvalActionsFor, approvalPromptKey, ApprovalAction, ParsedApproval
+//          (the pieces SynBot's approval card reuses)
 
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
@@ -28,7 +30,7 @@ interface ComposerPendingApprovalPanelProps {
   ) => Promise<void>;
 }
 
-type ParsedApproval = {
+export type ParsedApproval = {
   tool: string | null;
   fileName: string | null;
   fileDir: string | null;
@@ -36,7 +38,7 @@ type ParsedApproval = {
   fallback: string | null;
 };
 
-type ApprovalAction = {
+export type ApprovalAction = {
   decision: ProviderApprovalDecision;
   labelKey: string;
   descriptionKey: string;
@@ -153,6 +155,25 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   tool: "chat:approveThisToolCall",
 };
 
+/** The answers a pending approval offers, in shortcut order (a Computer scope names its own). */
+export function approvalActionsFor(approval: PendingApproval): ReadonlyArray<ApprovalAction> {
+  const computerScope = approval.approvalScope
+    ? COMPUTER_SCOPES[approval.approvalScope]
+    : undefined;
+  return (
+    computerScope?.actions ??
+    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS)
+  );
+}
+
+/** The question a pending approval asks (a Computer scope asks its own). */
+export function approvalPromptKey(approval: PendingApproval): string {
+  const computerScope = approval.approvalScope
+    ? COMPUTER_SCOPES[approval.approvalScope]
+    : undefined;
+  return computerScope?.promptKey ?? KIND_PROMPT[approval.requestKind];
+}
+
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
@@ -168,9 +189,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const computerScope = approval.approvalScope
     ? COMPUTER_SCOPES[approval.approvalScope]
     : undefined;
-  const actions =
-    computerScope?.actions ??
-    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS);
+  const actions = approvalActionsFor(approval);
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
@@ -217,7 +236,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {t(computerScope?.promptKey ?? KIND_PROMPT[approval.requestKind])}
+          {t(approvalPromptKey(approval))}
           {!computerScope && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
@@ -253,7 +272,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   );
 };
 
-function ApprovalDetail({
+export function ApprovalDetail({
   parsed,
   permissionProfile,
   toolName,
@@ -376,7 +395,7 @@ function formatToolParameterValue(value: unknown): string {
  * first and fall back to targeted regex extraction so we can still surface the
  * file path / command even from a chopped-off string.
  */
-function parseApprovalDetail(detail: string | undefined): ParsedApproval {
+export function parseApprovalDetail(detail: string | undefined): ParsedApproval {
   const empty: ParsedApproval = {
     tool: null,
     fileName: null,

@@ -1,7 +1,8 @@
 /* FILE: newBot.css
    Purpose: The New bot steps (Paper "11 New bot", variant A): the progress line along the top
             edge, the question, the computer rows, the identity fields, the template chips and
-            the defaults rows. Kit tokens only (kit/holobot.css); text follows the UI font size. */
+            the instructions under the defaults rows (the rows themselves are the bot sheet's,
+            bots.css). Kit tokens only (kit/holobot.css); text follows the UI font size. */
 
 .hb .new-bot {
   display: flex;
@@ -213,71 +214,7 @@
   color: var(--hb-muted);
 }
 
-/* Where it starts */
-.hb .new-bot__defaults {
-  display: flex;
-  flex-direction: column;
-}
-/* A hairline above each row; a shadow, so the rows' own `border: 0` cannot drop it. */
-.hb .new-bot__defaults > * + * {
-  box-shadow: inset 0 1px 0 var(--hb-border);
-}
-.hb .new-bot__row {
-  display: flex;
-  align-items: center;
-  gap: var(--hb-gap);
-  width: 100%;
-  min-height: 52px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--hb-text);
-  font: inherit;
-  text-align: left;
-}
-.hb button.new-bot__row {
-  cursor: pointer;
-}
-.hb button.new-bot__row:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: 2px;
-  border-radius: var(--hb-radius-sm);
-}
-.hb .new-bot__label {
-  width: 112px;
-  flex-shrink: 0;
-  font-size: var(--hb-text-md);
-  color: var(--hb-muted);
-}
-.hb .new-bot__value {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: var(--hb-gap);
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--hb-text-lg);
-  font-weight: var(--hb-weight-medium);
-}
-.hb .new-bot__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--hb-gap-sm);
-  min-width: 0;
-}
-.hb .new-bot__item-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hb .new-bot__more {
-  font-weight: normal;
-  color: var(--hb-muted);
-}
-.hb .new-bot__chevron {
-  flex-shrink: 0;
-  color: var(--hb-muted);
-}
+/* Where it starts: after the rows (bots.css), the instructions or Add instructions. */
 .hb .new-bot__add {
   display: flex;
   align-items: center;

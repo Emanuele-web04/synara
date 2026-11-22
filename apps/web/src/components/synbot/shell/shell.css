@@ -1,9 +1,11 @@
 /* FILE: shell.css
    Purpose: The SynBot page inside Synara's frame (ported from HoloBot's shell/shell.css and
-            sidebar.css): the thread and the task pane side by side, the task pane over the
-            thread's right edge when the window is too narrow for both; in Synara's sidebar
-            panel, HoloBot's sidebar: the pinned tiles, "My bots" rows and the foot. Every value
-            is a kit token (kit/holobot.css). */
+            sidebar.css): the thread and the task pane side by side; the task pane over the
+            thread behind a scrim when the window is too narrow for both, over the whole page
+            when narrower than a phone; the Alto gate. In Synara's sidebar panel, HoloBot's
+            sidebar: the pinned tiles, "My bots" rows and the foot. Rows hover, select and take
+            focus with Synara's own sidebar colors (sidebarRowStyles.ts) and its density; the
+            rest are kit tokens (kit/holobot.css). */
 
 .hb.synbot-shell {
   position: relative;
@@ -37,7 +39,8 @@
   > .thread-pane__top::after {
   display: none;
 }
-/* Too narrow for the thread and the task pane: the task pane lies over the thread's right edge. */
+/* Too narrow for the thread and the task pane: the task pane lies over the thread, behind it a
+   scrim that closes the task; narrower than a phone, the pane takes the whole page. */
 .hb.synbot-shell[data-narrow] > .task-pane {
   position: absolute;
   top: 0;
@@ -45,7 +48,21 @@
   bottom: 0;
   z-index: var(--hb-z-strip);
   width: min(var(--hb-sessions), 100%);
+  background: var(--hb-bg);
   box-shadow: var(--hb-shadow-dialog);
+}
+.hb.synbot-shell[data-narrow="full"] > .task-pane {
+  width: 100%;
+  box-shadow: none;
+}
+.hb .synbot-shell__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--hb-z-strip);
+  padding: 0;
+  border: 0;
+  background: var(--hb-scrim);
+  cursor: default;
 }
 .hb .synbot-shell__state {
   display: flex;
@@ -53,20 +70,22 @@
   align-items: center;
   justify-content: center;
   padding: var(--hb-gutter);
-  font-size: var(--hb-text-md);
-  color: var(--hb-muted);
   text-align: center;
 }
-.hb .synbot-shell__alto {
+.hb.synbot-shell__alto {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--hb-gap);
   max-width: 380px;
+  margin: 0 auto;
+  text-align: center;
 }
 .hb .synbot-shell__alto-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--hb-gap-sm);
 }
 .hb .synbot-shell__alto-body {
@@ -77,7 +96,9 @@
 }
 .hb .synbot-shell__alto-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--hb-gap-sm);
   margin-top: var(--hb-gap-xs);
 }
@@ -90,6 +111,46 @@
   min-height: 0;
   color: var(--hb-text);
   --hb-sidebar-bg: transparent;
+  /* Synara's sidebar rows (sidebarRowStyles.ts): hover, selected and the focus ring. */
+  --synbot-row-hover: var(--sidebar-accent);
+  --synbot-row-selected: var(--sidebar-selected);
+  --synbot-row-focus: var(--color-border-focus, var(--ring));
+}
+
+/* A row's or tile's "…": shown while the pointer is over it or it holds the focus, always on a
+   touch screen (no hover there), with a 44 px target on touch. */
+.hb .tile__more,
+.hb .conversation__more {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+.hb .tile:hover > .tile__more,
+.hb .tile:focus-within > .tile__more,
+.hb .conversation:hover > .conversation__more,
+.hb .conversation:focus-within > .conversation__more {
+  opacity: 1;
+  pointer-events: auto;
+}
+.hb .tile__more::before,
+.hb .conversation__more::before {
+  content: "";
+  position: absolute;
+  inset: min(0px, calc((20px - var(--hb-hit, 32px)) / 2));
+}
+@media (pointer: coarse) {
+  .hb .tile__more,
+  .hb .conversation__more {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .tile__more,
+  .hb .conversation__more {
+    transition: none;
+  }
 }
 
 /* Pinned bots: three to a row, a row of one or two centered. */
@@ -102,28 +163,40 @@
   flex-shrink: 0;
 }
 .hb .tile {
+  position: relative;
   flex: 0 0 calc((100% - 2 * var(--hb-gap-xs)) / 3);
   min-width: 0;
+  border-radius: var(--radius-md, var(--hb-radius-md));
+}
+.hb .tile:hover {
+  background: var(--synbot-row-hover);
+}
+.hb .tile--selected,
+.hb .tile--selected:hover {
+  background: var(--synbot-row-selected);
+}
+.hb .tile__main {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--hb-gap-sm);
+  width: 100%;
   padding: var(--hb-gap) 0 var(--hb-gap-sm);
   border: 0;
-  border-radius: var(--hb-radius-md);
+  border-radius: inherit;
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  outline: none;
 }
-.hb .tile--selected,
-.hb .tile:hover {
-  background: var(--hb-sidebar-selected);
+.hb .tile__more {
+  top: 4px;
+  right: 4px;
 }
-.hb .tile:focus-visible,
-.hb .conversation:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: 2px;
+.hb .tile__main:focus-visible,
+.hb .conversation__main:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--synbot-row-focus);
 }
 .hb .tile__mascot {
   position: relative;
@@ -150,6 +223,8 @@
   justify-content: center;
   gap: var(--hb-gap-xs);
   max-width: 100%;
+  padding: 0 var(--hb-gap-sm);
+  box-sizing: border-box;
   font-size: var(--hb-text-sm);
   font-weight: var(--hb-weight-medium);
   color: var(--hb-soft-text);
@@ -182,22 +257,58 @@
   padding: 0 var(--hb-gap-sm);
 }
 .hb .conversation {
+  position: relative;
+  border-radius: var(--radius-md, var(--hb-radius-md));
+}
+.hb .conversation:hover {
+  background: var(--synbot-row-hover);
+}
+.hb .conversation--selected,
+.hb .conversation--selected:hover {
+  background: var(--synbot-row-selected);
+}
+.hb .conversation__main,
+.hb .conversation--skeleton {
   display: flex;
   align-items: center;
-  gap: var(--hb-gap);
+  gap: calc(var(--app-density-row-gap, 0.5rem) + 4px);
   width: 100%;
-  padding: var(--hb-gap-sm) var(--hb-gap-sm);
+  padding: calc(var(--app-density-row-padding-y, 0.125rem) + 6px) 0.5rem;
+  box-sizing: border-box;
+}
+.hb .conversation__main {
   border: 0;
-  border-radius: var(--hb-radius-md);
+  border-radius: inherit;
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  outline: none;
 }
-.hb .conversation--selected,
-.hb .conversation:hover {
-  background: var(--hb-sidebar-selected);
+.hb .conversation__more {
+  top: 50%;
+  right: 0.5rem;
+  translate: 0 -50%;
+}
+/* The "…" takes the time's and the dot's place while it shows; on touch it always shows, so
+   the text leaves it room. */
+.hb .conversation:hover .conversation__time,
+.hb .conversation:hover .conversation__status .hb-dot,
+.hb .conversation:focus-within .conversation__time,
+.hb .conversation:focus-within .conversation__status .hb-dot {
+  visibility: hidden;
+}
+@media (pointer: coarse) {
+  .hb .conversation__main {
+    padding-right: calc(0.5rem + 28px);
+  }
+  .hb .conversation:hover .conversation__time,
+  .hb .conversation:hover .conversation__status .hb-dot,
+  .hb .conversation:focus-within .conversation__time,
+  .hb .conversation:focus-within .conversation__status .hb-dot {
+    visibility: visible;
+  }
 }
 .hb .conversation__text {
   flex: 1;
@@ -205,6 +316,9 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+.hb .conversation--skeleton .conversation__text {
+  gap: var(--hb-gap-sm);
 }
 .hb .conversation__top {
   display: flex;
@@ -234,8 +348,10 @@
   font-size: var(--hb-text-sm);
   color: var(--hb-muted);
 }
+/* Waiting for you: amber text dark enough to read on the sidebar (the dot keeps the bright
+   amber). */
 .hb .conversation__status--attention {
-  color: var(--hb-attention);
+  color: var(--hb-tone-attention-text);
 }
 .hb .conversation__preview {
   flex: 1;
@@ -252,10 +368,11 @@
   margin: 0;
   padding: var(--hb-gap-sm) var(--hb-gap);
   font-size: var(--hb-text-sm);
+  line-height: 1.45;
   color: var(--hb-muted);
 }
 
-/* The foot: New bot and Stop all. */
+/* The foot: New bot, and Stop all while something runs. */
 .hb .sidebar__foot {
   display: flex;
   align-items: center;

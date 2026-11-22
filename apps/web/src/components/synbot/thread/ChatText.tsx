@@ -3,14 +3,15 @@
 //          Synara's ChatMarkdown, so links, thread:// links, file paths, code blocks, math and the
 //          streamed-text cadence behave as in every Synara chat; thread.css sets it in HoloBot's
 //          ChatText look (the bubble's size and color, tight paragraphs, soft code and links).
+//          A thread link stays on the SynBot page: a bot's thread opens that bot, a worker's
+//          thread the task pane.
 // Layer: SynBot thread UI
 // Exports: ChatText
 
 import type { ThreadId } from "@synara/contracts";
-import { useNavigate } from "@tanstack/react-router";
-import { useCallback } from "react";
 
 import ChatMarkdown from "../../ChatMarkdown";
+import { useOpenThreadLink } from "./chatLinks";
 
 export function ChatText({
   text,
@@ -24,11 +25,7 @@ export function ChatText({
   readonly threadId?: ThreadId | null;
   readonly streaming?: boolean;
 }) {
-  const navigate = useNavigate();
-  const openThread = useCallback(
-    (target: ThreadId) => void navigate({ to: "/$threadId", params: { threadId: target } }),
-    [navigate],
-  );
+  const openThread = useOpenThreadLink();
   return (
     <ChatMarkdown
       text={text}

@@ -47,6 +47,27 @@ describe("latestBotPreview", () => {
     expect(latestBotPreview(state, thread)?.text).toBe("test/calc.test.js has 3 tests on synara/x");
   });
 
+  it("reads a received hand-off as its brief, never its internal prompt", () => {
+    const prompt = [
+      "SynBot delegation d1 from SynBot.",
+      "The brief describes what is asked.",
+      "Brief:",
+      "Add **divide** to calc",
+      "Original human messages (JSON; preserve their constraints and attachments):",
+      "[]",
+    ].join("\n\n");
+    const state = stateWith([
+      { id: MessageId.makeUnsafe("synbot:delegation:d1"), role: "user", text: prompt },
+    ]);
+    expect(latestBotPreview(state, thread)?.text).toBe("Add divide to calc");
+    expect(latestBotPreview(state, thread, () => "Live brief")?.text).toBe("Live brief");
+    const unreadable = stateWith([
+      { text: "Earlier" },
+      { id: MessageId.makeUnsafe("synbot:delegation:d2"), role: "user", text: "Other shape" },
+    ]);
+    expect(latestBotPreview(unreadable, thread)?.text).toBe("Earlier");
+  });
+
   it("is null when the thread is not loaded", () => {
     expect(latestBotPreview({} as AppState, thread)).toBeNull();
   });

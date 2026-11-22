@@ -1,22 +1,26 @@
 // FILE: controls.tsx
 // Purpose: The HoloBot kit's small controls (ported from HoloBot's packages/ui Button.tsx,
-//          IconButton.tsx, Chip.tsx, Text.tsx, TextField.tsx, Switch.tsx, Segmented.tsx,
-//          Field.tsx, Panel.tsx and DragStrip.tsx): capsule buttons (a primary one is a dark core
-//          inside a thin ring of HoloBot's moving liquid metal), round icon buttons, chips,
-//          counts and dots, text styles, a capsule text field, a switch, a segmented choice, a
-//          titled field, a pane and a pane's top strip.
+//          IconButton.tsx, Chip.tsx, Text.tsx, TextField.tsx, Field.tsx, Panel.tsx and
+//          DragStrip.tsx): capsule buttons (a primary one is a dark core inside a thin ring of
+//          HoloBot's liquid metal, which moves only under the pointer or the keyboard's focus),
+//          the composer Send's metal ring, round icon buttons, chips, counts and dots, text
+//          styles, a capsule text field, a titled field, a pane and a pane's top strip. Switches
+//          and choices are Synara's own (ui/switch, the settings controls).
 // Layer: SynBot kit
-// Exports: CapsuleButton, ButtonKind, IconButton, Chip, Tone, CountBadge, Badged, Dot, DotTone,
-//          Text, TextField, Switch, Segmented, SegmentedOption, Field, Pane, Strip
+// Exports: CapsuleButton, ButtonKind, SendRing, IconButton, Chip, Tone, Dot, DotTone, Text,
+//          TextField, Field, Pane, Strip
 
 import {
+  useEffect,
   useId,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type KeyboardEvent,
   type ReactNode,
   type Ref,
+  type RefObject,
 } from "react";
 
 import { Icon, type IconName } from "./Icon";
@@ -28,8 +32,56 @@ const classes = (...names: Array<string | false | null | undefined>) =>
 
 // ── Buttons ──────────────────────────────────────────────────────────
 
-/** primary: a dark core in a ring of moving liquid metal (none while disabled); normal,
- * danger, card, ghost: flat capsules. */
+/** Whether the control holding `anchor` is under the pointer or has the keyboard's focus. */
+function useControlLit(anchor: RefObject<HTMLElement | null>): boolean {
+  const [lit, setLit] = useState(false);
+  useEffect(() => {
+    const control = anchor.current?.closest("button");
+    if (!control) return;
+    const on = () => setLit(true);
+    const off = () => setLit(control.matches(":hover"));
+    const focus = () => setLit(control.matches(":focus-visible"));
+    control.addEventListener("pointerenter", on);
+    control.addEventListener("pointerleave", off);
+    control.addEventListener("focusin", focus);
+    control.addEventListener("focusout", off);
+    return () => {
+      control.removeEventListener("pointerenter", on);
+      control.removeEventListener("pointerleave", off);
+      control.removeEventListener("focusin", focus);
+      control.removeEventListener("focusout", off);
+    };
+  }, [anchor]);
+  return lit;
+}
+
+/** A primary capsule's metal: one still frame until its button is pointed at or focused. */
+function CapsuleMetal({ round }: { readonly round: boolean | undefined }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const lit = useControlLit(anchor);
+  return (
+    <span ref={anchor} className="hb-btn__metal">
+      <LiquidMetal moving={lit} round={round} />
+    </span>
+  );
+}
+
+/** The composer's Send in a bot chat: HoloBot's dark core in a ring of liquid metal (ui/metal's
+ * ring). The metal moves while `moving` (a message on its way) or while Send is pointed at or
+ * focused; otherwise it holds one frame. Pass it as the composer's `composerSendUnderlay`. */
+export function SendRing({ moving = false }: { readonly moving?: boolean }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const lit = useControlLit(anchor);
+  return (
+    <span ref={anchor} className="ui-metal-ring" aria-hidden>
+      <LiquidMetal moving={moving || lit} round />
+      <span className="ui-metal-ring__core" />
+    </span>
+  );
+}
+
+/** primary: a dark core in a ring of liquid metal that moves under the pointer or the
+ * keyboard's focus (no metal while disabled); normal, danger, card, ghost: flat capsules. */
 export type ButtonKind = "primary" | "normal" | "danger" | "card" | "ghost";
 
 export function CapsuleButton({
@@ -69,7 +121,7 @@ export function CapsuleButton({
       data-chosen={chosen || undefined}
       {...rest}
     >
-      {kind === "primary" && !rest.disabled ? <LiquidMetal moving round={round} /> : null}
+      {kind === "primary" && !rest.disabled ? <CapsuleMetal round={round} /> : null}
       <span className="hb-btn__core">{children}</span>
     </button>
   );
@@ -218,102 +270,6 @@ export function TextField({
       onKeyDown={keyDown}
       {...rest}
     />
-  );
-}
-
-/** An on/off switch: a capsule track with a round knob. */
-export function Switch({
-  checked,
-  onChange,
-  ariaLabel,
-  disabled,
-}: {
-  readonly checked: boolean;
-  readonly onChange: (checked: boolean) => void;
-  readonly ariaLabel: string;
-  readonly disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      className="hb-switch"
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="hb-switch__knob" />
-    </button>
-  );
-}
-
-export interface SegmentedOption<T extends string> {
-  readonly value: T;
-  readonly label: string;
-}
-
-/** One choice among a few, the current one highlighted; a radio group (arrow keys move). */
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-  disabled,
-}: {
-  readonly value: T | null;
-  readonly options: readonly SegmentedOption<T>[];
-  readonly onChange: (value: T) => void;
-  /** Accessible name of the group (the setting's name). */
-  readonly label: string;
-  readonly disabled?: boolean;
-}) {
-  const group = useRef<HTMLDivElement>(null);
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (!step || disabled) return;
-    event.preventDefault();
-    const at = options.findIndex((option) => option.value === value);
-    const next = options[(at + step + options.length) % options.length];
-    if (!next) return;
-    onChange(next.value);
-    group.current?.querySelector<HTMLButtonElement>(`[data-value="${next.value}"]`)?.focus();
-  };
-  return (
-    <div
-      ref={group}
-      className="hb-segmented"
-      role="radiogroup"
-      aria-label={label}
-      aria-disabled={disabled || undefined}
-      onKeyDown={onKeyDown}
-    >
-      {options.map((option, index) => {
-        const selected = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            data-value={option.value}
-            tabIndex={selected || (value === null && index === 0) ? 0 : -1}
-            className="hb-segmented__option"
-            disabled={disabled}
-            onClick={() => {
-              if (!selected) onChange(option.value);
-            }}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 

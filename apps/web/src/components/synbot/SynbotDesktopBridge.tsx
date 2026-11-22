@@ -1,19 +1,21 @@
 // FILE: SynbotDesktopBridge.tsx
 // Purpose: SynBot's ties to the window and the desktop app (Beta): the app menu's SynBot items
-//          (Open SynBot, New Bot…, Stop All Bots…), the Dock badge's count of bots waiting on the
-//          user, and the memory of the SynBot page for the next launch. Renders nothing.
+//          (Open SynBot, New Bot…, Stop All Bots…), the Dock badge's count of bots waiting for
+//          the user, and the memory of the SynBot page for the next launch. It renders SynBot's
+//          confirmation (Stop all, Remove) for the whole window, wherever it was asked.
 // Layer: SynBot runtime (mounted once at the app root while SynBot is on)
 // Exports: SynbotDesktopBridge
 
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 
-import { confirmAndStopAllBots } from "~/synbot/synbotActions";
+import { askToStopAllBots } from "~/synbot/synbotActions";
 import { rememberSynbotRoute } from "~/synbot/synbotRouteMemory";
 import { synbotNeedsYouCount } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 
 import { useBotEditor } from "./editor/botEditorStore";
+import { SynbotConfirmDialog } from "./SynbotConfirmDialog";
 
 export function SynbotDesktopBridge() {
   const navigate = useNavigate();
@@ -53,7 +55,7 @@ export function SynbotDesktopBridge() {
           openPage();
           return;
         case "synbot-stop-all":
-          void confirmAndStopAllBots();
+          askToStopAllBots();
           return;
         default:
           return;
@@ -62,5 +64,5 @@ export function SynbotDesktopBridge() {
     return () => unsubscribe?.();
   }, [navigate, pathname]);
 
-  return null;
+  return <SynbotConfirmDialog />;
 }

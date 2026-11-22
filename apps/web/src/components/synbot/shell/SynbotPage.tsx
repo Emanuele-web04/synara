@@ -1,21 +1,22 @@
 // FILE: SynbotPage.tsx
 // Purpose: The SynBot page (HoloBot's shell/Shell.tsx inside Synara's frame): the selected bot's
-//          thread (`?bot=`, SynBot without it) and, when a task is open (`?task=`), its own
-//          thread in the right pane; when the window is too narrow for both, the task pane lies
-//          over the thread's right edge. The bot sheet opens over it (`?new=bot`: New bot at its
-//          Bot step, then the parameter is dropped). Synara's app rail and
-//          sidebar panel (SynbotSidebar) stay around it.
+//          thread (`?bot=`; SynBot without it, or when it names a bot that is gone) and, when a
+//          task is open (`?task=`), its own thread in the right pane. When the window is too
+//          narrow for both, the task pane lies over the thread behind a scrim that closes it;
+//          narrower than a phone's width it takes the whole page. The bot sheet opens over it
+//          (`?new=bot`: New bot at its Bot step, then the parameter is dropped). Loading, a
+//          failed load (with Retry) and a host without SynBot each have their own state.
+//          Synara's app rail and sidebar panel (SynbotSidebar) stay around it.
 // Layer: SynBot UI (route component for /synbot)
 // Exports: default SynbotPage
 
-import { BOT_MASCOT_COLORS, ThreadId } from "@synara/contracts";
+import { ThreadId } from "@synara/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { useAccount } from "~/hooks/useAccount";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
-import { altoGrantRetry, botById, orderedBots } from "~/synbot/synbotState.logic";
+import { altoGrantRetry, botById, selectedBot } from "~/synbot/synbotState.logic";
 import {
   ensureSynbotMain,
   restartSynbotLiveSync,
@@ -23,22 +24,29 @@ import {
   useSynbotStore,
 } from "~/synbot/synbotStore";
 
-import { useAccountDialogStore } from "../../account/accountDialogStore";
 import { CHAT_CONTENT_CARD_CLASS_NAME } from "../../chat/composerPickerStyles";
-import { useOpenSynaraPlan, useSynaraPlan } from "../../settings/BillingSettingsPanel";
-import { Badge } from "../../ui/badge";
+import { useSynaraPlan } from "../../settings/BillingSettingsPanel";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../../ui/empty";
+import { Spinner } from "../../ui/spinner";
 import { BotSheetHost } from "../editor/BotSheet";
 import { useBotEditor } from "../editor/botEditorStore";
 import { CapsuleButton } from "../kit/controls";
-import { BotMascot } from "../kit/Mascot";
+import { useOpenTask } from "../synbotNav";
 import { TaskPane } from "../thread/TaskPane";
 import { ThreadPane } from "../thread/ThreadPane";
+import { SynbotAltoGate } from "./SynbotAltoGate";
 import "../kit/holobot.css";
 import "./shell.css";
 
-/** Narrower than the thread's least width plus the task pane: the pane lies over the thread. */
-function useNarrow(root: React.RefObject<HTMLElement | null>): boolean {
-  const [narrow, setNarrow] = useState(false);
+/** Under this width the task pane covers the whole page instead of most of it. */
+const FULL_TASK_PANE_WIDTH = 480;
+
+/**
+ * How the task pane sits: beside the thread (null), over its right edge ("over"), or over the
+ * whole page ("full"), from the page's width and the panes' least widths.
+ */
+function useTaskPaneFit(root: React.RefObject<HTMLElement | null>): "over" | "full" | null {
+  const [fit, setFit] = useState<"over" | "full" | null>(null);
   useLayoutEffect(() => {
     const el = root.current;
     if (!el) return;
@@ -47,46 +55,51 @@ function useNarrow(root: React.RefObject<HTMLElement | null>): boolean {
       (parseFloat(style.getPropertyValue("--hb-sessions")) || 380) +
       (parseFloat(style.getPropertyValue("--hb-thread-min")) || 440);
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setNarrow(entry.contentRect.width < least);
+      if (!entry) return;
+      const width = entry.contentRect.width;
+      setFit(width < FULL_TASK_PANE_WIDTH ? "full" : width < least ? "over" : null);
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, [root]);
-  return narrow;
+  return fit;
 }
 
-function SynbotAltoGate() {
+/** Loading, a failed load and a host without SynBot: the app's empty state in the page. */
+function PageState({
+  title,
+  description,
+  busy,
+  onRetry,
+}: {
+  readonly title: string;
+  readonly description?: string | null | undefined;
+  readonly busy?: boolean;
+  readonly onRetry?: () => void;
+}) {
   const { t } = useTranslation();
-  const { status: accountStatus } = useAccount();
-  const openPlans = useOpenSynaraPlan();
-  const signedOut = accountStatus?.state !== "signed-in";
   return (
-    <div className="synbot-shell__state">
-      <div className="synbot-shell__alto">
-        <BotMascot shape="synara" color={BOT_MASCOT_COLORS[0]} size={48} mood="idle" />
-        <div className="synbot-shell__alto-title">
-          <h2 className="text-ui-lg font-medium text-foreground">{t("synbot:altoTitle")}</h2>
-          <Badge variant="secondary" size="sm">
-            {t("synbot:betaBadge")}
-          </Badge>
-        </div>
-        <p className="synbot-shell__alto-body">{t("synbot:altoDescription")}</p>
-        <div className="synbot-shell__alto-actions">
-          {signedOut ? (
-            <CapsuleButton
-              kind="primary"
-              onClick={() => useAccountDialogStore.getState().openSignIn()}
-            >
-              {t("synbot:altoSignIn")}
-            </CapsuleButton>
-          ) : null}
-          <CapsuleButton kind={signedOut ? "normal" : "primary"} onClick={openPlans}>
-            {t("synbot:altoViewPlans")}
+    <Empty aria-busy={busy || undefined}>
+      <EmptyHeader>
+        {busy ? <Spinner className="mb-3 size-5 text-muted-foreground" /> : null}
+        <EmptyTitle className="text-ui-lg font-medium">{title}</EmptyTitle>
+        {description ? <EmptyDescription>{description}</EmptyDescription> : null}
+      </EmptyHeader>
+      {onRetry ? (
+        <EmptyContent>
+          <CapsuleButton kind="normal" onClick={onRetry}>
+            {t("common:common_retry")}
           </CapsuleButton>
-        </div>
-      </div>
-    </div>
+        </EmptyContent>
+      ) : null}
+    </Empty>
   );
+}
+
+/** Reloads SynBot after a failed load. */
+function retryLoad() {
+  restartSynbotLiveSync();
+  void ensureSynbotMain();
 }
 
 export default function SynbotPage() {
@@ -97,7 +110,8 @@ export default function SynbotPage() {
   const data = useSynbotStore((store) => store.data);
   const plan = useSynaraPlan();
   const root = useRef<HTMLDivElement>(null);
-  const narrow = useNarrow(root);
+  const fit = useTaskPaneFit(root);
+  const openTask = useOpenTask();
 
   useEffect(() => {
     if (useSynbotStore.getState().status === "subscription_required") {
@@ -134,33 +148,50 @@ export default function SynbotPage() {
     });
   }, [navigate, search.bot, search.new, status]);
 
-  const bot = botById(data, search.bot) ?? orderedBots(data.bots).main;
+  // The sidebar highlights the same bot (selectedBot), stale links included.
+  const bot = selectedBot(data, search.bot);
   const taskThreadId = search.task ? ThreadId.makeUnsafe(search.task) : null;
   const task = taskThreadId
     ? (data.tasks.find((entry) => entry.task.workerThreadId === taskThreadId) ?? null)
     : null;
+  const taskOver = taskThreadId !== null && fit !== null;
 
   let content;
   if (status === "subscription_required") {
-    content = <SynbotAltoGate />;
+    content = (
+      <div className="synbot-shell__state">
+        <SynbotAltoGate />
+      </div>
+    );
   } else if (status === "unavailable") {
-    content = <p className="synbot-shell__state">{t("synbot:unavailable")}</p>;
+    content = <PageState title={t("synbot:unavailable")} />;
   } else if (status === "error" && !bot) {
-    content = <p className="synbot-shell__state">{error ?? t("synbot:loadFailed")}</p>;
+    content = <PageState title={t("synbot:loadFailed")} description={error} onRetry={retryLoad} />;
   } else if (!bot) {
-    content = <p className="synbot-shell__state">{t("synbot:loading")}</p>;
+    content = <PageState title={t("synbot:loading")} busy />;
   } else {
     content = (
       <>
         <ThreadPane key={bot.id} bot={bot} />
         {taskThreadId ? (
-          <TaskPane
-            key={taskThreadId}
-            threadId={taskThreadId}
-            task={task?.task ?? null}
-            bot={botById(data, task?.botId) ?? bot}
-            showProof={data.settings.mergeProofEnabled}
-          />
+          <>
+            {taskOver ? (
+              <button
+                type="button"
+                className="synbot-shell__scrim"
+                aria-label={t("synbot:closeTask")}
+                tabIndex={-1}
+                onClick={() => openTask(null)}
+              />
+            ) : null}
+            <TaskPane
+              key={taskThreadId}
+              threadId={taskThreadId}
+              task={task?.task ?? null}
+              bot={botById(data, task?.botId) ?? bot}
+              showProof={data.settings.mergeProofEnabled}
+            />
+          </>
         ) : null}
       </>
     );
@@ -172,7 +203,7 @@ export default function SynbotPage() {
       // Synara's route card: in the rail layout the page sits in the inset block under the
       // shell band, like every other route, its top strip on the band.
       className={cn("hb synbot-shell", CHAT_CONTENT_CARD_CLASS_NAME)}
-      data-narrow={(narrow && taskThreadId) || undefined}
+      data-narrow={taskOver ? fit : undefined}
     >
       {content}
       <BotSheetHost />

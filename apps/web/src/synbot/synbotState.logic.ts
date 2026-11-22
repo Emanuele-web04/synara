@@ -3,8 +3,8 @@
 //          what the page shows (sidebar order, attention counts, a bot's tasks and delegations).
 // Layer: Web domain logic (no React, no I/O)
 // Exports: SynbotData, EMPTY_SYNBOT_DATA, applyBotStreamEvent, orderedBots, botNeedsYou,
-//          synbotNeedsYouCount, tasksForBot, delegationsTouchingThread, delegationById,
-//          altoGrantRetry
+//          synbotNeedsYouCount, synbotHasStoppableWork, tasksForBot, delegationsTouchingThread,
+//          delegationById, botById, selectedBot, botByThreadId, altoGrantRetry
 
 import type {
   Bot,
@@ -16,7 +16,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
-import { DEFAULT_BOT_SETTINGS } from "@synara/contracts";
+import { BOT_DELEGATION_TERMINAL_STATES, DEFAULT_BOT_SETTINGS } from "@synara/contracts";
 
 export interface SynbotTask {
   readonly botId: ProjectId;
@@ -117,6 +117,26 @@ export function synbotNeedsYouCount(data: SynbotData): number {
   return data.bots.filter(botNeedsYou).length;
 }
 
+/** Task states Stop all still has something to stop in. */
+const STOPPABLE_TASK_STATES: ReadonlySet<HubWorkItem["state"]> = new Set([
+  "queued",
+  "starting",
+  "working",
+  "waiting",
+]);
+
+/**
+ * Whether Stop all would stop anything: a bot working or waiting for the user, a task queued
+ * or running, or a hand-off that has not ended.
+ */
+export function synbotHasStoppableWork(data: SynbotData): boolean {
+  return (
+    data.bots.some((bot) => bot.status === "working" || bot.status === "waiting") ||
+    data.tasks.some((entry) => STOPPABLE_TASK_STATES.has(entry.task.state)) ||
+    data.delegations.some((delegation) => !BOT_DELEGATION_TERMINAL_STATES.has(delegation.state))
+  );
+}
+
 /** A bot's tasks, newest first. */
 export function tasksForBot(data: SynbotData, botId: ProjectId): readonly HubWorkItem[] {
   return data.tasks
@@ -142,6 +162,15 @@ export function delegationById(data: SynbotData, id: string): BotDelegation | nu
 export function botById(data: SynbotData, id: string | null | undefined): Bot | null {
   if (!id) return null;
   return data.bots.find((bot) => bot.id === id) ?? null;
+}
+
+/**
+ * The bot the SynBot page shows for `?bot=`: that bot, or SynBot when the parameter is absent or
+ * names a bot that is gone (a removed bot, an old notification link). The page and the sidebar
+ * both read it, so the highlighted row is always the open thread.
+ */
+export function selectedBot(data: SynbotData, id: string | null | undefined): Bot | null {
+  return botById(data, id) ?? orderedBots(data.bots).main;
 }
 
 export function botByThreadId(data: SynbotData, threadId: string | null | undefined): Bot | null {

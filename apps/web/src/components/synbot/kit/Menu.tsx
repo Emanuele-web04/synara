@@ -3,7 +3,9 @@
 //          anchored to its trigger (the top bar's More, the composer's "+"), items in sections,
 //          a check on the chosen one. It opens over everything, dialogs included, and flips or
 //          shrinks to stay on screen. Closes on a pick, Escape or a click outside; arrow keys
-//          and typing move between items. Right-click menus use Synara's own context menu.
+//          and typing move between items. An entry with a `submenu` opens its items to the side
+//          (one parent row for variants, as the compact-menu rule asks). Right-click menus use
+//          Synara's own context menu.
 // Layer: SynBot kit
 // Exports: MenuEntry, Menu
 
@@ -14,6 +16,8 @@ import {
   MenuItem,
   MenuPopupBase,
   MenuSeparator,
+  MenuSub,
+  MenuSubTriggerBase,
   MenuTrigger,
 } from "~/components/ui/menu";
 
@@ -22,6 +26,14 @@ import { Icon, type IconName } from "./Icon";
 export type MenuEntry =
   | { readonly section: string }
   | { readonly rule: true }
+  | {
+      readonly id: string;
+      readonly label: string;
+      readonly detail?: string;
+      /** A quiet line at the top of the submenu. */
+      readonly hint?: string;
+      readonly submenu: readonly MenuEntry[];
+    }
   | {
       readonly id: string;
       readonly label: string;
@@ -57,6 +69,30 @@ function Items({ items }: { readonly items: readonly MenuEntry[] }) {
     ) : "rule" in item ? (
       // oxlint-disable-next-line react/no-array-index-key -- static, positional entries
       <MenuSeparator key={`r${index}`} className="hb-menu__rule" />
+    ) : "submenu" in item ? (
+      <MenuSub key={item.id}>
+        <MenuSubTriggerBase className="hb-menu__item hb-menu__sub">
+          <span className="hb-menu__label">
+            {item.label}
+            {item.detail ? <span className="hb-menu__detail">{item.detail}</span> : null}
+          </span>
+          <span className="hb-menu__chevron" aria-hidden>
+            <Icon name="chevron-down" size="xs" />
+          </span>
+        </MenuSubTriggerBase>
+        <MenuPopupBase
+          surface="bare"
+          className="hb hb-menu__panel"
+          side="inline-start"
+          align="start"
+          alignOffset={-5}
+          sideOffset={4}
+          aria-label={item.label}
+        >
+          {item.hint ? <p className="hb-menu__section hb-menu__hint">{item.hint}</p> : null}
+          <Items items={item.submenu} />
+        </MenuPopupBase>
+      </MenuSub>
     ) : (
       <MenuItem
         key={item.id}

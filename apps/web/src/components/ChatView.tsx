@@ -7292,6 +7292,23 @@ export default function ChatView({
                   {renderTranscript ? (
                     renderTranscript({
                       contentInsetBottomPx: composerTranscriptInsetPx,
+                      threadDetailHydration,
+                      onRetryThreadDetailSync: handleRetryThreadDetailSync,
+                      threadError: activeThread?.error ?? null,
+                      onDismissThreadError: dismissActiveThreadError,
+                      onUnblockThread: unblockThread,
+                      unblockingThread: unblockingActiveThread,
+                      recoverableTurnId:
+                        activeLatestTurnState === "error" ? activeLatestTurnId : null,
+                      turnRecoveryDisabled:
+                        isSendBusy ||
+                        isConnecting ||
+                        isWorking ||
+                        pendingApprovals.length > 0 ||
+                        pendingUserInputs.length > 0,
+                      onContinueFailedTurn: onResumeTurn,
+                      onChangeRecoveryModel: () => handleModelPickerOpenChange(true),
+                      onExpandImage: onExpandTimelineImage,
                       pendingApprovals,
                       respondingRequestKeys,
                       onRespondToApproval,

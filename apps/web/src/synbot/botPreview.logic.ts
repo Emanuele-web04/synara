@@ -1,12 +1,17 @@
 // FILE: botPreview.logic.ts
 // Purpose: What a bot's sidebar row says under its name (HoloBot's botRow): the last word of its
-//          thread when the thread is loaded (no check-in, SILENT reply or report wake-up) as plain
-//          text, and
-//          when it was said, in the list's short form ("19:08" today, "Mon" this week, "26 Oct").
+//          thread when the thread is loaded (no check-in, SILENT reply or report wake-up; a
+//          hand-off it received reads as its brief, never the internal prompt) as plain text,
+//          and when it was said, in the list's short form ("19:08" today, "Mon" this week,
+//          "26 Oct").
 // Layer: Web domain logic (pure)
 // Exports: BotPreview, latestBotPreview, listTime
 
-import { BOT_REPORT_MESSAGE_PREFIX, type ThreadId } from "@synara/contracts";
+import {
+  BOT_DELEGATION_MESSAGE_PREFIX,
+  BOT_REPORT_MESSAGE_PREFIX,
+  type ThreadId,
+} from "@synara/contracts";
 import {
   isCoordinatorCheckinUserMessage,
   isSilentCoordinatorCheckinReply,
@@ -14,6 +19,7 @@ import {
 
 import { summarizeAssistantText } from "../notifications/taskCompletion.logic";
 import type { AppState } from "../storeState";
+import { delegationBriefFromPrompt } from "./botThread.logic";
 
 export interface BotPreview {
   readonly text: string;
@@ -22,8 +28,15 @@ export interface BotPreview {
 
 const PREVIEW_MAX = 140;
 
-/** The newest message worth showing in `threadId`, or null when none is loaded. */
-export function latestBotPreview(state: AppState, threadId: ThreadId): BotPreview | null {
+/**
+ * The newest message worth showing in `threadId`, or null when none is loaded. A hand-off's
+ * brief comes from `briefOf` (the live delegation), else from inside its prompt.
+ */
+export function latestBotPreview(
+  state: AppState,
+  threadId: ThreadId,
+  briefOf?: (delegationId: string) => string | null,
+): BotPreview | null {
   const ids = state.messageIdsByThreadId?.[threadId];
   const byId = state.messageByThreadId?.[threadId];
   if (!ids || !byId) return null;
@@ -33,8 +46,13 @@ export function latestBotPreview(state: AppState, threadId: ThreadId): BotPrevie
     if (message.id.startsWith(BOT_REPORT_MESSAGE_PREFIX)) continue;
     if (isCoordinatorCheckinUserMessage(message)) continue;
     if (message.role === "assistant" && isSilentCoordinatorCheckinReply(message.text)) continue;
+    const words = message.id.startsWith(BOT_DELEGATION_MESSAGE_PREFIX)
+      ? (briefOf?.(message.id.slice(BOT_DELEGATION_MESSAGE_PREFIX.length)) ??
+        delegationBriefFromPrompt(message.text))
+      : message.text;
+    if (!words) continue;
     // Plain words on one line: a reply's `code` and **bold** marks would show raw.
-    const text = summarizeAssistantText(message.text);
+    const text = summarizeAssistantText(words);
     if (!text) continue;
     return { text: text.slice(0, PREVIEW_MAX), at: message.createdAt };
   }

@@ -2,32 +2,59 @@
 // Purpose: The merge proof, HoloBot's signature card (thread/ProofCard.tsx + ProofBadge.tsx):
 //          "Merge it?" with the pull request and what changed (PR #12 · +12 −3 · 4 files), the
 //          proof as a checklist (checks green on the current head, the branch up to date with
-//          its base, no conflicts, the diff's red flags, never trusted away), then its answers as
-//          small buttons: Merge (primary, only when the server says the proof is ready; the merge
-//          is the user's), Update branch when behind, Refresh. Shown in a task's pane when
-//          Settings → SynBot → Merge proof is on (bots.mergeProof / merge / updateBranch).
+//          its base, no conflicts, the diff's red flags, never trusted away), then its answers:
+//          Merge (primary, only when the server says the proof is ready; the merge is the
+//          user's, asked once more in a dialog), Update branch when behind, Refresh. Shown in a
+//          task's pane when Settings → SynBot → Merge proof is on and the task has a pull
+//          request (bots.mergeProof / merge / updateBranch). A card of the same height holds
+//          its place while it loads; it reads the proof again when the task moves on or its pull
+//          request changes, and every 20 s while checks run (for five minutes at most).
 // Layer: SynBot thread UI
 // Exports: ProofCard
 
-import type { BotMergeProof, ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useState } from "react";
+import type { BotMergeProof, HubWorkState, ThreadId } from "@synara/contracts";
+import { useEffect, useRef, useState } from "react";
 import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
 
 import { toastManager } from "../../ui/toast";
+import { AlertDialog } from "../kit/Dialog";
 import { CapsuleButton, Chip } from "../kit/controls";
 import { Icon } from "../kit/Icon";
+import { StatusMark, type MarkShape, type MarkTone } from "./CardParts";
 
 type LoadState =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly proof: BotMergeProof }
-  | { readonly kind: "none"; readonly message: string };
+  /** The server has no pull request for the task (yet): no card. */
+  | { readonly kind: "none" }
+  | { readonly kind: "error"; readonly message: string };
 
 type Check = { readonly tone: "good" | "bad" | "attention" | "muted"; readonly text: string };
 
+/** While checks run, the proof is read again this often, this many times at most. */
+const PENDING_POLL_MS = 20_000;
+const PENDING_POLLS = 15;
+
 const messageOf = (error: unknown) => describeErrorMessage(error, String(error));
+
+/** The server's "no pull request yet" (bots.mergeProof fails with code `invalid`). */
+function isNoPullRequest(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : null;
+  return code === "invalid" || /no pull request/i.test(messageOf(error));
+}
+
+const MARK: Record<Check["tone"], { readonly shape: MarkShape; readonly tone: MarkTone }> = {
+  good: { shape: "check", tone: "good" },
+  bad: { shape: "cross", tone: "bad" },
+  attention: { shape: "dot", tone: "attention" },
+  muted: { shape: "ring", tone: "muted" },
+};
 
 function useChecklist(proof: BotMergeProof): readonly Check[] {
   const { t } = useTranslation();
@@ -69,9 +96,7 @@ function Checklist({ proof }: { readonly proof: BotMergeProof }) {
     <ul className="checklist" aria-label={t("synbot:proofChecks")}>
       {checks.map((check) => (
         <li key={check.text} className={`checklist__item checklist__item--${check.tone}`}>
-          <span className="checklist__mark" aria-hidden>
-            {check.tone === "good" ? "✓" : check.tone === "bad" ? "✕" : "•"}
-          </span>
+          <StatusMark shape={MARK[check.tone].shape} tone={MARK[check.tone].tone} />
           <span className="checklist__text">{check.text}</span>
         </li>
       ))}
@@ -79,30 +104,98 @@ function Checklist({ proof }: { readonly proof: BotMergeProof }) {
   );
 }
 
-export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
+/** The card's place while the proof loads: its frame, a title and three lines, no jump. */
+function ProofSkeleton() {
+  const { t } = useTranslation();
+  return (
+    <div className="choice proof-card proof-card--loading" aria-busy role="status">
+      <span className="sr-only">{t("synbot:proofLoading")}</span>
+      <span className="proof-card__bone proof-card__bone--title" aria-hidden />
+      <span className="proof-card__bone" aria-hidden />
+      <span className="proof-card__bone" aria-hidden />
+      <span className="proof-card__bone proof-card__bone--short" aria-hidden />
+    </div>
+  );
+}
+
+export function ProofCard({
+  threadId,
+  prUrl,
+  taskState,
+}: {
+  readonly threadId: ThreadId;
+  /** The task's known pull request: a new one reads the proof again. */
+  readonly prUrl: string;
+  /** Where the task stands: a change (a push, a finished run) reads the proof again. */
+  readonly taskState: HubWorkState | null;
+}) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [busy, setBusy] = useState<"merge" | "update" | "refresh" | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  // Only the newest read lands (a slow one never overwrites a later one).
+  const latestRead = useRef(0);
 
-  const load = useCallback(() => {
+  const load = (quiet: boolean) => {
     const api = readNativeApi();
     if (!api) return;
-    setBusy((current) => current ?? "refresh");
+    const read = latestRead.current + 1;
+    latestRead.current = read;
+    if (!quiet) setBusy((current) => current ?? "refresh");
     void api.bots
       .mergeProof({ threadId })
-      .then((proof) => setState({ kind: "ready", proof }))
-      .catch((error: unknown) => setState({ kind: "none", message: messageOf(error) }))
-      .finally(() => setBusy(null));
-  }, [threadId]);
-
+      .then((proof) => {
+        if (latestRead.current === read) setState({ kind: "ready", proof });
+      })
+      .catch((error: unknown) => {
+        if (latestRead.current !== read) return;
+        setState(
+          isNoPullRequest(error) ? { kind: "none" } : { kind: "error", message: messageOf(error) },
+        );
+      })
+      .finally(() => {
+        if (!quiet) setBusy((current) => (current === "refresh" ? null : current));
+      });
+  };
+  const loadRef = useRef(load);
   useEffect(() => {
-    setState({ kind: "loading" });
-    load();
-  }, [load]);
+    loadRef.current = load;
+  });
 
-  if (state.kind === "loading") return null;
-  if (state.kind === "none") {
-    return <p className="choice__note">{state.message}</p>;
+  // A new task, pull request or task state: read the proof again (the card keeps its place).
+  useEffect(() => {
+    loadRef.current(true);
+  }, [threadId, prUrl, taskState]);
+
+  // Checks still running: look again every 20 s, for five minutes at most.
+  const pendingHead =
+    state.kind === "ready" && state.proof.state === "open" && state.proof.checks === "pending"
+      ? state.proof.headSha
+      : null;
+  useEffect(() => {
+    if (!pendingHead) return;
+    let polls = 0;
+    const timer = window.setInterval(() => {
+      polls += 1;
+      loadRef.current(true);
+      if (polls >= PENDING_POLLS) window.clearInterval(timer);
+    }, PENDING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pendingHead]);
+
+  if (state.kind === "loading") return <ProofSkeleton />;
+  if (state.kind === "none") return null;
+  if (state.kind === "error") {
+    return (
+      <div className="choice proof-card proof-card--error" role="status">
+        <p className="choice__note">{t("synbot:proofUnavailable")}</p>
+        <div className="choice__pair">
+          <CapsuleButton kind="ghost" compact disabled={busy !== null} onClick={() => load(false)}>
+            {t("synbot:proof_refresh")}
+          </CapsuleButton>
+        </div>
+      </div>
+    );
   }
   const { proof } = state;
   const open = proof.state === "open";
@@ -132,7 +225,10 @@ export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
           description: messageOf(error),
         }),
       )
-      .finally(() => setBusy(null));
+      .finally(() => {
+        setBusy(null);
+        setConfirming(false);
+      });
   };
 
   const updateBranch = () => {
@@ -198,18 +294,18 @@ export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
         <div className="choice__pair" role="group" aria-label={t("synbot:answers")}>
           <CapsuleButton
             kind="primary"
-            small
+            compact
             disabled={!proof.ready || busy !== null}
-            onClick={merge}
+            onClick={() => setConfirming(true)}
           >
             {t("synbot:proof_merge")}
           </CapsuleButton>
           {proof.behind ? (
-            <CapsuleButton kind="normal" small disabled={busy !== null} onClick={updateBranch}>
+            <CapsuleButton kind="normal" compact disabled={busy !== null} onClick={updateBranch}>
               {t("synbot:proof_updateBranch")}
             </CapsuleButton>
           ) : null}
-          <CapsuleButton kind="ghost" small disabled={busy !== null} onClick={load}>
+          <CapsuleButton kind="ghost" compact disabled={busy !== null} onClick={() => load(false)}>
             {t("synbot:proof_refresh")}
           </CapsuleButton>
         </div>
@@ -221,6 +317,15 @@ export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
       ) : (
         <p className="choice__chosen">{t("synbot:proof_titleClosed")}</p>
       )}
+      <AlertDialog
+        open={confirming}
+        title={t("synbot:proofMergeConfirmTitle", { number: proof.prNumber })}
+        message={t("synbot:proofMergeConfirmBody", { base: proof.baseBranch })}
+        confirmLabel={t("synbot:proof_merge")}
+        busy={busy === "merge"}
+        onConfirm={merge}
+        onCancel={() => setConfirming(false)}
+      />
     </div>
   );
 }

@@ -15,6 +15,8 @@ import {
   botByThreadId,
   delegationsTouchingThread,
   orderedBots,
+  selectedBot,
+  synbotHasStoppableWork,
   synbotNeedsYouCount,
   tasksForBot,
 } from "./synbotState.logic";
@@ -108,6 +110,60 @@ describe("orderedBots", () => {
     expect(botByThreadId({ ...EMPTY_SYNBOT_DATA, bots: [bot({})] }, "thread-a")?.name).toBe(
       "Frontend",
     );
+  });
+});
+
+describe("selectedBot", () => {
+  const main = bot({ id: ProjectId.makeUnsafe("main"), kind: "main", name: "SynBot" });
+  const frontend = bot({ id: ProjectId.makeUnsafe("front"), name: "Frontend" });
+  const data = { ...EMPTY_SYNBOT_DATA, bots: [frontend, main] };
+
+  it("is the bot `?bot=` names, or SynBot without one", () => {
+    expect(selectedBot(data, "front")?.name).toBe("Frontend");
+    expect(selectedBot(data, undefined)?.name).toBe("SynBot");
+  });
+
+  it("falls back to SynBot for a bot that is gone (a stale link)", () => {
+    expect(selectedBot(data, "removed-bot")?.name).toBe("SynBot");
+  });
+
+  it("is nothing before the bots load", () => {
+    expect(selectedBot(EMPTY_SYNBOT_DATA, "front")).toBeNull();
+  });
+});
+
+describe("synbotHasStoppableWork", () => {
+  const idle = { ...EMPTY_SYNBOT_DATA, bots: [bot({})] };
+
+  it("is false when every bot is idle and nothing runs", () => {
+    expect(synbotHasStoppableWork(EMPTY_SYNBOT_DATA)).toBe(false);
+    expect(
+      synbotHasStoppableWork({
+        ...idle,
+        tasks: [{ botId: ProjectId.makeUnsafe("bot-a"), task: task({ state: "completed" }) }],
+        delegations: [{ id: "d1", state: "cancelled" } as BotDelegation],
+      }),
+    ).toBe(false);
+  });
+
+  it("is true while a bot works or waits for the user", () => {
+    expect(synbotHasStoppableWork({ ...idle, bots: [bot({ status: "working" })] })).toBe(true);
+    expect(synbotHasStoppableWork({ ...idle, bots: [bot({ status: "waiting" })] })).toBe(true);
+  });
+
+  it("is true while a task is queued or running, or a hand-off is open", () => {
+    expect(
+      synbotHasStoppableWork({
+        ...idle,
+        tasks: [{ botId: ProjectId.makeUnsafe("bot-a"), task: task({ state: "queued" }) }],
+      }),
+    ).toBe(true);
+    expect(
+      synbotHasStoppableWork({
+        ...idle,
+        delegations: [{ id: "d1", state: "awaiting-start" } as BotDelegation],
+      }),
+    ).toBe(true);
   });
 });
 

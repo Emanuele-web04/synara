@@ -1,8 +1,10 @@
 // FILE: ChoiceParts.tsx
 // Purpose: The parts every ask card shares (HoloBot's thread/ChoiceCard.tsx and InlineText.tsx):
-//          lettered answer rows (A, B, C…), the two-way pair of small buttons (the first primary,
-//          a danger one red), and plain text with its `backticked` commands and paths
-//          in the monospace face.
+//          lettered answer rows (A, B, C…, each with an optional line under it; answered, the
+//          pick keeps its own letter), the two-way pair of answer buttons (primary only when the
+//          answer is, a danger one red), and plain text with its `backticked` commands and paths
+//          in the monospace face. The letters answer from the keyboard through the card's own
+//          onKeyDown (cardKeys.ts).
 // Layer: SynBot thread UI
 // Exports: ChoiceRow, ChoiceRows, Pair, InlineText
 
@@ -11,18 +13,24 @@ import { Fragment } from "react";
 import { useTranslation } from "~/i18n";
 
 import { CapsuleButton, type ButtonKind } from "../kit/controls";
-import { LETTERS, useLetterKeys } from "./cardKeys";
+import { Icon } from "../kit/Icon";
+import { LETTERS } from "./cardKeys";
 
 export interface ChoiceRow {
   readonly id: string;
   readonly label: string;
+  /** A quiet line under the label (a question option's description). */
+  readonly detail?: string | undefined;
   readonly danger?: boolean;
   readonly primary?: boolean;
   /** The answer it got: its letter filled. */
   readonly picked?: boolean;
+  /** Its letter where the rows show only the pick (its place among the answers offered); null
+   * for an answer that had none (a dismiss): a check instead. */
+  readonly letter?: string | null;
 }
 
-/** Lettered answers; on the focused card the letters answer from the keyboard. */
+/** Lettered answers; the card's onKeyDown answers them from the keyboard. */
 export function ChoiceRows({
   rows,
   open,
@@ -38,33 +46,37 @@ export function ChoiceRows({
   readonly onPick: (row: ChoiceRow) => void;
 }) {
   const { t } = useTranslation();
-  useLetterKeys(open && !disabled ? rows.length : 0, (index) => {
-    const row = rows[index];
-    if (row) onPick(row);
-  });
   if (rows.length === 0) return null;
   return (
     <div className="choice__rows" role="group" aria-label={label ?? t("synbot:answers")}>
-      {rows.map((row, index) => (
-        <button
-          key={row.id}
-          type="button"
-          className={row.danger ? "choice__row choice__row--danger" : "choice__row"}
-          data-picked={row.picked || undefined}
-          data-primary={(open && row.primary) || undefined}
-          aria-pressed={row.picked}
-          disabled={!open || disabled}
-          onClick={() => onPick(row)}
-        >
-          <span className="choice__letter">{LETTERS[open ? index : 0]}</span>
-          <span className="choice__label">{row.label}</span>
-        </button>
-      ))}
+      {rows.map((row, index) => {
+        const letter = row.letter === undefined ? LETTERS[index] : row.letter;
+        return (
+          <button
+            key={row.id}
+            type="button"
+            className={row.danger ? "choice__row choice__row--danger" : "choice__row"}
+            data-picked={row.picked || undefined}
+            data-primary={(open && row.primary) || undefined}
+            aria-pressed={row.picked}
+            disabled={!open || disabled}
+            onClick={() => onPick(row)}
+          >
+            <span className="choice__letter" aria-hidden>
+              {letter ?? <Icon name="check" size="xs" />}
+            </span>
+            <span className="choice__text">
+              <span className="choice__label">{row.label}</span>
+              {row.detail ? <span className="choice__sub">{row.detail}</span> : null}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-/** Small capsules side by side; the first is primary, a danger one red. */
+/** Answer buttons side by side: primary only when the answer is, a danger one red. */
 export function Pair({
   buttons,
   disabled,
@@ -75,18 +87,15 @@ export function Pair({
   readonly onPick: (row: ChoiceRow) => void;
 }) {
   const { t } = useTranslation();
-  useLetterKeys(disabled ? 0 : buttons.length, (index) => {
-    const button = buttons[index];
-    if (button) onPick(button);
-  });
   return (
     <div className="choice__pair" role="group" aria-label={t("synbot:answers")}>
-      {buttons.map((button, index) => (
+      {buttons.map((button) => (
         <CapsuleButton
           key={button.id}
-          kind={button.kind ?? (button.danger ? "danger" : index === 0 ? "primary" : "normal")}
-          small
+          kind={button.kind ?? (button.primary ? "primary" : button.danger ? "danger" : "normal")}
+          compact
           disabled={disabled}
+          title={button.detail}
           onClick={() => onPick(button)}
         >
           {button.label}

@@ -2,7 +2,8 @@
 // Purpose: HoloBot's dialogs (ported from packages/ui Dialog.tsx and AlertDialog.tsx) on
 //          Synara's ui/dialog: the rest of the window is inert and focus stays inside, and
 //          Synara's menus open over it. Esc and a click on the scrim close it only when
-//          `closable`; the title row has a close button. HoloBot's card, title row and scrim.
+//          `closable`; the title row has a close button. HoloBot's card, title row and scrim; on
+//          a phone-width window ui/dialog's own bottom sheet, its buttons above the home bar.
 //          AlertDialog: a question before something that cannot be taken back.
 // Layer: SynBot kit
 // Exports: Dialog, AlertDialog
@@ -70,7 +71,6 @@ export function Dialog({
         className={cn("hb hb-dialog", wide && "hb-dialog--wide")}
         backdropClassName="hb hb-dialog__scrim"
         showCloseButton={false}
-        bottomStickOnMobile={false}
         initialFocus={() => openingFocus(popup.current)}
         aria-label={label}
         aria-labelledby={title ? titleId : undefined}

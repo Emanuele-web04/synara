@@ -2,15 +2,27 @@
 // Purpose: The rows of a bot's thread on the SynBot page (HoloBot's thread row model,
 //          engine/view/thread.ts + thread/fold.ts), built from Synara's timeline entries: a date
 //          separator at the start, after an hour's gap and on a new day; messages grouped by side
-//          within five minutes; SynBot cards, "Message from" rows and task cards among them; worker
-//          status as quiet system lines. Each Hub task of the bot shows once, as a card at the
-//          place of its latest activity. Tool rows stay out (the typing row says what the bot is
-//          doing); SILENT replies and automation check-ins never show.
+//          within five minutes; SynBot cards, hand-offs received and task cards among them; worker
+//          status rows; failed turns. Each Hub task of the bot shows once, as a card at the place
+//          of its latest activity. Tool rows stay out (the typing row says what the bot is
+//          doing); SILENT replies and automation check-ins never show, and neither does a
+//          delegation's internal prompt (its brief stands in). Also where a hand-off stands once
+//          its delegation left the client's snapshot, and whether the running turn is a check-in.
 // Layer: Web domain logic (pure)
-// Exports: BotThreadRow, buildBotThreadRows, latestWorkStep, replyStreaming
+// Exports: BotThreadRow, buildBotThreadRows, latestWorkStep, replyStreaming,
+//          delegationBriefFromPrompt, checkinTurnRunning, batonState, BatonState,
+//          withinBatonGrace
 
-import { BOT_DELEGATION_MESSAGE_PREFIX, type HubWorkItem, type TurnId } from "@synara/contracts";
-import { isSilentCoordinatorCheckinReply } from "@synara/shared/coordinatorCheckin";
+import {
+  BOT_DELEGATION_MESSAGE_PREFIX,
+  type BotDelegationState,
+  type HubWorkItem,
+  type TurnId,
+} from "@synara/contracts";
+import {
+  isCoordinatorCheckinUserMessage,
+  isSilentCoordinatorCheckinReply,
+} from "@synara/shared/coordinatorCheckin";
 
 import type { ChatMessage } from "../types";
 import type { TimelineEntry, WorkLogEntry, WorkLogSynbotNotice } from "../workLog";
@@ -30,12 +42,14 @@ export type BotThreadRow =
       readonly message: ChatMessage;
       readonly groupStart: boolean;
     }
-  /** Work another bot handed to this one: "Message from <bot>", then its brief. */
+  /** Work another bot handed to this one: its baton with the brief (null when no brief is
+   * known: never the internal prompt). `at`: when it arrived. */
   | {
       readonly kind: "from";
       readonly key: string;
       readonly delegationId: string;
-      readonly brief: string;
+      readonly brief: string | null;
+      readonly at: string;
     }
   /** A SynBot card (`synbot.*` activity): delegation, choice, report or control line. */
   | {
@@ -44,8 +58,10 @@ export type BotThreadRow =
       readonly entryId: string;
       readonly notice: WorkLogSynbotNotice;
     }
-  /** A quiet centered status line (a worker notice no task card stands for). */
+  /** A worker status row (a worker notice no task card stands for). */
   | { readonly kind: "system"; readonly key: string; readonly entry: WorkLogEntry }
+  /** A turn that failed (or paused at a usage limit), with its recovery. */
+  | { readonly kind: "failure"; readonly key: string; readonly entry: WorkLogEntry }
   /** One Hub task of this bot, as a card. */
   | { readonly kind: "task"; readonly key: string; readonly task: HubWorkItem };
 
@@ -76,10 +92,41 @@ function noticeThreadIds(entry: WorkLogEntry): readonly string[] {
   return entry.synaraWorkerNotice?.threads.map((thread) => thread.threadId) ?? [];
 }
 
+const BRIEF_OPEN = "\n\nBrief:\n\n";
+const BRIEF_CLOSE = "\n\nOriginal human messages";
+
+/**
+ * The brief inside a delegation's internal prompt (the server's renderDelegationMessage: "Brief:"
+ * then the brief, then the source messages as one-line JSON), or null when it has another shape.
+ */
+export function delegationBriefFromPrompt(text: string): string | null {
+  const open = text.indexOf(BRIEF_OPEN);
+  if (open < 0) return null;
+  const start = open + BRIEF_OPEN.length;
+  // The JSON after the brief has no raw newlines, so the last marker closes the brief.
+  const close = text.lastIndexOf(BRIEF_CLOSE);
+  const brief = (close > start ? text.slice(start, close) : "").trim();
+  return brief.length > 0 ? brief : null;
+}
+
+/** Each delegation's brief from its `synbot.delegation` notices (either thread's copy). */
+function noticeBriefs(entries: readonly TimelineEntry[]): ReadonlyMap<string, string> {
+  const briefs = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.kind !== "work") continue;
+    const notice = entry.entry.synbotNotice;
+    if (notice?.kind !== "synbot.delegation") continue;
+    const payload = notice.payload as { delegationId?: unknown; brief?: unknown } | null;
+    if (typeof payload?.delegationId !== "string" || typeof payload.brief !== "string") continue;
+    if (payload.brief.trim()) briefs.set(payload.delegationId, payload.brief);
+  }
+  return briefs;
+}
+
 /**
  * The rows for a bot thread's timeline `entries` (oldest first) and the bot's Hub `tasks`
- * (those this thread started). Delegation briefs come from `briefOf` (the live delegation);
- * a delegation message without one falls back to the message's own text.
+ * (those this thread started). Delegation briefs come from `briefOf` (the live delegation),
+ * then the delegation's notice, then the brief inside its prompt; never the prompt itself.
  */
 export function buildBotThreadRows(input: {
   readonly entries: readonly TimelineEntry[];
@@ -90,6 +137,7 @@ export function buildBotThreadRows(input: {
   for (const task of input.tasks) {
     if (task.workerThreadId) tasksByWorker.set(task.workerThreadId, task);
   }
+  const briefs = noticeBriefs(input.entries);
   // Where each task's card goes: its latest folded notice, else when it was created.
   const taskAt = new Map<string, { at: number; iso: string }>(
     input.tasks.map((task) => [task.id, { at: parse(task.createdAt, 0), iso: task.createdAt }]),
@@ -114,7 +162,11 @@ export function buildBotThreadRows(input: {
             kind: "from",
             key: `from:${message.id}`,
             delegationId,
-            brief: input.briefOf?.(delegationId) ?? message.text,
+            brief:
+              input.briefOf?.(delegationId) ??
+              briefs.get(delegationId) ??
+              delegationBriefFromPrompt(message.text),
+            at: entry.createdAt,
           },
           at,
           iso: entry.createdAt,
@@ -132,11 +184,19 @@ export function buildBotThreadRows(input: {
     const work = entry.entry;
     if (work.synbotNotice) {
       const notice = work.synbotNotice;
-      // The target chat shows a delegation as its "Message from" row instead.
+      // The target chat shows a delegation as its received baton instead.
       if (notice.kind === "synbot.delegation" && work.id.endsWith(":to")) continue;
       if (notice.kind === "synbot.card.resolved") continue;
       placed.push({
         row: { kind: "card", key: `card:${work.id}`, entryId: work.id, notice },
+        at,
+        iso: entry.createdAt,
+      });
+      continue;
+    }
+    if (work.turnFailure) {
+      placed.push({
+        row: { kind: "failure", key: `fail:${work.id}`, entry: work },
         at,
         iso: entry.createdAt,
       });
@@ -233,4 +293,56 @@ export function replyStreaming(rows: readonly BotThreadRow[]): boolean {
     if (row.message.streaming && row.message.text.trim().length > 0) return true;
   }
   return false;
+}
+
+/**
+ * The running turn is an automation check-in (its SILENT reply never shows, so no typing row
+ * either): the newest user message is a check-in's and belongs to that turn (or is not bound
+ * to one yet).
+ */
+export function checkinTurnRunning(
+  messages: readonly Pick<ChatMessage, "role" | "dispatchOrigin" | "turnId">[],
+  activeTurnId: TurnId | null | undefined,
+): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== "user") continue;
+    if (!isCoordinatorCheckinUserMessage(message)) return false;
+    return message.turnId == null || activeTurnId == null || message.turnId === activeTurnId;
+  }
+  return false;
+}
+
+/** Where a hand-off stands: a delegation state, or "settled" once it is over but unknown. */
+export type BatonState = BotDelegationState | "settled";
+
+/** A notice younger than this can arrive before its delegation reaches the snapshot. */
+const BATON_GRACE_MS = 60_000;
+
+/** The hand-off was sent so recently that its delegation may not have reached the client. */
+export function withinBatonGrace(createdAt: string | null, nowMs: number): boolean {
+  const created = createdAt ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(created) && nowMs - created < BATON_GRACE_MS;
+}
+
+/**
+ * Where a hand-off's baton stands. The live delegation's state when the client has it. Without
+ * it: waiting while its Start card is open; settled once that card was answered, and settled
+ * when the snapshot (the server keeps the latest delegations only) no longer has it, unless the
+ * snapshot is still loading or the hand-off is seconds old (then it was just sent).
+ */
+export function batonState(input: {
+  readonly live: BotDelegationState | null;
+  readonly startOpen: boolean;
+  readonly startAnswered: boolean;
+  readonly snapshotReady: boolean;
+  readonly createdAt: string | null;
+  readonly nowMs: number;
+}): BatonState {
+  if (input.live) return input.live;
+  if (input.startOpen) return "awaiting-start";
+  if (input.startAnswered) return "settled";
+  return !input.snapshotReady || withinBatonGrace(input.createdAt, input.nowMs)
+    ? "sent"
+    : "settled";
 }

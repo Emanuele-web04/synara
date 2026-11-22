@@ -23,6 +23,9 @@ test("A bot proposal card creates the bot", async ({ synbot, screen, app }) => {
   });
   await synbot.open();
   await synbot.send("PROPOSE-1 I need a docs bot");
+  // Earlier tests leave answered proposals in SynBot's chat, their pick still reading "Create
+  // bot": wait for this proposal's card, the newest, before taking its button.
+  await expect(screen.getByText(`Save "${name}" as a bot?`)).toBeVisible({ timeout: 60_000 });
   const create = screen.getByText("Create bot", { exact: true }).last();
   await expect(create).toBeVisible({ timeout: 60_000 });
   await app.screenshot("proposal-card");

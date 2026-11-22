@@ -82,7 +82,7 @@ test("Delegation refuses self, a fifth hand-off in one turn, and a cycle", async
   ).toHaveCount(4, { timeout: 30_000 });
   const fiveReport = browser.locator("article.report").filter({ hasText: delta!.name }).last();
   await expect(fiveReport).toBeVisible({ timeout: 90_000 });
-  await expect(fiveReport).toContainText("4 delegations");
+  await expect(fiveReport).toContainText("4 hand-offs");
   await app.screenshot("five-report");
 
   // 3. Alpha → Beta → Alpha is a cycle.

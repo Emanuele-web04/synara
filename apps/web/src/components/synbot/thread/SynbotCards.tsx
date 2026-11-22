@@ -4,9 +4,9 @@
 //          bots' threads (BatonCard); the report that stands in for the requester's wake-up
 //          message, as a timeline of its hand-offs; and the quiet "From <bot>" line in a chat a
 //          bot wrote to. The same cards render in Synara's transcript when a bot thread opens
-//          there (SynbotNoticeRow).
+//          there (SynbotNoticeRow). A choice card's letters answer it while it has focus.
 // Layer: SynBot thread UI
-// Exports: SynbotCard, MessageFromRow, delegationStartCard, delegationTone, isLineCard
+// Exports: SynbotCard, MessageFromRow, delegationStartCard, isLineCard
 
 import {
   BOT_DELEGATION_TERMINAL_STATES,
@@ -21,7 +21,6 @@ import {
 import { Option, Schema } from "effect";
 
 import { useTranslation } from "~/i18n";
-import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
@@ -30,9 +29,11 @@ import { BotFace, delegationMood } from "../BotFace";
 import { IconButton } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
-import { BatonCard, delegationTone, type BatonStart } from "./BatonCard";
-import { CARD_FACE, CardHead, StatusChip } from "./CardParts";
+import { BatonCard, type BatonStart } from "./BatonCard";
+import { CARD_FACE, CardHead, StatusChip, StatusMark, useTimeAgo } from "./CardParts";
+import { LETTERS, letterKeyHandler } from "./cardKeys";
 import { ChoiceRows, InlineText, Pair, type ChoiceRow } from "./ChoiceParts";
+import { delegationStateKey, delegationTone } from "./stateWords";
 import { useCardAnswer } from "./useCardAnswer";
 
 const decodeCard = Schema.decodeUnknownOption(BotCard);
@@ -58,18 +59,30 @@ function BotChoiceCard({
   const choices = card.options.filter((option) => option.tone !== "dismiss");
   const rows: ChoiceRow[] = (open ? choices : card.options)
     .filter((option) => open || option.id === chosen?.optionId)
-    .map((option) => ({
-      id: option.id,
-      label: option.label,
-      danger: option.tone === "danger",
-      primary: option.tone === "primary",
-      picked: option.id === chosen?.optionId,
-    }));
+    .map((option) => {
+      // Answered, the pick keeps the letter it had (a dismiss had none: a check).
+      const place = choices.indexOf(option);
+      return {
+        id: option.id,
+        label: option.label,
+        danger: option.tone === "danger",
+        primary: option.tone === "primary",
+        picked: option.id === chosen?.optionId,
+        letter: place >= 0 ? (LETTERS[place] ?? null) : null,
+      };
+    });
   const pick = (row: ChoiceRow) => answer(row.id, row.label);
   // Two answers and no ×: two small buttons under the question (HoloBot's pair).
   const pair = open && !close && choices.length === 2;
+  const onKeyDown = letterKeyHandler(open && pending === null ? rows.length : 0, (index) => {
+    const row = rows[index];
+    if (row) pick(row);
+  });
   return (
-    <div className={open ? (pair ? "choice choice--pair" : "choice") : "choice choice--done"}>
+    <div
+      className={open ? (pair ? "choice choice--pair" : "choice") : "choice choice--done"}
+      onKeyDown={open ? onKeyDown : undefined}
+    >
       <div className="choice__head">
         <p className="choice__title">
           <InlineText text={card.title} />
@@ -113,15 +126,23 @@ function BotChoiceCard({
 export function MessageFromRow({
   delegationId,
   brief,
+  createdAt,
   start,
 }: {
   readonly delegationId: string;
-  readonly brief: string;
+  readonly brief: string | null;
+  readonly createdAt?: string | null;
   readonly start?: BatonStart | null;
 }) {
   return (
     <div className="row row--group row--bot">
-      <BatonCard delegationId={delegationId} brief={brief} side="to" start={start ?? null} />
+      <BatonCard
+        delegationId={delegationId}
+        brief={brief}
+        createdAt={createdAt ?? null}
+        side="to"
+        start={start ?? null}
+      />
     </div>
   );
 }
@@ -147,6 +168,7 @@ function StartBaton({
       delegationId={delegationId}
       toBotId={card.botId}
       brief={brief}
+      createdAt={card.createdAt}
       side="to"
       start={{ card, threadId, resolution }}
     />
@@ -180,7 +202,7 @@ function reportOutcome(states: readonly BotDelegationState[]): "done" | "failed"
   return states.some((state) => state === "failed") ? "failed" : "done";
 }
 
-/** The report that woke the requester: a head (the asking bot, "Report · 2 delegations", when,
+/** The report that woke the requester: a head (the asking bot, "Report · 2 hand-offs", when,
  * and the outcome), then a timeline of each hand-off's bot, how it ended and its result, then
  * the outcome. Live delegations first; the notice's own copy covers ones that left the
  * snapshot. */
@@ -226,16 +248,21 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
       : outcome === "failed"
         ? t("synbot:reportFailed", { count: failed })
         : t("synbot:reportGoing");
+  const when = useTimeAgo(notice.createdAt);
   return (
     <article className="report">
       <CardHead
         faces={<BotFace bot={asker} size={CARD_FACE} mood="idle" />}
         title={t("synbot:reportHandoffs", { count: notice.delegationIds.length })}
-        sub={formatRelativeTimeAgo(notice.createdAt)}
+        sub={when}
         status={
           <StatusChip
             tone={outcome === "done" ? "good" : outcome === "failed" ? "bad" : "active"}
-            label={outcomeLabel}
+            label={t(
+              delegationStateKey(
+                outcome === "done" ? "completed" : outcome === "failed" ? "failed" : "working",
+              ),
+            )}
           />
         }
       />
@@ -265,7 +292,7 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
                   <span
                     className={`timeline__state timeline__state--${delegationTone(delegation.state)}`}
                   >
-                    {t(`synbot:delegation_${delegation.state}`)}
+                    {t(delegationStateKey(delegation.state))}
                   </span>
                 </p>
                 {delegation.resultSummary ? (
@@ -279,11 +306,13 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
         })}
         <li className="timeline__item timeline__item--end">
           <span className="timeline__rail" aria-hidden>
-            <span className={`timeline__outcome timeline__outcome--${outcome}`}>
-              {outcome === "going" ? null : (
-                <Icon name={outcome === "done" ? "check" : "close"} size="xs" />
-              )}
-            </span>
+            {outcome === "done" ? (
+              <StatusMark shape="check" tone="good" />
+            ) : outcome === "failed" ? (
+              <StatusMark shape="cross" tone="bad" />
+            ) : (
+              <StatusMark shape="dot" />
+            )}
           </span>
           <div className="timeline__body">
             <p className="timeline__head timeline__head--end">{outcomeLabel}</p>
@@ -333,6 +362,7 @@ export function SynbotCard({
           fromBotId={decoded.value.fromBotId}
           toBotId={decoded.value.toBotId}
           brief={decoded.value.brief}
+          createdAt={decoded.value.createdAt}
           side="from"
         />
       ) : null;

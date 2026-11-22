@@ -5,7 +5,8 @@
             <html>), the font is Synara's UI family, and text sizes follow the size chosen in
             Settings (`--app-font-size-ui*`, `--app-font-size-chat`). Spacing, radii, shapes,
             layout and motion are HoloBot's. Everything is scoped to `.hb`: the SynBot page, its
-            sidebar panel, dialogs and menus carry it. */
+            sidebar panel, dialogs and menus carry it. Small controls keep their look and take a
+            larger hit area around it (32 px, 44 px on touch). */
 
 .hb {
   /* Palette (light): Synara's surfaces in HoloBot's roles. */
@@ -13,6 +14,9 @@
   --hb-sidebar-bg: var(--sidebar);
   --hb-sidebar-selected: color-mix(in srgb, var(--foreground) 7%, transparent);
   --hb-card: var(--card);
+  /* Dialogs and menus float with no blur behind them: Synara's opaque popover fill, so a
+     translucent theme never shows the page through them. */
+  --hb-raised: var(--popover);
   --hb-card-hover: color-mix(in srgb, var(--foreground) 7%, var(--background));
   --hb-bot-bubble: color-mix(in srgb, var(--foreground) 6%, var(--background));
   --hb-user-bubble: color-mix(in srgb, var(--foreground) 94%, var(--background));
@@ -33,14 +37,15 @@
   --hb-app-blue: var(--project-blue);
 
   /* Tones: chips, dots and the proof checklist (fill, text). Synara's `*-foreground` colors
-     are the text ON a filled badge, so the tinted text mixes the tone with the foreground.
+     are the text ON a filled badge, so the tinted text mixes the tone with the foreground,
+     enough of it that amber text stays readable on a light surface (about 5:1).
      Work in progress keeps HoloBot's blue (Synara's project blue), apart from amber waiting. */
   --hb-tone-muted-fill: color-mix(in srgb, var(--muted-foreground) 14%, transparent);
   --hb-tone-muted-text: var(--muted-foreground);
   --hb-tone-active-fill: color-mix(in srgb, var(--project-blue) 16%, transparent);
   --hb-tone-active-text: color-mix(in srgb, var(--project-blue) 80%, var(--foreground));
   --hb-tone-attention-fill: color-mix(in srgb, var(--warning) 16%, transparent);
-  --hb-tone-attention-text: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  --hb-tone-attention-text: color-mix(in srgb, var(--warning) 62%, var(--foreground));
   --hb-tone-good-fill: color-mix(in srgb, var(--success) 14%, transparent);
   --hb-tone-good-text: color-mix(in srgb, var(--success) 78%, var(--foreground));
   --hb-tone-bad-fill: color-mix(in srgb, var(--destructive) 13%, transparent);
@@ -81,10 +86,8 @@
   --hb-hairline: 0.5px;
   --hb-dot: 8px;
   --hb-dot-sm: 6px;
-  --hb-switch-w: 36px;
-  --hb-switch-h: 22px;
-  --hb-switch-inset: 2px;
-  --hb-switch-move: 160ms;
+  /* The least hit area of a control, whatever it draws (Apple's 44 pt on touch). */
+  --hb-hit: 32px;
 
   /* Mascots */
   --hb-avatar-tile: 52px;
@@ -99,16 +102,17 @@
   --hb-radius-xl: 23px;
   --hb-pill: 999px;
 
-  /* Type: Synara's UI family; sizes follow Settings → font size (13 px by default: HoloBot's
-     11 / 12 / 13 / 14 / 15 at that size). The thread's words follow the chat size. */
+  /* Type: Synara's UI family; sizes follow Settings → font size (13 px by default: 11 / 12 /
+     13 / 14 at that size). Titles take the large UI size; the thread's words are exactly the
+     chat size, as in every other chat. */
   --hb-font: var(--font-ui-family);
   --hb-font-mono: var(--font-mono-family);
   --hb-text-xs: var(--app-font-size-ui-xs, 11px);
   --hb-text-sm: var(--app-font-size-ui-sm, 12px);
   --hb-text-md: var(--app-font-size-ui, 13px);
   --hb-text-lg: var(--app-font-size-ui-lg, 14px);
-  --hb-text-title: calc(var(--app-font-size-ui, 13px) + 2px);
-  --hb-text-chat: calc(var(--app-font-size-chat, 13px) + 1px);
+  --hb-text-title: var(--app-font-size-ui-lg, 14px);
+  --hb-text-chat: var(--app-font-size-chat, 13px);
   --hb-line: calc(var(--hb-text-chat) * 1.43);
   --hb-weight-medium: 500;
   --hb-weight-semibold: 600;
@@ -137,6 +141,11 @@
   --hb-z-strip: 2;
 
   font-family: var(--hb-font);
+}
+@media (pointer: coarse) {
+  .hb {
+    --hb-hit: 44px;
+  }
 }
 
 /* Dark: the same roles, re-valued (HoloBot's dark is its default). */
@@ -227,78 +236,60 @@
   transform: none;
 }
 /* A bot alive, its mood in its head and eyes, calm and slow (each bot keeps its own phase).
-   Nothing hops, squashes or nods: the head turns and tilts by a degree or two and the eyes
-   glide, every move eased in and out.
-   - idle: breathes and blinks; now and then turns its head to glance left, then right, then
-     tilts it with its eyes up. On a turn the outline shifts and narrows by less than the eyes
-     travel, so the flat shape reads as a round head turning.
+   Only a bot that is doing something moves, so a list of idle bots stays still. Nothing hops,
+   squashes or nods: the head turns and tilts by a degree or two and the eyes glide, every
+   move eased in and out.
+   - idle: still, eyes open.
    - working (running): leans gently side to side, eyes narrowed in focus, sweeping with it.
    - waiting for you: tilts its head one way, then the other, eyes a little wider and up.
-   - done: eyes softly closed in a content squint, the head rocking slowly.
-   - paused: a slow deep breath with a droop, eyes nearly shut, opening a little now and then.
-   Reduce Motion holds them all still. */
+   - done: still, eyes softly closed in a content squint.
+   - paused: still, drooping a little, eyes nearly shut.
+   Reduce Motion holds the moving ones still, in their pose. */
 .hb-bot--alive .hb-bot__body,
 .hb-bot--alive .hb-bot__eyes {
   transform-box: fill-box;
   animation-delay: var(--hb-bot-phase, 0s);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
 }
 .hb-bot--alive .hb-bot__body {
   transform-box: view-box;
   transform-origin: 50% 100%;
-  animation-name: hb-bot-breathe, hb-bot-turn;
-  animation-duration: 5.6s, 12s;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
 }
 .hb-bot--alive .hb-bot__eyes {
   transform-origin: 50% 60%;
-  animation-name: hb-bot-blink, hb-bot-look;
-  animation-duration: 6.2s, 12s;
-  animation-timing-function: ease, ease-in-out;
-  animation-iteration-count: infinite;
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__body {
   animation-name: hb-bot-lean;
   animation-duration: 3.6s;
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__eyes {
+  scale: 1 0.85;
   animation-name: hb-bot-blink, hb-bot-scan;
   animation-duration: 6.2s, 3.6s;
+  animation-timing-function: ease, ease-in-out;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__body {
   animation-name: hb-bot-ask;
   animation-duration: 6.4s;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__eyes {
+  translate: 0 -2px;
+  scale: 1.05 1.06;
   animation-name: hb-bot-blink, hb-bot-up;
   animation-duration: 4.6s, 6.4s;
-}
-.hb-bot--alive[data-mood="done"] .hb-bot__body {
-  animation-name: hb-bot-rock;
-  animation-duration: 6.4s;
+  animation-timing-function: ease, ease-in-out;
 }
 .hb-bot--alive[data-mood="done"] .hb-bot__eyes {
-  animation-name: hb-bot-content;
-  animation-duration: 6.4s;
-  animation-timing-function: ease-in-out;
+  translate: 0 -0.5px;
+  scale: 1.03 0.55;
 }
 .hb-bot--alive[data-mood="paused"] .hb-bot__body {
-  animation-name: hb-bot-doze;
-  animation-duration: 7s;
+  rotate: 1.5deg;
 }
 .hb-bot--alive[data-mood="paused"] .hb-bot__eyes {
-  animation-name: hb-bot-sleepy;
-  animation-duration: 7s;
-  animation-timing-function: ease-in-out;
-}
-@keyframes hb-bot-breathe {
-  0%,
-  100% {
-    transform: scale(1, 1);
-  }
-  50% {
-    transform: scale(1.012, 0.988);
-  }
+  translate: 0 1.5px;
+  scale: 1 0.22;
 }
 @keyframes hb-bot-blink {
   0%,
@@ -308,64 +299,6 @@
   }
   96.5% {
     transform: scaleY(0.1);
-  }
-}
-/* Idle: the eyes' glances and the look up add to the head's turn and tilt (hb-bot-turn);
-   turned, the eyes narrow a little. Each move takes about a second. */
-@keyframes hb-bot-look {
-  0%,
-  24%,
-  64%,
-  72%,
-  92%,
-  100% {
-    translate: 0 0;
-    scale: 1 1;
-  }
-  32%,
-  42% {
-    translate: -3px 0.5px;
-    scale: 0.95 1;
-  }
-  50%,
-  58% {
-    translate: 2px -0.5px;
-    scale: 0.96 1;
-  }
-  78%,
-  86% {
-    translate: 1.5px -1.5px;
-    scale: 1.02 1.03;
-  }
-}
-@keyframes hb-bot-turn {
-  0%,
-  24%,
-  64%,
-  72%,
-  92%,
-  100% {
-    translate: 0 0;
-    rotate: 0deg;
-    scale: 1 1;
-  }
-  32%,
-  42% {
-    translate: -1.2px 0;
-    rotate: -1deg;
-    scale: 0.985 1;
-  }
-  50%,
-  58% {
-    translate: 1px 0;
-    rotate: 0.8deg;
-    scale: 0.99 1;
-  }
-  78%,
-  86% {
-    translate: 0 -0.5px;
-    rotate: 2deg;
-    scale: 1 1;
   }
 }
 /* Working: a slow lean side to side; the narrowed eyes sweep with it. */
@@ -418,57 +351,6 @@
     scale: 1.05 1.06;
   }
 }
-/* Done: a slow rock; the eyes rest in a content squint and open a little now and then. */
-@keyframes hb-bot-rock {
-  0%,
-  100% {
-    rotate: 0deg;
-  }
-  25% {
-    rotate: -1.5deg;
-  }
-  75% {
-    rotate: 1.5deg;
-  }
-}
-@keyframes hb-bot-content {
-  0%,
-  40%,
-  80%,
-  100% {
-    translate: 0 -0.5px;
-    scale: 1.03 0.55;
-  }
-  55%,
-  65% {
-    translate: 0 -0.5px;
-    scale: 1.02 0.8;
-  }
-}
-/* Paused: a slow deep breath with a droop; the eyes nearly shut, opening a little now and then. */
-@keyframes hb-bot-doze {
-  0%,
-  100% {
-    transform: translateY(0) rotate(1.5deg) scale(1, 1);
-  }
-  50% {
-    transform: translateY(1%) rotate(2.5deg) scale(1.015, 0.985);
-  }
-}
-@keyframes hb-bot-sleepy {
-  0%,
-  60%,
-  86%,
-  100% {
-    translate: 0 1.5px;
-    scale: 1 0.22;
-  }
-  70%,
-  78% {
-    translate: 0 0.5px;
-    scale: 1 0.5;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .hb-bot--alive .hb-bot__body,
   .hb-bot--alive .hb-bot__eyes {
@@ -483,11 +365,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   height: var(--hb-control);
   padding: 0 calc(var(--hb-gutter) - 2px);
   border: 0;
   border-radius: var(--hb-pill);
-  overflow: hidden;
   font: inherit;
   font-size: var(--hb-text-md);
   line-height: 1;
@@ -504,7 +386,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--hb-gap-sm);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
   white-space: nowrap;
+}
+/* The hit area: at least --hb-hit tall (and wide, for a round control), drawn by nothing, so a
+   24 px pill keeps its look and still takes a 32 px target (44 px on touch). The metal and the
+   core clip themselves, so nothing hides it. */
+.hb-btn,
+.hb-icon-btn {
+  --hb-hit-size: var(--hb-control);
+  --hb-hit-out: min(0px, calc((var(--hb-hit-size) - var(--hb-hit, 32px)) / 2));
+}
+.hb-btn--compact {
+  --hb-hit-size: var(--hb-control-sm);
+}
+.hb-btn--small {
+  --hb-hit-size: var(--hb-control-xs);
+}
+.hb-icon-btn {
+  --hb-hit-size: var(--hb-button);
+}
+.hb-btn::before,
+.hb-icon-btn::before {
+  content: "";
+  position: absolute;
+  inset: var(--hb-hit-out) 0;
+}
+.hb-btn--round::before,
+.hb-icon-btn::before {
+  inset: var(--hb-hit-out);
 }
 .hb-btn:hover:not(:disabled) {
   opacity: var(--hb-hover-opacity);
@@ -544,6 +456,11 @@
 }
 .hb-btn--round.hb-btn--primary::after {
   inset: var(--hb-rim-circle);
+}
+/* The metal's holder: no box of its own, so the metal fills the capsule and takes its shape. */
+.hb-btn__metal {
+  display: contents;
+  border-radius: inherit;
 }
 .hb-btn--primary:disabled {
   box-shadow: inset 0 0 0 1px var(--hb-border-strong);
@@ -591,6 +508,7 @@
 }
 /* IconButton: a circle on the card fill, or with no fill. */
 .hb-icon-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -816,92 +734,6 @@
   gap: 1px;
 }
 
-/* Switch: off a gray track; on a dark-core knob on a light track. */
-.hb-switch {
-  position: relative;
-  flex-shrink: 0;
-  width: var(--hb-switch-w);
-  height: var(--hb-switch-h);
-  padding: 0;
-  border: 0;
-  border-radius: var(--hb-pill);
-  background: var(--hb-border-strong);
-  cursor: pointer;
-  transition: background-color var(--hb-switch-move) ease-out;
-}
-.hb-switch__knob {
-  position: absolute;
-  top: var(--hb-switch-inset);
-  left: var(--hb-switch-inset);
-  width: calc(var(--hb-switch-h) - 2 * var(--hb-switch-inset));
-  height: calc(var(--hb-switch-h) - 2 * var(--hb-switch-inset));
-  border-radius: var(--hb-pill);
-  background: var(--hb-card);
-  transition:
-    transform var(--hb-switch-move) ease-out,
-    background-color var(--hb-switch-move) ease-out;
-}
-.hb-switch[aria-checked="true"] {
-  background: var(--hb-text);
-}
-.hb-switch[aria-checked="true"] .hb-switch__knob {
-  background: var(--hb-bg);
-  transform: translateX(calc(var(--hb-switch-w) - var(--hb-switch-h)));
-}
-.hb-switch:disabled {
-  cursor: default;
-  opacity: var(--hb-disabled-opacity);
-}
-.hb-switch:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: 2px;
-}
-@media (prefers-reduced-motion: reduce) {
-  .hb-switch,
-  .hb-switch__knob {
-    transition: none;
-  }
-}
-
-/* Segmented choice: a capsule track, the chosen option a lighter capsule. */
-.hb-segmented {
-  display: flex;
-  gap: var(--hb-gap-xs);
-  padding: calc(var(--hb-gap-xs) * 2);
-  border-radius: var(--hb-pill);
-  background: var(--hb-bg);
-  border: 1px solid var(--hb-border);
-}
-.hb-segmented__option {
-  flex: 1;
-  min-width: 0;
-  height: var(--hb-button);
-  padding: 0 var(--hb-gap);
-  border: 0;
-  border-radius: var(--hb-pill);
-  background: transparent;
-  color: var(--hb-muted);
-  font: inherit;
-  font-size: var(--hb-text-sm);
-  white-space: nowrap;
-  cursor: pointer;
-}
-.hb-segmented__option:hover:not(:disabled) {
-  color: var(--hb-soft-text);
-}
-.hb-segmented__option[aria-checked="true"] {
-  background: var(--hb-card-hover);
-  color: var(--hb-text);
-}
-.hb-segmented__option:disabled {
-  cursor: default;
-  opacity: var(--hb-disabled-opacity);
-}
-.hb-segmented__option:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: 1px;
-}
-
 /* Panes: a column filling its height, a hairline on the side it borders. */
 .hb-pane {
   position: relative;
@@ -984,7 +816,7 @@
   box-sizing: border-box;
   border-radius: var(--hb-radius-md);
   border: var(--hb-hairline) solid var(--hb-border-strong);
-  background: var(--hb-card);
+  background: var(--hb-raised);
   box-shadow: var(--hb-shadow-menu);
   color: var(--hb-text);
   outline: none;
@@ -1033,6 +865,15 @@
   font-size: var(--hb-text-xs);
   color: var(--hb-muted);
 }
+/* A submenu's row: its chevron points the way it opens; a hint line heads its items. */
+.hb-menu__chevron {
+  display: flex;
+  color: var(--hb-muted);
+  transform: rotate(90deg);
+}
+.hb-menu__hint {
+  margin: 0;
+}
 .hb-menu__icon {
   display: flex;
   color: var(--hb-soft-text);
@@ -1043,21 +884,27 @@
   background: var(--hb-border-strong);
 }
 
-/* Dialogs (ui/dialog's popup, centered by its viewport): a card over a dim scrim. */
+/* Dialogs (ui/dialog's popup): from 640 px a card centered over a dim scrim; narrower,
+   ui/dialog's own bottom sheet (its full width, square corners and top edge stay). Heights use
+   the dynamic viewport, so Safari's toolbars never hide the buttons. */
 .hb-dialog {
-  width: var(--hb-dialog);
-  max-width: calc(100vw - 2 * var(--hb-gutter-xl));
-  max-height: calc(100vh - 2 * var(--hb-gutter-xl));
   padding: 0;
-  border: 1px solid var(--hb-border-strong);
-  border-radius: var(--hb-radius-lg);
-  background: var(--hb-card);
+  background: var(--hb-raised);
   color: var(--hb-text);
   box-shadow: var(--hb-shadow-dialog);
   overflow: hidden;
 }
-.hb-dialog--wide {
-  width: var(--hb-dialog-wide);
+@media (min-width: 640px) {
+  .hb-dialog {
+    width: var(--hb-dialog);
+    max-width: calc(100vw - 2 * var(--hb-gutter-xl));
+    max-height: calc(100dvh - 2 * var(--hb-gutter-xl));
+    border: 1px solid var(--hb-border-strong);
+    border-radius: var(--hb-radius-lg);
+  }
+  .hb-dialog--wide {
+    width: var(--hb-dialog-wide);
+  }
 }
 .hb-dialog__scrim {
   background: var(--hb-scrim);
@@ -1067,12 +914,14 @@
 }
 .hb-dialog__box {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--hb-gutter);
-  max-height: inherit;
+  min-height: 0;
   padding: var(--hb-gutter-lg);
   box-sizing: border-box;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .hb-dialog__head {
   display: flex;
@@ -1103,6 +952,7 @@
   justify-content: flex-end;
   gap: var(--hb-gap);
   margin: 0 calc(-1 * var(--hb-gutter-lg)) calc(-1 * var(--hb-gutter-lg));
-  padding: var(--hb-gap) var(--hb-gutter-lg) var(--hb-gutter-lg);
-  background: var(--hb-card);
+  padding: var(--hb-gap) var(--hb-gutter-lg)
+    calc(var(--hb-gutter-lg) + env(safe-area-inset-bottom, 0px));
+  background: var(--hb-raised);
 }

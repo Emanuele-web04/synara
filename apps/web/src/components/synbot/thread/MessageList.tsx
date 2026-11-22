@@ -1,22 +1,26 @@
 // FILE: MessageList.tsx
 // Purpose: The bot thread's rows in its transcript (HoloBot's thread/MessageList.tsx,
 //          MessageRow.tsx and Typing.tsx): date separators, the user's bubble on the right in
-//          the bot's color (gray in SynBot's own thread), the bot's gray bubbles on the left
-//          (no face or name: it is the bot you are talking to), SynBot cards,
-//          task cards, hand-offs as baton cards (their Start / Not now on the baton), quiet
-//          system lines; at the end the
-//          pending approval and question cards (ChatView's own pending interactions), then the
-//          typing row (three dots and what the bot is doing) while it answers. The newest open
-//          ask takes the A, B, C… keys. ChatView draws this in its transcript's place, under
-//          Synara's own composer.
+//          the bot's color (gray in SynBot's own thread) with its images (they open in the
+//          chat's image viewer), the bot's gray bubbles on the left (no face or name: it is the
+//          bot you are talking to; Copy shows on hover), SynBot cards, task cards, hand-offs as
+//          baton cards (their Start / Not now on the baton), worker notices as in Synara's own
+//          transcript, failed turns with Continue; at the end the pending approval and question
+//          cards (ChatView's own pending interactions), then the typing row (three dots and what
+//          the bot is doing) while it answers. The thread's error shows under the top strip
+//          (`bannerTarget`). Until the thread's history has loaded, an empty thread shows the
+//          loading state, not the first-use intro. ChatView draws this in its transcript's
+//          place, under Synara's own composer.
 // Layer: SynBot thread UI
 // Exports: MessageList
 
-import { ThreadId, type Bot } from "@synara/contracts";
-import { memo, useMemo, type CSSProperties } from "react";
+import type { Bot, TurnId } from "@synara/contracts";
+import { memo, useMemo, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 
 import { useAppSettings } from "~/appSettings";
 import { useTranslation } from "~/i18n";
+import { getAppTypographyScale } from "~/lib/appTypography";
 import type { BotThreadRow } from "~/synbot/botThread.logic";
 import { formatDayAwareTimestamp } from "~/timestampFormat";
 import type { ChatAttachment, ChatMessage } from "~/types";
@@ -24,7 +28,6 @@ import type { ChatAttachment, ChatMessage } from "~/types";
 import { BotFace } from "../BotFace";
 import { Text } from "../kit/controls";
 import { useOpenTask } from "../synbotNav";
-import { CardFocus } from "./cardKeys";
 import { ChatText } from "./ChatText";
 import { ApprovalCard, QuestionCard } from "./PendingCards";
 import type { BatonStart } from "./BatonCard";
@@ -33,44 +36,92 @@ import { TaskCard } from "./TaskCard";
 import { Transcript, type TranscriptEdges } from "./Transcript";
 import { useBotThread, type BotThread } from "./useBotThread";
 import type { ChatTranscriptSlotInput } from "../../chat/chatTranscriptSlot";
+import {
+  buildExpandedImagePreview,
+  type ExpandedImagePreview,
+} from "../../chat/ExpandedImagePreview";
+import { MessageCopyButton } from "../../chat/MessageCopyButton";
+import { ThreadDetailHydrationState } from "../../chat/ThreadDetailHydrationState";
+import { ThreadErrorBanner } from "../../chat/ThreadErrorBanner";
+import { UsageLimitPauseDivider } from "../../chat/UsageLimitPauseDivider";
+import { UserMessageCollapsibleText } from "../../chat/UserMessageCollapsibleText";
+import { WorkerMonitorNoticePill } from "../../chat/WorkerMonitorNoticePill";
 
-function imagesOf(message: ChatMessage): readonly ChatAttachment[] {
+type ImageAttachment = Extract<ChatAttachment, { type: "image" }>;
+
+function imagesOf(message: ChatMessage): readonly ImageAttachment[] {
   return (message.attachments ?? []).filter(
-    (attachment) => attachment.type === "image" && attachment.previewUrl,
+    (attachment): attachment is ImageAttachment =>
+      attachment.type === "image" && Boolean(attachment.previewUrl),
   );
 }
 
-/** The user's words: a bubble of the bot's color, gray in SynBot's thread; images above it. */
+/** The user's words: a bubble of the bot's color, gray in SynBot's thread; images above it,
+ * each opening the chat's image viewer. */
 function UserBubble({
   message,
   tint,
+  onExpandImage,
 }: {
   readonly message: ChatMessage;
   readonly tint: string | null;
+  readonly onExpandImage: (preview: ExpandedImagePreview) => void;
 }) {
+  const { t } = useTranslation();
+  const { settings } = useAppSettings();
+  const [expanded, setExpanded] = useState(false);
   const images = imagesOf(message);
   const style = tint ? ({ ["--bubble-tint" as string]: tint } as CSSProperties) : undefined;
+  // thread.css sets the bubble's text at --hb-text-chat (chat size + 1px) on a 1.43 leading.
+  const lineHeightPx = (getAppTypographyScale(settings.chatFontSizePx).chatPx + 1) * 1.43;
   const bubble = message.text.trim() ? (
     <div
       className={tint ? "bubble bubble--user bubble--tinted" : "bubble bubble--user"}
       style={style}
     >
-      <ChatText text={message.text} tone="user" />
+      {/* A long message folds to twelve lines with Show more, as in every Synara chat. */}
+      <UserMessageCollapsibleText
+        text={message.text}
+        expanded={expanded}
+        lineHeightPx={lineHeightPx}
+        toggleClassName="bubble__more"
+        onToggle={() => setExpanded((value) => !value)}
+      >
+        <ChatText text={message.text} tone="user" />
+      </UserMessageCollapsibleText>
     </div>
   ) : null;
   if (images.length === 0) return bubble;
   return (
     <div className="user-stack">
-      <div className="message-images">
-        {images.map((image) =>
-          image.type === "image" && image.previewUrl ? (
-            <img key={image.id} className="message-image" src={image.previewUrl} alt={image.name} />
-          ) : null,
-        )}
+      <div className="message-images" data-count={images.length > 1 ? "many" : "one"}>
+        {images.map((image) => (
+          <button
+            key={image.id}
+            type="button"
+            className="message-image"
+            aria-label={t("chat:preview", { value0: image.name })}
+            title={image.name}
+            onClick={() => {
+              const preview = buildExpandedImagePreview(images, image.id);
+              if (preview) onExpandImage(preview);
+            }}
+          >
+            <img src={image.previewUrl} alt={image.name} />
+          </button>
+        ))}
       </div>
       {bubble}
     </div>
   );
+}
+
+/** What a failed turn's row can do: Continue the latest one, change the model first. */
+interface Recovery {
+  readonly recoverableTurnId: TurnId | null;
+  readonly disabled: boolean;
+  readonly onContinue: (turnId: TurnId) => Promise<boolean>;
+  readonly onChangeModel: () => void;
 }
 
 const Row = memo(function Row({
@@ -79,13 +130,18 @@ const Row = memo(function Row({
   thread,
   tint,
   start,
+  recovery,
+  onExpandImage,
 }: {
   readonly row: BotThreadRow;
   readonly bot: Bot;
   readonly thread: BotThread["threadId"];
   readonly tint: string | null;
   readonly start: BatonStart | null;
+  readonly recovery: Recovery;
+  readonly onExpandImage: (preview: ExpandedImagePreview) => void;
 }) {
+  const { t } = useTranslation();
   const { settings } = useAppSettings();
   const openTask = useOpenTask();
   switch (row.kind) {
@@ -96,21 +152,59 @@ const Row = memo(function Row({
         </div>
       );
     case "system": {
-      const target = row.entry.synaraWorkerNotice?.threads[0];
+      const notice = row.entry.synaraWorkerNotice;
+      if (!notice) return null;
+      // As in Synara's own coordinator transcript: each worker linked (it opens in the task
+      // pane here), its outcome, and Retry / Stop / Open when it needs you.
       return (
-        <p className="system-line">
-          {target ? (
-            <button type="button" onClick={() => openTask(ThreadId.makeUnsafe(target.threadId))}>
-              {row.entry.label}
-            </button>
+        <div className="row row--group row--bot">
+          <div className="bubble bubble--bot worker-note">
+            <WorkerMonitorNoticePill entry={row.entry} notice={notice} onOpenThread={openTask} />
+          </div>
+        </div>
+      );
+    }
+    case "failure": {
+      const failure = row.entry.turnFailure;
+      if (!failure) return null;
+      const turnId = row.entry.turnId ?? null;
+      const recoverable = turnId !== null && turnId === recovery.recoverableTurnId;
+      return (
+        <div className="row row--group failure-row">
+          {failure.usageLimit ? (
+            <UsageLimitPauseDivider
+              provider={failure.provider}
+              createdAt={row.entry.createdAt}
+              cause={failure.cause}
+              timestampFormat={settings.timestampFormat}
+              onContinue={recoverable ? () => void recovery.onContinue(turnId) : undefined}
+              continueDisabled={recovery.disabled}
+            />
           ) : (
-            <span className="system-line__text">{row.entry.label}</span>
+            <ThreadErrorBanner
+              title={t("chat:taskInterrupted")}
+              error={failure.message}
+              {...(recoverable
+                ? {
+                    onContinue: () => void recovery.onContinue(turnId),
+                    onChangeModel: recovery.onChangeModel,
+                  }
+                : {})}
+              recoveryDisabled={recovery.disabled}
+            />
           )}
-        </p>
+        </div>
       );
     }
     case "from":
-      return <MessageFromRow delegationId={row.delegationId} brief={row.brief} start={start} />;
+      return (
+        <MessageFromRow
+          delegationId={row.delegationId}
+          brief={row.brief}
+          createdAt={row.at}
+          start={start}
+        />
+      );
     case "card":
       return isLineCard(row.notice) ? (
         <SynbotCard entryId={row.entryId} notice={row.notice} threadId={thread} />
@@ -132,13 +226,14 @@ const Row = memo(function Row({
       if (row.message.role === "user") {
         return (
           <div className={`${spacing} row--user`} data-message={row.message.id}>
-            <UserBubble message={row.message} tint={tint} />
+            <UserBubble message={row.message} tint={tint} onExpandImage={onExpandImage} />
           </div>
         );
       }
+      const settled = !row.message.streaming && row.message.text.trim().length > 0;
       return (
         <div className={`${spacing} row--bot`} data-message={row.message.id}>
-          <div className="bot">
+          <div className="bot bot--reply">
             <div className="bubble bubble--bot">
               <ChatText
                 text={row.message.text}
@@ -146,6 +241,11 @@ const Row = memo(function Row({
                 streaming={row.message.streaming}
               />
             </div>
+            {settled ? (
+              <div className="bot__actions">
+                <MessageCopyButton text={row.message.text} />
+              </div>
+            ) : null}
           </div>
         </div>
       );
@@ -199,18 +299,13 @@ function threadShape(rows: readonly BotThreadRow[], threadId: BotThread["threadI
   for (const row of rows) {
     if (row.kind === "from") fromIds.add(row.delegationId);
   }
-  const starts = new Map<string, BatonStart & { readonly key: string }>();
+  const starts = new Map<string, BatonStart>();
   const mergedCardKeys = new Set<string>();
   for (const row of rows) {
     if (row.kind !== "card") continue;
     const card = delegationStartCard(row.notice);
     if (!card?.delegationId || !fromIds.has(card.delegationId)) continue;
-    starts.set(card.delegationId, {
-      key: row.key,
-      card,
-      threadId,
-      resolution: row.notice.resolution,
-    });
+    starts.set(card.delegationId, { card, threadId, resolution: row.notice.resolution });
     mergedCardKeys.add(row.key);
   }
   return { starts, mergedCardKeys };
@@ -229,66 +324,110 @@ function newestUserMessageId(rows: readonly BotThreadRow[]): string | null {
 export function MessageList({
   bot,
   slot,
+  bannerTarget,
   onEdges,
 }: {
   readonly bot: Bot;
   readonly slot: ChatTranscriptSlotInput;
+  /** Where the thread's error banner goes (under the pane's top strip). */
+  readonly bannerTarget: HTMLElement | null;
   readonly onEdges: (edges: TranscriptEdges) => void;
 }) {
   const { rows, answering, step, threadId } = useBotThread(bot);
   // The user's bubbles take the bot's color; SynBot's own thread keeps the app's gray.
   const tint = bot.kind === "main" ? null : bot.mascot.color;
-  const approvals = slot.pendingApprovals;
+  const approval = slot.pendingApprovals[0] ?? null;
   const asking = slot.pendingUserInput.input !== null;
   const { starts, mergedCardKeys } = useMemo(() => threadShape(rows, threadId), [rows, threadId]);
-  // The newest open ask takes the letter keys: a pending question, else the first approval.
-  const focusApproval = !asking && approvals.length > 0;
-  // Else the newest unanswered SynBot choice card (a Start drawn on its baton counts).
-  const focusCardKey =
-    focusApproval || asking
-      ? null
-      : (rows.findLast(
-          (row) =>
-            row.kind === "card" && row.notice.kind === "synbot.card" && !row.notice.resolution,
-        )?.key ?? null);
+  const { recoverableTurnId, turnRecoveryDisabled, onContinueFailedTurn, onChangeRecoveryModel } =
+    slot;
+  const recovery = useMemo<Recovery>(
+    () => ({
+      recoverableTurnId,
+      disabled: turnRecoveryDisabled,
+      onContinue: onContinueFailedTurn,
+      onChangeModel: onChangeRecoveryModel,
+    }),
+    [recoverableTurnId, turnRecoveryDisabled, onContinueFailedTurn, onChangeRecoveryModel],
+  );
+  const hydrated = slot.threadDetailHydration === "ready";
+  // A failed turn already drawn in the rows carries the error: no second banner for it.
+  const errorInRows =
+    slot.threadError !== null &&
+    rows.some((row) => row.kind === "failure" && row.entry.turnFailure?.cause === slot.threadError);
+  const banner =
+    slot.threadError && !errorInRows && bannerTarget
+      ? createPortal(
+          <div className="thread-banner">
+            <ThreadErrorBanner
+              error={slot.threadError}
+              unblocking={slot.unblockingThread}
+              onDismiss={slot.onDismissThreadError}
+              onUnblock={slot.onUnblockThread}
+            />
+          </div>,
+          bannerTarget,
+        )
+      : null;
   return (
-    <Transcript
-      opens={threadId}
-      watch={[rows, answering, step, approvals, asking]}
-      followKey={newestUserMessageId(rows)}
-      bottomInsetPx={slot.contentInsetBottomPx}
-      onEdges={onEdges}
-    >
-      {rows.length === 0 && !answering ? <FirstUse bot={bot} /> : null}
-      {rows.map((row) => {
-        if (mergedCardKeys.has(row.key)) return null;
-        const start = row.kind === "from" ? (starts.get(row.delegationId) ?? null) : null;
-        const focused = row.key === focusCardKey || (start !== null && start.key === focusCardKey);
-        return (
-          <CardFocus.Provider key={row.key} value={focused}>
-            <Row row={row} bot={bot} thread={threadId} tint={tint} start={start} />
-          </CardFocus.Provider>
-        );
-      })}
-      {approvals.map((approval, index) => (
-        <CardFocus.Provider key={approval.requestId} value={focusApproval && index === 0}>
+    <>
+      {banner}
+      <Transcript
+        opens={threadId}
+        watch={[rows, answering, step, approval, asking, hydrated]}
+        followKey={newestUserMessageId(rows)}
+        bottomInsetPx={slot.contentInsetBottomPx}
+        onEdges={onEdges}
+      >
+        {rows.length === 0 && !answering ? (
+          hydrated ? (
+            <FirstUse bot={bot} />
+          ) : (
+            <div className="first-use">
+              <ThreadDetailHydrationState
+                state={slot.threadDetailHydration === "failed" ? "failed" : "loading"}
+                onRetry={slot.onRetryThreadDetailSync}
+              />
+            </div>
+          )
+        ) : null}
+        {rows.map((row) => {
+          if (mergedCardKeys.has(row.key)) return null;
+          const start = row.kind === "from" ? (starts.get(row.delegationId) ?? null) : null;
+          return (
+            <Row
+              key={row.key}
+              row={row}
+              bot={bot}
+              thread={threadId}
+              tint={tint}
+              start={start}
+              recovery={recovery}
+              onExpandImage={slot.onExpandImage}
+            />
+          );
+        })}
+        {approval ? (
           <div className="row row--group row--bot">
             <div className="bot bot--card">
-              <ApprovalCard approval={approval} pending={slot} />
+              <ApprovalCard
+                key={approval.requestId}
+                approval={approval}
+                pendingCount={slot.pendingApprovals.length}
+                pending={slot}
+              />
             </div>
           </div>
-        </CardFocus.Provider>
-      ))}
-      {asking ? (
-        <CardFocus.Provider value>
+        ) : null}
+        {asking ? (
           <div className="row row--group row--bot">
             <div className="bot bot--card">
               <QuestionCard pending={slot.pendingUserInput} />
             </div>
           </div>
-        </CardFocus.Provider>
-      ) : null}
-      {answering && approvals.length === 0 && !asking ? <Typing bot={bot} step={step} /> : null}
-    </Transcript>
+        ) : null}
+        {answering && approval === null && !asking ? <Typing bot={bot} step={step} /> : null}
+      </Transcript>
+    </>
   );
 }

@@ -2,10 +2,11 @@
 // Purpose: New bot in steps (Paper "11 New bot", variant A), one question per screen under a thin
 //          progress line: which computer (only with more than one; a bot lives where it is
 //          created, so another computer opens its own SynBot page at the Bot step), who it is
-//          (look, name, role, or a template), and where it starts (projects, engine, new work,
-//          instructions; each a row that opens a menu). Those are only defaults: in its chat the user can ask it to work in
-//          another project or on another engine. Create on the last step sends `bots.create`
-//          (one request id per submit, reused when the same submit is retried).
+//          (look, name, role, or a template), and where it starts (projects, engine, new work:
+//          the same rows as the bot sheet's, BotFields.tsx; then instructions). Those are only
+//          defaults: in its chat the user can ask it to work in another project or on another
+//          engine. Create on the last step sends `bots.create` (one request id per submit,
+//          reused when the same submit is retried).
 // Layer: SynBot editor UI
 // Exports: NewBotDialog
 
@@ -14,35 +15,22 @@ import {
   BOT_NAME_MAX_LENGTH,
   BOT_ROLE_MAX_LENGTH,
   type Bot,
-  type BotAutonomy,
-  type ProjectId,
 } from "@synara/contracts";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { resolveSaveAttemptRequestId } from "~/components/chat/group/groupSettingsDialog.logic";
 import { useWorkspaceComputers } from "~/components/hosts/ComputerPicker";
-import { ProjectSidebarIcon } from "~/components/ProjectSidebarIcon";
-import { ProviderIcon } from "~/components/ProviderIcon";
 import { useOpenBot } from "~/components/synbot/synbotNav";
 import { useTranslation } from "~/i18n";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  CircleQuestionIcon,
-  MonitorIcon,
-  PlayIcon,
-  PlusIcon,
-} from "~/lib/icons";
+import { CheckIcon, MonitorIcon, PlusIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { useSynbotStore } from "~/synbot/synbotStore";
 
 import { Dialog } from "../kit/Dialog";
 import { CapsuleButton, Dot } from "../kit/controls";
 import { BotMascot } from "../kit/Mascot";
-import { Menu, type MenuEntry } from "../kit/Menu";
-import { useEngineMenu } from "../thread/useEngineMenu";
 import {
   BOT_EDITOR_CREW_TEMPLATE,
   applyBotTemplate,
@@ -54,16 +42,10 @@ import {
   type BotEditorForm,
 } from "./botEditor.logic";
 import { useBotEditor, type BotEditorTarget } from "./botEditorStore";
+import { AutonomyField, BotFieldRows, EngineField, ProjectsField } from "./BotFields";
 import { BotTemplateChip } from "./BotTemplateChip";
 import { MascotPicker } from "./MascotPicker";
-import {
-  chooseAllProjects,
-  newBotStepIssue,
-  newBotSteps,
-  projectsSummary,
-  toggleBotProject,
-  type NewBotStep,
-} from "./newBot.logic";
+import { newBotStepIssue, newBotSteps, type NewBotStep } from "./newBot.logic";
 import { useBotDefaultEngine } from "./useBotDefaultEngine";
 import { useBotProjects } from "./useBotProjects";
 import "./bots.css";
@@ -396,139 +378,15 @@ function StartStep({
   readonly onEngine: (selection: BotEditorForm["modelSelection"]) => void;
 }) {
   const { t } = useTranslation();
-  const engine = useEngineMenu({
-    selection: form.modelSelection,
-    onChange: onEngine,
-    withProviderIcons: true,
-  });
-  const summary = projectsSummary(form, projects);
-  const chosen = new Set<string>(form.projectIds);
-  const projectItems: MenuEntry[] =
-    projects.length === 0
-      ? [
-          {
-            id: "none",
-            label: t("synbotEditor:noProjects"),
-            disabled: true,
-            onSelect: () => undefined,
-          },
-        ]
-      : [
-          {
-            id: "all",
-            label: t("synbotEditor:allProjects"),
-            checked: form.scopeMode === "all",
-            onSelect: () => onChange(chooseAllProjects()),
-          },
-          { rule: true },
-          ...projects.map((project) => ({
-            id: project.id,
-            label: project.name,
-            glyph: (
-              <ProjectSidebarIcon
-                cwd={project.cwd}
-                expanded={false}
-                appearance={project.appearance}
-              />
-            ),
-            checked: form.scopeMode === "chosen" && chosen.has(project.id),
-            keepOpen: true,
-            onSelect: () => onChange(toggleBotProject(form, project.id as ProjectId)),
-          })),
-        ];
-  const autonomyChoices: readonly {
-    readonly value: BotAutonomy;
-    readonly label: string;
-    readonly detail: string;
-    readonly glyph: ReactNode;
-  }[] = [
-    {
-      value: "auto",
-      label: t("synbotEditor:autonomyAuto"),
-      detail: t("synbotEditor:autonomyAutoDetail"),
-      glyph: <PlayIcon className="size-3.5" />,
-    },
-    {
-      value: "ask",
-      label: t("synbotEditor:autonomyAskShort"),
-      detail: t("synbotEditor:autonomyAskDetail"),
-      glyph: <CircleQuestionIcon className="size-4" />,
-    },
-  ];
-  const autonomy = autonomyChoices.find((choice) => choice.value === form.autonomy);
-  const autonomyItems: MenuEntry[] = autonomyChoices.map((choice) => ({
-    id: choice.value,
-    label: choice.label,
-    detail: choice.detail,
-    glyph: choice.glyph,
-    checked: form.autonomy === choice.value,
-    onSelect: () => onChange({ autonomy: choice.value }),
-  }));
-  const shown = summary.all ? [] : summary.chosen.slice(0, 2);
-  const more = summary.all ? 0 : summary.chosen.length - shown.length;
-
   return (
-    <div className="new-bot__defaults">
-      <Menu
-        label={t("synbotEditor:projects")}
-        items={projectItems}
-        place="below-end"
-        trigger={
-          <button type="button" className="new-bot__row">
-            <span className="new-bot__label">{t("synbotEditor:projects")}</span>
-            <span className="new-bot__value">
-              {summary.all ? t("synbotEditor:allProjects") : null}
-              {shown.map((project) => (
-                <span key={project.id} className="new-bot__item">
-                  <ProjectSidebarIcon
-                    cwd={project.cwd}
-                    expanded={false}
-                    appearance={project.appearance}
-                  />
-                  <span className="new-bot__item-name">{project.name}</span>
-                </span>
-              ))}
-              {more > 0 ? <span className="new-bot__more">+{more}</span> : null}
-            </span>
-            <ChevronDownIcon className="new-bot__chevron size-3.5" />
-          </button>
-        }
-      />
-      <Menu
+    <BotFieldRows>
+      <ProjectsField form={form} projects={projects} onChange={onChange} />
+      <EngineField
         label={t("synbotEditor:engineSection")}
-        items={engine.items}
-        place="below-end"
-        onOpenChange={engine.setOpen}
-        trigger={
-          <button type="button" className="new-bot__row">
-            <span className="new-bot__label">{t("synbotEditor:engineSection")}</span>
-            <span className="new-bot__value">
-              <span className="new-bot__item">
-                <ProviderIcon provider={form.modelSelection.provider} className="size-4" />
-                <span className="new-bot__item-name">{engine.modelName}</span>
-              </span>
-            </span>
-            <ChevronDownIcon className="new-bot__chevron size-3.5" />
-          </button>
-        }
+        selection={form.modelSelection}
+        onChange={onEngine}
       />
-      <Menu
-        label={t("synbotEditor:newWork")}
-        items={autonomyItems}
-        place="below-end"
-        trigger={
-          <button type="button" className="new-bot__row">
-            <span className="new-bot__label">{t("synbotEditor:newWork")}</span>
-            <span className="new-bot__value">
-              <span className="new-bot__item">
-                {autonomy?.glyph}
-                <span className="new-bot__item-name">{autonomy?.label}</span>
-              </span>
-            </span>
-            <ChevronDownIcon className="new-bot__chevron size-3.5" />
-          </button>
-        }
-      />
+      <AutonomyField value={form.autonomy} onChange={(autonomy) => onChange({ autonomy })} />
       {instructions !== "closed" ? (
         <div className="new-bot__instructions">
           <textarea
@@ -548,6 +406,6 @@ function StartStep({
           {t("synbotEditor:addInstructions")}
         </button>
       )}
-    </div>
+    </BotFieldRows>
   );
 }

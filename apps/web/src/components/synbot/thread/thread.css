@@ -1,10 +1,12 @@
 /* FILE: thread.css
    Purpose: The SynBot thread pane (ported from HoloBot's thread/thread.css and message.css):
             the floating top strip and banner, the scrolling rows (separators, bubbles, system
-            lines, hand-off batons, cards, report timelines) and the typing row, drawn in ChatView's transcript slot
-            over which Synara's own composer floats. The rows fade out only where they run under
-            a bar. Every value is a kit token (holobot.css). No `:has()`: the pane carries
-            `data-under-top` / `data-under-bottom` itself. */
+            lines, hand-off batons, cards, report timelines) and the typing row, drawn in ChatView's
+            transcript slot over which Synara's own composer floats. The rows fade out only where
+            they run under a bar. One card frame (padding, border, radius) for every card, one
+            radius scale (the kit's), one checklist mark (StatusMark). Every value is a kit token
+            (holobot.css). No `:has()`: the pane carries `data-under-top` / `data-under-bottom`
+            itself. */
 
 .hb .thread-pane {
   position: relative;
@@ -67,21 +69,15 @@
 .hb .thread-strip {
   grid-template-columns: minmax(0, max-content) 0 minmax(0, 1fr);
 }
-/* The chat's permission, model and context controls (ChatView draws them here): a capsule
-   floating like the name pill, as wide as its controls, clipped when the pane is narrow (the
-   controls then compact themselves). */
+/* The chat's permission, model and context controls (ChatView draws them here, each its own
+   pill): a plain row, as wide as its controls, clipped when the pane is narrow (the controls
+   then compact themselves). */
 .hb .thread-controls {
   display: flex;
   align-items: center;
+  gap: var(--hb-gap-xs);
   min-width: 0;
   max-width: 100%;
-  height: var(--hb-control);
-  padding: 0 4px;
-  box-sizing: border-box;
-  border: var(--hb-hairline) solid var(--hb-border-strong);
-  border-radius: var(--hb-pill);
-  background: var(--hb-card);
-  box-shadow: var(--hb-shadow-float);
 }
 .hb .thread-controls:empty {
   display: none;
@@ -121,23 +117,31 @@
   white-space: nowrap;
 }
 
-.hb .banner {
+/* The thread's error under the strip: Synara's own banner (the rows draw it here), centered
+   in the chat's column; the strip's measured height grows with it, so no row hides under it. */
+.hb .thread-pane__banner {
   display: flex;
-  align-items: center;
-  gap: var(--hb-gap-sm);
-  height: var(--hb-control-sm);
-  margin: 0 var(--thread-inline) var(--hb-gap-sm);
-  padding: 0 var(--hb-gap);
-  border-radius: var(--hb-pill);
-  background: linear-gradient(var(--hb-banner-fill), var(--hb-banner-fill)), var(--hb-bg);
-  color: var(--hb-banner-text);
-  font-size: var(--hb-text-sm);
+  justify-content: center;
+  padding: 0 var(--thread-inline) var(--hb-gap-sm);
 }
-.hb .banner__text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.hb .thread-pane__banner:empty {
+  display: none;
+}
+.hb .thread-banner {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  max-width: calc(var(--thread-column) - 2 * var(--hb-gutter));
+}
+/* Synara's alerts are tinted glass; over the dither they get the page's ground under the tint. */
+.hb .thread-banner [data-slot="alert"],
+.hb .failure-row [data-slot="alert"] {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--destructive) 4%, transparent),
+      color-mix(in srgb, var(--destructive) 4%, transparent)
+    ),
+    var(--hb-bg);
 }
 
 /* The bot's thread is Synara's ChatView (its composer, queue and controls) under the strip. */
@@ -263,18 +267,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hb .system-line button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--hb-soft-text);
-  font: inherit;
-  cursor: pointer;
-}
-.hb .system-line button:hover {
-  color: var(--hb-text);
-  text-decoration: underline;
-}
 .hb .row {
   display: flex;
   /* Messages from the same side sit close; a new side starts a little further down. */
@@ -302,9 +294,10 @@
   background: var(--hb-user-bubble);
   color: var(--hb-on-user-bubble);
 }
-/* In a bot's thread: the bot's color, white text in both themes. */
+/* In a bot's thread: the bot's color, deepened until white text reads on every palette color
+   (above 4.5:1 for the lightest, yellow), in both themes. */
 .hb .bubble--tinted {
-  background: var(--bubble-tint);
+  background: color-mix(in srgb, var(--bubble-tint) 60%, #000000);
   color: #ffffff;
 }
 .hb .bot {
@@ -317,12 +310,75 @@
 .hb .bot--card {
   width: min(var(--hb-choice), 100%);
 }
+/* A reply and its Copy, which shows while the pointer is over the row (or it has focus). */
+.hb .bot--reply {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: var(--hb-gap-xs);
+}
+.hb .bot__actions {
+  display: flex;
+  flex: none;
+  color: var(--hb-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.hb .row:hover .bot__actions,
+.hb .bot__actions:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .hb .bot__actions {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .bot__actions {
+    transition: none;
+  }
+}
+/* A worker notice sits in the bot's gray bubble: it is part of what the bot says. */
+.hb .worker-note {
+  max-width: var(--hb-bubble-max);
+}
+/* At the bubble's own size and ink, like the bot's words around it. */
+.hb .worker-note > [data-worker-monitor-kind] {
+  color: inherit;
+  font-size: inherit;
+}
+/* A failed turn: Synara's own banner, centered in the column. */
+.hb .failure-row {
+  justify-content: center;
+}
 .hb .bubble--bot {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--hb-gap-sm);
   background: var(--hb-bot-bubble);
+}
+/* Show more / Show less under a long message, in the bubble's own text color. */
+.hb .bubble__more {
+  display: block;
+  margin-top: var(--hb-gap-xs);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--hb-text-sm);
+  font-weight: var(--hb-weight-semibold);
+  /* High enough to keep 4.5:1 on the deepened bot colors. */
+  opacity: 0.88;
+  cursor: pointer;
+}
+.hb .bubble__more:hover {
+  opacity: 1;
+}
+.hb .bubble__more:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
 }
 .hb .user-stack {
   display: flex;
@@ -336,17 +392,38 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 4px;
+  gap: var(--hb-gap-sm);
   max-width: var(--hb-bubble-max);
 }
+/* An image opens the chat's image viewer: one shows at its own shape, several as squares. */
 .hb .message-image {
   display: block;
-  width: 132px;
-  height: 132px;
+  padding: 0;
+  overflow: hidden;
   border: var(--hb-hairline) solid var(--hb-border);
-  border-radius: var(--hb-radius-lg);
+  border-radius: var(--hb-radius-md);
   background: var(--hb-card);
+  cursor: zoom-in;
+}
+.hb .message-image img {
+  display: block;
+}
+.hb .message-images[data-count="one"] .message-image img {
+  max-width: min(280px, var(--hb-bubble-max));
+  max-height: 240px;
+}
+.hb .message-images[data-count="many"] .message-image {
+  width: 96px;
+  height: 96px;
+}
+.hb .message-images[data-count="many"] .message-image img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
+}
+.hb .message-image:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
 }
 
 /* The bubble's text: Synara's ChatMarkdown (links, thread links, file paths, code), set in
@@ -389,32 +466,44 @@
 }
 
 /* Inline code in a bot chat (HoloBot's and the iPhone's look): plain monospace in a greyer ink,
-   no chip, in the bubbles and on the cards alike. */
+   no chip, in the bubbles and on the cards alike; grey enough to tell apart, dark enough to
+   keep 4.5:1 (on a bot's color, nearly the text's own white). */
 .hb .bubble .chat-markdown :not(pre) > code {
   padding: 0;
   border-radius: 0;
   background: none;
-  color: color-mix(in srgb, currentColor 62%, transparent);
+  color: color-mix(in srgb, currentColor 72%, transparent);
   font-size: 0.92em;
 }
 .hb .inline-code {
-  color: color-mix(in srgb, currentColor 62%, transparent);
+  color: color-mix(in srgb, currentColor 72%, transparent);
   font-family: var(--hb-font-mono);
   font-size: 0.92em;
 }
+.hb .bubble--tinted .chat-markdown :not(pre) > code,
+.hb .bubble--tinted .inline-code {
+  color: color-mix(in srgb, currentColor 88%, transparent);
+}
 
-/* A card that asks (ChoiceCard, QuestionCard, ProofCard): the question is its title, the
-   answers short lettered rows or two small buttons; answered, it dims and keeps the pick. */
-.hb .choice {
+/* The one card frame: the ask cards (ChoiceCard, QuestionCard, ProofCard), the task, the
+   hand-off (baton) and the report share its width, padding, border, radius and fill. */
+.hb .choice,
+.hb .task-card,
+.hb .baton,
+.hb .report {
   display: flex;
   flex-direction: column;
-  gap: var(--hb-gap-sm);
-  width: min(var(--hb-bubble-max), 100%);
-  padding: var(--hb-gap) var(--hb-gap) calc(var(--hb-gap) - var(--hb-gap-xs));
+  width: min(var(--hb-choice), 100%);
+  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter);
   box-sizing: border-box;
   border: var(--hb-hairline) solid var(--hb-border-strong);
   border-radius: var(--hb-radius-lg);
   background: var(--hb-card);
+}
+/* A card that asks: the question is its title, the answers short lettered rows or answer
+   buttons; answered, it dims and keeps the pick. */
+.hb .choice {
+  gap: calc(var(--hb-gap-sm) + 2px);
 }
 .hb .choice__head {
   display: flex;
@@ -449,21 +538,31 @@
   font-size: var(--hb-text-sm);
   color: var(--hb-muted);
 }
-.hb .choice__detail {
-  margin: 0;
-  max-height: calc(var(--hb-line) * 6);
-  overflow: auto;
-  padding: var(--hb-gap-sm) var(--hb-gap);
+/* An approval: the tool's name after the question, "1/3" when more wait, then what it asks
+   for (Synara's own approval detail: the file, the command, the tool's parameters). */
+.hb .choice__tool {
+  margin-left: var(--hb-gap-sm);
+  font-size: var(--hb-text-sm);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+.hb .choice__count {
+  flex-shrink: 0;
+  padding: 1px var(--hb-gap-sm);
   border-radius: var(--hb-radius-sm);
   background: var(--hb-card-hover);
-  font-family: var(--hb-font-mono);
   font-size: var(--hb-text-xs);
-  line-height: 1.5;
+  font-weight: var(--hb-weight-medium);
+  font-variant-numeric: tabular-nums;
   color: var(--hb-soft-text);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+}
+.hb .choice__request {
+  min-width: 0;
   user-select: text;
   -webkit-user-select: text;
+}
+.hb .choice__request > :first-child {
+  margin-top: 0;
 }
 .hb .choice__rows {
   display: flex;
@@ -472,10 +571,10 @@
 }
 .hb .choice__row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-height: var(--hb-control);
-  padding: 2px var(--hb-gap-sm);
+  padding: 5px var(--hb-gap-sm);
   border: 0;
   border-radius: var(--hb-radius-sm);
   background: none;
@@ -509,7 +608,7 @@
   height: 22px;
   box-sizing: border-box;
   border: 1px solid var(--hb-border-strong);
-  border-radius: 6px;
+  border-radius: var(--hb-radius-sm);
   font-size: var(--hb-text-xs);
   font-weight: var(--hb-weight-medium);
   color: var(--hb-soft-text);
@@ -519,9 +618,26 @@
   background: var(--project-blue);
   color: #ffffff;
 }
+.hb .choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding-top: 1px;
+}
 .hb .choice__label {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* An answer's description (a question's option, what an approval answer does). */
+.hb .choice__sub {
+  font-size: var(--hb-text-sm);
+  line-height: 1.4;
+  color: var(--hb-muted);
+  overflow-wrap: anywhere;
+}
+.hb .choice--done .choice__sub {
+  display: none;
 }
 .hb .choice__foot {
   display: flex;
@@ -550,11 +666,6 @@
   font-size: var(--hb-text-xs);
   color: var(--hb-muted);
 }
-.hb .choice__part {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hb-gap-xs);
-}
 .hb .choice--done {
   gap: var(--hb-gap);
 }
@@ -564,9 +675,6 @@
 }
 .hb .choice--done .choice__row {
   min-height: 26px;
-}
-.hb .choice--pair {
-  padding-bottom: var(--hb-gap);
 }
 .hb .choice__pair {
   display: flex;
@@ -591,6 +699,42 @@
 .hb .proof-card__meta a {
   color: inherit;
 }
+.hb .proof-card__meta a:focus-visible,
+.hb .task-bar__pr:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
+}
+/* While the proof loads: the card's frame at its usual height, a title and three lines. */
+.hb .proof-card--loading {
+  min-height: 168px;
+  gap: var(--hb-gap);
+}
+.hb .proof-card__bone {
+  display: block;
+  width: 72%;
+  height: 10px;
+  border-radius: var(--hb-pill);
+  background: var(--hb-card-hover);
+  animation: proof-bone 1.4s ease-in-out infinite;
+}
+.hb .proof-card__bone--title {
+  width: 40%;
+  height: 14px;
+}
+.hb .proof-card__bone--short {
+  width: 48%;
+}
+@keyframes proof-bone {
+  50% {
+    opacity: 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .proof-card__bone {
+    animation: none;
+  }
+}
 .hb .diffstat {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -612,49 +756,26 @@
 }
 .hb .checklist__item {
   display: flex;
-  align-items: baseline;
-  gap: var(--hb-gap-sm);
+  align-items: flex-start;
+  gap: 10px;
   min-width: 0;
-}
-.hb .checklist__mark {
-  flex-shrink: 0;
-  width: var(--hb-icon-sm);
-  text-align: center;
-  font-weight: var(--hb-weight-semibold);
+  line-height: 1.4;
 }
 .hb .checklist__text {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--hb-soft-text);
 }
-.hb .checklist__item--good .checklist__mark {
-  color: var(--hb-tone-good-text);
-}
-.hb .checklist__item--bad .checklist__mark,
 .hb .checklist__item--bad .checklist__text {
   color: var(--hb-tone-bad-text);
 }
-.hb .checklist__item--attention .checklist__mark {
-  color: var(--hb-tone-attention-text);
-}
-.hb .checklist__item--muted .checklist__mark {
-  color: var(--hb-muted);
-}
 
-/* A task (or a delegation) in a bot's thread: one card (TaskCard). */
-/* The bot-chat card frame, shared by the task card, the hand-off (baton) and the report. */
+/* A task, a hand-off and a report in a bot's thread: the shared frame (above), their text at
+   the chat's size. */
 .hb .task-card,
 .hb .baton,
 .hb .report {
-  display: flex;
-  flex-direction: column;
   gap: var(--hb-gap);
-  width: min(var(--hb-choice), 100%);
-  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter) var(--hb-gap);
-  box-sizing: border-box;
-  border: var(--hb-hairline) solid var(--hb-border-strong);
-  border-radius: var(--hb-radius-lg);
-  background: var(--hb-card);
   font-size: var(--hb-text-chat);
   line-height: var(--hb-line);
 }
@@ -670,6 +791,11 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+/* A task with no foot opens from its head: a quiet arrow says so. */
+.hb .task-card__go {
+  flex: none;
+  color: var(--hb-muted);
 }
 .hb .task-card__head:focus-visible {
   outline: 2px solid var(--hb-focus);
@@ -689,9 +815,16 @@
   display: flex;
   align-items: center;
   gap: var(--hb-gap-sm);
+  min-width: 0;
   margin: 0;
   font-size: var(--hb-text-md);
   color: var(--hb-soft-text);
+}
+.hb .task-card__live-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .hb .task-card__text {
   display: -webkit-box;
@@ -928,14 +1061,10 @@
   flex-shrink: 0;
   stroke: var(--hb-muted);
 }
-/* The engine (and later the branch) under a card's text. */
-.hb .card-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--hb-gap-sm);
-}
-/* Folds a finished card to one line and opens it again. */
+/* Folds a finished card to one line and opens it again; like the kit's buttons, an invisible
+   hit area of at least --hb-hit (32 px, 44 px on touch) around its 24 px circle. */
 .hb .card-fold {
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
@@ -949,6 +1078,11 @@
   color: var(--hb-muted);
   cursor: pointer;
 }
+.hb .card-fold::before {
+  content: "";
+  position: absolute;
+  inset: min(0px, calc((var(--hb-control-xs) - var(--hb-hit, 32px)) / 2));
+}
 .hb .card-fold:hover {
   background: var(--hb-card-hover);
 }
@@ -960,15 +1094,18 @@
   transform: rotate(180deg);
 }
 
-/* A hand-off between two bots, "passing the baton" (BatonCard): the head, the brief, the
-   engine chip, then small capsules at the foot (Not now and Start, or Stop and Open). Done,
-   it folds to one line. Left-aligned with the bot's bubbles. */
+/* A hand-off between two bots, "passing the baton" (BatonCard): the head, the brief, then the
+   engine chip and the capsules on one row (Not now and Start, or Stop and Open). Done (or over,
+   how unknown), it folds to one line. Left-aligned with the bot's bubbles. */
 .hb .baton--folded {
   flex-direction: row;
   align-items: center;
   gap: var(--hb-gap-sm);
-  padding: 10px var(--hb-gap) 10px calc(var(--hb-gap) + 2px);
-  border-radius: 14px;
+  padding: calc(var(--hb-gap-sm) + 4px) var(--hb-gap) calc(var(--hb-gap-sm) + 4px) var(--hb-gutter);
+}
+/* Over, but how is unknown (its delegation left the snapshot): quiet, nothing to act on. */
+.hb .baton[data-settled] .card-head__title {
+  color: var(--hb-soft-text);
 }
 .hb .baton--folded .card-head__text {
   flex-direction: row;
@@ -1002,8 +1139,15 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: var(--hb-gap-sm);
+}
+/* Stop and Open, or Not now and Start, together at the right. */
+.hb .baton__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin-left: auto;
 }
 .hb .baton__answered {
   display: inline-flex;
@@ -1031,9 +1175,36 @@
   gap: 10px;
   min-width: 0;
 }
-.hb .steps__mark {
+/* The one checklist mark (CardParts' StatusMark): a task's steps, the proof's checks, a
+   report's outcome. Ink for a plan, a tone's color for a verdict. */
+.hb .status-mark {
   flex-shrink: 0;
   margin-top: 1px;
+  --mark: var(--hb-text);
+  --mark-on: var(--hb-card);
+}
+.hb .status-mark--good {
+  --mark: var(--success);
+  --mark-on: #ffffff;
+}
+.hb .status-mark--bad {
+  --mark: var(--destructive);
+  --mark-on: #ffffff;
+}
+.hb .status-mark--attention {
+  --mark: var(--hb-tone-attention-text);
+}
+.hb .status-mark--muted {
+  --mark: var(--hb-border-strong);
+}
+.hb .status-mark__fill {
+  fill: var(--mark);
+}
+.hb .status-mark__ring {
+  stroke: var(--mark);
+}
+.hb .status-mark__on {
+  stroke: var(--mark-on);
 }
 .hb .steps__text {
   min-width: 0;
@@ -1044,25 +1215,9 @@
   color: var(--hb-text);
   font-weight: var(--hb-weight-medium);
 }
-.hb .steps__fill {
-  fill: var(--hb-text);
-}
-.hb .steps__tick {
-  stroke: var(--hb-card);
-}
-.hb .steps__ring {
-  stroke: var(--hb-text);
-}
-.hb .steps__ring--todo {
-  stroke: var(--hb-border-strong);
-}
 
 /* The report that woke the asking bot, as a timeline (SynbotCards' ReportCard): one line per
    hand-off with the bot's face on the rail, then the outcome. */
-/* The report's frame is the shared card's, with as much room below as above. */
-.hb .report {
-  padding-bottom: calc(var(--hb-gap) + 2px);
-}
 .hb .timeline {
   display: flex;
   flex-direction: column;
@@ -1098,6 +1253,10 @@
 }
 .hb .timeline__item--end .timeline__body {
   padding-bottom: 0;
+}
+/* The outcome's mark sits on the 22 px line of the heads above it. */
+.hb .timeline__item--end .timeline__rail {
+  padding-top: 3px;
 }
 .hb .timeline__head {
   display: flex;
@@ -1151,25 +1310,6 @@
   color: var(--hb-soft-text);
   user-select: text;
   -webkit-user-select: text;
-}
-.hb .timeline__outcome {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  box-sizing: border-box;
-  border-radius: var(--hb-pill);
-  color: #ffffff;
-}
-.hb .timeline__outcome--done {
-  background: var(--success);
-}
-.hb .timeline__outcome--failed {
-  background: var(--destructive);
-}
-.hb .timeline__outcome--going {
-  border: 2px solid var(--hb-border-strong);
 }
 
 /* A narrow pane (a phone, a split column): the name pill gives up width first so the chat's

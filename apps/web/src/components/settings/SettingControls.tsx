@@ -101,11 +101,14 @@ export function SettingsSegmentedControl<T extends string>({
   onValueChange,
   options,
   ariaLabel,
+  disabled,
 }: {
   value: T;
   onValueChange: (value: T) => void;
   options: readonly SettingsSegmentedOption<T>[];
   ariaLabel: string;
+  /** While the value is being saved elsewhere (a server-owned setting). */
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const radioItemProps = useRadioGroupKeyboardNav({
@@ -117,6 +120,7 @@ export function SettingsSegmentedControl<T extends string>({
     <div
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-disabled={disabled || undefined}
       className="inline-flex w-full items-center gap-1 sm:w-auto"
     >
       {options.map((option) => {
@@ -133,6 +137,7 @@ export function SettingsSegmentedControl<T extends string>({
               "flex-1 sm:flex-none",
               !isActive && "text-muted-foreground",
             )}
+            disabled={disabled}
             onClick={() => onValueChange(option.value)}
             {...radioItemProps(option.value)}
           >

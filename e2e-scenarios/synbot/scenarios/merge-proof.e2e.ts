@@ -255,6 +255,7 @@ const openTask = (browser: Browser, bot: Bot, worker: string) =>
 test("Merge proof warns about files outside the bot's folders and still merges when CI is green", async ({
   synbot,
   browser,
+  screen,
   app,
 }) => {
   const { bot, worker } = await botTask(synbot, "PROOF-SCOPE");
@@ -288,7 +289,7 @@ test("Merge proof warns about files outside the bot's folders and still merges w
       // The file outside `src` is flagged as a warning, never as a failure, and only that file.
       const outside = browser
         .locator(".proof-card .checklist__item")
-        .filter({ hasText: "Outside bot folders" });
+        .filter({ hasText: "Changes outside this bot's folders" });
       await expect(outside).toHaveCount(1);
       await expect(outside).toContainText("README.md");
       await expect(outside).toHaveAttribute("class", /checklist__item--attention/);
@@ -298,6 +299,12 @@ test("Merge proof warns about files outside the bot's folders and still merges w
       const merge = card.getByRole("button", "Merge");
       await expect(merge).toBeEnabled();
       await merge.tap();
+      // Merging cannot be taken back: the card asks once more before it merges.
+      const confirm = screen.getByRole("dialog", "Merge PR #41?");
+      await expect(confirm).toBeVisible();
+      expect(ghCalls().some((call) => call.startsWith("pr merge"))).toBe(false);
+      await app.screenshot("proof-merge-confirm");
+      await confirm.getByRole("button", "Merge").tap();
       await expect(card).toContainText("Merged", { timeout: 60_000 });
       await expect(card.getByRole("button", "Merge")).toHaveCount(0);
       await app.screenshot("proof-merged");

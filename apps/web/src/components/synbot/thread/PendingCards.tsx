@@ -1,11 +1,14 @@
 // FILE: PendingCards.tsx
 // Purpose: What the bot's thread waits on the user for, as HoloBot's ask cards at its end: a
-//          pending tool approval as a choice card (Approve once, Always allow, Decline, Cancel
-//          the turn) answered through Synara's respondToThreadApproval, and a pending question
-//          (`ask_user`) as HoloBot's QuestionCard: a page per question, lettered answers (one to
-//          pick, or several: "Choose all that apply" then Next or Done), Back between pages,
-//          dots for where it is, × to skip them all; Synara's composer answers in words instead.
-//          Both run on ChatView's own pending interactions (its transcript slot input).
+//          pending tool approval as a choice card answered through respondToThreadApproval, with
+//          Synara's own approval panel's wording, Computer scopes, answers and parsed request
+//          (the file, the command, the tool's parameters), and "1/3" when more wait; and a
+//          pending question (`ask_user`) as HoloBot's QuestionCard: a page per question,
+//          lettered answers with their descriptions (one to pick, or several: "Choose all that
+//          apply" then Next or Done), Back between pages, dots for where it is, × to skip them
+//          all; Synara's composer answers in words instead. Both run on ChatView's own pending
+//          interactions (its transcript slot input). Their letters answer only while the card
+//          has focus.
 // Layer: SynBot thread UI
 // Exports: ApprovalCard, QuestionCard
 
@@ -17,32 +20,24 @@ import { useTranslation } from "~/i18n";
 import type { PendingApproval } from "~/session-logic";
 
 import { CapsuleButton, IconButton } from "../kit/controls";
+import { letterKeyHandler } from "./cardKeys";
 import { ChoiceRows, InlineText, Pair, type ChoiceRow } from "./ChoiceParts";
 import type { ChatTranscriptSlotInput } from "../../chat/chatTranscriptSlot";
-
-const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
-  command: "chat:approvalActions_promptCommand",
-  "file-read": "chat:approvalActions_promptFileRead",
-  "file-change": "chat:approvalActions_promptFileChange",
-  permissions: "chat:grantThesePermissions",
-  tool: "chat:approveThisToolCall",
-};
-
-const ACTIONS: ReadonlyArray<{
-  readonly decision: ProviderApprovalDecision;
-  readonly labelKey: string;
-}> = [
-  { decision: "accept", labelKey: "chat:approvalActions_approveOnce" },
-  { decision: "acceptForSession", labelKey: "chat:approvalActions_alwaysAllow" },
-  { decision: "decline", labelKey: "chat:approvalActions_decline" },
-  { decision: "cancel", labelKey: "chat:approvalActions_cancelTurn" },
-];
+import {
+  ApprovalDetail,
+  approvalActionsFor,
+  approvalPromptKey,
+  parseApprovalDetail,
+} from "../../chat/ComposerPendingApprovalPanel";
 
 export function ApprovalCard({
   approval,
+  pendingCount,
   pending,
 }: {
   readonly approval: PendingApproval;
+  /** How many approvals wait (this one is the first). */
+  readonly pendingCount: number;
   readonly pending: ChatTranscriptSlotInput;
 }) {
   const { t } = useTranslation();
@@ -51,16 +46,14 @@ export function ApprovalCard({
   // One answer per request attempt, also when a key and a click race.
   const sent = useRef<string | null>(null);
   const attempt = JSON.stringify([key, approval.responseAttemptKey ?? null]);
-  const actions = ACTIONS.filter(
-    (action) =>
-      action.decision !== "acceptForSession" ||
-      (approval.sessionApprovalAvailable !== false && approval.approvalScope === undefined),
-  );
-  const rows: ChoiceRow[] = actions.map((action) => ({
+  const parsed = parseApprovalDetail(approval.detail);
+  const toolName = approval.approvalScope ? null : (approval.toolName ?? parsed.tool);
+  const rows: ChoiceRow[] = approvalActionsFor(approval).map((action) => ({
     id: action.decision,
     label: t(action.labelKey),
-    primary: action.decision === "accept",
-    danger: action.decision === "decline",
+    detail: t(action.descriptionKey),
+    primary: action.tone === "primary",
+    danger: action.tone === "destructive",
   }));
   const respond = (row: ChoiceRow) => {
     if (responding || sent.current === attempt) return;
@@ -76,15 +69,27 @@ export function ApprovalCard({
         if (sent.current === attempt) sent.current = null;
       });
   };
+  const onKeyDown = letterKeyHandler(responding ? 0 : rows.length, (index) => {
+    const row = rows[index];
+    if (row) respond(row);
+  });
   return (
-    <div className="choice">
+    <div className="choice" onKeyDown={onKeyDown}>
       <div className="choice__head">
         <p className="choice__title">
-          {t(KIND_PROMPT[approval.requestKind])}
-          {approval.toolName ? ` · ${approval.toolName}` : ""}
+          {t(approvalPromptKey(approval))}
+          {toolName ? <span className="choice__tool">{toolName}</span> : null}
         </p>
+        {pendingCount > 1 ? <span className="choice__count">1/{pendingCount}</span> : null}
       </div>
-      {approval.detail ? <pre className="choice__detail">{approval.detail}</pre> : null}
+      <div className="choice__request">
+        <ApprovalDetail
+          parsed={parsed}
+          {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+          {...(approval.toolName ? { toolName: approval.toolName } : {})}
+          {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
+        />
+      </div>
       <ChoiceRows rows={rows} open disabled={responding} onPick={respond} />
     </div>
   );
@@ -115,14 +120,21 @@ export function QuestionCard({
   const rows: ChoiceRow[] = question.options.map((option) => ({
     id: option.label,
     label: option.label,
+    detail: option.description === option.label ? undefined : option.description,
     picked: picked.has(option.label),
   }));
   const skipAll = () => pending.onCancel();
-  // One question with two answers: the question and two small buttons.
-  if (!paged && !question.multiSelect && question.options.length === 2) {
+  const onKeyDown = letterKeyHandler(sending ? 0 : rows.length, (index) => {
+    const row = rows[index];
+    if (row) choose(row);
+  });
+  // One question with two short answers: the question and two buttons (an answer with its own
+  // description keeps the lettered rows, where the description shows).
+  const describes = rows.some((row) => row.detail);
+  if (!paged && !question.multiSelect && question.options.length === 2 && !describes) {
     return (
       <>
-        <div className="choice choice--pair">
+        <div className="choice choice--pair" onKeyDown={onKeyDown}>
           <div className="choice__head">
             <p className="choice__title">
               <InlineText text={question.question} />
@@ -145,7 +157,7 @@ export function QuestionCard({
   const footer = paged || question.multiSelect;
   return (
     <>
-      <div className="choice">
+      <div className="choice" onKeyDown={onKeyDown}>
         <div className="choice__head">
           <p className="choice__title">
             <InlineText text={question.question} />

@@ -2,6 +2,7 @@
 // Purpose: What a bot's thread on the SynBot page reads from Synara: the thread (its detail
 //          subscribed while it shows), its rows (botThread.logic.ts over Synara's timeline
 //          entries and the bot's Hub tasks), whether the bot is answering and what it is doing.
+//          An automation check-in runs quietly: its SILENT reply never shows, so no typing row.
 //          Sending, stopping and the queue are Synara's composer's (ChatView).
 // Layer: SynBot thread hooks
 // Exports: BotThread, useBotThread, useBotAnswering
@@ -14,6 +15,7 @@ import { useStore } from "~/store";
 import { createThreadSelector } from "~/storeSelectors";
 import {
   buildBotThreadRows,
+  checkinTurnRunning,
   latestWorkStep,
   replyStreaming,
   type BotThreadRow,
@@ -69,8 +71,9 @@ export function useBotThread(bot: Bot) {
 
   const phase = derivePhase(thread?.session ?? null);
   const running = phase === "running" || phase === "connecting";
-  const step = running ? latestWorkStep(entries, activeTurnId) : null;
-  const answering = running && !replyStreaming(rows);
+  const checkin = running && checkinTurnRunning(thread?.messages ?? [], activeTurnId);
+  const step = running && !checkin ? latestWorkStep(entries, activeTurnId) : null;
+  const answering = running && !checkin && !replyStreaming(rows);
   return { thread, threadId, rows, tasks, running, answering, step };
 }
 

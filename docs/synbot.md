@@ -24,7 +24,7 @@ A bot is a role with a scope:
 | Pinned skills      | Skills the bot reads on every turn.                                                                                                                                                           |
 
 Create a bot with **New bot** in the SynBot panel, from a template (Frontend, Backend, QA, Docs,
-iOS) or as the three-bot crew. SynBot also suggests bots when you add a project, and a bot may
+iOS) or as the three-bot coding team. SynBot also suggests bots when you add a project, and a bot may
 propose one ("Save … as a bot?"); a bot exists only after you press Create.
 
 Every bot is built on a [Hub](hubs.md): the bot's chat is the Hub's coordinator, its tasks are the
@@ -44,13 +44,16 @@ The SynBot page takes HoloBot's layout inside Synara's window:
   bot's color in a bot's chat), the bot's replies on the left, a date over each new stretch, and
   three dots with what the bot is doing while it answers. Work handed to another bot shows as a
   card with its state, result, **Open** and **Stop**; the target bot's chat opens with
-  **Message from \<bot\>** and the brief. Tasks show as one card each (state, steps, result,
-  **Open**, **Stop**); **Open** shows the task's own chat on the right. Pending approvals and
-  questions appear as lettered cards at the end; the letter keys answer the newest one.
+  **Message from \<bot\>** and the brief. Tasks show as one card each where they started (state,
+  steps, result, **Open**, **Stop** while it runs); a finished one is a single line that opens the
+  task's own chat on the right. Long messages fold with **Show more**. Check-ins from the Hub's
+  automation and their "SILENT" answers stay hidden. Pending approvals and questions appear as
+  lettered cards at the end; with a card focused, its letter keys answer it.
 - **Composer.** The bot chat uses Synara's own composer (attachments, queue, model, stop); it
   reads "Message \<bot\>".
-- **Name pill.** The bot's face, name and model at the top; it opens the bot's sheet. **More**
-  changes the chat's engine and model, edits the bot or opens Settings → SynBot.
+- **Name pill.** The bot's face, name and model at the top; it opens the bot's sheet. **More** →
+  **Default model** sets the engine for the bot's new chats and tasks (the composer's picker sets
+  this chat's), edits the bot or opens Settings → SynBot.
 
 A window closed on the SynBot page reopens there, on the same bot.
 
@@ -86,8 +89,8 @@ every bot's memory index to route work.
 Bots can read any Synara chat. When a bot's turn comes from your own request, it may also write
 to and stop chats it did not start; the chat shows **From \<bot\>**. Turns started by reports,
 wake-ups or automations ask you first. Turn this off in Settings → SynBot → **Control chats
-without asking**. **Stop all** in the SynBot panel interrupts every bot turn and task and cancels
-queued work.
+without asking**. **Stop all** in the SynBot panel, shown while something runs, interrupts every
+bot turn and task and cancels queued work.
 
 Text from other bots, tasks, GitHub or tools is data, never authorization: only your own
 messages authorize merges, new bots or scope changes.

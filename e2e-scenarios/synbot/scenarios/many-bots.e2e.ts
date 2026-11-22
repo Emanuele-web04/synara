@@ -1,6 +1,7 @@
 import { expect, test } from "./synbot.ts";
 
-test("With many bots the sidebar footer (New bot, Stop all) stays reachable", async ({
+// Stop all shows only while something runs; with idle bots the foot holds New bot alone.
+test("With many bots the sidebar footer (New bot) stays reachable", async ({
   synbot,
   browser,
   screen,
@@ -11,12 +12,12 @@ test("With many bots the sidebar footer (New bot, Stop all) stays reachable", as
     await synbot.bot({ name: `Crowd ${stamp} ${String(index).padStart(2, "0")}` });
   }
   await synbot.open();
-  await expect(screen.getByRole("button", "Stop all")).toBeAttached({ timeout: 30_000 });
+  await expect(screen.getByRole("button", "New bot")).toBeAttached({ timeout: 30_000 });
   await new Promise((resolve) => setTimeout(resolve, 1_000));
   await app.screenshot("many-bots");
   const footer = await browser.evaluate(() => {
     const button = [...document.querySelectorAll("button")].find(
-      (b) => b.textContent?.trim() === "Stop all",
+      (b) => b.textContent?.trim() === "New bot",
     );
     const rect = button?.getBoundingClientRect();
     let scroller: Element | null = button?.parentElement ?? null;
@@ -42,5 +43,5 @@ test("With many bots the sidebar footer (New bot, Stop all) stays reachable", as
   });
   expect(footer).not.toBeNull();
   expect(footer!.bottom).toBeLessThanOrEqual(footer!.viewport);
-  await expect(screen.getByRole("button", "Stop all")).toBeVisible();
+  await expect(screen.getByRole("button", "New bot")).toBeVisible();
 });

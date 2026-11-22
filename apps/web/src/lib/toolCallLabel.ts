@@ -463,6 +463,36 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara stopped an automation",
     failed: "Synara couldn't stop an automation",
   },
+  synara_bots_list: {
+    running: "Synara is checking your bots",
+    completed: "Synara checked your bots",
+    failed: "Synara couldn't check your bots",
+  },
+  synara_bot_delegate: {
+    running: "Synara is handing this off to a bot",
+    completed: "Synara handed this off to a bot",
+    failed: "Synara couldn't hand this off to a bot",
+  },
+  synara_bot_delegations: {
+    running: "Synara is checking hand-offs",
+    completed: "Synara checked hand-offs",
+    failed: "Synara couldn't check hand-offs",
+  },
+  synara_bot_propose: {
+    running: "Synara is proposing a bot",
+    completed: "Synara proposed a bot",
+    failed: "Synara couldn't propose a bot",
+  },
+  synara_bot_suggest: {
+    running: "Synara is suggesting bots",
+    completed: "Synara suggested bots",
+    failed: "Synara couldn't suggest bots",
+  },
+  synara_bot_add_project: {
+    running: "Synara is adding a project",
+    completed: "Synara added a project",
+    failed: "Synara couldn't add a project",
+  },
   ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
   ...SYNARA_COMPUTER_TOOL_PRESENTATIONS,
 } as const satisfies Record<string, SynaraMcpToolSourcePresentation>;
@@ -942,6 +972,42 @@ const SYNARA_MCP_TOOL_PRESENTATION_KEYS = {
     completed: "chat:synaraStoppedAnAutomation",
     failed: "chat:synaraCouldnTStopAnAutomation",
     cancelled: "common:synaraStoppedStoppingAnAutomation",
+  },
+  synara_bots_list: {
+    running: "chat:synaraIsCheckingYourBots",
+    completed: "chat:synaraCheckedYourBots",
+    failed: "chat:synaraCouldnTCheckYourBots",
+    cancelled: "common:synaraStoppedCheckingYourBots",
+  },
+  synara_bot_delegate: {
+    running: "chat:synaraIsHandingThisOffToABot",
+    completed: "chat:synaraHandedThisOffToABot",
+    failed: "chat:synaraCouldnTHandThisOffToABot",
+    cancelled: "common:synaraStoppedHandingThisOffToABot",
+  },
+  synara_bot_delegations: {
+    running: "chat:synaraIsCheckingHandOffs",
+    completed: "chat:synaraCheckedHandOffs",
+    failed: "chat:synaraCouldnTCheckHandOffs",
+    cancelled: "common:synaraStoppedCheckingHandOffs",
+  },
+  synara_bot_propose: {
+    running: "chat:synaraIsProposingABot",
+    completed: "chat:synaraProposedABot",
+    failed: "chat:synaraCouldnTProposeABot",
+    cancelled: "common:synaraStoppedProposingABot",
+  },
+  synara_bot_suggest: {
+    running: "chat:synaraIsSuggestingBots",
+    completed: "chat:synaraSuggestedBots",
+    failed: "chat:synaraCouldnTSuggestBots",
+    cancelled: "common:synaraStoppedSuggestingBots",
+  },
+  synara_bot_add_project: {
+    running: "chat:synaraIsAddingAProject",
+    completed: "chat:synaraAddedAProject",
+    failed: "chat:synaraCouldnTAddAProject",
+    cancelled: "common:synaraStoppedAddingAProject",
   },
   synara_browser_status: {
     running: "common:checkBrowserStatus",

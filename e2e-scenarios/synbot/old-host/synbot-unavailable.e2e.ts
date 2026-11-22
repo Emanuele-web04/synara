@@ -19,7 +19,7 @@ interface ProxyState {
   readonly botTags: readonly string[];
 }
 
-const UNAVAILABLE = "SynBot is not available on this host.";
+const UNAVAILABLE = "SynBot isn't available on this computer.";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const SCRIPT_PATH = nodePath.join(OLD_HOST.STATE_DIR, "script.json");
 

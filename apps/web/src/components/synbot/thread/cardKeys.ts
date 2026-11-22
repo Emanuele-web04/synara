@@ -1,35 +1,32 @@
 // FILE: cardKeys.ts
-// Purpose: Answering an ask card from the keyboard (HoloBot's thread/cardKeys.ts): the focused
-//          card's answers take the letters A, B, C… in the order they show. One card is focused
-//          at a time (the newest open ask of the thread, `CardFocus`). Letters are taken only when
-//          no text is being typed, no modifier is held and no dialog or menu is open.
+// Purpose: Answering an ask card from the keyboard (HoloBot's thread/cardKeys.ts): a card's
+//          answers take the letters A, B, C… in the order they show. The keys bubble from the
+//          card's own focused controls only (its container's onKeyDown, as Synara's approval
+//          panel takes its digits): a bare letter typed anywhere else never answers a card, so
+//          a letter meant for a disabled composer cannot approve a command.
 // Layer: SynBot thread hooks
-// Exports: CardFocus, LETTERS, letterIndex, useLetterKeys
+// Exports: LETTERS, letterIndex, letterKeyHandler
 
-import { createContext, useContext, useEffect, useRef } from "react";
-
-/** The card inside answers the letters. */
-export const CardFocus = createContext(false);
+import type { KeyboardEvent } from "react";
 
 export const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
+  if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) return false;
   return (
     target.isContentEditable ||
     target.tagName === "INPUT" ||
     target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT"
+    target.tagName === "SELECT" ||
+    target.closest('[contenteditable]:not([contenteditable="false"])') !== null
   );
-}
-
-function somethingOver(): boolean {
-  return document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null;
 }
 
 /** The answer index `event` stands for: 0 for A, 1 for B… (-1: not a plain letter). */
 export function letterIndex(
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "isComposing">,
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> & {
+    readonly isComposing?: boolean;
+  },
 ): number {
   if (
     event.metaKey ||
@@ -45,23 +42,26 @@ export function letterIndex(
   return code >= 0 && code < 26 ? code : -1;
 }
 
-/** While the card is focused and `count` answers are offered, A… picks the `i`th. */
-export function useLetterKeys(count: number, pick: (index: number) => void): void {
-  const focused = useContext(CardFocus);
-  const latest = useRef(pick);
-  useEffect(() => {
-    latest.current = pick;
-  });
-  useEffect(() => {
-    if (!focused || count === 0) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || isTyping(event.target) || somethingOver()) return;
-      const index = letterIndex(event);
-      if (index < 0 || index >= count) return;
-      event.preventDefault();
-      latest.current(index);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focused, count]);
+/**
+ * The card container's onKeyDown: while `count` answers are offered, A… picks the `i`th. Only
+ * keys pressed on the card's own controls reach it.
+ */
+export function letterKeyHandler(
+  count: number,
+  pick: (index: number) => void,
+): (event: KeyboardEvent<HTMLElement>) => void {
+  return (event) => {
+    if (count === 0 || event.defaultPrevented || isTyping(event.target)) return;
+    const index = letterIndex({
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      isComposing: event.nativeEvent.isComposing,
+    });
+    if (index < 0 || index >= count) return;
+    event.preventDefault();
+    pick(index);
+  };
 }

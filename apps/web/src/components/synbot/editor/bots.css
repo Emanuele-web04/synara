@@ -1,7 +1,8 @@
 /* FILE: bots.css
    Purpose: The bot sheet (ported from HoloBot's bots/bots.css): templates, the look pickers,
-            the paired fields, the crew list, the instructions box and the footer. Every value
-            is a kit token (kit/holobot.css). */
+            the paired fields, a bot's default rows (BotFields.tsx, shared with New bot), the
+            coding team list, the instructions box and the footer. Every value is a kit token
+            (kit/holobot.css). */
 
 .hb .bot-sheet {
   display: flex;
@@ -53,10 +54,39 @@
   width: 20px;
   height: 20px;
 }
+/* Hit areas: each swatch's target reaches halfway into the gap on every side, so neighbors
+   never share one; on touch the swatches grow to 32 px, 12 px apart, a 44 px target each. */
+.hb .bot-sheet__swatch,
+.hb .bot-sheet__color {
+  position: relative;
+}
+.hb .bot-sheet__swatch::before,
+.hb .bot-sheet__color::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--hb-gap-sm) / 2);
+}
+.hb .bot-sheet__color::before {
+  inset: -6px calc(-1 * var(--hb-gap-sm) / 2);
+}
+@media (pointer: coarse) {
+  .hb .bot-sheet__row {
+    gap: var(--hb-gap);
+  }
+  .hb .bot-sheet__swatch,
+  .hb .bot-sheet__color {
+    width: 32px;
+    height: 32px;
+  }
+  .hb .bot-sheet__swatch::before,
+  .hb .bot-sheet__color::before {
+    inset: calc(-1 * var(--hb-gap) / 2);
+  }
+}
 .hb .bot-sheet__swatch[aria-checked="true"],
 .hb .bot-sheet__color[aria-checked="true"] {
   box-shadow:
-    0 0 0 2px var(--hb-card),
+    0 0 0 2px var(--hb-raised, var(--hb-card)),
     0 0 0 3.5px var(--hb-text);
 }
 .hb .bot-sheet__swatch:focus-visible,
@@ -110,6 +140,70 @@
 .hb .bot-sheet__instructions:focus {
   outline: none;
   border-color: var(--hb-chosen-border);
+}
+/* A bot's defaults (BotFields.tsx): a row per setting, its name, its value and a chevron; a
+   hairline above each row (a shadow, so the rows' own `border: 0` cannot drop it). */
+.hb .bot-rows {
+  display: flex;
+  flex-direction: column;
+}
+.hb .bot-rows > * + * {
+  box-shadow: inset 0 1px 0 var(--hb-border);
+}
+.hb .bot-row {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  width: 100%;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hb-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hb .bot-row:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
+}
+.hb .bot-row__label {
+  width: 112px;
+  flex-shrink: 0;
+  font-size: var(--hb-text-md);
+  color: var(--hb-muted);
+}
+.hb .bot-row__value {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--hb-gap);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--hb-text-lg);
+  font-weight: var(--hb-weight-medium);
+}
+.hb .bot-row__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .bot-row__item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .bot-row__more,
+.hb .bot-row__placeholder {
+  font-weight: normal;
+  color: var(--hb-muted);
+}
+.hb .bot-row__chevron {
+  flex-shrink: 0;
+  color: var(--hb-muted);
 }
 .hb .bot-sheet__crew {
   display: flex;

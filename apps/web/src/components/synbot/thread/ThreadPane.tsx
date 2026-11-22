@@ -3,12 +3,15 @@
 //          the rows scroll under a floating top strip (on the left the name pill with the bot's
 //          face and name, which opens its sheet; on the right the chat's permission, model and
 //          context controls, which ChatView draws there instead of under the composer, then More
-//          with the bot's engine, Edit and Settings) and Synara's own composer floats over their
-//          end, its Send button in HoloBot's metal ring: the pane is Synara's ChatView for the
-//          bot's thread, with HoloBot's rows (MessageList) in its transcript's place. The strip
-//          publishes its height (--thread-top) and the composer's comes from ChatView, so the
-//          list keeps its first and last rows clear of them and fades only where it runs under
-//          them; a banner says when the bot's chat has an error.
+//          with Default model (the bot's engine for new chats and tasks, in a submenu), Edit and
+//          Settings) and Synara's own composer floats over their end, its Send button in
+//          HoloBot's metal ring: the pane is Synara's ChatView for the bot's thread, with
+//          HoloBot's rows (MessageList) in its transcript's place. The strip publishes its
+//          height (--thread-top) and the composer's comes from ChatView, so the list keeps its
+//          first and last rows clear of them and fades only where it runs under them; the
+//          thread's error banner (Synara's own, drawn by the rows) sits under the strip.
+//          Diffs and browser links open in the thread's own view, thread links in the SynBot
+//          page.
 // Layer: SynBot thread UI
 // Exports: ThreadPane
 
@@ -20,7 +23,6 @@ import { describeErrorMessage } from "@synara/shared/errorMessages";
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
 import type { SplitViewPanePanelState } from "~/splitViewStore";
-import { useStore } from "~/store";
 import { useSynbotStore } from "~/synbot/synbotStore";
 
 import { DeferredChatView, noopChatSurfaceAction } from "../../chat/ChatThreadSurfacePrimitives";
@@ -28,11 +30,10 @@ import type { ChatTranscriptSlotInput } from "../../chat/chatTranscriptSlot";
 import { toastManager } from "../../ui/toast";
 import { BotFace, botMood } from "../BotFace";
 import { useBotEditor } from "../editor/botEditorStore";
-import { IconButton, Strip } from "../kit/controls";
-import { Icon } from "../kit/Icon";
+import { IconButton, SendRing, Strip } from "../kit/controls";
 import { Backdrop } from "../kit/Backdrop";
 import { Menu, type MenuEntry } from "../kit/Menu";
-import { MetalRing } from "~/components/ui/metal/LiquidMetal";
+import { useEmbeddedChatPanels, useOpenThreadLink } from "./chatLinks";
 import { MessageList } from "./MessageList";
 import type { TranscriptEdges } from "./Transcript";
 import { useBotAnswering } from "./useBotThread";
@@ -74,6 +75,39 @@ function useSaveEngine(bot: Bot) {
   );
 }
 
+/** More: Default model (a submenu, so the engine list never buries the rest), Edit bot and
+ * SynBot settings. */
+function MoreMenu({ bot }: { readonly bot: Bot }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const openEdit = useBotEditor((store) => store.openEdit);
+  const engine = useEngineMenu({ selection: bot.modelSelection, onChange: useSaveEngine(bot) });
+  const items: readonly MenuEntry[] = [
+    {
+      id: "engine",
+      label: t("synbot:defaultModel"),
+      detail: engine.label,
+      hint: t("synbot:defaultModelHint"),
+      submenu: engine.items,
+    },
+    { rule: true },
+    { id: "edit", label: t("synbot:editBotItem"), onSelect: () => openEdit(bot.id) },
+    {
+      id: "settings",
+      label: t("synbot:settings"),
+      onSelect: () => void navigate({ to: "/settings", search: { section: "synbot" } }),
+    },
+  ];
+  return (
+    <Menu
+      trigger={<IconButton icon="more" kind="ghost" label={t("synbot:more")} />}
+      items={items}
+      label={t("synbot:more")}
+      onOpenChange={(open) => engine.setOpen(open)}
+    />
+  );
+}
+
 function TopBar({
   bot,
   answering,
@@ -85,19 +119,7 @@ function TopBar({
   readonly controlsRef: (element: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const openEdit = useBotEditor((store) => store.openEdit);
-  const engine = useEngineMenu({ selection: bot.modelSelection, onChange: useSaveEngine(bot) });
-  const more: MenuEntry[] = [
-    ...engine.items,
-    { rule: true },
-    { id: "edit", label: t("synbot:editBotItem"), onSelect: () => openEdit(bot.id) },
-    {
-      id: "settings",
-      label: t("synbot:settings"),
-      onSelect: () => void navigate({ to: "/settings", search: { section: "synbot" } }),
-    },
-  ];
   return (
     <Strip
       className="thread-strip"
@@ -115,29 +137,12 @@ function TopBar({
       trailing={
         <>
           <div className="thread-controls" ref={controlsRef} />
-          <Menu
-            label={t("synbot:more")}
-            items={more}
-            onOpenChange={engine.setOpen}
-            trigger={<IconButton icon="more" kind="ghost" label={t("synbot:more")} />}
-          />
+          <MoreMenu bot={bot} />
         </>
       }
     />
   );
 }
-
-function Banner({ text }: { readonly text: string }) {
-  return (
-    <div className="banner" role="status" title={text}>
-      <Icon name="loading" size="sm" />
-      <span className="banner__text">{text}</span>
-    </div>
-  );
-}
-
-/** The composer's Send in a bot chat: HoloBot's dark core in a ring of moving metal. */
-const SEND_RING = <MetalRing />;
 
 const EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
   panel: null,
@@ -155,11 +160,15 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
   const [edges, setEdges] = useState<TranscriptEdges>({ top: false, bottom: false });
   const answering = useBotAnswering(bot.threadId);
   const [controls, setControls] = useState<HTMLDivElement | null>(null);
-  const error = useStore((state) => state.threadShellById?.[bot.threadId]?.error ?? null);
+  const [bannerTarget, setBannerTarget] = useState<HTMLDivElement | null>(null);
+  const { openTurnDiff, openBrowserUrl } = useEmbeddedChatPanels(bot.threadId);
+  const openThreadLink = useOpenThreadLink();
   // ChatView draws the composer (Synara's own) and hands its transcript's place to the rows.
   const renderTranscript = useCallback(
-    (slot: ChatTranscriptSlotInput) => <MessageList bot={bot} slot={slot} onEdges={setEdges} />,
-    [bot],
+    (slot: ChatTranscriptSlotInput) => (
+      <MessageList bot={bot} slot={slot} bannerTarget={bannerTarget} onEdges={setEdges} />
+    ),
+    [bannerTarget, bot],
   );
   return (
     <section
@@ -171,7 +180,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
       <Backdrop />
       <div className="thread-pane__top" ref={top}>
         <TopBar bot={bot} answering={answering} controlsRef={setControls} />
-        {error ? <Banner text={error} /> : null}
+        <div className="thread-pane__banner" ref={setBannerTarget} />
       </div>
       <div className="thread-pane__chat">
         <DeferredChatView
@@ -185,12 +194,13 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
           panelState={EMBEDDED_PANEL_STATE}
           onToggleDiff={noopChatSurfaceAction}
           onToggleBrowser={noopChatSurfaceAction}
-          onOpenBrowserUrl={noopChatSurfaceAction}
-          onOpenTurnDiff={noopChatSurfaceAction}
+          onOpenBrowserUrl={openBrowserUrl}
+          onOpenTurnDiff={openTurnDiff}
+          onOpenLinkedThread={openThreadLink}
           renderTranscript={renderTranscript}
           composerPlaceholder={t("synbot:placeholder", { name: bot.name })}
           composerStatusTarget={controls}
-          composerSendUnderlay={SEND_RING}
+          composerSendUnderlay={<SendRing moving={answering} />}
         />
       </div>
     </section>

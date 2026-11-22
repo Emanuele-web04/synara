@@ -1,13 +1,14 @@
 // FILE: BotSheet.tsx
 // Purpose: The bot sheet (HoloBot's bots/BotSheet.tsx and BotSheetHost.tsx). The host shows a
-//          new bot in steps (NewBotDialog) and the crew and every edit here. The coding crew
-//          makes its missing bots at once; a bot's sheet has its mascot (shape and
-//          color), name and role, where it works (every project or some, optionally only some
-//          folders), its chat engine and its tasks' engine, whether it starts on its own, its
-//          instructions, pinned skills and tile. Create sends `bots.create` (a request id per
-//          submit, reused when the same submit is retried); edit sends only what changed with
-//          `bots.update` and the revision the sheet opened (Reload merges after a conflict);
-//          Remove asks first. SynBot keeps its name, role, scope and look.
+//          new bot in steps (NewBotDialog) and the coding team and every edit here. The coding
+//          team makes its missing bots at once; a bot's sheet has its mascot (shape and color),
+//          name and role, then the same rows as New bot (BotFields.tsx: where it works, its chat
+//          engine and its tasks' engine, what it does with new work), the folders it keeps to,
+//          its instructions, pinned skills and whether it is pinned. Create sends `bots.create`
+//          (a request id per submit, reused when the same submit is retried); edit sends only
+//          what changed with `bots.update` and the revision the sheet opened (Reload merges after
+//          a conflict); Remove asks first in SynBot's confirmation (synbotActions.ts). SynBot
+//          keeps its name, role, scope and look.
 // Layer: SynBot editor UI
 // Exports: BotSheetHost
 
@@ -17,9 +18,6 @@ import {
   BOT_PINNED_SKILLS_MAX,
   BOT_ROLE_MAX_LENGTH,
   type Bot,
-  type BotAutonomy,
-  type ModelSelection,
-  type ProjectId,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,27 +25,21 @@ import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { resolveSaveAttemptRequestId } from "~/components/chat/group/groupSettingsDialog.logic";
 import { buildSettingsSkillGroups } from "~/components/settings/skillsSettingsModel";
+import { Switch } from "~/components/ui/switch";
 import { useTranslation } from "~/i18n";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { skillsCatalogQueryOptions } from "~/lib/providerDiscoveryReactQuery";
 import { readNativeApi } from "~/nativeApi";
 import { useOpenBot } from "~/components/synbot/synbotNav";
-import { removeBot } from "~/synbot/synbotActions";
-import { orderedBots } from "~/synbot/synbotState.logic";
+import { askToRemoveBot, useSynbotConfirm } from "~/synbot/synbotActions";
 import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
 import { BotFace } from "../BotFace";
-import { AlertDialog, Dialog } from "../kit/Dialog";
-import {
-  CapsuleButton,
-  Field,
-  Segmented,
-  Switch,
-  TextField,
-  type SegmentedOption,
-} from "../kit/controls";
+import { Dialog } from "../kit/Dialog";
+import { CapsuleButton, Field, TextField } from "../kit/controls";
 import { BotMascot } from "../kit/Mascot";
 import { Menu, type MenuEntry } from "../kit/Menu";
-import { useEngineMenu } from "../thread/useEngineMenu";
+import { SynbotConfirmDialog } from "../SynbotConfirmDialog";
 import {
   BOT_EDITOR_CREW_TEMPLATE,
   applyBotTemplate,
@@ -63,9 +55,9 @@ import {
   missingCrewTemplates,
   rebaseBotEditorForm,
   type BotEditorForm,
-  type BotScopeMode,
 } from "./botEditor.logic";
 import { useBotEditor, type BotEditorTarget } from "./botEditorStore";
+import { AutonomyField, BotFieldRows, EngineField, FoldersField, ProjectsField } from "./BotFields";
 import { BotTemplateChip } from "./BotTemplateChip";
 import { MascotPicker } from "./MascotPicker";
 import { NewBotDialog } from "./NewBotDialog";
@@ -77,8 +69,19 @@ type SaveError =
   | { readonly kind: "conflict" }
   | { readonly kind: "message"; readonly text: string };
 
-/** Mount once (the SynBot page); open it with `useBotEditor`. */
+/** Mount once (the SynBot page, Settings → SynBot); open it with `useBotEditor`. Inside a
+ * workspace frame, where the app root's SynbotDesktopBridge is not mounted, it also shows
+ * SynBot's confirmation. */
 export function BotSheetHost() {
+  return (
+    <>
+      <BotSheetSwitch />
+      {readWorkspaceFrame() ? <SynbotConfirmDialog /> : null}
+    </>
+  );
+}
+
+function BotSheetSwitch() {
   const open = useBotEditor((store) => store.open);
   const target = useBotEditor((store) => store.target);
   const session = useBotEditor((store) => store.session);
@@ -98,7 +101,7 @@ export function BotSheetHost() {
   }, [botMissing, close]);
 
   if (!open || !target || (target.mode === "edit" && !bot)) return null;
-  // A new bot is made in steps; the crew and every edit use the whole sheet.
+  // A new bot is made in steps; the coding team and every edit use the whole sheet.
   if (
     target.mode === "create" &&
     target.template?.toLowerCase() !== BOT_EDITOR_CREW_TEMPLATE.toLowerCase()
@@ -106,52 +109,6 @@ export function BotSheetHost() {
     return <NewBotDialog key={session} target={target} bots={bots} onClose={close} />;
   }
   return <BotSheet key={session} target={target} bot={bot} bots={bots} onClose={close} />;
-}
-
-function EngineField({
-  title,
-  hint,
-  selection,
-  onChange,
-  sameAs,
-  onSame,
-}: {
-  readonly title: string;
-  readonly hint?: string;
-  readonly selection: ModelSelection;
-  readonly onChange: (next: ModelSelection) => void;
-  /** The task engine: "Same as the chat" first, checked while it follows the chat. */
-  readonly sameAs?: { readonly checked: boolean; readonly label: string };
-  readonly onSame?: () => void;
-}) {
-  const engine = useEngineMenu({ selection, onChange });
-  const items: MenuEntry[] = sameAs
-    ? [
-        {
-          id: "same",
-          label: sameAs.label,
-          checked: sameAs.checked,
-          onSelect: () => onSame?.(),
-        },
-        { rule: true },
-        ...engine.items,
-      ]
-    : engine.items;
-  return (
-    <Field title={title} hint={hint}>
-      <Menu
-        label={title}
-        items={items}
-        place="below-start"
-        onOpenChange={engine.setOpen}
-        trigger={
-          <CapsuleButton kind="normal" compact className="bot-sheet__engine">
-            {sameAs?.checked ? sameAs.label : engine.label}
-          </CapsuleButton>
-        }
-      />
-    </Field>
-  );
 }
 
 function BotSheet({
@@ -191,11 +148,11 @@ function BotSheet({
   /** A new bot follows the default engine until one is picked. */
   const [enginePicked, setEnginePicked] = useState(!creating);
   const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const [error, setError] = useState<SaveError | null>(null);
   // The last failed create: a retry of the same payload reuses its request id.
   const failedAttemptRef = useRef<{ requestId: string; fingerprint: string } | null>(null);
+  // A removal is running in SynBot's confirmation.
+  const removing = useSynbotConfirm((store) => store.busy);
   const busy = saving || removing;
   useEffect(() => {
     useBotEditor.getState().setBusy(busy);
@@ -282,31 +239,21 @@ function BotSheet({
     setError(null);
   };
 
-  const remove = async () => {
-    if (!baseBot || removing) return;
-    setRemoving(true);
-    try {
-      await removeBot(baseBot);
-      setRemoving(false);
-      setConfirmRemove(false);
-      const synbot = orderedBots(useSynbotStore.getState().data.bots).main;
-      if (synbot) openBot(synbot);
-      onClose();
-    } catch (cause) {
-      setRemoving(false);
-      setConfirmRemove(false);
-      setError({ kind: "message", text: describeErrorMessage(cause, String(cause)) });
-    }
+  // Once removed, the bot leaves the store and the host closes its sheet (botMissing).
+  const remove = () => {
+    if (baseBot && !busy) askToRemoveBot(baseBot);
   };
 
-  const scopeOptions: SegmentedOption<BotScopeMode>[] = [
-    { value: "all", label: t("synbotEditor:allProjects") },
-    { value: "chosen", label: t("synbotEditor:chosenProjects") },
-  ];
-  const autonomyOptions: SegmentedOption<BotAutonomy>[] = [
-    { value: "auto", label: t("synbotEditor:autonomyAuto") },
-    { value: "ask", label: t("synbotEditor:autonomyAsk") },
-  ];
+  const engineField = (
+    <EngineField
+      label={t("synbotEditor:engine")}
+      selection={effective.modelSelection}
+      onChange={(modelSelection) => {
+        setEnginePicked(true);
+        update({ modelSelection });
+      }}
+    />
+  );
   const pinnedPaths = new Set(effective.pinnedSkills.map((skill) => skill.path));
   const skillItems: MenuEntry[] =
     skillGroups.length === 0
@@ -339,7 +286,6 @@ function BotSheet({
               }),
           };
         });
-  const chosen = new Set<string>(effective.projectIds);
   const templates = availableBotTemplates(bots);
 
   const title = crewMode
@@ -351,7 +297,7 @@ function BotSheet({
   const footer = (
     <div className="bot-sheet__footer">
       {!creating && !main ? (
-        <CapsuleButton kind="danger" compact disabled={busy} onClick={() => setConfirmRemove(true)}>
+        <CapsuleButton kind="danger" compact disabled={busy} onClick={remove}>
           {t("synbotEditor:remove")}
         </CapsuleButton>
       ) : null}
@@ -380,272 +326,195 @@ function BotSheet({
   );
 
   return (
-    <>
-      <Dialog
-        open
-        onClose={() => !busy && onClose()}
-        closable={!busy}
-        title={title}
-        wide
-        footer={footer}
-      >
-        <div className="bot-sheet">
-          {creating ? (
-            <div
-              className="bot-sheet__templates"
-              role="group"
-              aria-label={t("synbotEditor:startFrom")}
-            >
-              <span className="bot-sheet__label">{t("synbotEditor:startFrom")}</span>
-              {templates.map((template) => (
-                <BotTemplateChip
-                  key={template.name}
-                  template={template}
-                  chosen={!crewMode && form.name === template.name}
-                  size="small"
-                  onPick={() => {
-                    if (crewMode) useBotEditor.getState().openCreate({ template: template.name });
-                    else update(applyBotTemplate(form, template));
-                  }}
-                />
-              ))}
-              {crew.length > 1 && !crewMode ? (
-                <CapsuleButton
-                  kind="ghost"
-                  small
-                  title={t("synbotEditor:crewDescription", {
+    <Dialog
+      open
+      onClose={() => !busy && onClose()}
+      closable={!busy}
+      title={title}
+      wide
+      footer={footer}
+    >
+      <div className="bot-sheet">
+        {creating ? (
+          <div
+            className="bot-sheet__templates"
+            role="group"
+            aria-label={t("synbotEditor:startFrom")}
+          >
+            <span className="bot-sheet__label">{t("synbotEditor:startFrom")}</span>
+            {templates.map((template) => (
+              <BotTemplateChip
+                key={template.name}
+                template={template}
+                chosen={!crewMode && form.name === template.name}
+                size="small"
+                onPick={() => {
+                  if (crewMode) useBotEditor.getState().openCreate({ template: template.name });
+                  else update(applyBotTemplate(form, template));
+                }}
+              />
+            ))}
+            {crew.length > 1 && !crewMode ? (
+              <CapsuleButton
+                kind="ghost"
+                small
+                title={t("synbotEditor:crewDescription", {
+                  names: new Intl.ListFormat(formatLocale).format(crew.map((entry) => entry.name)),
+                })}
+                disabled={busy}
+                onClick={() => void save(true)}
+              >
+                {t("synbotEditor:crewButton", { count: crew.length })}
+              </CapsuleButton>
+            ) : null}
+          </div>
+        ) : null}
+        {crewMode ? (
+          <>
+            <p className="bot-sheet__hint">
+              {crew.length === 0
+                ? t("synbotEditor:crewComplete")
+                : t("synbotEditor:crewDescription", {
                     names: new Intl.ListFormat(formatLocale).format(
                       crew.map((entry) => entry.name),
                     ),
                   })}
-                  disabled={busy}
-                  onClick={() => void save(true)}
-                >
-                  {t("synbotEditor:crewButton", { count: crew.length })}
-                </CapsuleButton>
-              ) : null}
+            </p>
+            <ul className="bot-sheet__crew">
+              {crew.map((template) => (
+                <li key={template.name} className="bot-sheet__crew-row">
+                  <BotMascot
+                    shape={template.mascot.shape}
+                    color={template.mascot.color}
+                    size={28}
+                  />
+                  <span className="bot-sheet__crew-text">
+                    <span className="bot-sheet__crew-name">{template.name}</span>
+                    <span className="bot-sheet__hint">{template.role}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <BotFieldRows>{engineField}</BotFieldRows>
+            <p className="bot-sheet__hint">{t("synbotEditor:modelHint")}</p>
+          </>
+        ) : (
+          <>
+            <div className="bot-sheet__look">
+              {main && bot ? (
+                <BotFace bot={bot} size={56} mood="idle" />
+              ) : (
+                <BotMascot
+                  shape={effective.mascot.shape}
+                  color={effective.mascot.color}
+                  size={56}
+                />
+              )}
+              {main ? (
+                <p className="bot-sheet__hint">{t("synbotEditor:mainDescription")}</p>
+              ) : (
+                <MascotPicker mascot={effective.mascot} onChange={(mascot) => update({ mascot })} />
+              )}
             </div>
-          ) : null}
-          {crewMode ? (
-            <>
-              <p className="bot-sheet__hint">
-                {crew.length === 0
-                  ? t("synbotEditor:crewComplete")
-                  : t("synbotEditor:crewDescription", {
-                      names: new Intl.ListFormat(formatLocale).format(
-                        crew.map((entry) => entry.name),
-                      ),
-                    })}
-              </p>
-              <ul className="bot-sheet__crew">
-                {crew.map((template) => (
-                  <li key={template.name} className="bot-sheet__crew-row">
-                    <BotMascot
-                      shape={template.mascot.shape}
-                      color={template.mascot.color}
-                      size={28}
-                    />
-                    <span className="bot-sheet__crew-text">
-                      <span className="bot-sheet__crew-name">{template.name}</span>
-                      <span className="bot-sheet__hint">{template.role}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
+            <div className="bot-sheet__pair">
+              <Field title={t("synbotEditor:name")}>
+                <TextField
+                  value={effective.name}
+                  onChange={(name) => update({ name })}
+                  placeholder={t("synbotEditor:namePlaceholder")}
+                  disabled={main}
+                  maxLength={BOT_NAME_MAX_LENGTH}
+                  aria-label={t("synbotEditor:name")}
+                />
+              </Field>
+              <Field title={t("synbotEditor:role")}>
+                <TextField
+                  value={effective.role}
+                  onChange={(role) => update({ role })}
+                  placeholder={t("synbotEditor:rolePlaceholder")}
+                  disabled={main}
+                  maxLength={BOT_ROLE_MAX_LENGTH}
+                  aria-label={t("synbotEditor:role")}
+                />
+              </Field>
+            </div>
+            <BotFieldRows>
+              {main ? null : (
+                <ProjectsField form={effective} projects={projects} onChange={update} />
+              )}
+              {engineField}
               <EngineField
-                title={t("synbotEditor:engine")}
-                hint={t("synbotEditor:modelHint")}
-                selection={effective.modelSelection}
-                onChange={(modelSelection) => {
-                  setEnginePicked(true);
-                  update({ modelSelection });
+                label={t("synbotEditor:taskEngine")}
+                selection={effective.taskModelSelection ?? effective.modelSelection}
+                onChange={(taskModelSelection) => update({ taskModelSelection })}
+                sameAs={{
+                  checked: effective.taskModelSelection === null,
+                  label: t("synbotEditor:sameTaskEngine"),
+                  onSelect: () => update({ taskModelSelection: null }),
                 }}
               />
-            </>
-          ) : (
-            <>
-              <div className="bot-sheet__look">
-                {main && bot ? (
-                  <BotFace bot={bot} size={56} mood="idle" />
-                ) : (
-                  <BotMascot
-                    shape={effective.mascot.shape}
-                    color={effective.mascot.color}
-                    size={56}
-                  />
-                )}
-                {main ? (
-                  <p className="bot-sheet__hint">{t("synbotEditor:mainDescription")}</p>
-                ) : (
-                  <MascotPicker
-                    mascot={effective.mascot}
-                    onChange={(mascot) => update({ mascot })}
-                  />
-                )}
-              </div>
-              <div className="bot-sheet__pair">
-                <Field title={t("synbotEditor:name")}>
-                  <TextField
-                    value={effective.name}
-                    onChange={(name) => update({ name })}
-                    placeholder={t("synbotEditor:namePlaceholder")}
-                    disabled={main}
-                    maxLength={BOT_NAME_MAX_LENGTH}
-                    aria-label={t("synbotEditor:name")}
-                  />
-                </Field>
-                <Field title={t("synbotEditor:role")}>
-                  <TextField
-                    value={effective.role}
-                    onChange={(role) => update({ role })}
-                    placeholder={t("synbotEditor:rolePlaceholder")}
-                    disabled={main}
-                    maxLength={BOT_ROLE_MAX_LENGTH}
-                    aria-label={t("synbotEditor:role")}
-                  />
-                </Field>
-              </div>
+              <AutonomyField
+                value={effective.autonomy}
+                onChange={(autonomy) => update({ autonomy })}
+              />
+            </BotFieldRows>
+            <p className="bot-sheet__hint">
+              {main ? t("synbotEditor:mainScope") : t("synbotEditor:startHint")}
+            </p>
+            {!main ? (
+              <FoldersField
+                value={paths}
+                onChange={(next) => {
+                  setError(null);
+                  setPaths(next);
+                }}
+              />
+            ) : null}
+            <Field
+              title={t("synbotEditor:instructions")}
+              hint={t("synbotEditor:instructionsHelper")}
+            >
+              <textarea
+                className="bot-sheet__instructions"
+                value={effective.instructions}
+                maxLength={BOT_INSTRUCTIONS_MAX_LENGTH}
+                rows={5}
+                placeholder={t("synbotEditor:instructionsPlaceholder")}
+                aria-label={t("synbotEditor:instructions")}
+                onChange={(event) => update({ instructions: event.target.value })}
+              />
+            </Field>
+            <div className="bot-sheet__pair">
+              <Field title={t("synbotEditor:skills")} hint={t("synbotEditor:skillsDescription")}>
+                <Menu
+                  label={t("synbotEditor:chooseSkills")}
+                  items={skillItems}
+                  place="below-start"
+                  trigger={
+                    <CapsuleButton kind="normal" compact className="bot-sheet__engine">
+                      {effective.pinnedSkills.length > 0
+                        ? effective.pinnedSkills.map((skill) => skill.name).join(", ")
+                        : t("synbotEditor:chooseSkills")}
+                    </CapsuleButton>
+                  }
+                />
+              </Field>
               {!main ? (
-                <Field
-                  title={t("synbotEditor:scopeSection")}
-                  hint={t("synbotEditor:projectsDescription")}
-                >
-                  <Segmented
-                    label={t("synbotEditor:scopeSection")}
-                    value={effective.scopeMode}
-                    options={scopeOptions}
-                    onChange={(scopeMode) => update({ scopeMode })}
-                  />
-                  {effective.scopeMode === "chosen" ? (
-                    <div className="bot-sheet__repos">
-                      {projects.length === 0 ? (
-                        <span className="bot-sheet__hint">{t("synbotEditor:noProjects")}</span>
-                      ) : null}
-                      {projects.map((project) => {
-                        const on = chosen.has(project.id);
-                        return (
-                          <CapsuleButton
-                            key={project.id}
-                            kind={on ? "normal" : "ghost"}
-                            small
-                            chosen={on}
-                            aria-pressed={on}
-                            onClick={() =>
-                              update({
-                                projectIds: on
-                                  ? effective.projectIds.filter((id) => id !== project.id)
-                                  : [...effective.projectIds, project.id as ProjectId],
-                              })
-                            }
-                          >
-                            {project.name}
-                          </CapsuleButton>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  <TextField
-                    value={paths}
-                    onChange={(next) => {
-                      setError(null);
-                      setPaths(next);
-                    }}
-                    placeholder={t("synbotEditor:pathsPlaceholder")}
-                    aria-label={t("synbotEditor:paths")}
+                <Field title={t("synbotEditor:pinned")} hint={t("synbotEditor:pinnedDescription")}>
+                  <Switch
+                    checked={effective.pinned}
+                    aria-label={t("synbotEditor:pinned")}
+                    onCheckedChange={(pinned) => update({ pinned })}
                   />
                 </Field>
               ) : null}
-              <div className="bot-sheet__pair">
-                <EngineField
-                  title={t("synbotEditor:engine")}
-                  hint={t("synbotEditor:modelHint")}
-                  selection={effective.modelSelection}
-                  onChange={(modelSelection) => {
-                    setEnginePicked(true);
-                    update({ modelSelection });
-                  }}
-                />
-                <EngineField
-                  title={t("synbotEditor:taskEngine")}
-                  selection={effective.taskModelSelection ?? effective.modelSelection}
-                  onChange={(taskModelSelection) => update({ taskModelSelection })}
-                  sameAs={{
-                    checked: effective.taskModelSelection === null,
-                    label: t("synbotEditor:sameTaskEngine"),
-                  }}
-                  onSame={() => update({ taskModelSelection: null })}
-                />
-              </div>
-              <Field
-                title={t("synbotEditor:autonomy")}
-                hint={t("synbotEditor:autonomyDescription")}
-              >
-                <Segmented
-                  label={t("synbotEditor:autonomy")}
-                  value={effective.autonomy}
-                  options={autonomyOptions}
-                  onChange={(autonomy) => update({ autonomy })}
-                />
-              </Field>
-              <Field
-                title={t("synbotEditor:instructions")}
-                hint={t("synbotEditor:instructionsHelper")}
-              >
-                <textarea
-                  className="bot-sheet__instructions"
-                  value={effective.instructions}
-                  maxLength={BOT_INSTRUCTIONS_MAX_LENGTH}
-                  rows={5}
-                  placeholder={t("synbotEditor:instructionsPlaceholder")}
-                  aria-label={t("synbotEditor:instructions")}
-                  onChange={(event) => update({ instructions: event.target.value })}
-                />
-              </Field>
-              <div className="bot-sheet__pair">
-                <Field title={t("synbotEditor:skills")} hint={t("synbotEditor:skillsDescription")}>
-                  <Menu
-                    label={t("synbotEditor:chooseSkills")}
-                    items={skillItems}
-                    place="below-start"
-                    trigger={
-                      <CapsuleButton kind="normal" compact className="bot-sheet__engine">
-                        {effective.pinnedSkills.length > 0
-                          ? effective.pinnedSkills.map((skill) => skill.name).join(", ")
-                          : t("synbotEditor:chooseSkills")}
-                      </CapsuleButton>
-                    }
-                  />
-                </Field>
-                {!main ? (
-                  <Field
-                    title={t("synbotEditor:pinned")}
-                    hint={t("synbotEditor:pinnedDescription")}
-                  >
-                    <Switch
-                      checked={effective.pinned}
-                      ariaLabel={t("synbotEditor:pinned")}
-                      onChange={(pinned) => update({ pinned })}
-                    />
-                  </Field>
-                ) : null}
-              </div>
-              {issue === "projects-required" ? (
-                <p className="bot-sheet__error">{t("synbotEditor:projectsRequired")}</p>
-              ) : null}
-            </>
-          )}
-        </div>
-      </Dialog>
-      <AlertDialog
-        open={confirmRemove}
-        title={t("synbotEditor:removeTitle", { value0: baseBot?.name ?? "" })}
-        message={t("synbotEditor:removeMessage")}
-        confirmLabel={t("synbotEditor:remove")}
-        danger
-        busy={removing}
-        onConfirm={() => void remove()}
-        onCancel={() => setConfirmRemove(false)}
-      />
-    </>
+            </div>
+            {issue === "projects-required" ? (
+              <p className="bot-sheet__error">{t("synbotEditor:projectsRequired")}</p>
+            ) : null}
+          </>
+        )}
+      </div>
+    </Dialog>
   );
 }

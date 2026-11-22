@@ -1,9 +1,10 @@
 // FILE: TaskPane.tsx
 // Purpose: A task's own thread in the right pane (HoloBot's right-pane ThreadPane with
-//          TaskBar): back to the bot's thread, the face of the bot that works on it and its
-//          title, close; under it the state, when it started and its pull request; the merge
-//          proof when that setting is on; then the worker's thread itself in Synara's chat view
-//          (tool work, diffs and follow-ups as in any Synara thread).
+//          TaskBar): the face of the bot that works on it and its title, Close; under it the
+//          state, when it started and its pull request; the merge proof when that setting is on
+//          and the task has a pull request; then the worker's thread itself in Synara's chat view
+//          (tool work and follow-ups as in any Synara thread; a diff or a browser link opens in
+//          the thread's own view, a thread link in this pane).
 // Layer: SynBot thread UI
 // Exports: TaskPane
 
@@ -11,7 +12,6 @@ import type { Bot, HubWorkItem, ThreadId } from "@synara/contracts";
 import { useEffect } from "react";
 
 import { useTranslation } from "~/i18n";
-import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import type { SplitViewPanePanelState } from "~/splitViewStore";
 import { useStore } from "~/store";
 import { retainThreadDetailSubscription } from "~/threadDetailSubscriptionRetention";
@@ -21,8 +21,10 @@ import { BotFace, taskMood } from "../BotFace";
 import { Backdrop } from "../kit/Backdrop";
 import { Chip, IconButton, Pane, Strip, Text } from "../kit/controls";
 import { useOpenTask } from "../synbotNav";
+import { useTimeAgo } from "./CardParts";
+import { useEmbeddedChatPanels, useOpenThreadLink } from "./chatLinks";
 import { ProofCard } from "./ProofCard";
-import { taskStateKey, taskTone } from "./TaskCard";
+import { taskStateKey, taskTone } from "./stateWords";
 import "./thread.css";
 
 const EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
@@ -51,6 +53,9 @@ export function TaskPane({
     (state) => task?.title ?? state.threadShellById?.[threadId]?.title ?? t("synbot:task"),
   );
   const pr = useStore((state) => state.threadShellById?.[threadId]?.lastKnownPr?.url ?? null);
+  const when = useTimeAgo(task?.createdAt ?? null);
+  const { openTurnDiff, openBrowserUrl } = useEmbeddedChatPanels(threadId);
+  const openThreadLink = useOpenThreadLink();
   return (
     <Pane width="sessions" edge="left" className="task-pane">
       <Backdrop />
@@ -58,12 +63,6 @@ export function TaskPane({
         className="task-bar"
         leading={
           <>
-            <IconButton
-              icon="arrow-left"
-              kind="ghost"
-              label={t("synbot:backToThread")}
-              onClick={() => openTask(null)}
-            />
             <BotFace bot={bot} size="pill" mood={task ? taskMood(task.state) : "idle"} />
             <Text variant="label" truncate>
               {title}
@@ -82,7 +81,7 @@ export function TaskPane({
       {task ? (
         <div className="task-bar__info">
           <Chip tone={taskTone(task.state)}>{t(taskStateKey(task.state))}</Chip>
-          <span className="task-bar__meta">{formatRelativeTimeAgo(task.createdAt)}</span>
+          <span className="task-bar__meta">{when}</span>
           {pr ? (
             <a className="task-bar__pr" href={pr} target="_blank" rel="noreferrer">
               {t("synbot:pullRequest")}
@@ -90,9 +89,9 @@ export function TaskPane({
           ) : null}
         </div>
       ) : null}
-      {showProof ? (
+      {showProof && pr ? (
         <div className="task-pane__proof">
-          <ProofCard threadId={threadId} />
+          <ProofCard threadId={threadId} prUrl={pr} taskState={task?.state ?? null} />
         </div>
       ) : null}
       <div className="task-pane__chat">
@@ -107,8 +106,9 @@ export function TaskPane({
           panelState={EMBEDDED_PANEL_STATE}
           onToggleDiff={noopChatSurfaceAction}
           onToggleBrowser={noopChatSurfaceAction}
-          onOpenBrowserUrl={noopChatSurfaceAction}
-          onOpenTurnDiff={noopChatSurfaceAction}
+          onOpenBrowserUrl={openBrowserUrl}
+          onOpenTurnDiff={openTurnDiff}
+          onOpenLinkedThread={openThreadLink}
         />
       </div>
     </Pane>

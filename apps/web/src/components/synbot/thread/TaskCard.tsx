@@ -2,26 +2,31 @@
 // Purpose: A Hub task in a bot's thread (HoloBot's thread/TaskCard.tsx): the head (who works on
 //          it, its title, when it started, its state chip), its plan as a checklist (done,
 //          running, to do; long plans fold their finished lines), its latest word once it stops
-//          running, then the step count with small Stop (projectAgent.resolveWorker, as the
-//          Hub's own stop does) and Open (its own thread in the right pane) capsules. Without a
-//          plan it shows the live step or the latest word.
+//          running, then the step count (or why it is queued) with small Stop
+//          (projectAgent.resolveWorker, as the Hub's own stop does) and Open (its own thread in
+//          the right pane) capsules. Without a plan it shows the live step while it runs (the
+//          worker's progress line, else its thread's newest tool step) or the latest word.
 // Layer: SynBot thread UI
-// Exports: TaskCard, taskTone, taskStateKey
+// Exports: TaskCard
 
 import type { Bot, HubWorkItem, HubWorkProgressStep, HubWorkState } from "@synara/contracts";
 import { ProjectId, ThreadId } from "@synara/contracts";
+import { useMemo } from "react";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
-import { formatRelativeTimeAgo } from "~/lib/relativeTime";
+import { useStore } from "~/store";
+import { latestWorkStep } from "~/synbot/botThread.logic";
+import { deriveWorkLogEntries, type TimelineEntry } from "~/workLog";
 
 import { BotFace, taskMood } from "../BotFace";
-import { CapsuleButton, type Tone } from "../kit/controls";
+import { CapsuleButton } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenTask } from "../synbotNav";
 import { useStopAction } from "./useStopAction";
-import { CARD_FACE, CardHead, StatusChip } from "./CardParts";
+import { CARD_FACE, CardHead, StatusChip, StatusMark, useTimeAgo } from "./CardParts";
 import { InlineText } from "./ChoiceParts";
+import { queueReasonKey, taskStateKey, taskTone } from "./stateWords";
 
 const ACTIVE: ReadonlySet<HubWorkState> = new Set(["queued", "starting", "working", "waiting"]);
 
@@ -37,52 +42,36 @@ function stepClass(status: StepStatus): "done" | "current" | "todo" {
 /** A checklist mark: filled check when done, a ring with a dot while running, an empty ring. */
 function StepMark({ status }: { readonly status: StepStatus }) {
   const kind = stepClass(status);
-  return (
-    <svg className="steps__mark" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-      {kind === "done" ? (
-        <>
-          <circle cx="12" cy="12" r="11" className="steps__fill" />
-          <path
-            d="m7.5 12 3 3 6-6.5"
-            fill="none"
-            className="steps__tick"
-            strokeWidth="2.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </>
-      ) : kind === "current" ? (
-        <>
-          <circle cx="12" cy="12" r="10" fill="none" className="steps__ring" strokeWidth="2" />
-          <circle cx="12" cy="12" r="4" className="steps__fill" />
-        </>
-      ) : (
-        <circle cx="12" cy="12" r="10" fill="none" className="steps__ring--todo" strokeWidth="2" />
-      )}
-    </svg>
+  return kind === "done" ? (
+    <StatusMark shape="check" />
+  ) : kind === "current" ? (
+    <StatusMark shape="dot" />
+  ) : (
+    <StatusMark shape="ring" tone="muted" />
   );
 }
 
-export function taskTone(state: HubWorkState): Tone {
-  switch (state) {
-    case "starting":
-    case "working":
-      return "active";
-    case "waiting":
-      return "attention";
-    case "completed":
-      return "good";
-    case "failed":
-      return "bad";
-    case "queued":
-    case "idle":
-    case "cancelled":
-      return "muted";
-  }
-}
-
-export function taskStateKey(state: HubWorkState): string {
-  return `synbot:task_${state}`;
+/** The worker thread's newest tool step while it runs, when its activity is loaded (read only
+ * for a running task without a plan or a progress line; no subscription of its own). */
+function useWorkerStep(threadId: ThreadId | null, enabled: boolean): string | null {
+  const ids = useStore((state) =>
+    enabled && threadId ? (state.activityIdsByThreadId?.[threadId] ?? null) : null,
+  );
+  const byId = useStore((state) =>
+    enabled && threadId ? (state.activityByThreadId?.[threadId] ?? null) : null,
+  );
+  const activeTurnId = useStore((state) =>
+    enabled && threadId ? (state.threadSessionById?.[threadId]?.activeTurnId ?? null) : null,
+  );
+  return useMemo(() => {
+    if (!ids || !byId || !activeTurnId) return null;
+    const activities = ids.flatMap((id) => (byId[id] ? [byId[id]] : []));
+    const entries: TimelineEntry[] = deriveWorkLogEntries(activities, activeTurnId, {
+      activeTurnId,
+      latestTurnState: "running",
+    }).map((entry) => ({ id: entry.id, kind: "work", createdAt: entry.createdAt, entry }));
+    return latestWorkStep(entries, activeTurnId);
+  }, [ids, byId, activeTurnId]);
 }
 
 export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly bot: Bot }) {
@@ -92,20 +81,29 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
   const running = task.state === "working" || task.state === "starting";
   const steps = task.progress?.steps ?? [];
   const done = steps.filter((step) => step.status === "completed").length;
-  const current = steps.find((step) => step.status === "inProgress")?.text ?? null;
+  const worker = task.workerThreadId;
+  const progressLine = task.progress?.summary?.trim() || null;
+  const workerStep = useWorkerStep(worker, running && steps.length === 0 && !progressLine);
+  // Without a plan, what it is doing now: its own progress line, else its newest tool step.
+  const live = running && steps.length === 0 ? (progressLine ?? workerStep) : null;
   // Long plans keep their last few lines; the finished ones before them fold into one line.
   const firstOpen = steps.findIndex((step) => step.status !== "completed");
   const leadingDone = firstOpen === -1 ? steps.length : firstOpen;
   const hiddenDone =
     steps.length > MAX_STEPS ? Math.min(steps.length - MAX_STEPS + 1, leadingDone) : 0;
+  const reasonKey = task.state === "queued" ? queueReasonKey(task.queueReason) : null;
   const meta = [
     steps.length > 0 ? t("synbot:taskSteps", { done, total: steps.length }) : null,
-    task.queueReason && task.state === "queued" ? task.queueReason : null,
+    // The chip already says Queued: only a known reason adds a line.
+    reasonKey && reasonKey !== taskStateKey("queued") ? t(reasonKey) : null,
   ]
     .filter(Boolean)
     .join(" · ");
   const latest = task.resultSummary ?? task.progress?.summary ?? null;
-  const worker = task.workerThreadId;
+  const when = useTimeAgo(task.createdAt);
+  // Nothing to stop and nothing to count: no foot, so a finished task is one compact card
+  // whose head opens it (an arrow says so), not a head over an empty rule.
+  const hasFoot = ACTIVE.has(task.state) || meta.length > 0;
   const stop = () =>
     runStop(() => {
       const api = readNativeApi();
@@ -132,9 +130,14 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
         <CardHead
           faces={<BotFace bot={bot} size={CARD_FACE} mood={taskMood(task.state)} />}
           title={task.title}
-          sub={`${bot.name} · ${formatRelativeTimeAgo(task.createdAt)}`}
+          sub={`${bot.name} · ${when}`}
           status={<StatusChip tone={taskTone(task.state)} label={t(taskStateKey(task.state))} />}
         />
+        {!hasFoot && worker ? (
+          <span className="task-card__go">
+            <Icon name="arrow-right" size="xs" />
+          </span>
+        ) : null}
       </button>
       {steps.length > 0 ? (
         <ol className="steps" aria-label={t("synbot:taskSteps", { done, total: steps.length })}>
@@ -156,32 +159,36 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
           ))}
         </ol>
       ) : null}
-      {steps.length > 0 && running ? null : running && current ? (
+      {steps.length > 0 && running ? null : live ? (
         <p className="task-card__live">
           <span className="task-card__pulse" />
-          <InlineText text={current} />
+          <span className="task-card__live-text">
+            <InlineText text={live} />
+          </span>
         </p>
-      ) : latest ? (
+      ) : latest && !running ? (
         <p className="task-card__text">
           <InlineText text={latest} />
         </p>
       ) : null}
-      <div className="task-card__foot">
-        <p className="task-card__meta">{meta}</p>
-        <div className="task-card__actions">
-          {ACTIVE.has(task.state) ? (
-            <CapsuleButton kind="danger" small disabled={stopping} onClick={stop}>
-              {t("synbot:stop")}
-            </CapsuleButton>
-          ) : null}
-          {worker ? (
-            <CapsuleButton kind="card" small onClick={() => openTask(worker)}>
-              {t("synbot:open")}
-              <Icon name="arrow-right" size="xs" />
-            </CapsuleButton>
-          ) : null}
+      {hasFoot ? (
+        <div className="task-card__foot">
+          <p className="task-card__meta">{meta}</p>
+          <div className="task-card__actions">
+            {ACTIVE.has(task.state) ? (
+              <CapsuleButton kind="danger" small disabled={stopping} onClick={stop}>
+                {t("synbot:stop")}
+              </CapsuleButton>
+            ) : null}
+            {worker ? (
+              <CapsuleButton kind="card" small onClick={() => openTask(worker)}>
+                {t("synbot:open")}
+                <Icon name="arrow-right" size="xs" />
+              </CapsuleButton>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
     </article>
   );
 }
