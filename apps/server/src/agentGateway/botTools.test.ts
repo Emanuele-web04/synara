@@ -3,6 +3,7 @@ import { Effect } from "effect";
 
 import { BotServiceError, type BotServiceShape } from "../bots/Services/BotService.ts";
 import { makeBotTools } from "./botTools.ts";
+import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext } from "./toolRuntime.ts";
 
 const context = {
@@ -14,8 +15,8 @@ const context = {
 const toolsWith = (resolveCaller: BotServiceShape["resolveCaller"]) =>
   makeBotTools({ bots: { resolveCaller } as unknown as BotServiceShape });
 
-const textOf = (result: { readonly content: ReadonlyArray<{ readonly text?: string }> }) =>
-  result.content.map((entry) => entry.text ?? "").join("");
+const textOf = (result: McpToolCallResult) =>
+  result.content.map((entry) => (entry.type === "text" ? entry.text : "")).join("");
 
 describe("SynBot gateway tools", () => {
   it.effect("a bot chat locked by the Alto gate is told SUBSCRIPTION_REQUIRED", () =>
