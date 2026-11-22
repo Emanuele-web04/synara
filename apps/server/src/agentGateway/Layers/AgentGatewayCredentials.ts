@@ -90,7 +90,7 @@ export function makeAgentGatewayConnectorRegistry(input: {
     set: (next: ReadonlyArray<AgentGatewayConnectorRegistration>) => {
       registrations = [...next];
     },
-    /** The connectors a new bearer receives; Pi, Devin, and Antigravity get none. */
+    /** The connectors a new bearer receives; Pi and Devin get none. */
     grant: (
       token: string,
       provider: ProviderKind,

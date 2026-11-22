@@ -20,16 +20,19 @@ import {
   deriveContinuedAssistantMessageIds,
   deriveTerminalAssistantMessageIds,
   deriveTurnTimingByTurnId,
-  findLastLiveWorkGroupId,
+  findLiveToolCallTarget,
   formatTurnHeaderLabel,
+  isWorkRowYieldedToLiveToolCall,
+  withoutLiveToolCallRun,
   formatTurnResumedBy,
   isPinnedSubagentRunEntry,
   normalizeCompactToolLabel,
+  pickLiveToolCallDisplay,
   summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
-  resolveWorkEntryChunkFold,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  resolveLiveTailClaim,
   resolveThreadFindJumpTarget,
   type CollapsedTurnItem,
   type MessagesTimelineRow,
@@ -850,6 +853,71 @@ describe("deriveMessagesTimelineRows", () => {
 
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
+
+  it("treats an untagged reply after the last request as part of the live turn", () => {
+    const entries = [
+      userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+      assistantEntry("earlier", "2026-01-01T00:00:01Z", { completedAt: "2026-01-01T00:00:01Z" }),
+      userEntry("u2", "2026-01-01T00:00:02Z", "t2"),
+      assistantEntry("untagged", "2026-01-01T00:00:03Z", {}),
+      assistantEntry("other-turn", "2026-01-01T00:00:04Z", { turnId: "t1" }),
+    ];
+    const live = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t2"),
+      timelineEntries: entries,
+    });
+    expect(messageRow(live, "untagged")).toMatchObject({
+      assistantTurnInProgress: true,
+      assistantCopyStreaming: true,
+    });
+    // Before the last request, or tagged with another turn: settled chrome.
+    expect(messageRow(live, "earlier")?.assistantTurnInProgress).toBe(false);
+    expect(messageRow(live, "other-turn")?.assistantTurnInProgress).toBe(false);
+
+    // Without a turn id yet (revert, reconnect, a follow-up before its turn
+    // exists) nothing changes.
+    const noTurnId = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: null,
+      timelineEntries: entries,
+    });
+    expect(messageRow(noTurnId, "untagged")?.assistantTurnInProgress).toBe(false);
+    const idle = deriveMessagesTimelineRows({
+      ...baseInput,
+      activeTurnInProgress: false,
+      activeTurnId: TurnId.makeUnsafe("t2"),
+      collapseFinishedTurns: false,
+      timelineEntries: entries,
+    });
+    expect(messageRow(idle, "untagged")?.assistantTurnInProgress).toBe(false);
+  });
+
+  it("keeps an untagged live reply as the terminal answer of its unfolded turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool w1"),
+        assistantEntry("untagged", "2026-01-01T00:00:02Z", {
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+      ],
+    });
+    const row = messageRow(rows, "untagged");
+    // Terminal, so it owns the turn's chrome once the turn ends, but it does not
+    // fold or show that chrome while the turn is still live.
+    expect(row?.showAssistantCopyButton).toBe(true);
+    expect(row?.assistantTurnInProgress).toBe(true);
+    expect(row?.collapsedTurnItems).toBeUndefined();
+  });
 
   it("folds adjacent child groups into the settled turn without crossing narration", () => {
     const launch = (id: string, child: string, time: string): TimelineEntry => ({
@@ -3061,38 +3129,34 @@ describe("chunkCollapsedTurnItems", () => {
   });
 });
 
-const planSignature = (
-  entries: ReadonlyArray<WorkLogEntry>,
-  options: { tailIsLive: boolean },
-): string[] =>
-  planWorkEntryRenderChunks(entries, options).map((chunk) => {
+const planSignature = (entries: ReadonlyArray<WorkLogEntry>): string[] =>
+  planWorkEntryRenderChunks(entries).map((chunk) => {
     const ids = chunk.entries.map((entry) => entry.id).join("+");
-    if (chunk.liveEntry) return `live(${chunk.liveEntry.id}):${ids}`;
     return chunk.summary === null ? `open:${ids}` : `collapsed:${ids}`;
   });
 
 describe("planWorkEntryRenderChunks", () => {
-  it("never collapses a run that still has running work", () => {
-    expect(
-      planSignature(
-        [
-          toolItem("w1", { toolStatus: "running" }).entry,
-          toolItem("w2").entry,
-          toolItem("think", { tone: "thinking" }).entry,
-          toolItem("w3").entry,
-          toolItem("w4").entry,
-        ],
-        { tailIsLive: false },
-      ),
-    ).toEqual(["live(w2):w1+w2", "open:think", "collapsed:w3+w4"]);
+  it("folds a run with running work behind a summary that counts it", () => {
+    const entries = [
+      toolItem("w1", { toolStatus: "running" }).entry,
+      toolItem("w2").entry,
+      toolItem("think", { tone: "thinking" }).entry,
+      toolItem("w3").entry,
+      toolItem("w4").entry,
+    ];
+    expect(planSignature(entries)).toEqual(["collapsed:w1+w2", "open:think", "collapsed:w3+w4"]);
+    const [runningRun, , settledRun] = planWorkEntryRenderChunks(entries);
+    expect(runningRun?.summary).toMatchObject({ runningCount: 1, runningLabel: "1 running" });
+    expect(settledRun?.summary).toMatchObject({ runningCount: 0, runningLabel: null });
   });
 
-  it("keeps singleton runs open: nothing to summarize", () => {
+  it("keeps singleton runs open, a running one too: nothing to summarize", () => {
     expect(
-      planSignature(
-        [toolItem("w1").entry, toolItem("think", { tone: "thinking" }).entry, toolItem("w2").entry],
-        { tailIsLive: false },
-      ),
+      planSignature([
+        toolItem("w1", { toolStatus: "running" }).entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w2").entry,
+      ]),
     ).toEqual(["open:w1", "open:think", "open:w2"]);
   });
 });
@@ -3110,15 +3174,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
   ];
 
   it("preserves collapsed summaries and uncapped boundaries while limiting open entries", () => {
-    const result = capOpenWorkEntryRenderChunks(
-      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-      {
-        expanded: false,
-        maxVisibleEntries: 0,
-        keep: "last",
-        shouldCapEntry: (entry) => entry.tone === "tool",
-      },
-    );
+    const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+      expanded: false,
+      maxVisibleEntries: 0,
+      keep: "last",
+      shouldCapEntry: (entry) => entry.tone === "tool",
+    });
 
     expect(result.chunks.map((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
       ["w1", "w2"],
@@ -3135,15 +3196,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
 
   it("never hides one or two rows behind a Show more toggle", () => {
     for (const maxVisibleEntries of [1, 2]) {
-      const result = capOpenWorkEntryRenderChunks(
-        planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-        {
-          expanded: false,
-          maxVisibleEntries,
-          keep: "last",
-          shouldCapEntry: (entry) => entry.tone === "tool",
-        },
-      );
+      const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+        expanded: false,
+        maxVisibleEntries,
+        keep: "last",
+        shouldCapEntry: (entry) => entry.tone === "tool",
+      });
       expect(result.hasOverflow).toBe(false);
       expect(result.hiddenEntryCount).toBe(0);
       expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
@@ -3159,11 +3217,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
     expect(collapsibleHiddenRowCount(4, 6)).toBe(0);
   });
 
-  it("never caps a live run: it already renders as one line", () => {
-    const chunks = planWorkEntryRenderChunks(
-      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
-      { tailIsLive: true },
-    );
+  it("never caps a folded run: it already renders as one line", () => {
+    const chunks = planWorkEntryRenderChunks([
+      toolItem("w1").entry,
+      toolItem("w2").entry,
+      toolItem("w3").entry,
+    ]);
 
     const result = capOpenWorkEntryRenderChunks(chunks, {
       expanded: false,
@@ -3176,10 +3235,11 @@ describe("capOpenWorkEntryRenderChunks", () => {
   });
 
   it("restores every open entry when expanded while retaining overflow state", () => {
-    const result = capOpenWorkEntryRenderChunks(
-      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-      { expanded: true, maxVisibleEntries: 0, keep: "last" },
-    );
+    const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+      expanded: true,
+      maxVisibleEntries: 0,
+      keep: "last",
+    });
 
     expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
       singletonRuns.map((entry) => entry.id),
@@ -3196,59 +3256,18 @@ describe("multi-file edit folding", () => {
   }).entry;
 
   it("folds a lone patch that would list a column of edited-file rows", () => {
-    const [settled] = planWorkEntryRenderChunks([patch], { tailIsLive: false });
+    const [settled] = planWorkEntryRenderChunks([patch]);
 
     expect(settled?.summary?.label).toBe("Edited 3 files");
-    expect(resolveWorkEntryChunkFold(settled!)?.entries).toEqual([patch]);
-  });
-
-  it("keeps the patch's file rows behind its live line", () => {
-    const [live] = planWorkEntryRenderChunks([patch], { tailIsLive: true });
-
-    expect(live?.liveEntry).toBe(patch);
-    expect(resolveWorkEntryChunkFold(live!)?.entries).toEqual([patch]);
+    expect(settled?.entries).toEqual([patch]);
   });
 
   it("leaves a single-file edit as a plain row", () => {
     const edit = toolItem("edit", { itemType: "file_change", changedFiles: ["a.swift"] }).entry;
-    const [chunk] = planWorkEntryRenderChunks([edit], { tailIsLive: false });
+    const [chunk] = planWorkEntryRenderChunks([edit]);
 
-    expect(resolveWorkEntryChunkFold(chunk!)).toBeNull();
+    expect(chunk?.summary).toBeNull();
   });
-});
-
-describe("resolveWorkEntryChunkFold", () => {
-  it("reveals only the calls before the one a live line wears", () => {
-    const [chunk] = planWorkEntryRenderChunks(
-      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
-      { tailIsLive: true },
-    );
-    const fold = resolveWorkEntryChunkFold(chunk!);
-
-    expect(fold?.entries.map((entry) => entry.id)).toEqual(["w1", "w2"]);
-    expect(fold?.keySuffix).toBe(":live");
-  });
-
-  it("reveals every call of a settled summary and leaves singletons unfolded", () => {
-    const [settled] = planWorkEntryRenderChunks([toolItem("w1").entry, toolItem("w2").entry], {
-      tailIsLive: false,
-    });
-    const [singleton] = planWorkEntryRenderChunks([toolItem("w1").entry], { tailIsLive: true });
-
-    expect(resolveWorkEntryChunkFold(settled!)?.entries.map((entry) => entry.id)).toEqual([
-      "w1",
-      "w2",
-    ]);
-    expect(resolveWorkEntryChunkFold(settled!)?.keySuffix).toBe("");
-    expect(resolveWorkEntryChunkFold(singleton!)).toBeNull();
-  });
-});
-
-const workRow = (id: string): MessagesTimelineRow => ({
-  kind: "work",
-  id,
-  createdAt: "2026-01-01T00:00:00Z",
-  groupedEntries: [{ id, createdAt: "2026-01-01T00:00:00Z", label: "tool", tone: "tool" }],
 });
 
 const messageRowOf = (
@@ -3278,43 +3297,276 @@ const workingRow: MessagesTimelineRow = {
   createdAt: null,
 };
 
-describe("findLastLiveWorkGroupId", () => {
-  it("returns the trailing standalone work row", () => {
+describe("findLiveToolCallTarget", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+  const running = { toolStatus: "running" } as const;
+  const groupRow = (id: string, entries: WorkLogEntry[]): MessagesTimelineRow => ({
+    kind: "work",
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    groupedEntries: entries,
+  });
+  const target = (rows: MessagesTimelineRow[]) => {
+    const found = findLiveToolCallTarget(rows);
+    return found
+      ? {
+          groupId: found.groupId,
+          chunkId: found.chunkId,
+          entry: found.display?.entry.id ?? null,
+          tone: found.display?.tone ?? null,
+        }
+      : null;
+  };
+
+  it("claims the live run and wears its running call", () => {
     expect(
-      findLastLiveWorkGroupId([
+      target([
         messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
-        workRow("g2"),
+        groupRow("g1", [
+          tool("w1"),
+          tool("think", { tone: "thinking" }),
+          tool("w2"),
+          tool("w3", running),
+        ]),
         workingRow,
       ]),
-    ).toBe("g2");
+    ).toEqual({ groupId: "g1", chunkId: "w2", entry: "w3", tone: "running" });
   });
 
-  it("prefers a message's inline group over its leading group", () => {
+  it("prefers a running earlier call over a finished later one", () => {
     expect(
-      findLastLiveWorkGroupId([
+      target([groupRow("g1", [tool("w1", running), tool("w2", running), tool("w3")]), workingRow]),
+    ).toEqual({ groupId: "g1", chunkId: "w1", entry: "w2", tone: "running" });
+  });
+
+  it("keeps the claim but reads Thinking once every call finished", () => {
+    expect(target([groupRow("g1", [tool("w1"), tool("w2")]), workingRow])).toEqual({
+      groupId: "g1",
+      chunkId: "w1",
+      entry: null,
+      tone: null,
+    });
+    expect(target([groupRow("g1", [tool("w1", { toolStatus: "completed" })]), workingRow])).toEqual(
+      { groupId: "g1", chunkId: "w1", entry: null, tone: null },
+    );
+  });
+
+  it("wears the newest call when it failed, until another call runs", () => {
+    const failed = tool("w2", {
+      tone: "error",
+      toolStatus: "failed",
+      activityKind: "tool.completed",
+    });
+    expect(target([groupRow("g1", [tool("w1"), failed]), workingRow])).toEqual({
+      groupId: "g1",
+      chunkId: "w1",
+      entry: "w2",
+      tone: "failed",
+    });
+    expect(
+      target([groupRow("g1", [tool("w1"), failed, tool("w3", running)]), workingRow]),
+    ).toMatchObject({ entry: "w3", tone: "running" });
+    // A failure older than the newest finished call no longer speaks.
+    expect(target([groupRow("g1", [failed, tool("w3")]), workingRow])).toMatchObject({
+      entry: null,
+    });
+  });
+
+  it("shows a Codex status only while it is the newest entry", () => {
+    const status = tool("status", { itemType: "command_execution", label: "Command execution" });
+    expect(target([groupRow("g1", [tool("w1"), status]), workingRow])).toMatchObject({
+      entry: "status",
+      tone: "status",
+    });
+    expect(target([groupRow("g1", [status, tool("w2")]), workingRow])).toMatchObject({
+      entry: null,
+    });
+    expect(target([groupRow("g1", [status, tool("w2", running)]), workingRow])).toMatchObject({
+      entry: "w2",
+      tone: "running",
+    });
+  });
+
+  it("claims a lone call that would render as a plain row", () => {
+    expect(
+      target([
         messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1", inlineWorkGroupId: "g2" }),
+        groupRow("g1", [tool("think", { tone: "thinking" }), tool("w1", running)]),
+        workingRow,
       ]),
-    ).toBe("g2");
+    ).toEqual({ groupId: "g1", chunkId: "w1", entry: "w1", tone: "running" });
   });
 
-  it("falls back to the leading group when no inline group exists", () => {
-    expect(
-      findLastLiveWorkGroupId([
-        messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
-      ]),
-    ).toBe("g1");
+  it("claims an assistant message's inline run, never its leading one", () => {
+    const withInline: MessagesTimelineRow = {
+      ...messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+      inlineWorkEntries: [tool("w1"), tool("w2", running)],
+    } as MessagesTimelineRow;
+    const withLeading: MessagesTimelineRow = {
+      ...messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
+      leadingWorkEntries: [tool("w1"), tool("w2", running)],
+    } as MessagesTimelineRow;
+
+    expect(target([withInline, workingRow])).toEqual({
+      groupId: "g1",
+      chunkId: "w1",
+      entry: "w2",
+      tone: "running",
+    });
+    expect(target([withLeading, workingRow])).toBeNull();
   });
 
-  it("stops at a trailing user message: the next turn has no live group yet", () => {
+  it("returns null once assistant text follows the run", () => {
     expect(
-      findLastLiveWorkGroupId([
-        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
-        messageRowOf("u2", "user"),
+      target([
+        groupRow("g1", [tool("w1"), tool("w2", running)]),
+        messageRowOf("a1", "assistant"),
         workingRow,
       ]),
     ).toBeNull();
+  });
+
+  it("returns null without a working row", () => {
+    expect(target([groupRow("g1", [tool("w1"), tool("w2", running)])])).toBeNull();
+  });
+
+  it("returns null when narration or a rich card closes the group", () => {
+    expect(
+      target([groupRow("g1", [tool("w1"), tool("think", { tone: "thinking" })]), workingRow]),
+    ).toBeNull();
+    expect(
+      target([
+        groupRow("g1", [tool("w1"), tool("sub", { subagents: [{ threadId: "thread-1" }] })]),
+        workingRow,
+      ]),
+    ).toBeNull();
+    expect(
+      target([groupRow("g1", [tool("w1"), tool("err", { tone: "error" })]), workingRow]),
+    ).toBeNull();
+  });
+
+  it("is attached to the derived working row only while the indicator shows", () => {
+    const workTimelineEntry = (id: string, createdAt: string): TimelineEntry => ({
+      id: `entry-${id}`,
+      kind: "work",
+      createdAt,
+      entry: { id, createdAt, label: `tool ${id}`, tone: "tool", toolStatus: "running" },
+    });
+    const input = {
+      timelineEntries: [
+        {
+          id: "entry-u1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: MessageId.makeUnsafe("u1"),
+            role: "user",
+            text: "ask",
+            createdAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+            turnId: TurnId.makeUnsafe("turn-1"),
+          },
+        } satisfies TimelineEntry,
+        workTimelineEntry("w1", "2026-01-01T00:00:01Z"),
+        workTimelineEntry("w2", "2026-01-01T00:00:02Z"),
+      ],
+      worktreeSetup: null,
+      worktreeSetupOpen: false,
+      activeTurnStartedAt: null,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-1"),
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    };
+    const live = deriveMessagesTimelineRows({ ...input, isWorking: true });
+    const idle = deriveMessagesTimelineRows({ ...input, isWorking: false });
+    const workingRowOf = (rows: MessagesTimelineRow[]) =>
+      rows.find((row) => row.kind === "working");
+
+    expect(workingRowOf(live)).toMatchObject({
+      liveToolCall: { chunkId: "w1", display: { tone: "running", entry: { id: "w2" } } },
+    });
+    expect(workingRowOf(idle)).toBeUndefined();
+    expect(findLiveToolCallTarget(idle)).toBeNull();
+  });
+});
+
+describe("pickLiveToolCallDisplay", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+
+  it("reads Thinking for an empty or finished run", () => {
+    expect(pickLiveToolCallDisplay([])).toBeNull();
+    expect(
+      pickLiveToolCallDisplay([tool("w1"), tool("w2", { toolStatus: "completed" })]),
+    ).toBeNull();
+  });
+
+  it("treats a failed tool-tone call like a failed error-tone one", () => {
+    expect(pickLiveToolCallDisplay([tool("w1", { toolStatus: "failed" })])).toMatchObject({
+      tone: "failed",
+    });
+  });
+});
+
+describe("live tail claim", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+  const claim = { groupId: "g1", chunkId: "w1", display: null };
+  const claimingWorkingRow: MessagesTimelineRow = { ...workingRow, liveToolCall: claim };
+
+  it("leaves a group everything before the claimed run", () => {
+    const entries = [tool("w1"), tool("think", { tone: "thinking" }), tool("w2"), tool("w3")];
+    expect(withoutLiveToolCallRun(entries, "w2").map((entry) => entry.id)).toEqual(["w1", "think"]);
+    expect(withoutLiveToolCallRun(entries, null)).toBe(entries);
+    expect(withoutLiveToolCallRun(entries, "missing")).toBe(entries);
+  });
+
+  it("marks a work row emptied by the claim so it leaves no gap", () => {
+    const row: MessagesTimelineRow = {
+      kind: "work",
+      id: "g1",
+      createdAt: "2026-01-01T00:00:00Z",
+      groupedEntries: [tool("w1"), tool("w2")],
+    };
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w1" })).toBe(true);
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w2" })).toBe(false);
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g2", chunkId: "w1" })).toBe(false);
+    expect(isWorkRowYieldedToLiveToolCall(row, null)).toBe(false);
+  });
+
+  it("is the working row's claim, only while the indicator reads Thinking", () => {
+    const rows = [messageRowOf("u1", "user"), claimingWorkingRow];
+    expect(resolveLiveTailClaim(rows, true)).toBe(claim);
+    // Loading, startup, delivery checks and waiting labels claim nothing: the
+    // run renders settled in history.
+    expect(resolveLiveTailClaim(rows, false)).toBeNull();
+    // No working row (turn over, or worktree setup replacing it): nothing is live.
+    expect(resolveLiveTailClaim([messageRowOf("u1", "user")], true)).toBeNull();
+    expect(resolveLiveTailClaim([claimingWorkingRow, messageRowOf("u1", "user")], true)).toBeNull();
+  });
+
+  it("re-renders the working row when its line changes, not when it only re-flushes", () => {
+    const entry = tool("w1", { toolStatus: "running" });
+    const prev: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: { groupId: "g1", chunkId: "w1", display: { entry, tone: "running" } },
+    };
+    const sameContent: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: {
+        groupId: "g1",
+        chunkId: "w1",
+        display: { entry: { ...entry }, tone: "running" },
+      },
+    };
+    const finished: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: { groupId: "g1", chunkId: "w1", display: null },
+    };
+    const stable = computeStableMessagesTimelineRows([prev], {
+      byId: new Map([[prev.id, prev]]),
+      result: [prev],
+    });
+    expect(computeStableMessagesTimelineRows([sameContent], stable).result[0]).toBe(prev);
+    expect(computeStableMessagesTimelineRows([finished], stable).result[0]).toBe(finished);
   });
 });

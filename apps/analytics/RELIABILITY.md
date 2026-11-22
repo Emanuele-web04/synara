@@ -58,8 +58,26 @@ For remote-access interruptions, also compare `remote.ingress_socket_error`,
 `remote.tunnel_socket_error` and `backend.event_loop_stall`. The first two count
 handled connection failures; a count does not mean the backend crashed. Stall
 counts use the existing monitor's throttling and do not attribute a slow query.
-Socket categories are also limited to one report per category per backend every
-thirty seconds; they count reporting windows, not every failed connection.
+
+The following host reports require Desktop Beta and explicit product-sharing
+consent. Apply D1 migration `0015_product_connection_detail.sql` and deploy the
+updated Analytics Worker before releasing these codes in Desktop Beta or the
+matching connection fields on iPhone/iPad. The previous Worker rejects a batch
+containing a new reliability code.
+
+| Code                                         | Meaning                                                                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `remote.admission_refused`                   | A remote stream reached the host but admission was unavailable (no fresh authorization lease or billing gate closed). |
+| `remote.authorization_failed`                | The host's account authorization read failed: outage, transport error, 5xx or an unconfirmed billing policy.          |
+| `remote.authorization_denied`                | The account service denied the host: unlinked, deleted, handed over or remote access not enabled.                     |
+| `remote.authorization_subscription_required` | The owner's remote subscription is required.                                                                          |
+| `remote.tunnel_provision_failed`             | `POST /hosts/:id/tunnel` provisioning failed while starting the managed connector.                                    |
+| `remote.connector_exited`                    | The managed `cloudflared` connector exited without the host stopping it.                                              |
+
+Socket and admission categories are limited to one report per category per backend
+every thirty seconds; authorization, provisioning and connector categories to one
+every ten minutes. They count reporting windows, not every failed connection or retry.
+Match them against iPhone `connection.*` failures in `GET /api/product` (`connectionFailures`) by day and version; they share no identifiers.
 
 The worker rejects unknown codes/properties, noncanonical release strings,
 precise timestamps and dates outside the retry window. Extend the shared

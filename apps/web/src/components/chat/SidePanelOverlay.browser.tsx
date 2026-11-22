@@ -41,3 +41,24 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps a wide card inside a narrow chat column", async () => {
+  const screen = await render(
+    <div className="relative" style={{ width: 240, height: 400 }}>
+      <SidePanelOverlay open variant="floating" className="items-end" cardClassName="w-72">
+        <div style={{ width: 320 }}>Wide content</div>
+      </SidePanelOverlay>
+    </div>,
+  );
+
+  try {
+    const column = screen.container.firstElementChild!;
+    const card = screen.container.querySelector("[data-environment-panel-variant] > div")!;
+    await expect.poll(() => card.getBoundingClientRect().width).toBeLessThanOrEqual(216);
+    expect(card.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      column.getBoundingClientRect().left,
+    );
+  } finally {
+    await screen.unmount();
+  }
+});

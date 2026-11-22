@@ -449,7 +449,7 @@ function listRevertRescueRefs(cwd: string): ReadonlyArray<string> {
     .filter((ref) => ref.includes("/revert-rescue/"));
 }
 
-// Building a repo costs several git spawns; clone a per-file template instead.
+// Let Git initialize the metadata from a per-file template in a single spawn.
 const gitRepositoryTemplates = new Map<boolean, string>();
 function createGitRepository(hasInitialCommit = true) {
   let template = gitRepositoryTemplates.get(hasInitialCommit);
@@ -466,7 +466,10 @@ function createGitRepository(hasInitialCommit = true) {
     gitRepositoryTemplates.set(hasInitialCommit, template);
   }
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
-  fs.cpSync(template, cwd, { recursive: true });
+  runGit(cwd, ["init", "--initial-branch=main", `--template=${path.join(template, ".git")}`]);
+  if (hasInitialCommit) {
+    fs.copyFileSync(path.join(template, "README.md"), path.join(cwd, "README.md"));
+  }
   return cwd;
 }
 afterAll(() => {

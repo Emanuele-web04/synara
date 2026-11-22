@@ -3,7 +3,12 @@ import { isAbsolute, join } from "node:path";
 import { installCloudflared, CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
 import { startCloudflareIngress } from "./cloudflare/ingress";
 import { startCloudflareConnector } from "./cloudflare/connector";
-import { requestAuthorizationSnapshot, startRemoteAuthorization } from "./cloudflare/authorization";
+import {
+  authorizationFailureCode,
+  requestAuthorizationSnapshot,
+  startRemoteAuthorization,
+} from "./cloudflare/authorization";
+import { reportReliabilityIssue } from "./reliability";
 import { recordRemoteBillingPolicyHint } from "./remoteBillingPolicy";
 import { registerHostAuthorizationNudge } from "./hostConnectivitySignals";
 import { accountStateDirectory } from "./accountAuth";
@@ -150,6 +155,8 @@ export async function startHostConnectivity(
       }
       return authorization;
     } catch (error) {
+      // Startup and the poll share this read; a stop is not a failure.
+      if (!signal?.aborted) reportReliabilityIssue(authorizationFailureCode(error));
       if (
         error instanceof AccountApiError &&
         ((error.status === 403 && error.code === "subscription_required") ||
@@ -314,6 +321,7 @@ export async function startHostConnectivity(
       }),
       accept: (socket, path, ingress) => {
         if (!admissionAvailable()) {
+          reportReliabilityIssue("remote.admission_refused");
           socket.close(1012, "Remote authorization unavailable");
           return;
         }
@@ -451,12 +459,14 @@ export async function startHostConnectivity(
               }))),
       token: async (signal) => {
         if (!(await admitNow())) throw new Error("Remote authorization unavailable");
-        const config = await client.provisionRemoteTunnel(
-          await hostProof(),
-          credentials.hostId!,
-          ingress.port,
-          signal,
-        );
+        const config = await hostProof()
+          .then((proof) =>
+            client.provisionRemoteTunnel(proof, credentials.hostId!, ingress.port, signal),
+          )
+          .catch((error: unknown) => {
+            if (!signal.aborted) reportReliabilityIssue("remote.tunnel_provision_failed");
+            throw error;
+          });
         if (controller.signal.aborted) throw new Error("Remote connector stopped");
         activeTunnelId = config.tunnelId;
         ingress.setHostname(config.hostname);

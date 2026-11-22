@@ -264,7 +264,7 @@ export class ProductAnalytics {
     )
       return this.getState();
     if (value && this.enabled && !this.hasExplicitConsent) {
-      // Confirming Remote's default choice must not rotate its existing product
+      // Confirming the default choice must not rotate the existing product
       // identity or discard pending usage. Only reliability begins a new epoch.
       try {
         this.reliability.setEnabled(true);
@@ -303,7 +303,8 @@ export class ProductAnalytics {
       try {
         this.persistConsent();
       } catch (error) {
-        this.removeConsentOnFailure();
+        // Deleting the saved choice only disables sharing on default-off builds.
+        if (!this.defaultEnabled) this.removeConsentOnFailure();
         throw error;
       }
       if (cleanupError) throw cleanupError;
@@ -936,7 +937,7 @@ export class ProductAnalytics {
     try {
       rmSync(this.consentPath, { force: true });
     } catch {
-      // An absent consent file means disabled; IPC rejects if durable opt-out cannot be recorded.
+      // IPC rejects if durable opt-out cannot be recorded.
     }
   }
 

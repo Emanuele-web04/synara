@@ -155,6 +155,43 @@ describe("analytics ingest and D1 storage", () => {
     expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
   });
 
+  it("stores new host reliability codes only for Beta and keeps legacy Stable ingress totals", async () => {
+    const codes = [
+      "remote.admission_refused",
+      "remote.authorization_failed",
+      "remote.authorization_denied",
+      "remote.authorization_subscription_required",
+      "remote.tunnel_provision_failed",
+      "remote.connector_exited",
+    ];
+    for (const channel of ["stable", "remote"]) {
+      const events = codes.map((code) => reliabilityRecord({ channel, code }));
+      expect((await postReliability({ events })).status).toBe(400);
+    }
+    const stable = reliabilityRecord({ code: "remote.ingress_socket_error" });
+    const events = [
+      stable,
+      ...codes.map((code) =>
+        reliabilityRecord({ channel: "beta", appVersion: "1.6.4-beta.1", code }),
+      ),
+    ];
+    const response = await postReliability({ events });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      stored: true,
+      acknowledged: events.map((event) => event.id),
+    });
+    expect(
+      db.database
+        .prepare(
+          "SELECT code, count FROM reliability_daily WHERE code LIKE 'remote.%' ORDER BY code",
+        )
+        .all(),
+    ).toEqual([...codes, stable.code].toSorted().map((code) => ({ code, count: 1 })));
+    const invalid = reliabilityRecord({ code: "remote.authorization_failed: 503 from host" });
+    expect((await postReliability({ events: [invalid] })).status).toBe(400);
+  });
+
   it("rejects private, invalid, oversize or conflicting reliability batches without partial writes", async () => {
     const original = reliabilityRecord();
     env.INGEST_RATE_LIMITER = { limit: async () => ({ success: false }) };
@@ -781,13 +818,12 @@ describe("analytics ingest and D1 storage", () => {
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
       );
-      // The current receiver also writes the turn-failure columns (0014 deploys first).
-      legacy.database.exec(
-        readFileSync(
-          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      // The current receiver also writes the turn-failure and connection-detail columns
+      // (0014 and 0015 deploy first).
+      for (const name of ["0014_product_turn_failures.sql", "0015_product_connection_detail.sql"])
+        legacy.database.exec(
+          readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"),
+        );
       const at = new Date(now).toISOString();
       const installId = "00000000-0000-4000-8000-0000000000f1";
       const eventId = Number(
@@ -981,13 +1017,12 @@ describe("analytics ingest and D1 storage", () => {
       legacy.database.exec(
         readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
       );
-      // The current receiver also writes the turn-failure columns (0014 deploys first).
-      legacy.database.exec(
-        readFileSync(
-          new URL("./migrations/0014_product_turn_failures.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      // The current receiver also writes the turn-failure and connection-detail columns
+      // (0014 and 0015 deploy first).
+      for (const name of ["0014_product_turn_failures.sql", "0015_product_connection_detail.sql"])
+        legacy.database.exec(
+          readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"),
+        );
       const send = () =>
         worker.fetch(
           new Request("https://worker.invalid/v1/product-events", {
@@ -1346,6 +1381,119 @@ describe("analytics ingest and D1 storage", () => {
       }),
     ]);
     expect(body.turnFailures[0].lastSeen).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("adds connection network and route columns to a populated product table without changing its rows", () => {
+    const deployed = new SQLiteD1();
+    try {
+      applyMigrations(deployed.database, "0014");
+      const columns = () =>
+        deployed.database
+          .prepare("PRAGMA table_info(product_events)")
+          .all()
+          .map((column) => column.name);
+      expect(columns()).not.toContain("network");
+      deployed.database
+        .prepare(
+          `INSERT INTO product_events (event_id, ts, received_at, install_id, channel, surface,
+             platform, app_version, event, outcome, mode, failure)
+           VALUES (?, ?, ?, ?, 'stable', 'ios', 'ios', '1.0.0', 'connection.connect', 'failed',
+             'remote', 'timeout')`,
+        )
+        .run(
+          crypto.randomUUID(),
+          new Date(now).toISOString(),
+          new Date(now).toISOString(),
+          "00000000-0000-4000-8000-0000000000c2",
+        );
+      const before = deployed.database.prepare("SELECT * FROM product_events").get();
+      deployed.database.exec(
+        readFileSync(
+          new URL("./migrations/0015_product_connection_detail.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(columns()).toEqual(expect.arrayContaining(["network", "route"]));
+      expect(deployed.database.prepare("SELECT * FROM product_events").get()).toEqual({
+        ...before,
+        network: null,
+        route: null,
+      });
+      // The columns hold only the fixed values.
+      for (const [column, value] of [
+        ["network", "5g"],
+        ["route", "relay"],
+      ])
+        expect(() =>
+          deployed.database.prepare(`UPDATE product_events SET ${column} = ?`).run(value),
+        ).toThrow(/CHECK/);
+    } finally {
+      deployed.close();
+    }
+  });
+
+  it("stores connection failure detail and serves it grouped behind dashboard auth", async () => {
+    const attempt = (patch) =>
+      envelope({
+        id: crypto.randomUUID(),
+        surface: "ios",
+        platform: "ios",
+        event: "connection.connect",
+        outcome: "failed",
+        mode: "remote",
+        feature: undefined,
+        durationMs: undefined,
+        ...patch,
+      });
+    const first = "00000000-0000-4000-8000-0000000000e1";
+    const second = "00000000-0000-4000-8000-0000000000e2";
+    const tunnelUpgrade = {
+      failure: "route_upgrade",
+      httpStatus: 502,
+      network: "cellular",
+      route: "tunnel",
+    };
+    const response = await postEvents([
+      attempt({ installId: first, ...tunnelUpgrade }),
+      attempt({ installId: second, event: "connection.reconnect", ...tunnelUpgrade }),
+      attempt({ installId: second, ...tunnelUpgrade }),
+      attempt({ installId: first, failure: "no_route", network: "cellular" }),
+      // An older client without detail still counts as a failure.
+      attempt({ installId: first }),
+      attempt({ installId: first, outcome: "succeeded", network: "wifi", route: "local" }),
+      // Free text, a category on a success, a turn category or a stray dimension is dropped.
+      attempt({ installId: first, failure: "getaddrinfo ENOTFOUND host.example.test" }),
+      attempt({ installId: first, outcome: "succeeded", failure: "timeout" }),
+      attempt({ installId: first, failure: "edge_blocked" }),
+      attempt({ installId: first, route: "relay" }),
+      envelope({ id: crypto.randomUUID(), network: "wifi" }),
+    ]);
+    expect(await response.json()).toEqual({ accepted: 6, received: 11 });
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const dashboard = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    const body = await dashboard.json();
+    const row = (patch) => ({
+      day,
+      surface: "ios",
+      appVersion: "1.2.3",
+      mode: "remote",
+      route: null,
+      network: null,
+      failure: null,
+      httpStatus: null,
+      ...patch,
+    });
+    expect(body.connectionFailures).toEqual([
+      row({ ...tunnelUpgrade, attempts: 3, installations: 2 }),
+      row({ failure: null, attempts: 1, installations: 1 }),
+      row({ failure: "no_route", network: "cellular", attempts: 1, installations: 1 }),
+    ]);
   });
 
   it("discards valid and malformed legacy account identifiers without linking installations", async () => {

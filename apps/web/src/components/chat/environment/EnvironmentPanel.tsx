@@ -88,6 +88,9 @@ import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 // Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
 // the chat content by this amount clears the overlay while leaving the transcript's
 // scrollbar pinned to the viewport's far right.
+// Leave enough room for the transcript and composer beside the docked card.
+export const ENVIRONMENT_DOCKED_MIN_COLUMN_WIDTH_PX = 860;
+
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 export interface EnvironmentPanelProps {

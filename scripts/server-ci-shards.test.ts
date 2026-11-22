@@ -7,8 +7,15 @@ const serverRoot = fileURLToPath(new URL("../apps/server/", import.meta.url));
 const count = 3;
 // Expected placement must not come from the config being checked.
 const expectedPins: Record<string, number> = {
-  "src/orchestration/Layers/ProviderCommandReactor.test.ts": 2,
   "src/accountLiveActivityReporter.test.ts": 2,
+  // ProviderCommandReactor.test.ts was split into these seven files; all stay on shard 2.
+  "src/orchestration/Layers/ProviderCommandReactor.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.claudeCacheReview.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.deliveryRecovery.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.resumeAndEdits.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.turnStart.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.queueAndHandoff.test.ts": 2,
+  "src/orchestration/Layers/ProviderCommandReactor.sessionLifecycle.test.ts": 2,
 };
 
 const name = (file: TestSpecification) => relative(serverRoot, file.moduleId).replaceAll("\\", "/");

@@ -111,10 +111,10 @@
     "yaml": "^2.8.3"
   },
   "engines": {
-    "bun": "^1.4.4",
+    "bun": "^1.4.5",
     "node": "^24.13.1"
   },
-  "packageManager": "bun@1.4.4",
+  "packageManager": "bun@1.4.5",
   "msw": {
     "workerDirectory": [
       "apps/web/public"

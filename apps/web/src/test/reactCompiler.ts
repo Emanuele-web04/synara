@@ -8,9 +8,10 @@ export interface CompilerEvent {
   readonly data?: unknown;
 }
 
-export function compileReactModule(filePath: string): CompilerEvent[] {
+/** Compiles `source` as the module at `filePath` and returns the compiler's events. */
+export function compileReactSource(filePath: string, source: string): CompilerEvent[] {
   const events: CompilerEvent[] = [];
-  transformSync(readFileSync(filePath, "utf8"), {
+  transformSync(source, {
     filename: filePath,
     configFile: false,
     babelrc: false,
@@ -28,4 +29,8 @@ export function compileReactModule(filePath: string): CompilerEvent[] {
     ],
   });
   return events;
+}
+
+export function compileReactModule(filePath: string): CompilerEvent[] {
+  return compileReactSource(filePath, readFileSync(filePath, "utf8"));
 }
