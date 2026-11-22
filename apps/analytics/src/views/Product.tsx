@@ -518,7 +518,7 @@ export function Product({
                 ) : (
                   <EChart
                     height={250}
-                    ariaLabel="Daily opt-in product events"
+                    ariaLabel="Daily product events"
                     option={{
                       ...chartChrome(theme),
                       xAxis: {
