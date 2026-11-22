@@ -3716,11 +3716,6 @@ const make = Effect.gen(function* () {
     // budget below already reserves room for it.
     // A worktree chat edits the primary folder in its worktree, so point the model there.
     const threadProject = yield* resolveThreadWorkspaceProject(thread);
-    let selectedProvider =
-      input.modelSelection?.provider ??
-      threadSessionModelSelections.get(input.threadId)?.provider ??
-      thread.session?.providerName ??
-      thread.modelSelection.provider;
     const threadWorktreePath =
       resolveThreadWorkspaceState({
         envMode: thread.envMode,
@@ -3731,7 +3726,7 @@ const make = Effect.gen(function* () {
     const projectCwd = threadWorktreePath ?? threadProject?.workspaceRoot;
     const guestFolderPaths =
       (threadProject?.additionalFolders?.length ?? 0) > 0 &&
-      selectedProvider === "antigravity" &&
+      (input.modelSelection?.provider ?? thread.modelSelection.provider) === "antigravity" &&
       projectCwd !== undefined &&
       resolveWslWorkspace(projectCwd) !== null;
     // The adapter validates distro membership before sending this context to the process.
@@ -3942,6 +3937,11 @@ const make = Effect.gen(function* () {
     });
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
+    let selectedProvider =
+      input.modelSelection?.provider ??
+      threadSessionModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
     const registerPriorTranscriptBootstrapOnFreshStart =
       selectedProvider === "opencode" &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
