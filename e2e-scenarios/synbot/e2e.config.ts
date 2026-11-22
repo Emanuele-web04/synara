@@ -10,6 +10,9 @@ const app = {
   command: {
     executable: process.execPath,
     args: ["start-app.ts", "{port}"],
+    // The runner passes only PATH, HOME and the temp variables; the app and the tests must agree
+    // on the scenario folder.
+    inheritEnv: ["SYNBOT_SCENARIO_DIR"],
     startupTimeout: 300_000,
     log: ".e2e/app.log",
   },
