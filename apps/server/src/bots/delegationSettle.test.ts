@@ -162,9 +162,17 @@ describe("evaluateDelegationSettlement", () => {
     });
 
     it("keeps waiting while another active turn delays an onward report", () => {
+      const unrelated = turn({
+        turnId: "unrelated-turn",
+        pendingMessageId: "user-msg",
+        state: "running",
+        requestedAt: at(280),
+        completedAt: null,
+        assistantMessageId: null,
+      });
       const result = evaluateDelegationSettlement({
         messageId: "synbot:delegation:d1",
-        turns: [turn({})],
+        turns: [turn({}), unrelated],
         attributableMessageIds: new Set(),
         items: [],
         onward: [onward({ reportMessageId: "synbot:report:r1", reportedAt: at(300) })],
@@ -216,6 +224,91 @@ describe("evaluateDelegationSettlement", () => {
       expect(result.state).toBe("settled");
       expect(result.outcome).toBe("completed");
       expect(result.lastAssistantMessageId).toBe("a2");
+    });
+
+    it("stops holding for a session that names a turn that already ended", () => {
+      const reported = onward({ reportMessageId: "synbot:report:r1", reportedAt: at(300) });
+      const ended = turn({ turnId: "stale-turn", pendingMessageId: "user-msg", state: "error" });
+      const result = evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns: [turn({}), ended],
+        attributableMessageIds: new Set(),
+        items: [],
+        onward: [reported],
+        sessionActiveTurnId: "stale-turn",
+        nowMs: NOW,
+        graceMs: 60_000,
+      });
+      expect(result.state).toBe("settled");
+      // Nor for a turn the projection never had.
+      expect(
+        evaluateDelegationSettlement({
+          messageId: "synbot:delegation:d1",
+          turns: [turn({})],
+          attributableMessageIds: new Set(),
+          items: [],
+          onward: [reported],
+          sessionActiveTurnId: "gone-turn",
+          nowMs: NOW,
+          graceMs: 60_000,
+        }).state,
+      ).toBe("settled");
+    });
+
+    it("an onward report wake is not the Hub's roll-up of finished tasks", () => {
+      const task = item({ updatedAt: at(10) });
+      const reportedWake = turn({
+        turnId: "t2",
+        pendingMessageId: "synbot:report:r1",
+        requestedAt: at(8),
+        completedAt: at(5),
+        assistantMessageId: "a2",
+      });
+      const result = evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns: [turn({}), reportedWake],
+        attributableMessageIds: new Set(["hub-wake-1"]),
+        items: [task],
+        onward: [onward({ reportMessageId: "synbot:report:r1", reportedAt: at(9) })],
+        sessionActiveTurnId: null,
+        nowMs: NOW,
+        graceMs: 60_000,
+      });
+      // The Hub's wake has not rolled the task up yet: keep waiting out the grace window.
+      expect(result.state).toBe("working");
+    });
+
+    it("a failed report wake does not fail the delegation once a later turn completed", () => {
+      const failedWake = turn({
+        turnId: "t2",
+        pendingMessageId: "synbot:report:r1",
+        state: "error",
+        requestedAt: at(240),
+        completedAt: at(230),
+        assistantMessageId: null,
+      });
+      const hubWake = turn({
+        turnId: "t3",
+        pendingMessageId: "hub-wake-1",
+        requestedAt: at(200),
+        completedAt: at(100),
+        assistantMessageId: "a3",
+      });
+      const result = evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns: [turn({}), failedWake, hubWake],
+        attributableMessageIds: new Set(["hub-wake-1"]),
+        items: [],
+        onward: [onward({ reportMessageId: "synbot:report:r1", reportedAt: at(250) })],
+        sessionActiveTurnId: null,
+        nowMs: NOW,
+        graceMs: 60_000,
+      });
+      expect(result).toMatchObject({
+        state: "settled",
+        outcome: "completed",
+        lastAssistantMessageId: "a3",
+      });
     });
   });
 });

@@ -103,15 +103,24 @@ export function evaluateDelegationSettlement(input: {
   }
   const turnIds = [...turnIdSet];
   const woken = new Set(delegated.map((turn) => turn.pendingMessageId));
+  // The target is busy only with a turn that is really running: a session can keep naming a turn
+  // that already ended, and that must not hold a report open forever.
+  const targetBusy =
+    input.sessionActiveTurnId !== null &&
+    input.turns.some(
+      (turn) =>
+        turn.turnId === input.sessionActiveTurnId &&
+        (turn.state === "running" || turn.state === "pending"),
+    );
   // Still owed: not reported yet, or reported while the turn its report wakes has not shown up
-  // (a report queued behind another active turn keeps holding until that turn finishes; once
+  // (a report queued behind another running turn keeps holding until that turn finishes; once
   // idle, a report that never wakes anyone stops holding the delegation after the grace window).
   const onwardOpen = onward.some(
     (child) =>
       child.reportedAt === null ||
       (child.reportMessageId !== null &&
         !woken.has(child.reportMessageId) &&
-        (input.sessionActiveTurnId !== null || input.nowMs - time(child.reportedAt) < graceMs)),
+        (targetBusy || input.nowMs - time(child.reportedAt) < graceMs)),
   );
   const items = input.items.filter(
     (item) => item.delegationTurnId !== null && turnIdSet.has(item.delegationTurnId),
@@ -135,10 +144,13 @@ export function evaluateDelegationSettlement(input: {
   if (items.length > 0) {
     const lastItemUpdatedAt = Math.max(...items.map((item) => time(item.updatedAt)));
     // Once a Hub wake turn has already rolled up the finished tasks, settle without waiting
-    // out the full 60s grace window.
+    // out the full 60s grace window. Only the Hub's own wakes roll tasks up; a turn woken by an
+    // onward report is not one.
     const rolledUpAfterTasks = delegated.some(
       (turn) =>
-        turn.pendingMessageId !== input.messageId &&
+        turn.pendingMessageId !== null &&
+        input.attributableMessageIds.has(turn.pendingMessageId) &&
+        !reportIds.has(turn.pendingMessageId) &&
         turn.state === "completed" &&
         time(turn.completedAt) >= lastItemUpdatedAt,
     );
@@ -156,9 +168,14 @@ export function evaluateDelegationSettlement(input: {
     .filter((turn) => turn.pendingMessageId !== null && reportIds.has(turn.pendingMessageId))
     .toSorted((left, right) => time(left.requestedAt) - time(right.requestedAt))
     .at(-1);
+  // A failed report wake fails the delegation unless a later turn of it went on and completed.
   const onwardWakeFailed =
     latestOnwardWake !== undefined &&
-    (latestOnwardWake.state === "error" || latestOnwardWake.state === "interrupted");
+    (latestOnwardWake.state === "error" || latestOnwardWake.state === "interrupted") &&
+    !delegated.some(
+      (turn) =>
+        turn.state === "completed" && time(turn.requestedAt) > time(latestOnwardWake.requestedAt),
+    );
   const turnsFailed =
     (delegated.every((turn) => turn.state === "error" || turn.state === "interrupted") &&
       items.length === 0) ||
