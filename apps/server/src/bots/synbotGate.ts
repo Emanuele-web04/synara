@@ -43,19 +43,44 @@ interface CachedAltoAccess {
   readonly checkedAtMs: number;
 }
 
-const altoCacheByDir = new Map<string, CachedAltoAccess>();
-const inflightByDir = new Map<string, Promise<boolean>>();
+interface InflightAltoCheck {
+  readonly accountKey: string;
+  readonly epoch: number;
+  promise: Promise<boolean>;
+}
 
-const accountKeyOf = (accountUrl: string, userId?: string) =>
-  `${accountUrl}::${userId ?? "unknown"}`;
+const altoCacheByDir = new Map<string, CachedAltoAccess>();
+const inflightByDir = new Map<string, InflightAltoCheck>();
+/**
+ * Bumped by every fresh grant and every sign-out. A check started under an older epoch was
+ * overtaken by newer knowledge: it neither writes its result nor removes a newer check.
+ */
+const epochByDir = new Map<string, number>();
+const epochOf = (credentialDir: string) => epochByDir.get(credentialDir) ?? 0;
+const nextEpoch = (credentialDir: string) => {
+  epochByDir.set(credentialDir, epochOf(credentialDir) + 1);
+};
+
+/** Billing is per organization: a token is scoped to one, so the cache is too. */
+const accountKeyOf = (input: {
+  readonly accountUrl: string;
+  readonly organizationId?: string | undefined;
+  readonly userId?: string | undefined;
+}) => `${input.accountUrl}::${input.organizationId ?? "unknown"}::${input.userId ?? "unknown"}`;
 
 /** Records a fresh billing result from AccountSession so checkout unlocks SynBot immediately. */
 export function noteServerAltoAccess(
   credentialDir: string,
-  input: { readonly accountUrl: string; readonly userId?: string; readonly granted: boolean },
+  input: {
+    readonly accountUrl: string;
+    readonly organizationId?: string;
+    readonly userId?: string;
+    readonly granted: boolean;
+  },
 ): void {
+  nextEpoch(credentialDir);
   altoCacheByDir.set(credentialDir, {
-    accountKey: accountKeyOf(input.accountUrl, input.userId),
+    accountKey: accountKeyOf(input),
     granted: input.granted,
     checkedAtMs: Date.now(),
   });
@@ -63,9 +88,17 @@ export function noteServerAltoAccess(
 
 /** Clears cached Alto access immediately on sign-out or account deletion. */
 export function clearServerAltoAccess(credentialDir: string): void {
+  nextEpoch(credentialDir);
   altoCacheByDir.delete(credentialDir);
   inflightByDir.delete(credentialDir);
 }
+
+const freshCached = (credentialDir: string, accountKey: string, nowMs: number) => {
+  const cached = altoCacheByDir.get(credentialDir);
+  if (!cached || cached.accountKey !== accountKey) return null;
+  const ttl = cached.granted ? GRANTED_CACHE_TTL_MS : DENIED_COALESCE_TTL_MS;
+  return nowMs - cached.checkedAtMs < ttl ? cached.granted : null;
+};
 
 /**
  * Verifies active Synara Alto (Pro) access for `credentialDir` against the Account API.
@@ -79,40 +112,34 @@ export async function checkServerSynbotAltoAccess(credentialDir: string): Promis
     altoCacheByDir.delete(credentialDir);
     return false;
   }
-  const key = accountKeyOf(credentials.accountUrl, credentials.userId);
-  const now = Date.now();
-  const cached = altoCacheByDir.get(credentialDir);
-  if (cached && cached.accountKey === key) {
-    const ttl = cached.granted ? GRANTED_CACHE_TTL_MS : DENIED_COALESCE_TTL_MS;
-    if (now - cached.checkedAtMs < ttl) return cached.granted;
-  }
+  const key = accountKeyOf(credentials);
+  const cached = freshCached(credentialDir, key, Date.now());
+  if (cached !== null) return cached;
+  const epoch = epochOf(credentialDir);
   const existing = inflightByDir.get(credentialDir);
-  if (existing) return existing;
-  const check = (async () => {
+  if (existing && existing.accountKey === key && existing.epoch === epoch) return existing.promise;
+  const check: InflightAltoCheck = { accountKey: key, epoch, promise: Promise.resolve(false) };
+  inflightByDir.set(credentialDir, check);
+  check.promise = (async () => {
+    let granted = false;
     try {
       const client = createServerAccountClient(credentials.accountUrl);
       const status = await withFreshAccessToken(
         { baseDir: credentialDir, client, credentials },
         (token) => client.billingStatus(token),
       );
-      const granted = status.available === true && status.access === "granted";
-      altoCacheByDir.set(credentialDir, {
-        accountKey: key,
-        granted,
-        checkedAtMs: Date.now(),
-      });
-      return granted;
+      granted = status.available === true && status.access === "granted";
     } catch {
-      altoCacheByDir.set(credentialDir, {
-        accountKey: key,
-        granted: false,
-        checkedAtMs: Date.now(),
-      });
-      return false;
-    } finally {
-      inflightByDir.delete(credentialDir);
+      granted = false;
     }
-  })();
-  inflightByDir.set(credentialDir, check);
-  return check;
+    if (epochOf(credentialDir) !== epoch) {
+      // A grant or sign-out landed while this check ran: answer from what is known now.
+      return freshCached(credentialDir, key, Date.now()) ?? false;
+    }
+    altoCacheByDir.set(credentialDir, { accountKey: key, granted, checkedAtMs: Date.now() });
+    return granted;
+  })().finally(() => {
+    if (inflightByDir.get(credentialDir) === check) inflightByDir.delete(credentialDir);
+  });
+  return check.promise;
 }
