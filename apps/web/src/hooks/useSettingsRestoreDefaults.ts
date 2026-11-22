@@ -210,6 +210,9 @@ export function useSettingsRestoreDefaults({
     settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions
       ? ["settings:sourceControlWritingStyle"]
       : []),
+    ...(settings.gitAttributionEnabled !== defaults.gitAttributionEnabled
+      ? ["settings:addSynaraAttribution"]
+      : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||

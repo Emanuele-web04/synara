@@ -52,7 +52,7 @@ export function SidePanelOverlay({
         className={cn(
           ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
           ENVIRONMENT_PANEL_MOTION_CLASS,
-          "flex flex-col",
+          "flex min-w-0 max-w-full flex-col",
           cardClassName,
           open
             ? "pointer-events-auto translate-x-0 opacity-100"

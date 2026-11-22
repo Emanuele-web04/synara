@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { AccountApiError } from "@synara/shared/account";
-import type { HostAuthorizationSnapshot } from "@synara/contracts";
+import type { HostAuthorizationSnapshot, ReliabilityCode } from "@synara/contracts";
 
 import { findAccountApiError, isRemoteAccessRefusal } from "../accountRefusal";
 import { exponentialBackoffMs, jitterMs } from "../backoff";
@@ -63,6 +63,29 @@ const OWNERSHIP_DENIAL_CODES: ReadonlySet<string> = new Set([
   "host_not_found",
   "not_host_owner",
 ]);
+
+/**
+ * The fixed reliability category for a failed host authorization read. Refusals that
+ * need the owner to act stay apart from outages, so neither hides the other.
+ */
+export function authorizationFailureCode(
+  error: unknown,
+): Extract<
+  ReliabilityCode,
+  | "remote.authorization_failed"
+  | "remote.authorization_denied"
+  | "remote.authorization_subscription_required"
+> {
+  const answer = findAccountApiError(error);
+  if (answer?.status === 403 && answer.code === "subscription_required")
+    return "remote.authorization_subscription_required";
+  if (
+    isRemoteAccessRefusal(error) ||
+    (answer && [401, 403, 404].includes(answer.status) && OWNERSHIP_DENIAL_CODES.has(answer.code))
+  )
+    return "remote.authorization_denied";
+  return "remote.authorization_failed";
+}
 
 function describeFailure(error: unknown): string {
   if (error instanceof AccountApiError) return `${error.status} ${error.code}`;

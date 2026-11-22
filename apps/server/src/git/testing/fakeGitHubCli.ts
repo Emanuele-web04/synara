@@ -6,6 +6,7 @@
 //       fixtures ("OPEN", "CONFLICTING", GraphQL nodes, …) normalize exactly like production.
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { Effect, Semaphore } from "effect";
 import type {
@@ -100,9 +101,12 @@ function isGitHubCliError(error: unknown): error is GitHubCliError {
 export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   service: GitHubCliShape;
   ghCalls: string[];
+  /** Body-file contents of every `gh pr create`, read before the caller removes the file. */
+  createdPrBodies: string[];
 } {
   const prListQueue = [...(scenario.prListSequence ?? [])];
   const ghCalls: string[] = [];
+  const createdPrBodies: string[] = [];
 
   const execute: GitHubCliShape["execute"] = (input) => {
     const args = [...input.args];
@@ -133,6 +137,11 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     }
 
     if (args[0] === "pr" && args[1] === "create") {
+      const bodyFileIndex = args.indexOf("--body-file");
+      const bodyFile = bodyFileIndex >= 0 ? args[bodyFileIndex + 1] : undefined;
+      if (bodyFile) {
+        createdPrBodies.push(readFileSync(bodyFile, "utf8"));
+      }
       if (scenario.createPullRequestError) {
         return Effect.fail(scenario.createPullRequestError);
       }
@@ -470,6 +479,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       },
     },
     ghCalls,
+    createdPrBodies,
   };
 }
 

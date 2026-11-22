@@ -13,7 +13,11 @@ import {
 import { readInlineVisualEmbedIds } from "@synara/shared/inlineVisual";
 import { t } from "~/i18n";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
-import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
+import {
+  isCodexRuntimeWarningType,
+  isFileChangeWorkLogEntry,
+  type WorkLogUserInputExchangeItem,
+} from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import { mergeSubagentRunEntries } from "./SubagentRunCard.logic";
@@ -62,8 +66,8 @@ export type CollapsedTurnItem =
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
-// summarizable tool rows fold into one "Ran N commands..." disclosure while
-// narration and rich rows pass through individually.
+// tool runs fold into one disclosure. Codex reasoning stays in order inside
+// the run while assistant messages and rich rows remain boundaries.
 export type CollapsedTurnChunk =
   | { kind: "item"; item: CollapsedTurnItem }
   | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
@@ -81,7 +85,7 @@ export function chunkCollapsedTurnItems(
   const flushPendingRun = () => {
     if (pendingRun.length === 0) return;
     const pendingRowCount = pendingRun.reduce(
-      (total, item) => total + workEntryRowCount(item.entry),
+      (total, item) => total + (item.entry.codexReasoning ? 0 : workEntryRowCount(item.entry)),
       0,
     );
     if (pendingRowCount >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
@@ -99,7 +103,10 @@ export function chunkCollapsedTurnItems(
   };
 
   for (const item of items) {
-    if (item.kind === "work" && isSummarizableToolCallEntry(item.entry)) {
+    if (
+      item.kind === "work" &&
+      (item.entry.codexReasoning || isSummarizableToolCallEntry(item.entry))
+    ) {
       pendingRun.push(item);
       continue;
     }
@@ -123,76 +130,30 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
 }
 
 // One renderable block of a work group: `summary` is non-null when the block
-// renders collapsed behind a "Ran N commands..." disclosure. `liveEntry` is
-// non-null while a tool run is still open: the run renders as one line wearing
-// the latest status description, falling back to the newest call.
+// renders collapsed behind a "Ran N commands..." disclosure.
 export interface WorkEntryRenderPlanChunk {
   id: string;
   entries: WorkLogEntry[];
   summary: ToolCallGroupSummary | null;
-  liveEntry: WorkLogEntry | null;
-}
-
-// Keep the latest activity description visible as technical calls arrive.
-function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
-  return entries.findLast(isCodexActivityStatusWorkEntry) ?? entries.at(-1)!;
 }
 
 // Plans a work group's entries block by block. Boundaries are the entries a
 // summary can never absorb — thinking/info narration, errors, rich cards — so
-// each tool run between boundaries folds independently. A run stays expanded
-// only while it still has running work, or while it is the trailing block of
-// the live transcript tail (`tailIsLive`): the moment a new narration block
-// starts after it, it stops being the tail and collapses mid-turn. An expanded
-// run never lists its rows: it folds to a single line for its selected entry.
+// each tool run between boundaries folds independently into its summary.
+// Codex reasoning travels with the calls without contributing to tool counts.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
-  options: { tailIsLive: boolean },
 ): WorkEntryRenderPlanChunk[] {
-  const chunks = chunkWorkEntries(entries);
-  return chunks.map((chunk, index) => {
-    if (chunk.kind === "item") {
-      return { id: chunk.id, entries: [chunk.entry], summary: null, liveEntry: null };
-    }
-    const summary = summarizeToolCallGroup(chunk.entries);
-    const isLiveTail = options.tailIsLive && index === chunks.length - 1;
-    const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
-    return {
-      id: chunk.id,
-      entries: chunk.entries,
-      summary: collapsed ? summary : null,
-      liveEntry: summary !== null && !collapsed ? pickLiveToolEntry(chunk.entries) : null,
-    };
-  });
+  return chunkWorkEntries(entries).map((chunk) =>
+    chunk.kind === "item"
+      ? { id: chunk.id, entries: [chunk.entry], summary: null }
+      : { id: chunk.id, entries: chunk.entries, summary: summarizeToolCallGroup(chunk.entries) },
+  );
 }
 
-// A folded chunk renders as one line (settled summary or live newest call)
-// instead of listing its rows.
+// A folded chunk renders as one summary line instead of listing its rows.
 export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
-  return chunk.summary !== null || chunk.liveEntry !== null;
-}
-
-// How a folded chunk renders: the line's summary, the rows its disclosure
-// reveals, and a suffix for the open-state key. A live line reveals only the
-// other entries, and keeps its own open state so the run
-// settles collapsed even when the live line was opened.
-export function resolveWorkEntryChunkFold(
-  chunk: WorkEntryRenderPlanChunk,
-): { summary: ToolCallGroupSummary; entries: WorkLogEntry[]; keySuffix: string } | null {
-  if (chunk.summary !== null) {
-    return { summary: chunk.summary, entries: chunk.entries, keySuffix: "" };
-  }
-  const liveSummary = chunk.liveEntry ? summarizeToolCallGroup(chunk.entries) : null;
-  if (!liveSummary) return null;
-  return {
-    summary: liveSummary,
-    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows
-    // still belong behind the line.
-    entries: chunk.entries.filter(
-      (entry) => entry !== chunk.liveEntry || workEntryRowCount(entry) > 1,
-    ),
-    keySuffix: ":live",
-  };
+  return chunk.summary !== null;
 }
 
 export interface CappedWorkEntryRenderPlan {
@@ -248,26 +209,190 @@ export function capOpenWorkEntryRenderChunks(
   };
 }
 
-// The newest work group in the transcript — the one still allowed to render its
-// rows inline while the turn is live. Everything older collapses to a summary.
-export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>): string | null {
+// Entries a standalone work row lists. Thread-creation milestones belong to the
+// end-of-turn recap; handoff dividers and turn failures render on their own.
+export function standaloneWorkGroupListEntries(
+  entries: ReadonlyArray<WorkLogEntry>,
+): WorkLogEntry[] {
+  return entries.filter(
+    (entry) => !entry.synaraThreadCreation && !entry.providerHandoff && !entry.turnFailure,
+  );
+}
+
+function isGenericFileChangeEntry(entry: WorkLogEntry): boolean {
+  return isFileChangeWorkLogEntry(entry) && (entry.changedFiles?.length ?? 0) === 0;
+}
+
+// Entries an assistant message's leading or inline work group lists, in order.
+// A file change without file names is dropped once the group holds one: the
+// turn's edited-files list names those files instead.
+export function inlineWorkGroupListEntries(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry[] {
+  const displayEntries = entries.filter((entry) => !entry.synaraThreadCreation);
+  const hasGenericFileChangeEntry = displayEntries.some(
+    (entry) => entry.tone === "tool" && isGenericFileChangeEntry(entry),
+  );
+  return hasGenericFileChangeEntry
+    ? displayEntries.filter((entry) => !isGenericFileChangeEntry(entry))
+    : displayEntries;
+}
+
+// What the working indicator wears for its claimed run: a call still running
+// (or the provider's newest activity status), both shimmering like "Thinking",
+// or the newest call when it failed, in the failure tone and still.
+export type LiveToolCallTone = "running" | "status" | "failed";
+
+export interface LiveToolCallDisplay {
+  entry: WorkLogEntry;
+  tone: LiveToolCallTone;
+}
+
+// The work claimed by the working row. `chunkId` identifies either the start
+// of the run or a single entry when the rest stays visible in history.
+// `display` is what the indicator shows for the run; null reads "Thinking".
+export interface LiveToolCallTarget {
+  groupId: string;
+  chunkId: string;
+  entryOnly?: true | undefined;
+  display: LiveToolCallDisplay | null;
+}
+
+// Picks the indicator's line from the claimed run, oldest first. A running call
+// always wins, the newest one among parallel calls. Otherwise only the newest
+// entry speaks: a failed call, or a Codex activity status. A finished call
+// reads "Thinking": the agent is between calls.
+export function pickLiveToolCallDisplay(
+  entries: ReadonlyArray<WorkLogEntry>,
+): LiveToolCallDisplay | null {
+  const running = entries.findLast((entry) => entry.toolStatus === "running");
+  if (running) return { entry: running, tone: "running" };
+  const newest = entries.at(-1);
+  if (!newest) return null;
+  if (newest.toolStatus === "failed") return { entry: newest, tone: "failed" };
+  if (isCodexActivityStatusWorkEntry(newest)) return { entry: newest, tone: "status" };
+  return null;
+}
+
+function trailingToolRunTarget(
+  groupId: string,
+  entries: ReadonlyArray<WorkLogEntry>,
+): LiveToolCallTarget | null {
+  // Codex announces a command before requesting approval and does not start it
+  // again after a grant. Claim that command while keeping the approval visible.
+  const latest = entries.at(-1);
+  if (latest?.grantedCommandApproval) {
+    const requestIndex = latest.activityKind === "approval.resolved" ? -2 : -1;
+    const request = entries.at(requestIndex);
+    const command = entries.at(requestIndex - 1);
+    const requestedCommand = request?.rawCommand ?? request?.command;
+    return request?.activityKind === "approval.requested" &&
+      request.grantedCommandApproval &&
+      command?.itemType === "command_execution" &&
+      command.toolStatus === "running" &&
+      requestedCommand &&
+      (command.rawCommand ?? command.command) === requestedCommand
+      ? {
+          groupId,
+          chunkId: command.id,
+          entryOnly: true,
+          display: { entry: command, tone: "running" },
+        }
+      : null;
+  }
+
+  let start = entries.length;
+  let hasCodexReasoning = false;
+  while (start > 0) {
+    const entry = entries[start - 1]!;
+    if (!entry.codexReasoning && !isSummarizableToolCallEntry(entry)) break;
+    hasCodexReasoning ||= entry.codexReasoning === true;
+    start -= 1;
+  }
+  if (start === entries.length) return null;
+  const display = pickLiveToolCallDisplay(entries.slice(start));
+  if (hasCodexReasoning) {
+    return display ? { groupId, chunkId: display.entry.id, entryOnly: true, display } : null;
+  }
+  return { groupId, chunkId: entries[start]!.id, display };
+}
+
+// Resolves the run the working row claims, or null when there is none. Only a
+// transcript that ends in the working row qualifies, and only when the content
+// right above it is the live work group itself: assistant text, a visual or a
+// leading group (whose message text follows it) means the run already settled
+// into history.
+export function findLiveToolCallTarget(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+): LiveToolCallTarget | null {
+  let hasWorkingRow = false;
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
+    if (row.kind === "working") {
+      hasWorkingRow = true;
+      continue;
+    }
+    if (row.kind === "worktree-setup") continue;
+    if (!hasWorkingRow) return null;
     if (row.kind === "work") {
-      return row.id;
+      const entries = standaloneWorkGroupListEntries(row.groupedEntries);
+      // An all-subagent group renders as one merged card, never as tool rows.
+      if (entries.every((entry) => entry.subagentRun)) return null;
+      return trailingToolRunTarget(row.id, entries);
     }
-    if (row.kind === "message") {
-      const groupId = row.inlineWorkGroupId ?? row.leadingWorkGroupId;
-      if (groupId) {
-        return groupId;
-      }
-      // A user message closes the previous turn: nothing before it is live.
-      if (row.message.role === "user") {
-        return null;
-      }
+    if (row.kind === "message" && row.message.role === "assistant" && row.inlineWorkGroupId) {
+      return trailingToolRunTarget(
+        row.inlineWorkGroupId,
+        inlineWorkGroupListEntries(row.inlineWorkEntries ?? []),
+      );
     }
+    return null;
   }
   return null;
+}
+
+// A normal live run takes the tail. A command claimed after approval leaves
+// the intervening approval rows in history.
+export function withoutLiveToolCallRun(
+  entries: WorkLogEntry[],
+  chunkId: string | null,
+  entryOnly = false,
+): WorkLogEntry[] {
+  if (chunkId === null) return entries;
+  const runStart = entries.findIndex((entry) => entry.id === chunkId);
+  if (runStart < 0) return entries;
+  return entryOnly ? entries.toSpliced(runStart, 1) : entries.slice(0, runStart);
+}
+
+// The one "live tail" signal both work-group render sites read: the run the
+// working row claims. There is none without a working row (turn over, or
+// worktree setup replacing it), and none while the indicator reads anything
+// but "Thinking" (loading, startup, delivery checks, waiting on the user): the
+// run then renders settled in history, never as a second live line.
+export function resolveLiveTailClaim(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  indicatorReadsThinking: boolean,
+): LiveToolCallTarget | null {
+  if (!indicatorReadsThinking) return null;
+  const lastRow = rows.at(-1);
+  return lastRow?.kind === "working" ? (lastRow.liveToolCall ?? null) : null;
+}
+
+// True when a standalone work row has nothing left to render because the
+// working indicator wears its only run: it must not leave an empty padded gap.
+export function isWorkRowYieldedToLiveToolCall(
+  row: MessagesTimelineRow,
+  liveToolCall: Pick<LiveToolCallTarget, "groupId" | "chunkId" | "entryOnly"> | null,
+): boolean {
+  return (
+    row.kind === "work" &&
+    liveToolCall !== null &&
+    row.id === liveToolCall.groupId &&
+    row.groupedEntries.every((entry) => !entry.providerHandoff && !entry.turnFailure) &&
+    withoutLiveToolCallRun(
+      standaloneWorkGroupListEntries(row.groupedEntries),
+      liveToolCall.chunkId,
+      liveToolCall.entryOnly,
+    ).length === 0
+  );
 }
 
 /** Provider-reported lifecycle of one turn, used for its settled header. */
@@ -645,7 +770,14 @@ export type MessagesTimelineRow =
       // Set when a stopped turn without a settled header ends on this visual.
       turnEndMarker?: TurnEndMarker;
     }
-  | { kind: "working"; id: string; createdAt: string | null }
+  | {
+      kind: "working";
+      id: string;
+      createdAt: string | null;
+      // The live run the indicator claims, and the line it wears for it; see
+      // findLiveToolCallTarget. Its group leaves that run to the indicator.
+      liveToolCall?: LiveToolCallTarget;
+    }
   | {
       // Live-turn header that mirrors the settled turn header ("Working 12s"
       // + hairline), but is non-collapsible and counts up while the turn is
@@ -1135,6 +1267,9 @@ export function deriveMessagesTimelineRows(input: {
     wakeIds,
   );
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
+  const lastUserMessageEntryIndex = input.timelineEntries.findLastIndex(
+    (entry) => entry.kind === "message" && entry.message.role === "user",
+  );
 
   const groupedEntriesEqual = (
     left: ReadonlyArray<WorkLogEntry>,
@@ -1321,11 +1456,15 @@ export function deriveMessagesTimelineRows(input: {
       flushPendingWorkGroup();
     }
 
+    // A reply the provider did not tag with a turn id belongs to the live turn
+    // when it follows the last user message; one tagged with another turn, or
+    // any reply while no turn id exists yet, keeps its settled chrome.
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       input.activeTurnInProgress === true &&
       input.activeTurnId != null &&
-      message.turnId === input.activeTurnId;
+      (message.turnId === input.activeTurnId ||
+        (message.turnId == null && index > lastUserMessageEntryIndex));
 
     nextRows.push({
       kind: "message",
@@ -1382,8 +1521,8 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The generic Thinking shimmer remains the single live status. Provider work
-  // rows are transcript history and must never replace it.
+  // The trailing live status: "Thinking", or the call of the moment once the
+  // rows are final (see findLiveToolCallTarget below).
   if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",
@@ -1433,11 +1572,23 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  if (input.conversationOnly === true) {
+    return nextRows;
+  }
   // A finished background task already shows on its own row and in the header
   // of the turn it woke ("Resumed: … finished"), so its completion line goes.
-  return input.conversationOnly === true
-    ? nextRows
-    : nextRows.filter((row) => !isBackgroundTaskCompletionRow(row));
+  const rows = nextRows.filter((row) => !isBackgroundTaskCompletionRow(row));
+  // The working row claims the live run and wears its call of the moment; the
+  // run's group stops listing it until narration or text settles it back.
+  const liveToolCall = findLiveToolCallTarget(rows);
+  if (liveToolCall) {
+    const workingIndex = rows.findLastIndex((row) => row.kind === "working");
+    const workingRow = rows[workingIndex];
+    if (workingRow?.kind === "working") {
+      rows[workingIndex] = { ...workingRow, liveToolCall };
+    }
+  }
+  return rows;
 }
 
 // A stopped turn opens with a "Stopped by you after Xs" header when it has a
@@ -2160,7 +2311,9 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.tone === b.tone &&
     a.itemType === b.itemType &&
     a.requestKind === b.requestKind &&
+    a.grantedCommandApproval === b.grantedCommandApproval &&
     a.activityKind === b.activityKind &&
+    a.codexReasoning === b.codexReasoning &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
     a.toolStatus === b.toolStatus &&
@@ -2270,8 +2423,22 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   if (a.kind !== b.kind || a.id !== b.id) return false;
 
   switch (a.kind) {
-    case "working":
-      return a.createdAt === (b as typeof a).createdAt;
+    case "working": {
+      const bw = b as typeof a;
+      const aDisplay = a.liveToolCall?.display ?? null;
+      const bDisplay = bw.liveToolCall?.display ?? null;
+      return (
+        a.createdAt === bw.createdAt &&
+        a.liveToolCall?.groupId === bw.liveToolCall?.groupId &&
+        a.liveToolCall?.chunkId === bw.liveToolCall?.chunkId &&
+        a.liveToolCall?.entryOnly === bw.liveToolCall?.entryOnly &&
+        aDisplay?.tone === bDisplay?.tone &&
+        (aDisplay === bDisplay ||
+          (aDisplay !== null &&
+            bDisplay !== null &&
+            workLogEntryContentEqual(aDisplay.entry, bDisplay.entry)))
+      );
+    }
 
     case "working-header": {
       const bh = b as typeof a;

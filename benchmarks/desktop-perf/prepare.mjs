@@ -5,6 +5,8 @@
 // --templates     (re)create the empty and seeded data-home templates with that build
 // --template-set  name of the template set to create (default "default"); builds with an
 //                 older database schema need a set created by a build of that schema
+// --realistic     also seed the long threads of seed-realistic-threads.ts (use a separate
+//                 template set, e.g. "longchat", so the default set stays comparable)
 import { buildName, createTemplates, prepareBuild, useTemplateSet } from "./lib/builds.mjs";
 
 const args = process.argv.slice(2);
@@ -23,6 +25,8 @@ console.log(
 );
 if (args.includes("--templates")) {
   useTemplateSet(value("template-set") ?? "default");
-  await createTemplates(build);
+  await createTemplates(build, {
+    ...(args.includes("--realistic") ? { shape: { realisticThreads: true } } : {}),
+  });
 }
 process.exit(0);

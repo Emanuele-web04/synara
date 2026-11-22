@@ -101,6 +101,23 @@ describe("source control writing settings", () => {
   });
 });
 
+describe("git attribution setting", () => {
+  it("defaults on and mirrors the server setting both ways", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).gitAttributionEnabled).toBe(true);
+    expect(DEFAULT_SERVER_SETTINGS_VIEW.gitAttributionEnabled).toBe(true);
+    expect(
+      serverSettingsToAppSettings({ ...DEFAULT_SERVER_SETTINGS_VIEW, gitAttributionEnabled: false })
+        .gitAttributionEnabled,
+    ).toBe(false);
+    expect(appSettingsPatchToServerSettingsPatch({ gitAttributionEnabled: false })).toEqual({
+      gitAttributionEnabled: false,
+    });
+    expect(appSettingsPatchToServerSettingsPatch({ gitAttributionEnabled: true })).toEqual({
+      gitAttributionEnabled: true,
+    });
+  });
+});
+
 describe("computer control defaults", () => {
   it("leaves computer control off until a preference is explicitly saved", () => {
     expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);

@@ -101,6 +101,7 @@ const makeThreadEventReadMethods = (
   | "getThreadHighWaterSequence"
   | "getThreadTitleHighWaterSequence"
   | "hasThreadStopAfter"
+  | "canReplayThreadEventsInRange"
   | "readThreadEvents"
   | "readThreadEventsFromSequence"
 > => ({
@@ -111,6 +112,8 @@ const makeThreadEventReadMethods = (
         .at(-1)?.sequence ?? 0,
     ),
   getThreadTitleHighWaterSequence: () => Effect.succeed(0),
+  canReplayThreadEventsInRange: () =>
+    Effect.die("replay admission is not used by the orchestration engine harness"),
   hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
     Effect.succeed(
       events.some(

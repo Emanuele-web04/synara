@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
@@ -9,7 +9,19 @@ import { ComposerColumnFrame } from "./ComposerColumnFrame";
 import { ComposerTransportNotice } from "./ComposerTransportNotice";
 
 describe("composer transport notice", () => {
-  afterEach(() => emitWsTransportState("open"));
+  // The notice waits 1.5s before showing an outage. Fake only that timer, then
+  // poll with real timers; the delay itself is pinned in composerTransportStatus.test.ts.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  const elapseOutageDelay = async () => {
+    await vi.advanceTimersByTimeAsync(1_500);
+    vi.useRealTimers();
+  };
+  afterEach(() => {
+    emitWsTransportState("open");
+    vi.useRealTimers();
+  });
 
   it("renders a delayed live status from transport events and removes it on recovery", async () => {
     emitWsTransportState("open");
@@ -22,6 +34,7 @@ describe("composer transport notice", () => {
     try {
       emitWsTransportState("connecting");
       expect(screen.container.querySelector('[role="status"]')).toBeNull();
+      await elapseOutageDelay();
       await expect
         .element(page.getByRole("status"), { timeout: 4000 })
         .toHaveTextContent("Reconnecting to Synara…");
@@ -44,6 +57,7 @@ describe("composer transport notice", () => {
       </ComposerColumnFrame>,
     );
     try {
+      await elapseOutageDelay();
       await expect
         .element(page.getByRole("status"), { timeout: 4000 })
         .toHaveTextContent("Reconnecting to Synara…");
