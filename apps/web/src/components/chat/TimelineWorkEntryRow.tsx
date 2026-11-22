@@ -532,6 +532,14 @@ function commandRowDisplay(
     : null;
 }
 
+// What a failed call's row says about its failure ("Failed · exit 1"), or null
+// for a call that did not fail. Shared with the working indicator.
+export function workEntryFailureMetaText(workEntry: TimelineWorkEntry): string | null {
+  if (toolWorkEntryStatus(workEntry) !== "failed") return null;
+  const { exitCode } = deriveToolFailureSummary(workEntry.toolDetails);
+  return exitCode !== null ? `Failed · exit ${exitCode}` : "Failed";
+}
+
 export interface WorkEntryDisplayParts {
   heading: string;
   preview: string | null;
@@ -778,22 +786,14 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   );
   // A failed call says so explicitly, with its exit code, instead of the
   // generic lifecycle meta. The output itself stays behind the disclosure.
-  const failure =
-    toolWorkEntryStatus(workEntry) === "failed"
-      ? deriveToolFailureSummary(workEntry.toolDetails)
-      : null;
-  const liveActivityMetaText = failure
+  const failureMetaText = workEntryFailureMetaText(workEntry);
+  const liveActivityMetaText = failureMetaText
     ? null
     : workEntry.liveActivity
       ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
           subagent: isSubagentTaskRow,
         })
       : null;
-  const failureMetaText = failure
-    ? failure.exitCode !== null
-      ? `Failed · exit ${failure.exitCode}`
-      : "Failed"
-    : null;
 
   // A computer-control denial renders as an actionable card (enable + retry)
   // instead of a buried tool-error line. Kept after the hooks above so the

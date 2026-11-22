@@ -670,6 +670,8 @@ function makeHarnessLayer(
       ),
     getThreadTitleHighWaterSequence: () => Effect.succeed(0),
     hasThreadStopAfter: () => Effect.succeed(false),
+    canReplayThreadEventsInRange: () =>
+      Effect.die("replay admission is not used by the gateway harness"),
     readThreadEvents: (input: {
       threadId: string;
       throughSequenceInclusive: number;

@@ -172,6 +172,7 @@ export interface WorkLogEntry {
   toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: WorkLogRequestKind;
+  grantedCommandApproval?: true;
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
   // Set on the one entry a turn's subagents fold into: the transcript renders
@@ -232,6 +233,8 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
+  // Codex sends reasoning as its own item between tool calls in one work run.
+  codexReasoning?: true;
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
@@ -615,23 +618,32 @@ export function deriveWorkLogEntries(
   const ordered = orderedActivities(activities);
   const mappedEntries = ordered
     .filter((activity) => !isLogOnlyPiWarning(activity))
-    // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
+    // App-server startup and stderr belong to diagnostics, including saved turns.
     .filter((activity) => {
-      if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
+      if (activity.kind !== "runtime.warning") return true;
       const payload = asRecord(activity.payload);
+      const message = asTrimmedString(payload?.message);
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return false;
+      const startup = asRecord(payload?.data);
+      const server = asTrimmedString(startup?.name);
       if (
+        startup?.status === "failed" &&
+        server &&
+        message?.startsWith(`MCP server "${server}" failed to start`)
+      ) {
+        return false;
+      }
+      if (
+        activity.tone === "error" ||
         payload?.willRetry === true ||
         asRecord(payload?.data)?.willRetry === true ||
         payload?.nativeEventType === "monitor_event" ||
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
-      // Ingestion already judged the Codex stderr rows it marks, and stored their
-      // text normalized: judging that text again could hide a structured ERROR
-      // whose level the normalization removed.
-      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
-      const message = asTrimmedString(payload?.message);
-      return !message || classifyCodexStderr(message)?.kind === "notice";
+      if (!message) return true;
+      const diagnostic = classifyCodexStderr(message);
+      return diagnostic?.kind === "notice" && !diagnostic.mcpSubscriptionError;
     })
     .filter((activity) => !isLogOnlyClaudeWarning(activity))
     .filter((activity) => !isTurnFailureActivity(activity))
@@ -679,6 +691,7 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
+  const grantedApprovals = grantedCommandApprovalActivityIds(ordered, options.activeTurnId);
   const derived = reconcileSettledLiveActivities(
     collapseDerivedWorkLogEntries(userInputExchangeEntries),
     ordered,
@@ -686,7 +699,12 @@ export function deriveWorkLogEntries(
     options,
   )
     .filter((entry) => !isUninformativeCommandStartEntry(entry))
-    .map((entry) => toPublicWorkLogEntry(entry, translate));
+    .map((entry) => {
+      const workEntry = toPublicWorkLogEntry(entry, translate);
+      return grantedApprovals?.has(entry.id)
+        ? { ...workEntry, grantedCommandApproval: true as const }
+        : workEntry;
+    });
   const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered, translate);
   if (handoffFastModeNotices.size > 0) {
     for (const [index, entry] of derived.entries()) {
@@ -1545,6 +1563,46 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   }
   // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
   return activity.tone !== "error";
+}
+
+// A granted command's approval rows stay visible, but no longer block the live tool line.
+function grantedCommandApprovalActivityIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activeTurnId: TurnId | null | undefined,
+): ReadonlySet<string> | undefined {
+  if (!activeTurnId) return undefined;
+  const openRequests = new Map<string, string>();
+  const granted = new Set<string>();
+  for (const activity of activities) {
+    if (
+      activity.turnId !== activeTurnId ||
+      (activity.kind !== "approval.requested" && activity.kind !== "approval.resolved")
+    ) {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    const requestId = asTrimmedString(payload?.requestId);
+    if (!requestId || extractWorkLogRequestKind(payload) !== "command") continue;
+    const key = pendingRequestInstanceKey(
+      requestId,
+      asTrimmedString(payload?.lifecycleGeneration) ?? undefined,
+    );
+    if (activity.kind === "approval.requested") {
+      openRequests.set(key, activity.id);
+      continue;
+    }
+    const requestedId = openRequests.get(key);
+    openRequests.delete(key);
+    if (
+      requestedId &&
+      activity.tone !== "error" &&
+      (payload?.decision === "accept" || payload?.decision === "acceptForSession")
+    ) {
+      granted.add(requestedId);
+      granted.add(activity.id);
+    }
+  }
+  return granted;
 }
 
 function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity): boolean {

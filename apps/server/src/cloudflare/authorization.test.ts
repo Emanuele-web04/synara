@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountApiError, createAccountClient } from "@synara/shared/account";
 import type { AccountErrorCode, HostAuthorizationSnapshot } from "@synara/contracts";
 import {
+  authorizationFailureCode,
   REMOTE_AUTHORIZATION_LEASE_MS,
   REMOTE_PERMANENT_DENIAL_MS,
   requestAuthorizationSnapshot,
@@ -18,6 +19,31 @@ const snapshot: HostAuthorizationSnapshot = {
 };
 afterEach(() => vi.useRealTimers());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+describe("authorization failure reliability codes", () => {
+  const answer = (status: number, code: AccountErrorCode, message = "fixture") =>
+    new AccountApiError({ status, code, message });
+
+  it.each([
+    [answer(403, "subscription_required"), "remote.authorization_subscription_required"],
+    [
+      new Error("dial failed", { cause: answer(403, "subscription_required") }),
+      "remote.authorization_subscription_required",
+    ],
+    [answer(404, "host_not_linked"), "remote.authorization_denied"],
+    [answer(403, "not_host_owner"), "remote.authorization_denied"],
+    [
+      answer(403, "not_host_owner", "Remote test access is not enabled for this account"),
+      "remote.authorization_denied",
+    ],
+    [answer(503, "billing_unavailable"), "remote.authorization_failed"],
+    [answer(500, "internal_error"), "remote.authorization_failed"],
+    [answer(401, "bad_proof"), "remote.authorization_failed"],
+    [new TypeError("fetch failed"), "remote.authorization_failed"],
+  ] as const)("classifies %s as %s", (error, code) => {
+    expect(authorizationFailureCode(error)).toBe(code);
+  });
+});
+
 describe("remote authorization lease", () => {
   it("admits only after durable application and closes existing streams once at expiry", async () => {
     vi.useFakeTimers();

@@ -1,5 +1,15 @@
 import * as Schema from "effect/Schema";
 
+// Keep new Remote host failure signals on the desktop Beta channel.
+const BETA_HOST_RELIABILITY_CODES = [
+  "remote.admission_refused",
+  "remote.authorization_failed",
+  "remote.authorization_denied",
+  "remote.authorization_subscription_required",
+  "remote.tunnel_provision_failed",
+  "remote.connector_exited",
+] as const;
+
 export const RELIABILITY_CODES = [
   "backend.exit_before_ready",
   "backend.exit_after_ready",
@@ -19,6 +29,7 @@ export const RELIABILITY_CODES = [
   "remote.device_revoked",
   "remote.ingress_socket_error",
   "remote.tunnel_socket_error",
+  ...BETA_HOST_RELIABILITY_CODES,
   "billing.redirect_failed",
   "migration.startup_blocked",
   "migration.recovery_failed",
@@ -64,6 +75,16 @@ export const ReliabilityChannel = Schema.Literals(["stable", "beta", "remote"]);
 export type ReliabilityChannel = typeof ReliabilityChannel.Type;
 export const isReliabilityChannel = Schema.is(ReliabilityChannel);
 
+const betaHostReliabilityCodes: ReadonlySet<ReliabilityCode> = new Set(BETA_HOST_RELIABILITY_CODES);
+
+/** Legacy codes retain their existing channels. New host failure codes are Beta-only. */
+export function isReliabilityCodeAllowedForChannel(
+  code: ReliabilityCode,
+  channel: ReliabilityChannel,
+): boolean {
+  return channel === "beta" || !betaHostReliabilityCodes.has(code);
+}
+
 export const RELIABILITY_MAX_RECORD_AGE_DAYS = 7;
 export const RELIABILITY_MAX_EVENTS_PER_POST = 50;
 export const RELIABILITY_MAX_BODY_BYTES = 64 * 1024;
@@ -77,6 +98,10 @@ export const ReliabilityRecord = Schema.Struct({
   channel: ReliabilityChannel,
   appVersion: ReliabilityReleaseVersion,
   platform: ReliabilityPlatform,
-}).annotate({ parseOptions: { onExcessProperty: "error" } });
+})
+  .check(
+    Schema.makeFilter(({ code, channel }) => isReliabilityCodeAllowedForChannel(code, channel)),
+  )
+  .annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ReliabilityRecord = typeof ReliabilityRecord.Type;
 export const decodeReliabilityRecord = Schema.decodeUnknownSync(ReliabilityRecord);

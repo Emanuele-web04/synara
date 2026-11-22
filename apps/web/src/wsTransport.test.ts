@@ -16,6 +16,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   WS_COMPATIBILITY_QUERY,
+  WS_FEATURE_UNCOMPRESSED_QUERY,
   WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
@@ -42,6 +43,7 @@ import {
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
   makeNegotiateHttpUrl,
+  shouldDeclineCompressionForLocalBackend,
   getResnapshotRetryDelayMs,
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
@@ -3497,6 +3499,37 @@ describe("WsTransport", () => {
     expect(sockets.length).toBe(socketsBefore);
   }, 10_000);
 
+  it("declines compression on the desktop's own feature socket and nowhere else", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT))),
+    );
+    const desktopUrl = "ws://127.0.0.1:53036/?token=old";
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: { protocol: "http:", hostname: "localhost", port: "3020" },
+        desktopBridge: { getWsUrl: () => desktopUrl },
+        setTimeout: globalThis.setTimeout.bind(globalThis),
+        clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      },
+    });
+    const flag = (index: number) =>
+      new URL(sockets[index]!.url).searchParams.get(WS_FEATURE_UNCOMPRESSED_QUERY.name);
+
+    const local = new WsTransport();
+    await waitForSockets(1);
+    expect(flag(0)).toBe(WS_FEATURE_UNCOMPRESSED_QUERY.value);
+
+    // Same loopback address, but an explicit URL: a host or execution transport.
+    const explicit = new WsTransport(desktopUrl);
+    await waitForSockets(2);
+    expect(flag(1)).toBeNull();
+
+    await local.dispose();
+    await explicit.dispose();
+  });
+
   it("uses the desktop bridge URL before falling back to the browser location", async () => {
     const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {
@@ -3632,6 +3665,71 @@ describe("WsTransport", () => {
     expect(resolved.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
       "server-instance",
     );
+  });
+
+  it("adds the compression opt-out only when asked and never for a remote attachment", () => {
+    const compatibility = {
+      protocolEpoch: WS_PROTOCOL_EPOCH,
+      negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+      serverBuild: "0.5.2",
+      serverInstanceId: "server-instance",
+      capabilities: [],
+    };
+    const flag = (url: string) => new URL(url).searchParams.get(WS_FEATURE_UNCOMPRESSED_QUERY.name);
+    const local = "ws://127.0.0.1:53036/?token=old";
+
+    expect(flag(makeFeatureSocketUrl(local, compatibility))).toBeNull();
+    expect(flag(makeFeatureSocketUrl(local, compatibility, { declineCompression: true }))).toBe(
+      WS_FEATURE_UNCOMPRESSED_QUERY.value,
+    );
+    expect(
+      flag(
+        makeFeatureSocketUrl(
+          local,
+          { ...compatibility, remoteAttachmentId: "attachment-1" },
+          { declineCompression: true },
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it("declines compression only for the desktop on the backend it spawned", () => {
+    const desktop = "ws://127.0.0.1:53036/?token=abc";
+    const decide = (
+      overrides: Partial<Parameters<typeof shouldDeclineCompressionForLocalBackend>[0]>,
+    ) =>
+      shouldDeclineCompressionForLocalBackend({
+        constructedWithUrl: false,
+        socketUrl: desktop,
+        inWorkspaceFrame: false,
+        desktopWsUrl: desktop,
+        browserOverride: false,
+        ...overrides,
+      });
+
+    expect(decide({})).toBe(true);
+    // Remote hosts and execution transports carry an explicit URL.
+    expect(decide({ constructedWithUrl: true })).toBe(false);
+    expect(decide({ socketUrl: "ws://127.0.0.1:53036/ws/remote/mini/ws" })).toBe(false);
+    // A workspace frame dials the embedding page's controller URL.
+    expect(decide({ inWorkspaceFrame: true })).toBe(false);
+    // The desktop pointed elsewhere (dev env override) keeps compression.
+    expect(
+      decide({ socketUrl: "ws://192.168.1.4:3773/", desktopWsUrl: "ws://192.168.1.4:3773/" }),
+    ).toBe(false);
+    expect(
+      decide({ socketUrl: "wss://localhost:3773/", desktopWsUrl: "wss://localhost:3773/" }),
+    ).toBe(false);
+    expect(decide({ socketUrl: "ws://127.0.0.1:9999/" })).toBe(false);
+    // A browser on loopback (SSH tunnel, proxy) only opts out when told to.
+    expect(decide({ desktopWsUrl: null, socketUrl: "ws://localhost:3773" })).toBe(false);
+    expect(decide({ desktopWsUrl: "", socketUrl: "ws://localhost:3773" })).toBe(false);
+    expect(
+      decide({ desktopWsUrl: null, socketUrl: "ws://localhost:3773", browserOverride: true }),
+    ).toBe(true);
+    expect(
+      decide({ desktopWsUrl: null, socketUrl: "ws://tailnet.example:3773", browserOverride: true }),
+    ).toBe(false);
   });
 
   it("notifies state listeners and replays the current state on demand", async () => {

@@ -4,12 +4,12 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
-import { afterAll, expect, vi } from "vitest";
+import { afterAll, describe, expect, vi } from "vitest";
 import os from "node:os";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
-import { WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
+import { ServerSettingsError, WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
 import { makeGitActionRunner } from "../gitActionRunner";
 import type {
   GitPullRequestCheck,
@@ -41,6 +41,8 @@ import { GitCore } from "../Services/GitCore.ts";
 import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeGitHubCli.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { PULL_REQUEST_ATTRIBUTION_FOOTER } from "../gitAttribution.ts";
 
 interface FakeGitTextGeneration {
   generateCommitMessage: (input: {
@@ -355,8 +357,14 @@ function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
+  settings?: Parameters<typeof ServerSettingsService.layerTest>[0];
+  settingsLayer?: Layer.Layer<ServerSettingsService, ServerSettingsError>;
 }) {
-  const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const {
+    service: gitHubCli,
+    ghCalls,
+    createdPrBodies,
+  } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-git-manager-test-",
@@ -370,12 +378,13 @@ function makeManager(input?: {
   const managerLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
     Layer.succeed(TextGeneration, textGeneration),
+    input?.settingsLayer ?? ServerSettingsService.layerTest(input?.settings),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 
   return makeGitManager.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, createdPrBodies })),
   );
 }
 
@@ -2719,4 +2728,131 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
     }),
   );
+
+  describe("Synara attribution", () => {
+    const GENERATED_PR_BODY = "## Summary\n- Add stacked git workflow\n\n## Testing\n- Not run";
+
+    /** Runs commit_push_pr on a fresh feature branch and returns the commit message and PR body. */
+    const runCommitPushPr = (input: {
+      branch: string;
+      settings?: Parameters<typeof ServerSettingsService.layerTest>[0];
+      settingsLayer?: Layer.Layer<ServerSettingsService, ServerSettingsError>;
+      prBody?: string;
+    }) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-attribution-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", input.branch]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "attributed.txt"), "attributed\n");
+        const { manager, createdPrBodies } = yield* makeManager({
+          ...(input.settings ? { settings: input.settings } : {}),
+          ...(input.settingsLayer ? { settingsLayer: input.settingsLayer } : {}),
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([prEntry(77, "Add stacked git actions", input.branch)]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          ...(input.prBody ? { prBody: input.prBody } : {}),
+        });
+        expect(result.commit.status).toBe("created");
+        expect(result.pr.status).toBe("created");
+        expect(createdPrBodies).toHaveLength(1);
+        return {
+          result,
+          commitMessage: yield* gitOut(repoDir, ["log", "-1", "--pretty=%B"]),
+          prBody: createdPrBodies[0]!,
+        };
+      });
+
+    it.effect(
+      "ends a new PR description with the footer by default and leaves the commit alone",
+      () =>
+        Effect.gen(function* () {
+          const { result, commitMessage, prBody } = yield* runCommitPushPr({
+            branch: "feature/attribution-default",
+          });
+          expect(prBody).toBe(`${GENERATED_PR_BODY}\n\n${PULL_REQUEST_ATTRIBUTION_FOOTER}`);
+          expect(result.pr.title).toBe("Add stacked git actions");
+          expect(commitMessage).toBe("Implement stacked git actions");
+        }),
+    );
+
+    it.effect("adds no footer when the setting is off", () =>
+      Effect.gen(function* () {
+        const { prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-setting-off",
+          settings: { gitAttributionEnabled: false },
+        });
+        expect(prBody).toBe(GENERATED_PR_BODY);
+      }),
+    );
+
+    it.effect("treats an unreadable setting as off without failing the action", () =>
+      Effect.gen(function* () {
+        const failingSettingsLayer = Layer.effect(
+          ServerSettingsService,
+          Effect.gen(function* () {
+            const base = yield* ServerSettingsService;
+            return {
+              ...base,
+              getSettings: Effect.fail(
+                new ServerSettingsError({ settingsPath: "<memory>", detail: "unreadable" }),
+              ),
+            };
+          }),
+        ).pipe(Layer.provide(ServerSettingsService.layerTest()));
+        const { prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-unreadable",
+          settingsLayer: failingSettingsLayer,
+        });
+        expect(prBody).toBe(GENERATED_PR_BODY);
+      }),
+    );
+
+    it.effect("does not duplicate a footer the user already wrote", () =>
+      Effect.gen(function* () {
+        const userBody = `Hand-written description.\n\n${PULL_REQUEST_ATTRIBUTION_FOOTER}`;
+        const { prBody } = yield* runCommitPushPr({
+          branch: "feature/attribution-user-text",
+          prBody: userBody,
+        });
+        expect(prBody).toBe(userBody);
+      }),
+    );
+
+    it.effect("returns an already-open PR without creating or editing one", () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-attribution-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/attribution-existing"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/attribution-existing"]);
+        const { manager, ghCalls, createdPrBodies } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              JSON.stringify([prEntry(43, "Existing PR", "feature/attribution-existing")]),
+            ],
+          },
+        });
+
+        const result = yield* runStackedAction(manager, { cwd: repoDir, action: "create_pr" });
+
+        expect(result.pr.status).toBe("opened_existing");
+        expect(result.pr.number).toBe(43);
+        expect(createdPrBodies).toHaveLength(0);
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+        expect(ghCalls.some((call) => call.startsWith("pr edit "))).toBe(false);
+      }),
+    );
+  });
 });

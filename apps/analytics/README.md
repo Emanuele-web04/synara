@@ -80,6 +80,15 @@ the new columns `NULL`, so rolling the Worker back needs no schema change. To un
 schema, drop the two columns; restoring the bookmark would discard events received
 since then. Clients may ship first: older receivers drop the unknown fields.
 
+`0015_product_connection_detail.sql` (connection network and route) follows the same
+procedure and order: bookmark, apply only this file, record it in `d1_migrations`,
+check `PRAGMA table_info(product_events)` shows `network` and `route`, then deploy the
+receiver. `0014` must already be applied. A receiver deployed before `0015` fails every
+product-event insert with 500. The previous receiver works against the migrated schema,
+but rejects the new iPhone/iPad connection failure values and Desktop Beta
+host reliability codes. Ship these client updates after the receiver. To undo
+the schema, drop the two columns.
+
 `POST /v1/product-events` accepts bounded, consented desktop/iOS/iPadOS reports;
 `GET /api/product` requires dashboard authentication. Raw product events expire
 after 30 days. Raw diagnostic provider and turn samples (`usage_providers` and

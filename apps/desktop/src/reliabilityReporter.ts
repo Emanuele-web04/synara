@@ -13,6 +13,7 @@ import { Schema } from "effect";
 import {
   ReliabilityInput,
   ReliabilityRecord,
+  isReliabilityCodeAllowedForChannel,
   ReliabilityReleaseVersion,
   RELIABILITY_MAX_BODY_BYTES,
   RELIABILITY_MAX_EVENTS_PER_POST,
@@ -118,6 +119,8 @@ export class ReliabilityReporter {
     if (this.disposed || !this.enabled) return;
     try {
       if (!Schema.is(ReliabilityInput)(input)) return;
+      // Filter before spooling so a non-Beta client never retains these codes.
+      if (!isReliabilityCodeAllowedForChannel(input.code, this.channel)) return;
       const record: ReliabilityRecord = {
         v: 1,
         id: randomUUID(),

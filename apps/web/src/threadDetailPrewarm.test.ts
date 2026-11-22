@@ -171,4 +171,53 @@ describe("thread detail prewarm", () => {
     expect(retain.retainedThreadIds).toEqual([cachedThread]);
     controller.dispose();
   });
+  it("subscribes a cold thread on activation but keeps a single cold retain", () => {
+    vi.useFakeTimers();
+    const retain = makeRetainSpy();
+    const first = threadId("cold-1");
+    const second = threadId("cold-2");
+    const controller = createThreadDetailPrewarmController({
+      retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: () => false,
+      releaseMs: 1000,
+    });
+
+    // Hover intent still skips cold threads.
+    controller.prewarmThreadDetail(first);
+    expect(retain.retainedThreadIds).toEqual([]);
+
+    controller.prewarmThreadDetailForActivation(first);
+    expect(retain.retainedThreadIds).toEqual([first]);
+
+    // A second press replaces the first cold retain instead of adding a stream.
+    controller.prewarmThreadDetailForActivation(second);
+    expect(retain.retainedThreadIds).toEqual([first, second]);
+    expect(retain.releasedThreadIds).toEqual([first]);
+
+    // A press that never navigates (a drag) is released by the prewarm window.
+    vi.advanceTimersByTime(1000);
+    expect(retain.releasedThreadIds).toEqual([first, second]);
+  });
+
+  it("treats activation of a cached thread like intent and leaves other cold retains", () => {
+    vi.useFakeTimers();
+    const retain = makeRetainSpy();
+    const cold = threadId("cold-3");
+    const cached = threadId("cached-1");
+    const controller = createThreadDetailPrewarmController({
+      retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
+      canPrewarmThreadDetail: (id) => id === cached,
+      releaseMs: 1000,
+    });
+
+    controller.prewarmThreadDetailForActivation(cold);
+    controller.prewarmThreadDetailForActivation(cached);
+    controller.prewarmThreadDetailForActivation(cached);
+
+    expect(retain.retainedThreadIds).toEqual([cold, cached]);
+    expect(retain.releasedThreadIds).toEqual([]);
+
+    controller.dispose();
+    expect(retain.releasedThreadIds.toSorted()).toEqual([cached, cold].toSorted());
+  });
 });
