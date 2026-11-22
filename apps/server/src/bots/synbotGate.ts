@@ -36,11 +36,23 @@ export const requiresServerSynbotAlto = (): boolean =>
 
 const GRANTED_CACHE_TTL_MS = 60_000;
 const DENIED_COALESCE_TTL_MS = 5_000;
+/**
+ * How long a verified grant outlives an Account API that cannot answer (network down, timeout,
+ * billing reported unavailable). A blip must not lock a paying user out, but an outage still
+ * fails closed: once errors have lasted this long, the answer is no.
+ */
+const UNVERIFIED_GRANT_GRACE_MS = 60_000;
+/** Bounds one whole check (token refresh plus the billing read) so callers never wait long. */
+const ALTO_CHECK_TIMEOUT_MS = 10_000;
 
 interface CachedAltoAccess {
   readonly accountKey: string;
   readonly granted: boolean;
   readonly checkedAtMs: number;
+  /** How long this answer stands: a verified grant for longer than a denial or an unknown. */
+  readonly ttlMs: number;
+  /** When checks started failing while this account was granted; null after a real answer. */
+  readonly unknownSinceMs: number | null;
 }
 
 interface InflightAltoCheck {
@@ -108,6 +120,8 @@ export function noteServerAltoAccess(
     accountKey: accountKeyOf(input),
     granted: input.granted,
     checkedAtMs: Date.now(),
+    ttlMs: input.granted ? GRANTED_CACHE_TTL_MS : DENIED_COALESCE_TTL_MS,
+    unknownSinceMs: null,
   });
   if (!input.granted) notifyRevoked(credentialDir);
 }
@@ -123,8 +137,39 @@ export function clearServerAltoAccess(credentialDir: string): void {
 const freshCached = (credentialDir: string, accountKey: string, nowMs: number) => {
   const cached = altoCacheByDir.get(credentialDir);
   if (!cached || cached.accountKey !== accountKey) return null;
-  const ttl = cached.granted ? GRANTED_CACHE_TTL_MS : DENIED_COALESCE_TTL_MS;
-  return nowMs - cached.checkedAtMs < ttl ? cached.granted : null;
+  return nowMs - cached.checkedAtMs < cached.ttlMs ? cached.granted : null;
+};
+
+/**
+ * The Account API could not answer. A grant it verified stays for a short grace, re-asked on the
+ * denial cadence; with no grant, or once the grace is spent, the answer is no and open streams
+ * end. Returns the answer to give.
+ */
+const answerWithoutVerdict = (credentialDir: string, accountKey: string): boolean => {
+  const nowMs = Date.now();
+  const previous = altoCacheByDir.get(credentialDir);
+  const wasGranted = previous?.accountKey === accountKey && previous.granted;
+  const unknownSinceMs = wasGranted ? (previous.unknownSinceMs ?? nowMs) : null;
+  const granted = unknownSinceMs !== null && nowMs - unknownSinceMs < UNVERIFIED_GRANT_GRACE_MS;
+  altoCacheByDir.set(credentialDir, {
+    accountKey,
+    granted,
+    checkedAtMs: nowMs,
+    ttlMs: DENIED_COALESCE_TTL_MS,
+    unknownSinceMs: granted ? unknownSinceMs : null,
+  });
+  if (!granted) notifyRevoked(credentialDir);
+  return granted;
+};
+
+const withCheckTimeout = <A>(promise: Promise<A>): Promise<A> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Alto check timed out")), ALTO_CHECK_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
 };
 
 /**
@@ -134,7 +179,14 @@ const freshCached = (credentialDir: string, accountKey: string, nowMs: number) =
  */
 export async function checkServerSynbotAltoAccess(credentialDir: string): Promise<boolean> {
   if (!requiresServerSynbotAlto()) return true;
-  const credentials = await readAccountCredentials(credentialDir).catch(() => null);
+  let credentials: Awaited<ReturnType<typeof readAccountCredentials>>;
+  try {
+    credentials = await readAccountCredentials(credentialDir);
+  } catch {
+    // The credentials could not be read, which is not the same as signed out.
+    const previous = altoCacheByDir.get(credentialDir);
+    return previous ? answerWithoutVerdict(credentialDir, previous.accountKey) : false;
+  }
   if (!credentials) {
     altoCacheByDir.delete(credentialDir);
     notifyRevoked(credentialDir);
@@ -149,24 +201,33 @@ export async function checkServerSynbotAltoAccess(credentialDir: string): Promis
   const check: InflightAltoCheck = { accountKey: key, epoch, promise: Promise.resolve(false) };
   inflightByDir.set(credentialDir, check);
   check.promise = (async () => {
-    let granted = false;
+    // true or false is the Account API's verdict; null means it could not give one.
+    let verdict: boolean | null = null;
     try {
       const client = createServerAccountClient(credentials.accountUrl);
-      const status = await withFreshAccessToken(
-        { baseDir: credentialDir, client, credentials },
-        (token) => client.billingStatus(token),
+      const status = await withCheckTimeout(
+        withFreshAccessToken({ baseDir: credentialDir, client, credentials }, (token) =>
+          client.billingStatus(token),
+        ),
       );
-      granted = status.available === true && status.access === "granted";
+      if (status.available === true) verdict = status.access === "granted";
     } catch {
-      granted = false;
+      verdict = null;
     }
     if (epochOf(credentialDir) !== epoch) {
       // A grant or sign-out landed while this check ran: answer from what is known now.
       return freshCached(credentialDir, key, Date.now()) ?? false;
     }
-    altoCacheByDir.set(credentialDir, { accountKey: key, granted, checkedAtMs: Date.now() });
-    if (!granted) notifyRevoked(credentialDir);
-    return granted;
+    if (verdict === null) return answerWithoutVerdict(credentialDir, key);
+    altoCacheByDir.set(credentialDir, {
+      accountKey: key,
+      granted: verdict,
+      checkedAtMs: Date.now(),
+      ttlMs: verdict ? GRANTED_CACHE_TTL_MS : DENIED_COALESCE_TTL_MS,
+      unknownSinceMs: null,
+    });
+    if (!verdict) notifyRevoked(credentialDir);
+    return verdict;
   })().finally(() => {
     if (inflightByDir.get(credentialDir) === check) inflightByDir.delete(credentialDir);
   });

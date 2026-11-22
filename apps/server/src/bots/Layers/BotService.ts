@@ -129,7 +129,7 @@ const TASKS_PER_BOT = 40;
 const RECENT_TASK_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_TURN_START_POLL_MS = 100;
 const PENDING_TURN_START_MAX_POLLS = 100;
-/** How often an open SynBot stream on a host that requires Alto confirms the access it opened with. */
+/** How often a host that requires Alto, with SynBot streams open, confirms the access they opened with. */
 const STREAM_ALTO_RECHECK_MS = 5 * 60_000;
 const ACTIVE_ITEM_STATES = new Set(["queued", "starting", "working"]);
 /** The answers that turn a card down without doing anything. */
@@ -223,6 +223,8 @@ const make = Effect.gen(function* () {
     snapshotQuery,
   });
   const lastPublishedStatus = new Map<ProjectId, string>();
+  /** Ends each open SynBot stream on a host that requires Alto; one entry per stream. */
+  const openStreamRevokers = new Set<() => void>();
   const credentialDir = accountStateDirectory(serverConfig.baseDir, serverConfig.devUrl);
   const hasSynbotAccess = Effect.suspend(() => {
     if (!isServerSynbotEnabled()) return Effect.succeed(false);
@@ -1712,14 +1714,16 @@ const make = Effect.gen(function* () {
   /**
    * The settle sweep. It runs every 10 s and on every thread event, so it costs nothing when no
    * delegation concerns it: the Alto check comes only after that, and outside `settleLock`, so a
-   * slow Account API never holds up Stop or a cancel waiting on the lock.
+   * slow Account API never holds up Stop or a cancel waiting on the lock. Settling is bookkeeping
+   * and runs without Alto, so work that was running when Alto lapsed still shows how it ended;
+   * delivering a report wakes the asker, which is new work, so only that waits for Alto.
    */
   const evaluateDelegations: BotServiceShape["evaluateDelegations"] = (reason) =>
     Effect.gen(function* () {
       if (!isServerSynbotEnabled()) return;
       const pending = yield* repository.listActiveDelegations();
       if (relevantTo(pending, reason.threadId).length === 0) return;
-      if (!(yield* hasSynbotAccess)) return;
+      const entitled = yield* hasSynbotAccess;
       yield* settleLock.withPermits(1)(
         Effect.gen(function* () {
           const active = yield* repository.listActiveDelegations();
@@ -1733,6 +1737,7 @@ const make = Effect.gen(function* () {
             );
             updated.set(next.id, next);
           }
+          if (!entitled) return;
           const settings = yield* getSettings().pipe(Effect.orElseSucceed(() => null));
           const all = active.map((record) => updated.get(record.id) ?? record);
           const owed = all.filter(
@@ -2464,28 +2469,29 @@ const make = Effect.gen(function* () {
       if (onlyTaskId !== null) {
         const item = yield* hubWorkRepository
           .get(onlyTaskId)
-          .pipe(Effect.orElseSucceed(() => null));
-        if (item && (only === null || item.projectId === only)) {
-          if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
-            yield* interruptThread(item.workerThreadId, "stop-all").pipe(
-              Effect.catch(() => Effect.void),
-            );
-            interruptedSet.add(item.workerThreadId);
-          } else if (QUEUED_ITEM_STATES.has(item.state)) {
-            yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
-              Effect.tap(() => Effect.sync(() => cancelledTaskIds.push(item.id))),
-              Effect.catch(() => Effect.void),
-            );
-          } else if (INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
-            // Its worker is still being created: there is nothing to interrupt yet, and the
-            // creation cannot be called back halfway. Say so instead of reporting a Stop.
-            return yield* Effect.fail(
-              fail(
-                "This task is still starting. Stop it again once its chat has opened.",
-                "conflict",
-              ),
-            );
-          }
+          .pipe(Effect.mapError(toServiceError("Could not load the task.")));
+        // A task this host doesn't have (or another bot's) is refused, not reported as stopped.
+        if (!item || (only !== null && item.projectId !== only)) {
+          return yield* Effect.fail(fail("That task was not found.", "not-found"));
+        }
+        // A task that already ended needs no stop, and nothing is reported as stopped.
+        if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
+          yield* interruptThread(item.workerThreadId, "stop-all");
+          interruptedSet.add(item.workerThreadId);
+        } else if (QUEUED_ITEM_STATES.has(item.state)) {
+          yield* hubWork
+            .cancel({ workItemId: item.id }, USER)
+            .pipe(Effect.mapError(toServiceError("Could not cancel the task.", "conflict")));
+          cancelledTaskIds.push(item.id);
+        } else if (INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
+          // Its worker is still being created: there is nothing to interrupt yet, and the
+          // creation cannot be called back halfway. Say so instead of reporting a Stop.
+          return yield* Effect.fail(
+            fail(
+              "This task is still starting. Stop it again once its chat has opened.",
+              "conflict",
+            ),
+          );
         }
         return {
           interruptedThreadIds: [...interruptedSet],
@@ -2595,23 +2601,21 @@ const make = Effect.gen(function* () {
             revoked,
             Effect.fail(fail(SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE, "subscription-required")),
           );
-        const altoRequired = requiresServerSynbotAlto();
-        if (altoRequired) {
-          // Listen before the admission check, so a sign-out during it is not missed.
+        if (requiresServerSynbotAlto()) {
+          // Listen before the admission check, so a sign-out during it is not missed. The
+          // host's one re-check loop below reaches this stream through the same set.
           const unsubscribe = onServerAltoAccessRevoked((dir) => {
             if (dir === credentialDir) revoke();
           });
-          yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+          openStreamRevokers.add(revoke);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              unsubscribe();
+              openStreamRevokers.delete(revoke);
+            }),
+          );
         }
         yield* requireEnabled;
-        if (altoRequired) {
-          yield* Effect.gen(function* () {
-            for (;;) {
-              yield* Effect.sleep(STREAM_ALTO_RECHECK_MS);
-              if (!(yield* hasSynbotAccess)) revoke();
-            }
-          }).pipe(Effect.forkScoped);
-        }
         const liveQueue = yield* Queue.bounded<BotStreamEvent, Cause.Done>(256);
         // Stream.fromPubSub does not deliver under this runtime; subscribe in the stream's scope.
         const subscription = yield* PubSub.subscribe(events);
@@ -2626,6 +2630,19 @@ const make = Effect.gen(function* () {
         ).pipe(Stream.interruptWhen(Deferred.await(revoked)));
       }),
     );
+
+  // One Alto re-check for the whole host while any SynBot stream is open, however many there
+  // are: a lapse found here ends them all.
+  if (isServerSynbotEnabled()) {
+    yield* Effect.gen(function* () {
+      for (;;) {
+        yield* Effect.sleep(STREAM_ALTO_RECHECK_MS);
+        if (openStreamRevokers.size === 0 || !requiresServerSynbotAlto()) continue;
+        if (yield* hasSynbotAccess) continue;
+        for (const revoke of [...openStreamRevokers]) revoke();
+      }
+    }).pipe(Effect.forkScoped);
+  }
 
   // Hub task updates of bot Hubs become bot task events (and may change a bot's status).
   if (isServerSynbotEnabled()) {

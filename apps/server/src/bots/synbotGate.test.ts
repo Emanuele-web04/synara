@@ -230,4 +230,73 @@ describe("synbotGate Alto entitlement", () => {
     clearServerAltoAccess(dir);
     expect(revoked).toHaveLength(3);
   });
+
+  describe("when the Account API cannot answer", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-22T10:00:00Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const grantThenExpire = async () => {
+      signedIn();
+      state.billingResult = { available: true, access: "granted" };
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+      vi.setSystemTime(Date.now() + 61_000);
+    };
+
+    it("keeps a verified grant through a short outage without ending streams", async () => {
+      const revoked: string[] = [];
+      const stop = onServerAltoAccessRevoked((credentialDir) => revoked.push(credentialDir));
+      try {
+        await grantThenExpire();
+        state.billingThrows = true;
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+        vi.setSystemTime(Date.now() + 30_000);
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+        state.billingThrows = false;
+        vi.setSystemTime(Date.now() + 6_000);
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+        expect(revoked).toEqual([]);
+      } finally {
+        stop();
+      }
+    });
+
+    it("fails closed and ends streams once the outage outlasts the grace", async () => {
+      const revoked: string[] = [];
+      const stop = onServerAltoAccessRevoked((credentialDir) => revoked.push(credentialDir));
+      try {
+        await grantThenExpire();
+        state.billingThrows = true;
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+        vi.setSystemTime(Date.now() + 61_000);
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
+        expect(revoked).toEqual([dir]);
+        // The grace does not start over: the next failure is still a no.
+        vi.setSystemTime(Date.now() + 6_000);
+        expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
+      } finally {
+        stop();
+      }
+    });
+
+    it("treats billing that reports itself unavailable as no verdict", async () => {
+      await grantThenExpire();
+      state.billingResult = { available: false, access: "none" } as never;
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(true);
+      // A real verdict still locks at once.
+      state.billingResult = { available: true, access: "none" };
+      vi.setSystemTime(Date.now() + 6_000);
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
+    });
+
+    it("gives no grace to an account that was never granted", async () => {
+      signedIn();
+      state.billingThrows = true;
+      expect(await checkServerSynbotAltoAccess(dir)).toBe(false);
+    });
+  });
 });

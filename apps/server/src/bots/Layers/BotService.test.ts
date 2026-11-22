@@ -388,6 +388,54 @@ it.effect("delegates from a user request with provenance, then settles and repor
   }).pipe(Effect.provide(makeLayer(world)));
 });
 
+it.effect("work that ends while Alto has lapsed settles, and reports once Alto is back", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const caller = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const delegation = yield* bots.delegate({
+      caller,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply() and its tests",
+      requestId: "multiply",
+    });
+    const messageId = `${BOT_DELEGATION_MESSAGE_PREFIX}${delegation.id}`;
+    world.messages.get(FRONTEND.threadId)!.push({
+      id: MessageId.makeUnsafe("reply-frontend"),
+      role: "assistant",
+      text: "Added multiply() with tests.",
+      turnId: TurnId.makeUnsafe("turn-frontend"),
+      streaming: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    world.turns.get(FRONTEND.threadId)!.push({
+      threadId: FRONTEND.threadId,
+      turnId: TurnId.makeUnsafe("turn-frontend"),
+      pendingMessageId: MessageId.makeUnsafe(messageId),
+      state: "completed",
+      requestedAt: now,
+      completedAt: now,
+      assistantMessageId: MessageId.makeUnsafe("reply-frontend"),
+    });
+
+    gate.requiresAlto = true;
+    gate.granted = false;
+    yield* bots.evaluateDelegations({});
+    const settled = yield* (yield* BotRepository).getDelegation(delegation.id);
+    assert.strictEqual(settled?.state, "completed");
+    // Waking the asker is new work: it waits for Alto.
+    assert.strictEqual(turnStarts(world, MAIN.threadId).length, 0);
+
+    gate.granted = true;
+    yield* bots.evaluateDelegations({});
+    yield* bots.evaluateDelegations({});
+    assert.strictEqual(turnStarts(world, MAIN.threadId).length, 1);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
 it.effect("starts a second hand-off to one bot only after the first turn start is taken", () => {
   const world = makeWorld();
   return Effect.gen(function* () {
@@ -1390,6 +1438,29 @@ it.effect("stopping a task whose chat is still being created says so", () => {
     const refused = yield* Effect.flip(bots.stopAll({ taskId: "work-starting" }));
     assert.strictEqual(refused.code, "conflict");
     assert.include(refused.message, "still starting");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("stopping a task this host does not have, or another bot's, is refused", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    yield* (yield* HubWorkRepository).submit({
+      projectId: FRONTEND.projectId,
+      requestId: "frontend-work",
+      scopeKey: "frontend-source",
+      fingerprint: "frontend-plan",
+      records: [frontendTask("work-queued", 0, "queued", null)],
+    });
+    const bots = yield* BotService;
+    const missing = yield* Effect.flip(bots.stopAll({ taskId: "work-missing" }));
+    assert.strictEqual(missing.code, "not-found");
+    const otherBot = yield* Effect.flip(
+      bots.stopAll({ botId: QA.projectId, taskId: "work-queued" }),
+    );
+    assert.strictEqual(otherBot.code, "not-found");
+    const own = yield* bots.stopAll({ botId: FRONTEND.projectId, taskId: "work-queued" });
+    assert.deepStrictEqual(own.cancelledTaskIds, ["work-queued"]);
   }).pipe(Effect.provide(makeLayer(world)));
 });
 

@@ -1,6 +1,7 @@
 // Stable after Alto ends: the server keeps a granted check for at most 60 s, then fails closed.
-// A cancelled plan, a sign-out and an Account API that drops off the network all lock SynBot,
-// and access comes back without a restart once Alto is reachable and active again.
+// A cancelled plan, a sign-out and an Account API that drops off the network all lock SynBot (an
+// outage only after a further 60 s grace, so a blip does not), and access comes back without a
+// restart once Alto is reachable and active again.
 import { test } from "@e2e-dev/web";
 import { expect } from "e2e";
 
@@ -20,16 +21,22 @@ import {
 
 /** The server's granted cache (synbotGate.ts) plus one denied re-check and polling slack. */
 const CACHE_BOUND_MS = 60_000 + 5_000 + 5_000;
+/** An unreachable Account API: the granted cache, then the grace a verified grant keeps. */
+const OUTAGE_BOUND_MS = CACHE_BOUND_MS + 60_000;
 
 /** Polls `bots.list` until it is refused; resolves to how long that took. */
-async function msUntilRefused(browser: Parameters<typeof botsAccess>[0], since: number) {
+async function msUntilRefused(
+  browser: Parameters<typeof botsAccess>[0],
+  since: number,
+  boundMs = CACHE_BOUND_MS,
+) {
   for (;;) {
     const access = await botsAccess(browser);
     if (access !== "ok") {
       expect(access).toBe("SUBSCRIPTION_REQUIRED");
       return Date.now() - since;
     }
-    if (Date.now() - since > CACHE_BOUND_MS + 30_000) return Date.now() - since;
+    if (Date.now() - since > boundMs + 30_000) return Date.now() - since;
     await sleep(2_000);
   }
 }
@@ -89,8 +96,8 @@ test("Stable: with the Account API offline SynBot fails closed, and it recovers 
 
   const offlineAt = Date.now();
   await setNetwork(false);
-  const lockedAfter = await msUntilRefused(browser, offlineAt);
-  expect(lockedAfter).toBeLessThanOrEqual(CACHE_BOUND_MS);
+  const lockedAfter = await msUntilRefused(browser, offlineAt, OUTAGE_BOUND_MS);
+  expect(lockedAfter).toBeLessThanOrEqual(OUTAGE_BOUND_MS);
   expect((await switchState()).dropped).toBeGreaterThan(0);
   // A billing read while offline fails; it never unlocks anything.
   expect((await call(browser, "account.billingStatus")).ok).toBe(false);

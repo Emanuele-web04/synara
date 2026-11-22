@@ -45,7 +45,8 @@ const make = Effect.gen(function* () {
   const bots = yield* BotService;
 
   if (isServerSynbotEnabled()) {
-    yield* bots.evaluateDelegations({});
+    // Forked, first run included: on a host that requires Alto the sweep may wait on the Account
+    // API, which must never hold up the server's startup.
     yield* bots
       .evaluateDelegations({})
       .pipe(Effect.repeat(Schedule.spaced(Duration.millis(SWEEP_INTERVAL_MS))), Effect.forkScoped);

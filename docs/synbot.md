@@ -6,7 +6,9 @@ starts **tasks** in their own worktree, and when the work is done you get one sh
 > **Synara Alto.** SynBot needs a Synara Alto (Pro) subscription in Synara Stable and when Synara
 > runs from the command line; it is free in Synara Beta. It runs next to [Hubs](hubs.md); bots are
 > listed here, not in the Hubs sidebar section. Without Alto you can still stop bots that are
-> running.
+> running, and work that was already running still settles; its report reaches the bot that asked
+> once Alto is back. If Synara can't reach your account for a moment, SynBot keeps working for up
+> to a minute before it locks.
 
 ## Bots
 

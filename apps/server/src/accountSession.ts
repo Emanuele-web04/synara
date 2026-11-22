@@ -1215,13 +1215,18 @@ export function createAccountSession(
       const status = await withBillingSession((token, client) => client.billingStatus(token));
       // A host refused for lack of access may retry its own authorization now.
       const granted = status.access === "granted";
-      const credentials = await readAccountCredentials(credentialDir).catch(() => null);
+      // Billing that reports itself unavailable is no verdict on Alto: the gate's own check
+      // decides then, so a billing outage does not lock a paying user out at once.
+      const credentials =
+        status.available === true
+          ? await readAccountCredentials(credentialDir).catch(() => null)
+          : null;
       if (credentials) {
         noteServerAltoAccess(credentialDir, {
           accountUrl: credentials.accountUrl,
           organizationId: credentials.organizationId,
           ...(credentials.userId ? { userId: credentials.userId } : {}),
-          granted: status.available === true && granted,
+          granted,
         });
       }
       if (granted) {
