@@ -131,6 +131,12 @@ export const makeSynbotTest = (paths: ReturnType<typeof runPaths>) => {
           { timeout: 60_000 },
         )
         .toBe(true);
+      // "/" restores the last route or opens a fresh chat, asynchronously. A test that navigates
+      // before that lands gets pulled back off its page by the late redirect (an app race on
+      // main: RestoreOrCreateChatRoute does not cancel a fresh chat already being created).
+      await expect
+        .poll(() => browser.evaluate(() => location.pathname), { timeout: 30_000 })
+        .toMatch(/^\/.+/);
 
       const rpc = <T>(method: string, input: unknown = {}) =>
         rpcIn(browser, method, input) as Promise<T>;
