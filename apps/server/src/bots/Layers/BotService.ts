@@ -218,10 +218,18 @@ const make = Effect.gen(function* () {
     if (!requiresServerSynbotAlto()) return Effect.succeed(true);
     return Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
   });
+  /**
+   * SynBot exists on this host. Enough for stopping, cancelling and dismissing: ending work never
+   * needs an entitlement, so a user who signed out or lost Alto can still stop running bots.
+   */
+  const requireAvailable = Effect.suspend(() =>
+    isServerSynbotEnabled()
+      ? Effect.void
+      : Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable")),
+  );
+  /** SynBot exists and this host's entitlement allows starting or accepting work. */
   const requireEnabled = Effect.gen(function* () {
-    if (!isServerSynbotEnabled()) {
-      return yield* Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable"));
-    }
+    yield* requireAvailable;
     if (requiresServerSynbotAlto()) {
       const granted = yield* Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
       if (!granted) {
@@ -1637,20 +1645,30 @@ const make = Effect.gen(function* () {
       return next;
     });
 
+  const relevantTo = (records: readonly BotDelegationRecord[], threadId: ThreadId | undefined) =>
+    threadId
+      ? records.filter(
+          (record) => record.toThreadId === threadId || record.fromThreadId === threadId,
+        )
+      : records;
+
+  /**
+   * The settle sweep. It runs every 10 s and on every thread event, so it costs nothing when no
+   * delegation concerns it: the Alto check comes only after that, and outside `settleLock`, so a
+   * slow Account API never holds up Stop or a cancel waiting on the lock.
+   */
   const evaluateDelegations: BotServiceShape["evaluateDelegations"] = (reason) =>
-    settleLock
-      .withPermits(1)(
+    Effect.gen(function* () {
+      if (!isServerSynbotEnabled()) return;
+      const pending = yield* repository.listActiveDelegations();
+      if (relevantTo(pending, reason.threadId).length === 0) return;
+      if (!(yield* hasSynbotAccess)) return;
+      yield* settleLock.withPermits(1)(
         Effect.gen(function* () {
-          if (!(yield* hasSynbotAccess)) return;
           const active = yield* repository.listActiveDelegations();
           if (active.length === 0) return;
           const nowMs = Date.now();
-          const relevant = reason.threadId
-            ? active.filter(
-                (record) =>
-                  record.toThreadId === reason.threadId || record.fromThreadId === reason.threadId,
-              )
-            : active;
+          const relevant = relevantTo(active, reason.threadId);
           const updated = new Map<string, BotDelegationRecord>();
           for (const record of relevant) {
             const next = yield* settleOne(record, nowMs).pipe(
@@ -1697,12 +1715,12 @@ const make = Effect.gen(function* () {
             yield* deliverReport(records);
           }
         }),
-      )
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("SynBot delegation evaluation failed", { cause: Cause.pretty(cause) }),
-        ),
       );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("SynBot delegation evaluation failed", { cause: Cause.pretty(cause) }),
+      ),
+    );
 
   /**
    * Ends an open delegation: stops the target's turns for it and its tasks, then records the
@@ -1716,6 +1734,7 @@ const make = Effect.gen(function* () {
       | { readonly state: "cancelled" }
       | { readonly state: "failed"; readonly resultSummary: string },
     visited: Set<string> = new Set(),
+    options: { readonly cascade: boolean } = { cascade: true },
   ): Effect.Effect<BotDelegationRecord, BotServiceError> =>
     Effect.gen(function* () {
       if (visited.has(record.id)) return record;
@@ -1751,8 +1770,9 @@ const make = Effect.gen(function* () {
         }
       }
       // Cancelling an intermediate delegation also cancels open child delegations it handed on,
-      // so downstream bots stop and cannot wake the cancelled bot later.
-      if (end.state === "cancelled") {
+      // so downstream bots stop and cannot wake the cancelled bot later. `visited` collects every
+      // delegation ended this way.
+      if (end.state === "cancelled" && options.cascade) {
         const onward = yield* repository
           .listDelegationsFromThread({ fromThreadId: record.toThreadId, since: record.createdAt })
           .pipe(Effect.orElseSucceed(() => [] as readonly BotDelegationRecord[]));
@@ -1764,9 +1784,13 @@ const make = Effect.gen(function* () {
           ) {
             continue;
           }
+          // A child names the turn that handed it on. Only one that does not falls back to its
+          // place in the chain: the same root, exactly one hop further. A deeper child of the
+          // same root came from another branch that passed through this bot.
           const belongsToChain =
-            (child.fromTurnId !== null && assessedTurnIds.includes(child.fromTurnId)) ||
-            (child.rootId === record.rootId && child.depth > record.depth);
+            child.fromTurnId !== null
+              ? assessedTurnIds.includes(child.fromTurnId)
+              : child.rootId === record.rootId && child.depth === record.depth + 1;
           if (!belongsToChain) continue;
           yield* endDelegation(child, { state: "cancelled" }, visited).pipe(
             Effect.catch(() => Effect.void),
@@ -1801,7 +1825,7 @@ const make = Effect.gen(function* () {
 
   const cancelDelegation: BotServiceShape["cancelDelegation"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      yield* requireAvailable;
       return yield* settleLock.withPermits(1)(
         Effect.gen(function* () {
           const record = yield* repository
@@ -1881,11 +1905,13 @@ const make = Effect.gen(function* () {
 
   const cardAction: BotServiceShape["cardAction"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      yield* requireAvailable;
       const { card, resolved } = yield* findCard(input.threadId, input.cardId);
       if (resolved) return yield* Effect.fail(fail("This card was already answered.", "conflict"));
       const option = card.options.find((entry) => entry.id === input.optionId);
       if (!option) return yield* Effect.fail(fail("Unknown answer.", "invalid"));
+      // "Not now" starts nothing; every other answer starts or accepts work.
+      if (option.tone !== "dismiss") yield* requireEnabled;
       const createdBotIds: ProjectId[] = [];
       switch (card.kind) {
         case "bot-suggestions":
@@ -2368,7 +2394,7 @@ const make = Effect.gen(function* () {
 
   const stopAll: BotServiceShape["stopAll"] = (input) =>
     Effect.gen(function* () {
-      yield* requireEnabled;
+      yield* requireAvailable;
       const only = input?.botId ?? null;
       const onlyTaskId = input?.taskId ?? null;
       if (only !== null) yield* requireBot(only);
@@ -2389,6 +2415,15 @@ const make = Effect.gen(function* () {
             yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
               Effect.tap(() => Effect.sync(() => cancelledTaskIds.push(item.id))),
               Effect.catch(() => Effect.void),
+            );
+          } else if (INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
+            // Its worker is still being created: there is nothing to interrupt yet, and the
+            // creation cannot be called back halfway. Say so instead of reporting a Stop.
+            return yield* Effect.fail(
+              fail(
+                "This task is still starting. Stop it again once its chat has opened.",
+                "conflict",
+              ),
             );
           }
         }
@@ -2426,10 +2461,27 @@ const make = Effect.gen(function* () {
           }
           continue;
         }
-        // One bot stops the work handed to it; what it handed to others keeps going.
+        // One bot stops the work handed to it; what it handed to others keeps going. Stop all
+        // ends everything, so it may follow each hand-off down its chain.
         if (only !== null && record.toBotId !== only) continue;
-        yield* cancelDelegation({ delegationId: record.id }).pipe(Effect.catch(() => Effect.void));
-        cancelledDelegationIds.push(record.id);
+        if (cancelledDelegationIds.includes(record.id)) continue;
+        const ended = new Set<string>();
+        yield* settleLock
+          .withPermits(1)(
+            Effect.gen(function* () {
+              const latest = yield* repository
+                .getDelegation(record.id)
+                .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
+              if (!latest || BOT_DELEGATION_TERMINAL_STATES.has(latest.state)) return;
+              yield* endDelegation(latest, { state: "cancelled" }, ended, {
+                cascade: only === null,
+              });
+            }),
+          )
+          .pipe(Effect.catch(() => Effect.void));
+        for (const id of ended) {
+          if (!cancelledDelegationIds.includes(id)) cancelledDelegationIds.push(id);
+        }
       }
       for (const bot of yield* listBots()) {
         if (only !== null && bot.id !== only) continue;
