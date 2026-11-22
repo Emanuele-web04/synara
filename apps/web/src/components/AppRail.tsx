@@ -106,7 +106,7 @@ const RAIL_SINGLE_GLYPHS: Record<SingleGlyphRailItemId, AppRailGlyphs> = {
   spaces: sameGlyphs(FoldersIcon),
   // Hubs (stored id "studio"): the Hugeicons `dashboard-circle` circles.
   studio: sameGlyphs(HubIcon),
-  // SynBot: HoloBot's logo, as on the iPhone's Bot tab.
+  // SynBot: the mascot's horned profile.
   synbot: sameGlyphs(SynbotMarkIcon),
 };
 

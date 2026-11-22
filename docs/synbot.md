@@ -14,7 +14,7 @@ A bot is a role with a scope:
 
 | Field              | What it does                                                                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Name, role, mascot | How the bot appears in the SynBot panel and in its chat.                                                                                                                                      |
+| Name, role, mascot | How the bot appears in the SynBot panel and in its chat. Pick an outfit and a tile color.                                                                                                     |
 | Instructions       | Rules the bot and its tasks follow.                                                                                                                                                           |
 | Scope              | All projects or chosen ones, plus optional folders such as `apps/web/**`. The scope decides which bot gets work and is told to the bot; a task that changes files outside it shows a warning. |
 | Engine             | The provider and model of the bot's chat, and optionally a different one for its tasks. New bots start on an economy model; SynBot uses the model you pick.                                   |
@@ -102,3 +102,17 @@ CI test steps removed) are always shown. A bot never merges: only your press doe
 
 Synara for iPhone shows a **Bot** tab next to **Threads** when the connected Mac runs Synara Beta,
 with the same bots, chats, cards and Merge.
+
+## Mascot artwork
+
+The [SVG artwork](../apps/web/src/components/synbot/kit/synbot-mascots.svg) has separate
+layers for the profile, its visible eye, and each outfit. The angled horns echo the Synara mark,
+and the dot nose and flat shadows stay part of the profile as the eye blinks. The outfit follows
+the creature's motion.
+The saved mascot IDs still select the same slot in the picker. Frontend starts with the
+designer, Backend with the terminal, QA with the inspector, Docs with the archivist, and iOS
+with the mobile outfit. The main SynBot wears the captain's uniform.
+
+To sync the SVG layers into an iOS checkout, run
+`python3 scripts/export-synbot-mascots.py /path/to/SynaraIOS/Synara/SynaraIOS/Assets.xcassets`
+from this repository. Both apps use the same artwork and honor Reduce Motion.

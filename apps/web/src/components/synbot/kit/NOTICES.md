@@ -1,7 +1,7 @@
 # Third-party notices (SynBot kit)
 
-The SynBot kit is ported from HoloBot's `packages/ui` (tokens, components, mascots). It keeps
-HoloBot's third-party material, listed here. HoloBot's liquid-metal shader is not part of the port.
+The SynBot kit uses tokens and components ported from HoloBot's `packages/ui`. The
+animal avatars, outfits, and desktop navigation mark are original Synara vector artwork.
 
 ## Hugeicons (free, stroke rounded)
 
@@ -43,41 +43,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## BotAvatarsKit (Libraries.dev)
-
-The clover, rounded-square and blob mascot outlines in `botShapes.ts` are SVG path data from
-BotAvatarsKit (https://github.com/Jakubantalik/Libraries.dev, `packages/bot-avatars`,
-`BotAvatarShapes.swift`), unchanged.
-
-```
-MIT License
-
-Copyright (c) 2026 Jakub Antalik
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ## HoloBot
-
-SynBot's face (`assets/synbot-ghost-*.webp`) is HoloBot's chrome logo render
-(`assets/brand/logo-chrome-1024.png` in the HoloBot repository), cut out of its black square and
-scaled to 48, 96, 192 and 384 px, ported to SynBot at the owner's request.
 
 The dithered backdrop (`Backdrop.tsx`, `dither.ts`) is HoloBot's own, generated in code (HoloBot's
 `packages/ui/src/dither.ts`), ported to SynBot at the owner's request.
