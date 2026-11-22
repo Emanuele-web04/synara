@@ -83,6 +83,10 @@ test("Removing a bot deletes its chat and keeps the project threads it worked in
   await remove.tap();
   const confirm = screen.getByRole("dialog", `Remove ${doomed.name}?`);
   await expect(confirm).toBeVisible();
+  // The warning says what goes (the chat) and what stays (project threads), as checked below.
+  await expect(confirm).toContainText(
+    "Deletes the bot, its chat and its memory. Projects it worked in and their threads are untouched.",
+  );
   await app.screenshot("remove-confirm");
   await confirm.getByRole("button", "Remove bot").tap();
 
