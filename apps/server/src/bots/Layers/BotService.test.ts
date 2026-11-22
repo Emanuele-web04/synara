@@ -1075,6 +1075,13 @@ it.effect(
       );
       yield* bots.evaluateDelegations({});
       assert.lengthOf(reportsTo(world, MAIN.threadId), 1);
+      // The abandoned one is settled, not left open for every sweep to re-read.
+      const snapshot = yield* bots.snapshot();
+      const failed = snapshot.delegations.find((entry) => entry.toBotId === QA.projectId);
+      assert.strictEqual(failed?.state, "failed");
+      assert.isNotNull(failed?.settledAt);
+      yield* bots.evaluateDelegations({});
+      assert.lengthOf(reportsTo(world, MAIN.threadId), 1);
     }).pipe(Effect.provide(makeLayer(world)));
   },
 );
@@ -1466,5 +1473,49 @@ it.effect("proposing an accepted bot again answers with the same card, not a sec
       bots.cardAction({ threadId: MAIN.threadId, cardId: again.cardId, optionId: "create:0" }),
     );
     assert.strictEqual(answered.code, "conflict");
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("a sibling still being dispatched is not taken for an abandoned one", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Frontend part",
+      requestId: "frontend",
+    });
+    // QA's thread still holds another pending start, so this dispatch waits for it.
+    world.pendingStarts.set(QA.threadId, "msg-earlier");
+    const toQa = yield* Effect.forkChild(
+      bots.delegate({ caller: main, targetBotId: QA.projectId, brief: "QA part", requestId: "qa" }),
+    );
+    yield* TestClock.adjust("200 millis");
+    assert.lengthOf(turnStarts(world, QA.threadId), 0);
+
+    // The asker's turn has ended and Frontend finished: QA is mid-dispatch, not abandoned.
+    putTurn(world, FRONTEND.threadId, "turn-fe", delegationMessage(toFrontend.id), "Done.");
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+    const during = yield* bots.snapshot();
+    assert.strictEqual(
+      during.delegations.find((entry) => entry.toBotId === QA.projectId)?.state,
+      "sent",
+    );
+
+    world.pendingStarts.delete(QA.threadId);
+    yield* TestClock.adjust("200 millis");
+    const qa = yield* Fiber.join(toQa);
+    assert.lengthOf(turnStarts(world, QA.threadId), 1);
+    putTurn(world, QA.threadId, "turn-qa", delegationMessage(qa.id), "Checked.");
+    yield* bots.evaluateDelegations({});
+    const reports = reportsTo(world, MAIN.threadId);
+    assert.lengthOf(reports, 1);
+    assert.include(reports[0]!.message.text, "Checked.");
   }).pipe(Effect.provide(makeLayer(world)));
 });

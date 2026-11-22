@@ -1209,7 +1209,38 @@ const make = Effect.gen(function* () {
 
   const roster: BotServiceShape["roster"] = () => requireEnabled.pipe(Effect.andThen(listBots()));
 
+  /**
+   * Delegations whose first turn start is being dispatched right now. Saved as `sent` with no
+   * start until the dispatch lands, they look like an abandoned delivery; this tells them apart.
+   * In memory on purpose: after a restart nothing is mid-dispatch.
+   */
+  const delivering = new Set<string>();
+
+  /**
+   * A delivery that failed and can no longer be retried: saved but never started, not being
+   * dispatched, and its asker is no longer in the turn that could ask again (with no known turn,
+   * no longer in any turn).
+   */
+  const isAbandonedDelivery = (
+    record: BotDelegationRecord,
+    requesterShell: OrchestrationThreadShell | null,
+  ) => {
+    if (record.settledAt !== null || record.state !== "sent" || record.startedAt !== null)
+      return false;
+    if (delivering.has(record.id)) return false;
+    const activeTurnId = requesterShell?.session?.activeTurnId ?? null;
+    return record.fromTurnId !== null ? activeTurnId !== record.fromTurnId : activeTurnId === null;
+  };
+
   const dispatchDelegation = (record: BotDelegationRecord) =>
+    Effect.suspend(() => {
+      delivering.add(record.id);
+      return dispatchDelegationNow(record).pipe(
+        Effect.ensuring(Effect.sync(() => delivering.delete(record.id))),
+      );
+    });
+
+  const dispatchDelegationNow = (record: BotDelegationRecord) =>
     Effect.gen(function* () {
       const from = yield* loadBot(record.fromBotId);
       yield* startTurn({
@@ -1598,10 +1629,32 @@ const make = Effect.gen(function* () {
       return { shell: shell.value, messages, items, result };
     });
 
+  const requesterShellOf = (record: BotDelegationRecord) =>
+    snapshotQuery.getThreadShellById(record.fromThreadId).pipe(
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    );
+
   const settleOne = (record: BotDelegationRecord, nowMs: number) =>
     Effect.gen(function* () {
       if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state))
         return record;
+      if (isAbandonedDelivery(record, yield* requesterShellOf(record))) {
+        // The asker saw the delivery fail in its turn, so this is not reported again; settling it
+        // stops the sweep re-reading it and the UI showing it as sent.
+        const at = isoNow();
+        const failed: BotDelegationRecord = {
+          ...record,
+          state: "failed",
+          resultSummary: "The hand-off could not be started.",
+          settledAt: at,
+          reportedAt: at,
+          updatedAt: at,
+        };
+        yield* repository.saveDelegation(failed);
+        yield* publishDelegation(failed);
+        return failed;
+      }
       const assessed = yield* assessDelegation(record, nowMs);
       if (assessed === null) {
         const failed: BotDelegationRecord = {
@@ -1696,20 +1749,13 @@ const make = Effect.gen(function* () {
             if (settings?.recapMode !== "task") {
               const siblings = yield* repository.listDelegationsByRequest(key);
               const fresh = siblings.map((sibling) => updated.get(sibling.id) ?? sibling);
-              const requester = records[0]!;
-              const requesterShell = yield* snapshotQuery
-                .getThreadShellById(requester.fromThreadId)
-                .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
-              const requesterTurnActive =
-                Option.isSome(requesterShell) &&
-                requester.fromTurnId !== null &&
-                requesterShell.value.session?.activeTurnId === requester.fromTurnId;
+              const requesterShell = yield* requesterShellOf(records[0]!);
               const allSettled = fresh.every(
                 (sibling) =>
                   sibling.settledAt !== null ||
-                  // A sibling whose startTurn failed and whose requester turn already ended can
-                  // never be retried; do not let it block completed siblings from recapping.
-                  (!requesterTurnActive && sibling.state === "sent" && sibling.startedAt === null),
+                  // An abandoned delivery (settled on its own sweep) can never be retried; it
+                  // must not hold completed siblings back from their recap.
+                  isAbandonedDelivery(sibling, requesterShell),
               );
               // One recap per request; a failure is reported at once instead of waiting.
               const now = allSettled
