@@ -43,6 +43,7 @@ export class BotServiceError extends Schema.TaggedErrorClass<BotServiceError>()(
     "not-found",
     "conflict",
     "limit",
+    "subscription-required",
     "unavailable",
     "storage",
   ]),

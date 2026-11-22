@@ -112,6 +112,7 @@ import { Effect, Path as EffectPath } from "effect";
 import { deriveServerPaths } from "./config";
 import { HostSecretsCoordinator } from "./hostSecrets/coordinator";
 import { hostSecretsSyncKeyPath } from "./hostSecrets/syncKeyStore";
+import { clearServerAltoAccess, noteServerAltoAccess } from "./bots/synbotGate";
 
 function requireInboxRecaps(): void {
   if (!isServerBetaFeatureEnabled(ACCOUNT_INBOX_BETA_FEATURE)) {
@@ -1214,6 +1215,14 @@ export function createAccountSession(
       const status = await withBillingSession((token, client) => client.billingStatus(token));
       // A host refused for lack of access may retry its own authorization now.
       const granted = status.access === "granted";
+      const credentials = await readAccountCredentials(credentialDir).catch(() => null);
+      if (credentials) {
+        noteServerAltoAccess(credentialDir, {
+          accountUrl: credentials.accountUrl,
+          ...(credentials.userId ? { userId: credentials.userId } : {}),
+          granted: status.available === true && granted,
+        });
+      }
       if (granted) {
         // Access that was just granted lifts a refusal; an unchanged grant
         // must not reset the backoff on every billing read.
@@ -1405,6 +1414,7 @@ export function createAccountSession(
         )
           return;
         await deleteAccountCredentials(credentialDir);
+        clearServerAltoAccess(credentialDir);
         const { hostIdentityPath } = await Effect.runPromise(
           deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
         );
@@ -1416,6 +1426,7 @@ export function createAccountSession(
     },
 
     async signOut() {
+      clearServerAltoAccess(credentialDir);
       await runAuthLogout({
         baseDir,
         devUrl: options.devUrl,

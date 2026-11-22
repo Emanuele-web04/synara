@@ -70,6 +70,7 @@ import {
   Stream,
 } from "effect";
 
+import { accountStateDirectory } from "../../accountAuth.ts";
 import { stableGatewayDigest } from "../../agentGateway/creationUtils.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -107,7 +108,13 @@ import {
   type BotCaller,
   type BotServiceShape,
 } from "../Services/BotService.ts";
-import { SYNBOT_UNAVAILABLE_MESSAGE, isServerSynbotEnabled } from "../synbotGate.ts";
+import {
+  SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE,
+  SYNBOT_UNAVAILABLE_MESSAGE,
+  checkServerSynbotAltoAccess,
+  isServerSynbotEnabled,
+  requiresServerSynbotAlto,
+} from "../synbotGate.ts";
 
 const USER = { kind: "user" } as const;
 // BotCard's limits (packages/contracts/src/bots.ts).
@@ -150,12 +157,6 @@ const toServiceError =
           code,
           cause,
         );
-
-const requireEnabled = Effect.suspend(() =>
-  isServerSynbotEnabled()
-    ? Effect.void
-    : Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable")),
-);
 
 const repositoryFromPrUrl = (url: string): string | null => {
   const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/\d+/i.exec(url);
@@ -211,6 +212,25 @@ const make = Effect.gen(function* () {
     snapshotQuery,
   });
   const lastPublishedStatus = new Map<ProjectId, string>();
+  const credentialDir = accountStateDirectory(serverConfig.baseDir, serverConfig.devUrl);
+  const hasSynbotAccess = Effect.suspend(() => {
+    if (!isServerSynbotEnabled()) return Effect.succeed(false);
+    if (!requiresServerSynbotAlto()) return Effect.succeed(true);
+    return Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
+  });
+  const requireEnabled = Effect.gen(function* () {
+    if (!isServerSynbotEnabled()) {
+      return yield* Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable"));
+    }
+    if (requiresServerSynbotAlto()) {
+      const granted = yield* Effect.promise(() => checkServerSynbotAltoAccess(credentialDir));
+      if (!granted) {
+        return yield* Effect.fail(
+          fail(SYNBOT_SUBSCRIPTION_REQUIRED_MESSAGE, "subscription-required"),
+        );
+      }
+    }
+  });
 
   const publish = (event: BotStreamEvent) => PubSub.publish(events, event).pipe(Effect.asVoid);
 
@@ -1042,11 +1062,30 @@ const make = Effect.gen(function* () {
       }
       // A Hub wake while this bot works on a delegation keeps that delegation's provenance.
       if (message?.dispatchOrigin === "automation") {
-        const open = (yield* repository
+        const candidates = (yield* repository
           .listActiveDelegations()
-          .pipe(Effect.orElseSucceed(() => [] as BotDelegationRecord[]))).find(
+          .pipe(Effect.orElseSucceed(() => [] as BotDelegationRecord[]))).filter(
           (record) => record.toBotId === bot.id && record.settledAt === null,
         );
+        let open: BotDelegationRecord | undefined;
+        if (candidates.length === 1) {
+          open = candidates[0];
+        } else if (candidates.length > 1) {
+          const items = yield* listItems(bot.id).pipe(Effect.orElseSucceed(() => []));
+          open =
+            candidates.find((record) =>
+              items.some(
+                (item) =>
+                  record.taskIds.includes(item.id) &&
+                  (message.text.includes(item.id) || message.text.includes(item.title)),
+              ),
+            ) ??
+            candidates.toSorted(
+              (left, right) =>
+                Date.parse(right.startedAt ?? right.createdAt) -
+                Date.parse(left.startedAt ?? left.createdAt),
+            )[0];
+        }
         if (open) {
           return {
             ...base,
@@ -1062,7 +1101,7 @@ const make = Effect.gen(function* () {
 
   const botForThread = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      if (!isServerSynbotEnabled()) return null;
+      if (!(yield* hasSynbotAccess)) return null;
       const config = yield* projectAgentRepository
         .getConfigByCoordinatorThread(threadId)
         .pipe(Effect.orElseSucceed(() => Option.none<ProjectAgentConfig>()));
@@ -1143,7 +1182,7 @@ const make = Effect.gen(function* () {
       });
     }).pipe(Effect.orElseSucceed(() => ""));
 
-  const roster: BotServiceShape["roster"] = () => listBots();
+  const roster: BotServiceShape["roster"] = () => requireEnabled.pipe(Effect.andThen(listBots()));
 
   const dispatchDelegation = (record: BotDelegationRecord) =>
     Effect.gen(function* () {
@@ -1327,7 +1366,8 @@ const make = Effect.gen(function* () {
     });
 
   const listDelegationsFor: BotServiceShape["listDelegationsFor"] = (caller) =>
-    repository.listRecentDelegations(RECENT_DELEGATIONS).pipe(
+    requireEnabled.pipe(
+      Effect.andThen(repository.listRecentDelegations(RECENT_DELEGATIONS)),
       Effect.map((records) =>
         records
           .filter(
@@ -1455,12 +1495,48 @@ const make = Effect.gen(function* () {
         .listByThreadId({ threadId: record.toThreadId })
         .pipe(Effect.orElseSucceed(() => []));
       const messages = yield* threadMessages(record.toThreadId);
+      const items = yield* listItems(record.toBotId);
+      const activeOnTarget = (yield* repository
+        .listActiveDelegations()
+        .pipe(Effect.orElseSucceed(() => [] as BotDelegationRecord[]))).filter(
+        (other) =>
+          other.id !== record.id &&
+          other.toThreadId === record.toThreadId &&
+          other.settledAt === null,
+      );
+      const otherDelegationItems =
+        activeOnTarget.length > 0
+          ? items.filter((item) => activeOnTarget.some((other) => other.taskIds.includes(item.id)))
+          : [];
+      const ownTurnIds = new Set(
+        turns
+          .filter((turn) => turn.pendingMessageId === record.messageId && turn.turnId !== null)
+          .map((turn) => turn.turnId!),
+      );
+      const hasOwnItems =
+        record.taskIds.length > 0 ||
+        items.some(
+          (item) => item.delegationTurnId != null && ownTurnIds.has(item.delegationTurnId),
+        );
+      const recordStartMs = Date.parse(record.startedAt ?? record.createdAt) || 0;
       const attributable = new Set(
         messages
-          .filter((message) => message.dispatchOrigin === "automation")
+          .filter((message) => {
+            if (message.dispatchOrigin !== "automation") return false;
+            const createdMs = Date.parse(message.createdAt) || 0;
+            if (createdMs < recordStartMs) return false;
+            if (activeOnTarget.length === 0) return true;
+            // When multiple delegations run on the same bot, don't claim a wake that names
+            // another delegation's task or arrives while only another delegation owns tasks.
+            const namesOtherTask = otherDelegationItems.some(
+              (item) => message.text.includes(item.id) || message.text.includes(item.title),
+            );
+            if (namesOtherTask) return false;
+            if (!hasOwnItems && otherDelegationItems.length > 0) return false;
+            return true;
+          })
           .map((message) => message.id as string),
       );
-      const items = yield* listItems(record.toBotId);
       // Work the target handed on counts as part of this delegation until it is reported back.
       const onward = yield* repository
         .listDelegationsFromThread({ fromThreadId: record.toThreadId, since: record.createdAt })
@@ -1554,7 +1630,7 @@ const make = Effect.gen(function* () {
     settleLock
       .withPermits(1)(
         Effect.gen(function* () {
-          if (!isServerSynbotEnabled()) return;
+          if (!(yield* hasSynbotAccess)) return;
           const active = yield* repository.listActiveDelegations();
           if (active.length === 0) return;
           const nowMs = Date.now();
@@ -1585,7 +1661,21 @@ const make = Effect.gen(function* () {
             if (settings?.recapMode !== "task") {
               const siblings = yield* repository.listDelegationsByRequest(key);
               const fresh = siblings.map((sibling) => updated.get(sibling.id) ?? sibling);
-              const allSettled = fresh.every((sibling) => sibling.settledAt !== null);
+              const requester = records[0]!;
+              const requesterShell = yield* snapshotQuery
+                .getThreadShellById(requester.fromThreadId)
+                .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
+              const requesterTurnActive =
+                Option.isSome(requesterShell) &&
+                requester.fromTurnId !== null &&
+                requesterShell.value.session?.activeTurnId === requester.fromTurnId;
+              const allSettled = fresh.every(
+                (sibling) =>
+                  sibling.settledAt !== null ||
+                  // A sibling whose startTurn failed and whose requester turn already ended can
+                  // never be retried; do not let it block completed siblings from recapping.
+                  (!requesterTurnActive && sibling.state === "sent" && sibling.startedAt === null),
+              );
               // One recap per request; a failure is reported at once instead of waiting.
               const now = allSettled
                 ? records
@@ -1614,12 +1704,17 @@ const make = Effect.gen(function* () {
     end:
       | { readonly state: "cancelled" }
       | { readonly state: "failed"; readonly resultSummary: string },
-  ) =>
+    visited: Set<string> = new Set(),
+  ): Effect.Effect<BotDelegationRecord, BotServiceError> =>
     Effect.gen(function* () {
+      if (visited.has(record.id)) return record;
+      visited.add(record.id);
       let taskIds = record.taskIds;
+      let assessedTurnIds: readonly string[] = [];
       if (record.state !== "awaiting-start") {
         const assessed = yield* assessDelegation(record, Date.now());
         if (assessed !== null) {
+          assessedTurnIds = assessed.result.turnIds;
           // Only a turn of this delegation: the target may be busy with something else.
           const activeTurnId = assessed.shell.session?.activeTurnId ?? null;
           if (activeTurnId !== null && assessed.result.turnIds.includes(activeTurnId)) {
@@ -1644,6 +1739,29 @@ const make = Effect.gen(function* () {
           }
         }
       }
+      // Cancelling an intermediate delegation also cancels open child delegations it handed on,
+      // so downstream bots stop and cannot wake the cancelled bot later.
+      if (end.state === "cancelled") {
+        const onward = yield* repository
+          .listDelegationsFromThread({ fromThreadId: record.toThreadId, since: record.createdAt })
+          .pipe(Effect.orElseSucceed(() => [] as readonly BotDelegationRecord[]));
+        for (const child of onward) {
+          if (
+            child.id === record.id ||
+            visited.has(child.id) ||
+            BOT_DELEGATION_TERMINAL_STATES.has(child.state)
+          ) {
+            continue;
+          }
+          const belongsToChain =
+            (child.fromTurnId !== null && assessedTurnIds.includes(child.fromTurnId)) ||
+            (child.rootId === record.rootId && child.depth > record.depth);
+          if (!belongsToChain) continue;
+          yield* endDelegation(child, { state: "cancelled" }, visited).pipe(
+            Effect.catch(() => Effect.void),
+          );
+        }
+      }
       const now = isoNow();
       const next: BotDelegationRecord = {
         ...record,
@@ -1658,12 +1776,14 @@ const make = Effect.gen(function* () {
       yield* repository
         .saveDelegation(next)
         .pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
-      yield* resolveCardSilently(
-        record.toThreadId,
-        `synbot:card:start:${record.id}`,
-        "not-now",
-        "Not now",
-      );
+      if (record.state === "awaiting-start") {
+        yield* resolveCardSilently(
+          record.toThreadId,
+          `synbot:card:start:${record.id}`,
+          "not-now",
+          "Not now",
+        );
+      }
       yield* publishDelegation(next);
       return next;
     });
@@ -1796,7 +1916,14 @@ const make = Effect.gen(function* () {
               .execute({
                 operation: "synbot.initialCommit",
                 cwd: card.projectPath,
-                args: ["commit", "--allow-empty", "-m", "Initial commit"],
+                args: [
+                  "-c",
+                  "commit.gpgsign=false",
+                  "commit",
+                  "--allow-empty",
+                  "-m",
+                  "Initial commit",
+                ],
               })
               .pipe(Effect.mapError(toServiceError("Could not make the first commit.")));
             yield* registerProject(card.projectPath);
@@ -1858,10 +1985,33 @@ const make = Effect.gen(function* () {
       return { drafts: scan.drafts };
     });
 
+  /**
+   * Returns `baseId` while it is still open (preserving idempotency), or picks a fresh
+   * suffixed id when an earlier card with `baseId` was already answered (e.g. "Not now").
+   */
+  const nextCardId = (threadId: ThreadId, baseId: string) =>
+    snapshotQuery.getThreadDetailById(threadId).pipe(
+      Effect.map((detail) => {
+        if (Option.isNone(detail)) return baseId;
+        const resolvedIds = new Set(
+          detail.value.activities
+            .filter((activity) => activity.kind === BOT_CARD_RESOLVED_ACTIVITY_KIND)
+            .map((activity) => (activity.payload as { cardId?: unknown } | null)?.cardId)
+            .filter((id): id is string => typeof id === "string"),
+        );
+        if (!resolvedIds.has(baseId)) return baseId;
+        for (let attempt = 2; ; attempt += 1) {
+          const candidate = `${baseId}:${attempt}`;
+          if (!resolvedIds.has(candidate)) return candidate;
+        }
+      }),
+      Effect.orElseSucceed(() => baseId),
+    );
+
   const postSuggestionCard = (threadId: ThreadId, botId: ProjectId, projectId: ProjectId) =>
     Effect.gen(function* () {
       const { scan } = yield* scanProject(projectId);
-      const cardId = `synbot:card:suggest:${projectId}`;
+      const cardId = yield* nextCardId(threadId, `synbot:card:suggest:${projectId}`);
       yield* postCard({
         threadId,
         summary: scan.message,
@@ -1901,7 +2051,10 @@ const make = Effect.gen(function* () {
   const propose: BotServiceShape["propose"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
-      const cardId = `synbot:card:propose:${stableGatewayDigest({ bot: input.caller.bot.id, draft: input.draft }, 20)}`;
+      const cardId = yield* nextCardId(
+        input.caller.bot.threadId,
+        `synbot:card:propose:${stableGatewayDigest({ bot: input.caller.bot.id, draft: input.draft }, 20)}`,
+      );
       yield* postCard({
         threadId: input.caller.bot.threadId,
         summary: `Save "${input.draft.name}" as a bot?`,
@@ -1976,7 +2129,10 @@ const make = Effect.gen(function* () {
         .readBranchContext(workspaceRoot)
         .pipe(Effect.orElseSucceed(() => null));
       if (!context?.isRepo) {
-        const cardId = `synbot:card:git-init:${stableGatewayDigest({ workspaceRoot }, 20)}`;
+        const cardId = yield* nextCardId(
+          input.caller.bot.threadId,
+          `synbot:card:git-init:${stableGatewayDigest({ workspaceRoot }, 20)}`,
+        );
         yield* postCard({
           threadId: input.caller.bot.threadId,
           summary: "Make it a Git repository?",
@@ -2001,7 +2157,7 @@ const make = Effect.gen(function* () {
 
   const onProjectCreated: BotServiceShape["onProjectCreated"] = (projectId) =>
     Effect.gen(function* () {
-      if (!isServerSynbotEnabled()) return;
+      if (!(yield* hasSynbotAccess)) return;
       const project = yield* snapshotQuery.getProjectShellById(projectId);
       if (Option.isNone(project) || !isOrdinary(project.value)) return;
       const profiles = yield* repository.listProfiles();
@@ -2024,7 +2180,7 @@ const make = Effect.gen(function* () {
 
   const fullControlFor: BotServiceShape["fullControlFor"] = (input) =>
     Effect.gen(function* () {
-      if (!isServerSynbotEnabled()) return null;
+      if (!(yield* hasSynbotAccess)) return null;
       const settings = yield* getSettings();
       if (!settings.controlWithoutAsking) return null;
       const shell = yield* snapshotQuery
@@ -2039,7 +2195,7 @@ const make = Effect.gen(function* () {
 
   const noteControl: BotServiceShape["noteControl"] = (input) =>
     Effect.gen(function* () {
-      if (!isServerSynbotEnabled() || input.callerThreadId === input.targetThreadId) return;
+      if (!(yield* hasSynbotAccess) || input.callerThreadId === input.targetThreadId) return;
       const config = yield* projectAgentRepository.getConfigByCoordinatorThread(
         input.callerThreadId,
       );
@@ -2119,6 +2275,12 @@ const make = Effect.gen(function* () {
         .detail({ ...input, forceRefresh: true })
         .pipe(Effect.mapError(toServiceError("Could not read the pull request.", "unavailable")));
       const diff = yield* service.diff(input).pipe(Effect.orElseSucceed(() => null));
+      const owned = yield* hubWorkRepository
+        .findByWorker(threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      const profile = owned
+        ? yield* repository.getProfile(owned.projectId).pipe(Effect.orElseSucceed(() => null))
+        : null;
       return {
         service,
         input,
@@ -2128,6 +2290,7 @@ const make = Effect.gen(function* () {
           detail,
           patch: diff?.patch ?? "",
           patchComplete: diff !== null && !diff.truncated,
+          ...(profile && profile.scope.paths.length > 0 ? { scopePaths: profile.scope.paths } : {}),
           checkedAt: isoNow(),
         }),
       };
@@ -2190,14 +2353,62 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* requireEnabled;
       const only = input?.botId ?? null;
+      const onlyTaskId = input?.taskId ?? null;
       if (only !== null) yield* requireBot(only);
-      const interruptedThreadIds: ThreadId[] = [];
+      const interruptedSet = new Set<ThreadId>();
       const cancelledTaskIds: string[] = [];
       const cancelledDelegationIds: string[] = [];
-      for (const record of yield* repository
+      if (onlyTaskId !== null) {
+        const item = yield* hubWorkRepository
+          .get(onlyTaskId)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (item && (only === null || item.projectId === only)) {
+          if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
+            yield* interruptThread(item.workerThreadId, "stop-all").pipe(
+              Effect.catch(() => Effect.void),
+            );
+            interruptedSet.add(item.workerThreadId);
+          } else if (QUEUED_ITEM_STATES.has(item.state)) {
+            yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
+              Effect.tap(() => Effect.sync(() => cancelledTaskIds.push(item.id))),
+              Effect.catch(() => Effect.void),
+            );
+          }
+        }
+        return {
+          interruptedThreadIds: [...interruptedSet],
+          cancelledTaskIds,
+          cancelledDelegationIds,
+        };
+      }
+      const activeDelegations = yield* repository
         .listActiveDelegations()
-        .pipe(Effect.mapError(toServiceError("Could not load delegations.")))) {
-        if (record.settledAt !== null) continue;
+        .pipe(Effect.mapError(toServiceError("Could not load delegations.")));
+      for (const record of activeDelegations) {
+        if (record.settledAt !== null) {
+          // Suppress already-settled-but-unreported delegations so the next sweep cannot wake
+          // the requester right after Stop all.
+          if (
+            record.reportedAt === null &&
+            (only === null || record.toBotId === only || record.fromBotId === only)
+          ) {
+            yield* settleLock
+              .withPermits(1)(
+                Effect.gen(function* () {
+                  const latest = yield* repository
+                    .getDelegation(record.id)
+                    .pipe(Effect.orElseSucceed(() => null));
+                  if (!latest || latest.reportedAt !== null) return;
+                  const now = isoNow();
+                  yield* repository
+                    .saveDelegation({ ...latest, reportedAt: now, updatedAt: now })
+                    .pipe(Effect.catch(() => Effect.void));
+                }),
+              )
+              .pipe(Effect.catch(() => Effect.void));
+          }
+          continue;
+        }
         // One bot stops the work handed to it; what it handed to others keeps going.
         if (only !== null && record.toBotId !== only) continue;
         yield* cancelDelegation({ delegationId: record.id }).pipe(Effect.catch(() => Effect.void));
@@ -2208,16 +2419,22 @@ const make = Effect.gen(function* () {
         const shell = yield* snapshotQuery
           .getThreadShellById(bot.threadId)
           .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
-        if (Option.isSome(shell) && shell.value.session?.activeTurnId) {
+        if (
+          Option.isSome(shell) &&
+          shell.value.session?.activeTurnId &&
+          !interruptedSet.has(bot.threadId)
+        ) {
           yield* interruptThread(bot.threadId, "stop-all").pipe(Effect.catch(() => Effect.void));
-          interruptedThreadIds.push(bot.threadId);
+          interruptedSet.add(bot.threadId);
         }
         for (const item of yield* listItems(bot.id)) {
           if (item.workerThreadId && INTERRUPTIBLE_ITEM_STATES.has(item.state)) {
-            yield* interruptThread(item.workerThreadId, "stop-all").pipe(
-              Effect.catch(() => Effect.void),
-            );
-            interruptedThreadIds.push(item.workerThreadId);
+            if (!interruptedSet.has(item.workerThreadId)) {
+              yield* interruptThread(item.workerThreadId, "stop-all").pipe(
+                Effect.catch(() => Effect.void),
+              );
+              interruptedSet.add(item.workerThreadId);
+            }
           } else if (QUEUED_ITEM_STATES.has(item.state)) {
             yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
               Effect.tap(() => Effect.sync(() => cancelledTaskIds.push(item.id))),
@@ -2226,7 +2443,11 @@ const make = Effect.gen(function* () {
           }
         }
       }
-      return { interruptedThreadIds, cancelledTaskIds, cancelledDelegationIds };
+      return {
+        interruptedThreadIds: [...interruptedSet],
+        cancelledTaskIds,
+        cancelledDelegationIds,
+      };
     });
 
   // ── Stream ─────────────────────────────────────────────────────────
@@ -2251,20 +2472,24 @@ const make = Effect.gen(function* () {
     );
 
   // Hub task updates of bot Hubs become bot task events (and may change a bot's status).
-  yield* projectAgent.streamWorkItemEvents().pipe(
-    Stream.runForEach((event) =>
-      isBotProject(event.projectId).pipe(
-        Effect.flatMap((isBot) =>
-          isBot
-            ? publish({ type: "task-upserted", botId: event.projectId, task: event.workItem }).pipe(
-                Effect.andThen(refreshBotStatus(event.projectId)),
-              )
-            : Effect.void,
+  if (isServerSynbotEnabled()) {
+    yield* projectAgent.streamWorkItemEvents().pipe(
+      Stream.runForEach((event) =>
+        isBotProject(event.projectId).pipe(
+          Effect.flatMap((isBot) =>
+            isBot
+              ? publish({
+                  type: "task-upserted",
+                  botId: event.projectId,
+                  task: event.workItem,
+                }).pipe(Effect.andThen(refreshBotStatus(event.projectId)))
+              : Effect.void,
+          ),
         ),
       ),
-    ),
-    Effect.forkScoped,
-  );
+      Effect.forkScoped,
+    );
+  }
 
   return {
     snapshot,

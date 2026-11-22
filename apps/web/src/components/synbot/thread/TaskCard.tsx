@@ -109,13 +109,16 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
   const stop = () =>
     runStop(() => {
       const api = readNativeApi();
-      if (!api || !worker) return undefined;
-      return api.projectAgent.resolveWorker({
-        requestId: `synbot-task-stop:${task.id}:${task.revision}`,
-        projectId: ProjectId.makeUnsafe(bot.id),
-        threadId: ThreadId.makeUnsafe(worker),
-        action: "stop",
-      });
+      if (!api) return undefined;
+      if (worker) {
+        return api.projectAgent.resolveWorker({
+          requestId: `synbot-task-stop:${task.id}:${task.revision}`,
+          projectId: ProjectId.makeUnsafe(bot.id),
+          threadId: ThreadId.makeUnsafe(worker),
+          action: "stop",
+        });
+      }
+      return api.bots.stopAll({ botId: bot.id, taskId: task.id });
     });
   return (
     <article className="task-card">
@@ -166,7 +169,7 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
       <div className="task-card__foot">
         <p className="task-card__meta">{meta}</p>
         <div className="task-card__actions">
-          {ACTIVE.has(task.state) && worker ? (
+          {ACTIVE.has(task.state) ? (
             <CapsuleButton kind="danger" small disabled={stopping} onClick={stop}>
               {t("synbot:stop")}
             </CapsuleButton>

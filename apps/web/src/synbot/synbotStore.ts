@@ -17,8 +17,17 @@ import {
   type SynbotData,
 } from "./synbotState.logic";
 
-/** `unavailable`: the connected host has no SynBot (Stable, or an older Beta). */
-export type SynbotStatus = "idle" | "loading" | "ready" | "unavailable" | "error";
+/**
+ * `unavailable`: the connected host has no SynBot.
+ * `subscription_required`: Stable host requires an active Synara Alto (Pro) subscription.
+ */
+export type SynbotStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "unavailable"
+  | "subscription_required"
+  | "error";
 
 interface SynbotStoreState {
   readonly status: SynbotStatus;
@@ -41,9 +50,31 @@ export const useSynbotStore = create<SynbotStoreState>()((set) => ({
   setStatus: (status, error = null) => set({ status, error }),
 }));
 
-const UNAVAILABLE_PATTERN = /unavailable|METHOD_NOT_FOUND|not found|FEATURE_UNAVAILABLE/i;
+const UNAVAILABLE_PATTERN =
+  /FEATURE_UNAVAILABLE|METHOD_NOT_FOUND|SynBot is available in|SynBot is not available/i;
+const SUBSCRIPTION_PATTERN = /SUBSCRIPTION_REQUIRED|Synara Alto/i;
+
+const errorCodeOf = (error: unknown): string | null =>
+  error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : null;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+function statusForError(error: unknown): {
+  readonly status: SynbotStatus;
+  readonly message: string;
+} {
+  const code = errorCodeOf(error);
+  const message = messageOf(error);
+  if (code === "SUBSCRIPTION_REQUIRED" || SUBSCRIPTION_PATTERN.test(message)) {
+    return { status: "subscription_required", message };
+  }
+  if (code === "FEATURE_UNAVAILABLE" || UNAVAILABLE_PATTERN.test(message)) {
+    return { status: "unavailable", message };
+  }
+  return { status: "error", message };
+}
 
 let stopLiveSync: (() => void) | null = null;
 
@@ -65,16 +96,21 @@ export function startSynbotLiveSync(): () => void {
       useSynbotStore.setState({ data: snapshotToData(snapshot), status: "ready", error: null }),
     )
     .catch((error: unknown) => {
-      const message = messageOf(error);
-      useSynbotStore
-        .getState()
-        .setStatus(UNAVAILABLE_PATTERN.test(message) ? "unavailable" : "error", message);
+      const next = statusForError(error);
+      useSynbotStore.getState().setStatus(next.status, next.message);
     });
   stopLiveSync = () => {
     unsubscribe();
     stopLiveSync = null;
   };
   return stopLiveSync;
+}
+
+/** Re-subscribes and reloads SynBot after account sign-in or Alto plan activation. */
+export function restartSynbotLiveSync(): () => void {
+  stopLiveSync?.();
+  useSynbotStore.getState().setStatus("idle", null);
+  return startSynbotLiveSync();
 }
 
 let ensuringMain: Promise<void> | null = null;
@@ -84,17 +120,20 @@ export function ensureSynbotMain(): Promise<void> {
   if (!SYNBOT_ON) return Promise.resolve();
   const api = readNativeApi();
   if (!api) return Promise.resolve();
-  if (useSynbotStore.getState().data.bots.some((bot) => bot.kind === "main")) {
+  const current = useSynbotStore.getState();
+  if (
+    current.status === "subscription_required" ||
+    current.status === "unavailable" ||
+    current.data.bots.some((bot) => bot.kind === "main")
+  ) {
     return Promise.resolve();
   }
   ensuringMain ??= api.bots
     .ensureMain({})
     .then((bot) => useSynbotStore.getState().applyEvent({ type: "bot-upserted", bot }))
     .catch((error: unknown) => {
-      const message = messageOf(error);
-      useSynbotStore
-        .getState()
-        .setStatus(UNAVAILABLE_PATTERN.test(message) ? "unavailable" : "error", message);
+      const next = statusForError(error);
+      useSynbotStore.getState().setStatus(next.status, next.message);
     })
     .finally(() => {
       ensuringMain = null;

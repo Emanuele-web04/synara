@@ -104,13 +104,14 @@ export function evaluateDelegationSettlement(input: {
   const turnIds = [...turnIdSet];
   const woken = new Set(delegated.map((turn) => turn.pendingMessageId));
   // Still owed: not reported yet, or reported while the turn its report wakes has not shown up
-  // (a report that never wakes anyone stops holding the delegation after the grace window).
+  // (a report queued behind another active turn keeps holding until that turn finishes; once
+  // idle, a report that never wakes anyone stops holding the delegation after the grace window).
   const onwardOpen = onward.some(
     (child) =>
       child.reportedAt === null ||
       (child.reportMessageId !== null &&
         !woken.has(child.reportMessageId) &&
-        input.nowMs - time(child.reportedAt) < graceMs),
+        (input.sessionActiveTurnId !== null || input.nowMs - time(child.reportedAt) < graceMs)),
   );
   const items = input.items.filter(
     (item) => item.delegationTurnId !== null && turnIdSet.has(item.delegationTurnId),
@@ -132,17 +133,36 @@ export function evaluateDelegationSettlement(input: {
     return { state: "waiting", outcome: null, ...base };
   }
   if (items.length > 0) {
-    const lastActivity = Math.max(
-      ...items.map((item) => time(item.updatedAt)),
-      ...delegated.map((turn) => time(turn.completedAt)),
+    const lastItemUpdatedAt = Math.max(...items.map((item) => time(item.updatedAt)));
+    // Once a Hub wake turn has already rolled up the finished tasks, settle without waiting
+    // out the full 60s grace window.
+    const rolledUpAfterTasks = delegated.some(
+      (turn) =>
+        turn.pendingMessageId !== input.messageId &&
+        turn.state === "completed" &&
+        time(turn.completedAt) >= lastItemUpdatedAt,
     );
-    if (input.nowMs - lastActivity < graceMs) {
-      return { state: "working", outcome: null, ...base };
+    if (!rolledUpAfterTasks) {
+      const lastActivity = Math.max(
+        lastItemUpdatedAt,
+        ...delegated.map((turn) => time(turn.completedAt)),
+      );
+      if (input.nowMs - lastActivity < graceMs) {
+        return { state: "working", outcome: null, ...base };
+      }
     }
   }
+  const latestOnwardWake = delegated
+    .filter((turn) => turn.pendingMessageId !== null && reportIds.has(turn.pendingMessageId))
+    .toSorted((left, right) => time(left.requestedAt) - time(right.requestedAt))
+    .at(-1);
+  const onwardWakeFailed =
+    latestOnwardWake !== undefined &&
+    (latestOnwardWake.state === "error" || latestOnwardWake.state === "interrupted");
   const turnsFailed =
-    delegated.every((turn) => turn.state === "error" || turn.state === "interrupted") &&
-    items.length === 0;
+    (delegated.every((turn) => turn.state === "error" || turn.state === "interrupted") &&
+      items.length === 0) ||
+    onwardWakeFailed;
   const itemsFailed = items.length > 0 && items.every((item) => FAILED_ITEM_STATES.has(item.state));
   return {
     state: "settled",

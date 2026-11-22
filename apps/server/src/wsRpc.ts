@@ -447,11 +447,20 @@ export function toWsRpcError(cause: unknown, fallbackMessage: string) {
       cause,
     });
   }
-  // SynBot is Beta-only: Stable and hosts without it refuse with a stable code clients switch on.
+  // SynBot gate: hosts without it refuse with FEATURE_UNAVAILABLE; Stable without Alto refuses
+  // with SUBSCRIPTION_REQUIRED. Both are non-retryable terminal admission codes.
   if (cause instanceof BotServiceError && cause.code === "unavailable") {
     return new WsRpcError({
       message: cause.message,
       code: "FEATURE_UNAVAILABLE",
+      retryable: false,
+      cause,
+    });
+  }
+  if (cause instanceof BotServiceError && cause.code === "subscription-required") {
+    return new WsRpcError({
+      message: cause.message,
+      code: "SUBSCRIPTION_REQUIRED",
       retryable: false,
       cause,
     });

@@ -37,7 +37,10 @@ export async function stopBots(bot?: Pick<Bot, "id" | "name">): Promise<void> {
   if (!api) return;
   try {
     const result = await api.bots.stopAll(bot ? { botId: bot.id } : {});
-    const count = result.interruptedThreadIds.length + result.cancelledTaskIds.length;
+    const count =
+      result.interruptedThreadIds.length +
+      result.cancelledTaskIds.length +
+      result.cancelledDelegationIds.length;
     toastManager.add({
       type: "success",
       title: bot ? t("synbot:stopBotDone", { name: bot.name }) : t("synbot:stopAllDone", { count }),

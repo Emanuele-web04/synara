@@ -148,4 +148,31 @@ describe("findMergeRedFlags", () => {
     ].join("\n");
     expect(findMergeRedFlags(patch)).toEqual([]);
   });
+
+  it("flags edits outside bot scope paths without blocking merge readiness", () => {
+    const patch = [
+      "diff --git a/apps/web/src/Button.tsx b/apps/web/src/Button.tsx",
+      "+export const Button = () => null;",
+      "diff --git a/apps/server/src/index.ts b/apps/server/src/index.ts",
+      "+export const x = 1;",
+    ].join("\n");
+    const flags = findMergeRedFlags(patch, ["apps/web/**"]);
+    expect(flags).toEqual([
+      {
+        kind: "outside-scope",
+        file: "apps/server/src/index.ts",
+        detail: "Outside apps/web/**",
+      },
+    ]);
+    const proof = evaluateMergeProof({
+      threadId: ThreadId.makeUnsafe("t-scope"),
+      detail: detail(),
+      patch,
+      patchComplete: true,
+      scopePaths: ["apps/web/**"],
+      checkedAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect(proof.ready).toBe(true);
+    expect(proof.redFlags.map((flag) => flag.kind)).toEqual(["outside-scope"]);
+  });
 });

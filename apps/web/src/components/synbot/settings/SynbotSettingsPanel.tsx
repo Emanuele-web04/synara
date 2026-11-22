@@ -25,6 +25,7 @@ import { useStore } from "~/store";
 import { orderedBots } from "~/synbot/synbotState.logic";
 import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
+import { useOpenSynaraPlan } from "../../settings/BillingSettingsPanel";
 import { toastManager } from "../../ui/toast";
 import { BotFace } from "../BotFace";
 import { BotSheetHost } from "../editor/BotSheet";
@@ -155,6 +156,22 @@ export function SynbotSettingsPanel() {
     if (useSynbotStore.getState().status === "idle") startSynbotLiveSync();
   }, []);
 
+  const openPlans = useOpenSynaraPlan();
+
+  if (status === "subscription_required") {
+    return (
+      <div className="hb synbot-settings">
+        <Text variant="small" tone="muted">
+          {t("synbot:altoDescription")}
+        </Text>
+        <div className="mt-3">
+          <CapsuleButton kind="primary" small onClick={openPlans}>
+            {t("synbot:altoViewPlans")}
+          </CapsuleButton>
+        </div>
+      </div>
+    );
+  }
   if (status === "unavailable" || status === "error") {
     return (
       <div className="hb synbot-settings">

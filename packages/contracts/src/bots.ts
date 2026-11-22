@@ -320,6 +320,7 @@ export const BotMergeRedFlag = Schema.Struct({
     "assertion-removed",
     "failure-ignored",
     "ci-step-removed",
+    "outside-scope",
   ]),
   file: TrimmedNonEmptyString,
   detail: Schema.String.check(Schema.isMaxLength(400)),
@@ -470,8 +471,11 @@ export type BotsMergeResult = typeof BotsMergeResult.Type;
 export const BotsUpdateBranchInput = Schema.Struct({ threadId: ThreadId });
 export type BotsUpdateBranchInput = typeof BotsUpdateBranchInput.Type;
 
-/** Stops every bot, or with `botId` only that bot: its turn, its tasks and the work handed to it. */
-export const BotsStopAllInput = Schema.Struct({ botId: Schema.optional(ProjectId) });
+/** Stops every bot, or with `botId` only that bot, or with `taskId` only that task. */
+export const BotsStopAllInput = Schema.Struct({
+  botId: Schema.optional(ProjectId),
+  taskId: Schema.optional(TrimmedNonEmptyString),
+});
 export type BotsStopAllInput = typeof BotsStopAllInput.Type;
 
 export const BotsStopAllResult = Schema.Struct({

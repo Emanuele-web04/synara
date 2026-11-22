@@ -952,3 +952,146 @@ it.effect("allows four hand-offs per turn and refuses a fifth", () => {
     assert.strictEqual(fifth.code, "limit");
   }).pipe(Effect.provide(makeLayer(world)));
 });
+
+it.effect("cancelling an intermediate hand-off also stops its downstream child hand-off", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Build and test",
+      requestId: "frontend",
+    });
+    putTurn(world, FRONTEND.threadId, "turn-frontend", delegationMessage(toFrontend.id), null);
+    const frontend = (yield* bots.resolveCaller({
+      threadId: FRONTEND.threadId,
+      turnId: "turn-frontend",
+    }))!;
+    const toQa = yield* bots.delegate({
+      caller: frontend,
+      targetBotId: QA.projectId,
+      brief: "Run QA",
+      requestId: "qa",
+    });
+    putTurn(world, QA.threadId, "turn-qa", delegationMessage(toQa.id), null);
+    world.shells.set(QA.threadId, {
+      ...world.shells.get(QA.threadId),
+      session: { activeTurnId: TurnId.makeUnsafe("turn-qa") },
+    });
+
+    yield* bots.cancelDelegation({ delegationId: toFrontend.id });
+    const snapshot = yield* bots.snapshot();
+    assert.strictEqual(
+      snapshot.delegations.find((entry) => entry.id === toFrontend.id)?.state,
+      "cancelled",
+    );
+    assert.strictEqual(
+      snapshot.delegations.find((entry) => entry.id === toQa.id)?.state,
+      "cancelled",
+    );
+    assert.include(interruptedThreads(world), QA.threadId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect(
+  "an abandoned failed sibling delivery does not block completed siblings from recapping",
+  () => {
+    const world = makeWorld();
+    return Effect.gen(function* () {
+      yield* seed;
+      userTurn(world);
+      const bots = yield* BotService;
+      yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+      const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+      const ok = yield* bots.delegate({
+        caller: main,
+        targetBotId: FRONTEND.projectId,
+        brief: "Frontend part",
+        requestId: "frontend",
+      });
+      world.failTurnStarts.current = true;
+      yield* Effect.flip(
+        bots.delegate({
+          caller: main,
+          targetBotId: QA.projectId,
+          brief: "QA part",
+          requestId: "qa",
+        }),
+      );
+      world.failTurnStarts.current = false;
+      // Requester turn ended without retrying the failed sibling.
+      world.shells.set(MAIN.threadId, {
+        ...world.shells.get(MAIN.threadId),
+        session: { activeTurnId: null },
+      });
+      putTurn(
+        world,
+        FRONTEND.threadId,
+        "turn-frontend",
+        delegationMessage(ok.id),
+        "Frontend done.",
+      );
+      yield* bots.evaluateDelegations({});
+      assert.lengthOf(reportsTo(world, MAIN.threadId), 1);
+    }).pipe(Effect.provide(makeLayer(world)));
+  },
+);
+
+it.effect("stopAll suppresses already-settled-but-unreported delegations", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    yield* bots.update({ id: QA.projectId, autonomy: "auto" });
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const d1 = yield* bots.delegate({
+      caller: main,
+      targetBotId: FRONTEND.projectId,
+      brief: "Part 1",
+      requestId: "d1",
+    });
+    yield* bots.delegate({
+      caller: main,
+      targetBotId: QA.projectId,
+      brief: "Part 2",
+      requestId: "d2",
+    });
+    // d1 settles while d2 is still open (so d1 is settledAt != null, reportedAt == null).
+    putTurn(world, FRONTEND.threadId, "turn-fe", delegationMessage(d1.id), "Done.");
+    yield* bots.evaluateDelegations({ threadId: FRONTEND.threadId });
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+
+    yield* bots.stopAll({});
+    yield* bots.evaluateDelegations({});
+    assert.lengthOf(reportsTo(world, MAIN.threadId), 0);
+  }).pipe(Effect.provide(makeLayer(world)));
+});
+
+it.effect("proposing the same bot again after Not now creates a fresh answerable card", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const main = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const draft = {
+      name: "Docs",
+      role: "Documentation",
+      scope: { projects: "all" as const, paths: [] },
+    };
+    const first = yield* bots.propose({ caller: main, draft });
+    yield* bots.cardAction({
+      threadId: MAIN.threadId,
+      cardId: first.cardId,
+      optionId: "dismiss",
+    });
+    const second = yield* bots.propose({ caller: main, draft });
+    assert.notStrictEqual(second.cardId, first.cardId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});

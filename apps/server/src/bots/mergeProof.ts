@@ -11,6 +11,7 @@ import type {
   PullRequestDetail,
   ThreadId,
 } from "@synara/contracts";
+import { filesOutsideBotScope } from "@synara/shared/bots";
 
 const MAX_RED_FLAGS = 24;
 
@@ -61,12 +62,29 @@ const clip = (text: string) => {
 };
 
 /** Diff-based red flags: shown on the card, never used to hide anything. */
-export function findMergeRedFlags(patch: string): BotMergeRedFlag[] {
+export function findMergeRedFlags(
+  patch: string,
+  scopePaths?: readonly string[],
+): BotMergeRedFlag[] {
   const flags: BotMergeRedFlag[] = [];
   const push = (flag: BotMergeRedFlag) => {
     if (flags.length < MAX_RED_FLAGS) flags.push(flag);
   };
-  for (const file of parsePatch(patch)) {
+  const parsed = parsePatch(patch);
+  if (scopePaths && scopePaths.length > 0) {
+    const outside = filesOutsideBotScope(
+      parsed.map((file) => file.path).filter((path) => path.length > 0),
+      scopePaths,
+    );
+    for (const file of outside) {
+      push({
+        kind: "outside-scope",
+        file,
+        detail: `Outside ${scopePaths.join(", ")}`,
+      });
+    }
+  }
+  for (const file of parsed) {
     const isTest = TEST_FILE.test(file.path);
     if (isTest && file.deleted) {
       push({ kind: "test-removed", file: file.path, detail: "Test file deleted" });
@@ -117,6 +135,8 @@ export function evaluateMergeProof(input: {
   readonly patch: string;
   /** False when the patch could not be read or was truncated. */
   readonly patchComplete: boolean;
+  /** Optional bot scope path globs; files outside them surface as a non-blocking warning. */
+  readonly scopePaths?: readonly string[];
   readonly checkedAt: string;
 }): BotMergeProof {
   const { detail } = input;
@@ -159,7 +179,7 @@ export function evaluateMergeProof(input: {
     failingChecks,
     behind,
     conflicts,
-    redFlags: findMergeRedFlags(input.patch),
+    redFlags: findMergeRedFlags(input.patch, input.scopePaths),
     additions: detail.additions,
     deletions: detail.deletions,
     changedFiles: detail.changedFiles,

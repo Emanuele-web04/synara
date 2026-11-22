@@ -160,5 +160,62 @@ describe("evaluateDelegationSettlement", () => {
         ).state,
       ).toBe("settled");
     });
+
+    it("keeps waiting while another active turn delays an onward report", () => {
+      const result = evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns: [turn({})],
+        attributableMessageIds: new Set(),
+        items: [],
+        onward: [onward({ reportMessageId: "synbot:report:r1", reportedAt: at(300) })],
+        sessionActiveTurnId: "unrelated-turn",
+        nowMs: NOW,
+        graceMs: 60_000,
+      });
+      expect(result.state).toBe("working");
+    });
+
+    it("fails when the onward report wake turn errors instead of returning stale turn 1", () => {
+      const failedWake = turn({
+        turnId: "t2",
+        pendingMessageId: "synbot:report:r1",
+        state: "error",
+        requestedAt: at(240),
+        completedAt: at(230),
+        assistantMessageId: null,
+      });
+      const reported = onward({ reportMessageId: "synbot:report:r1", reportedAt: at(250) });
+      const result = evaluateChain([turn({}), failedWake], [reported]);
+      expect(result.state).toBe("settled");
+      expect(result.outcome).toBe("failed");
+    });
+
+    it("settles immediately once a rollup wake turn completes after finished tasks", () => {
+      const task = {
+        id: "w1",
+        state: "completed" as const,
+        delegationTurnId: "t1",
+        updatedAt: at(10),
+      };
+      const wake = turn({
+        turnId: "t2",
+        pendingMessageId: "hub-wake-1",
+        requestedAt: at(9),
+        completedAt: at(5),
+        assistantMessageId: "a2",
+      });
+      const result = evaluateDelegationSettlement({
+        messageId: "synbot:delegation:d1",
+        turns: [turn({}), wake],
+        attributableMessageIds: new Set(["hub-wake-1"]),
+        items: [task],
+        sessionActiveTurnId: null,
+        nowMs: NOW,
+        graceMs: 60_000,
+      });
+      expect(result.state).toBe("settled");
+      expect(result.outcome).toBe("completed");
+      expect(result.lastAssistantMessageId).toBe("a2");
+    });
   });
 });

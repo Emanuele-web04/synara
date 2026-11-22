@@ -57,6 +57,30 @@
   color: var(--hb-muted);
   text-align: center;
 }
+.hb .synbot-shell__alto {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--hb-gap);
+  max-width: 380px;
+}
+.hb .synbot-shell__alto-title {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+}
+.hb .synbot-shell__alto-body {
+  margin: 0;
+  font-size: var(--hb-text-sm);
+  line-height: 1.5;
+  color: var(--hb-muted);
+}
+.hb .synbot-shell__alto-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin-top: var(--hb-gap-xs);
+}
 
 /* The sidebar panel: HoloBot's sidebar on Synara's panel surface. */
 .hb.synbot-sidebar {

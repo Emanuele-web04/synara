@@ -651,9 +651,11 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // Retry only the overflowing subscription, preserving its applied cursor.
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
-  // A server that does not offer Tasks refuses its stream for good;
-  // reconnecting the socket would only be refused again.
+  // A server that does not offer Tasks or SynBot (or requires Alto for SynBot) refuses its
+  // stream for good; reconnecting the socket would only be refused again.
   TASKS_UNAVAILABLE_ERROR_CODE,
+  "FEATURE_UNAVAILABLE",
+  "SUBSCRIPTION_REQUIRED",
 ]);
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
@@ -2544,6 +2546,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
     else if (channel === WS_CHANNELS.todoEvent) this.stopStream("todo.events");
+    else if (channel === WS_CHANNELS.botsEvent) this.stopStream("bots.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)

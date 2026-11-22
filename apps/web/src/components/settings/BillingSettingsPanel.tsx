@@ -64,7 +64,11 @@ const ALTO_FEATURES: ReadonlyArray<{
     description: "Share the activity, models and streaks from your usage.",
   },
   { icon: DeviceMobileIcon, title: "Remote from iPhone and iPad", soon: true },
-  { icon: BotIcon, title: "Synara Bots", soon: true },
+  {
+    icon: BotIcon,
+    title: "SynBot (Beta)",
+    description: "Your crew of coding bots that delegate work, run tasks and report back.",
+  },
 ];
 
 /** Deep-link target for "See plans" / plan links elsewhere in Settings. */

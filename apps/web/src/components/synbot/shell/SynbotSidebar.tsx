@@ -33,6 +33,7 @@ import { orderedBots, tasksForBot } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 
 import { SidebarPanelTitle } from "../../SidebarPanelTitle";
+import { Badge } from "../../ui/badge";
 import { BotFace, botMood } from "../BotFace";
 import { useBotEditor } from "../editor/botEditorStore";
 import { AlertDialog } from "../kit/Dialog";
@@ -306,8 +307,14 @@ export function SynbotSidebar() {
 
   return (
     <div ref={root} className="hb synbot-sidebar">
-      <SidebarPanelTitle title={t("synbot:pageTitle")} />
-      {status === "unavailable" ? (
+      <SidebarPanelTitle title={t("synbot:pageTitle")}>
+        <Badge variant="secondary" size="sm">
+          {t("synbot:betaBadge")}
+        </Badge>
+      </SidebarPanelTitle>
+      {status === "subscription_required" ? (
+        <p className="conversations__none">{t("synbot:altoSidebarNote")}</p>
+      ) : status === "unavailable" ? (
         <p className="conversations__none">{t("synbot:unavailable")}</p>
       ) : status !== "ready" && bots.length === 0 ? (
         <p className="conversations__none">{t("synbot:loading")}</p>

@@ -12,14 +12,25 @@ import { ThreadId } from "@synara/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { useAccount } from "~/hooks/useAccount";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import { botById, orderedBots } from "~/synbot/synbotState.logic";
-import { ensureSynbotMain, startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
+import {
+  ensureSynbotMain,
+  restartSynbotLiveSync,
+  startSynbotLiveSync,
+  useSynbotStore,
+} from "~/synbot/synbotStore";
 
+import { useAccountDialogStore } from "../../account/accountDialogStore";
 import { CHAT_CONTENT_CARD_CLASS_NAME } from "../../chat/composerPickerStyles";
+import { useOpenSynaraPlan, useSynaraPlan } from "../../settings/BillingSettingsPanel";
+import { Badge } from "../../ui/badge";
 import { BotSheetHost } from "../editor/BotSheet";
 import { useBotEditor } from "../editor/botEditorStore";
+import { CapsuleButton } from "../kit/controls";
+import { GhostMark } from "../kit/Mascot";
 import { TaskPane } from "../thread/TaskPane";
 import { ThreadPane } from "../thread/ThreadPane";
 import "../kit/holobot.css";
@@ -44,12 +55,47 @@ function useNarrow(root: React.RefObject<HTMLElement | null>): boolean {
   return narrow;
 }
 
+function SynbotAltoGate() {
+  const { t } = useTranslation();
+  const { status: accountStatus } = useAccount();
+  const openPlans = useOpenSynaraPlan();
+  const signedOut = accountStatus?.state !== "signed-in";
+  return (
+    <div className="synbot-shell__state">
+      <div className="synbot-shell__alto">
+        <GhostMark size={48} mood="idle" />
+        <div className="synbot-shell__alto-title">
+          <h2 className="text-ui-lg font-medium text-foreground">{t("synbot:altoTitle")}</h2>
+          <Badge variant="secondary" size="sm">
+            {t("synbot:betaBadge")}
+          </Badge>
+        </div>
+        <p className="synbot-shell__alto-body">{t("synbot:altoDescription")}</p>
+        <div className="synbot-shell__alto-actions">
+          {signedOut ? (
+            <CapsuleButton
+              kind="primary"
+              onClick={() => useAccountDialogStore.getState().openSignIn()}
+            >
+              {t("synbot:altoSignIn")}
+            </CapsuleButton>
+          ) : null}
+          <CapsuleButton kind={signedOut ? "normal" : "primary"} onClick={openPlans}>
+            {t("synbot:altoViewPlans")}
+          </CapsuleButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SynbotPage() {
   const { t } = useTranslation();
   const search = useSearch({ from: "/_chat/synbot" });
   const status = useSynbotStore((store) => store.status);
   const error = useSynbotStore((store) => store.error);
   const data = useSynbotStore((store) => store.data);
+  const plan = useSynaraPlan();
   const root = useRef<HTMLDivElement>(null);
   const narrow = useNarrow(root);
 
@@ -57,17 +103,25 @@ export default function SynbotPage() {
     startSynbotLiveSync();
     void ensureSynbotMain();
   }, []);
+  // When a previously locked user subscribes to Alto, re-open the stream immediately.
+  useEffect(() => {
+    if (status === "subscription_required" && plan?.granted) {
+      restartSynbotLiveSync();
+      void ensureSynbotMain();
+    }
+  }, [plan?.granted, status]);
   // Step one chose this computer on another computer's page: go on from the Bot step.
   const navigate = useNavigate();
   useEffect(() => {
     if (search.new !== "bot") return;
+    if (status === "subscription_required") return;
     useBotEditor.getState().openCreate({ startAt: "bot" });
     void navigate({
       to: "/synbot",
       search: search.bot ? { bot: search.bot } : {},
       replace: true,
     });
-  }, [navigate, search.bot, search.new]);
+  }, [navigate, search.bot, search.new, status]);
 
   const bot = botById(data, search.bot) ?? orderedBots(data.bots).main;
   const taskThreadId = search.task ? ThreadId.makeUnsafe(search.task) : null;
@@ -76,7 +130,9 @@ export default function SynbotPage() {
     : null;
 
   let content;
-  if (status === "unavailable") {
+  if (status === "subscription_required") {
+    content = <SynbotAltoGate />;
+  } else if (status === "unavailable") {
     content = <p className="synbot-shell__state">{t("synbot:unavailable")}</p>;
   } else if (status === "error" && !bot) {
     content = <p className="synbot-shell__state">{error ?? t("synbot:loadFailed")}</p>;

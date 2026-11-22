@@ -55,7 +55,7 @@ function useChecklist(proof: BotMergeProof): readonly Check[] {
   if (proof.conflicts) checks.push({ tone: "bad", text: t("synbot:proof_conflicts") });
   for (const flag of proof.redFlags) {
     checks.push({
-      tone: "bad",
+      tone: flag.kind === "outside-scope" ? "attention" : "bad",
       text: `${t(`synbot:proof_flag_${flag.kind}`)} · ${flag.file}${flag.detail ? ` · ${flag.detail}` : ""}`,
     });
   }
@@ -156,14 +156,29 @@ export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
     <div className={open ? "choice proof-card" : "choice proof-card choice--done"}>
       <div className="choice__head">
         <p className="choice__title">
-          {proof.state === "merged" ? t("synbot:proof_titleMerged") : t("synbot:proof_title")}
+          {proof.state === "merged"
+            ? t("synbot:proof_titleMerged")
+            : proof.state === "closed"
+              ? t("synbot:proof_titleClosed")
+              : t("synbot:proof_title")}
         </p>
-        <Chip tone={proof.ready ? "good" : proof.state === "merged" ? "muted" : "attention"} dot>
+        <Chip
+          tone={
+            proof.ready
+              ? "good"
+              : proof.state === "merged" || proof.state === "closed"
+                ? "muted"
+                : "attention"
+          }
+          dot
+        >
           {proof.ready
             ? t("synbot:proof_ready")
             : proof.state === "merged"
               ? t("synbot:proof_merged")
-              : t("synbot:proof_notReady")}
+              : proof.state === "closed"
+                ? t("synbot:proof_closed")
+                : t("synbot:proof_notReady")}
         </Chip>
       </div>
       <p className="proof-card__meta">
@@ -198,11 +213,13 @@ export function ProofCard({ threadId }: { readonly threadId: ThreadId }) {
             {t("synbot:proof_refresh")}
           </CapsuleButton>
         </div>
-      ) : (
+      ) : proof.state === "merged" ? (
         <p className="choice__chosen">
           <Icon name="check" size="sm" />
           {t("synbot:proof_titleMerged")}
         </p>
+      ) : (
+        <p className="choice__chosen">{t("synbot:proof_titleClosed")}</p>
       )}
     </div>
   );

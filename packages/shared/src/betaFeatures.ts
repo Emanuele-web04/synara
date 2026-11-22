@@ -59,13 +59,12 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
 /**
- * SynBot (Beta only): bots built on Hubs, the main SynBot that routes work between them,
- * delegations, bot cards and the merge proof. Beta shows SynBot in place of the Hubs UI;
- * Stable keeps Hubs as they are until SynBot is promoted. See docs/plans/synbot.md.
+ * SynBot (Stable with Alto Pro, and Beta): bots built on Hubs, the main SynBot that routes work
+ * between them, delegations, bot cards and the merge proof. See docs/plans/synbot.md.
  */
 export const SYNBOT_BETA_FEATURE = "synbot";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [SYNBOT_BETA_FEATURE];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

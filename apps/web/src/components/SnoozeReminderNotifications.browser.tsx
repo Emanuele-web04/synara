@@ -10,6 +10,9 @@ const route = vi.hoisted(() => ({ threadId: "another-thread", navigate: vi.fn() 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => route.navigate,
   useParams: () => ThreadId.makeUnsafe(route.threadId),
+  useRouter: () => ({ state: { location: { pathname: "/", search: {} } } }),
+  useRouterState: ({ select }: { select: (state: unknown) => unknown }) =>
+    select({ location: { pathname: "/", search: {} } }),
 }));
 vi.mock("../hooks/useDiffRouteSearch", () => ({ useDiffRouteSearch: () => ({}) }));
 vi.mock("../appSettings", async (importOriginal) => ({
