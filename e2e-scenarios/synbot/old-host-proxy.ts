@@ -5,7 +5,8 @@
 // It sits between the web app and the server and passes everything through, except that every
 // `bots.*` request reaches the server under a method name the server has never heard of. The
 // server then answers exactly as a host without those methods does; nothing here makes up a
-// reply. `GET /__scenario/state` counts the WebSocket connections the web app opened and the
+// reply. Like such a host, it does not advertise the SynBot capability (`bots.synbot`) in the
+// connection handshake, over HTTP or WebSocket. `GET /__scenario/state` counts the WebSocket connections the web app opened and the
 // `bots.*` requests it sent, so a scenario can tell a reconnect loop from a quiet socket.
 // `POST /__scenario/mode {"renameBots": false}` passes `bots.*` through untouched (the control).
 //
@@ -60,6 +61,29 @@ const rewrite = (frame: string): string => {
   return changed ? JSON.stringify(next) : frame;
 };
 
+const SYNBOT_CAPABILITY = "bots.synbot";
+
+/** Drops the SynBot capability from every string list in a server answer, as an old host omits it. */
+const hideSynbotCapability = (text: string): string => {
+  if (!renameBots || !text.includes(SYNBOT_CAPABILITY)) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return value.filter((item) => item !== SYNBOT_CAPABILITY).map(visit);
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
+    }
+    return value;
+  };
+  return JSON.stringify(visit(parsed));
+};
+
 Bun.serve({
   port,
   hostname: "127.0.0.1",
@@ -86,7 +110,16 @@ Bun.serve({
       body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
       redirect: "manual",
     });
-    return new Response(answer.body, { status: answer.status, headers: answer.headers });
+    if (!answer.headers.get("content-type")?.includes("json")) {
+      return new Response(answer.body, { status: answer.status, headers: answer.headers });
+    }
+    const answerHeaders = new Headers(answer.headers);
+    answerHeaders.delete("content-length");
+    answerHeaders.delete("content-encoding");
+    return new Response(hideSynbotCapability(await answer.text()), {
+      status: answer.status,
+      headers: answerHeaders,
+    });
   },
   websocket: {
     open(ws: ClientSocket) {
@@ -98,7 +131,8 @@ Bun.serve({
         for (const frame of ws.data.queue.splice(0)) upstream.send(frame);
       });
       upstream.addEventListener("message", (event: MessageEvent) => {
-        ws.send(event.data as string | ArrayBuffer);
+        const data = event.data as string | ArrayBuffer;
+        ws.send(typeof data === "string" ? hideSynbotCapability(data) : data);
       });
       upstream.addEventListener("close", (event: CloseEvent) => {
         ws.close(event.code === 1005 || event.code === 1006 ? 1000 : event.code, event.reason);

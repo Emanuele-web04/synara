@@ -24,6 +24,7 @@ import {
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WS_SERVER_RUNTIME_STATUS_CAPABILITY,
+  WS_SYNBOT_CAPABILITY,
   WsCompatibilityError,
   WsOrchestrationDispatchCommandRpc,
   WsRpcError,
@@ -61,6 +62,7 @@ import {
   WsTransport,
   RemoteConnectionUnavailableError,
   WsTransportRequestInterruptedError,
+  synbotRefusalForHost,
   type WsThreadStreamFailure,
 } from "./wsTransport";
 import {
@@ -4152,3 +4154,22 @@ it.each(["accepted", "rejected", "typed-error"] as const)(
     }
   },
 );
+
+describe("synbotRefusalForHost", () => {
+  it("refuses bots.* locally on a host that does not advertise SynBot", () => {
+    const refusal = synbotRefusalForHost("bots.list", ["rpc.typed-errors"]);
+    expect(refusal).toMatchObject({
+      _tag: "WsRpcError",
+      code: "FEATURE_UNAVAILABLE",
+      retryable: false,
+      message: "SynBot is not available on this host.",
+    });
+    expect(synbotRefusalForHost("bots.subscribe", undefined)?.code).toBe("FEATURE_UNAVAILABLE");
+  });
+
+  it("lets bots.* through to a host with SynBot and never touches other methods", () => {
+    expect(synbotRefusalForHost("bots.list", [WS_SYNBOT_CAPABILITY])).toBeNull();
+    expect(synbotRefusalForHost(WS_METHODS.serverGetConfig, [])).toBeNull();
+    expect(synbotRefusalForHost("botsLike.list", undefined)).toBeNull();
+  });
+});

@@ -91,55 +91,51 @@ async function openApp(app: TestFixtures["app"], browser: Browser) {
   });
 }
 
-// Expected to fail until the web app tells "this host has no such method" apart from a broken
-// socket. A host that does not know `bots.list` answers with an RPC Defect ("Unknown request tag:
-// bots.list"). The web app classifies that Defect as a transport failure
-// (apps/web/src/lib/rpcTransportFailure.ts, `RpcClientDefect`), so the socket reconnects once
-// (apps/web/src/wsTransport.ts, the RpcClientDefect branch of the session-failure handler) and
-// the request fails with "Connection interrupted. Check the operation's status.", which
-// synbotStore.ts (UNAVAILABLE_PATTERN) turns into status "error": the page shows that error
-// instead of "SynBot is not available on this host.". Observed: statuses idle → loading → error,
-// one extra socket, bots.subscribe sent again after the reconnect, then quiet: not because the
-// page settled, but because the second Defect tripped the transport's breaker (see below).
-test.fail(
-  "A host without SynBot says SynBot is not available, once, and keeps its socket",
-  async ({ app, browser, screen }) => {
-    await openApp(app, browser);
-    const start = await proxyState();
-    const startPage = await pageProbe(browser);
-    await navigate(browser, "/synbot");
-    // Long enough for the page to settle and for a reconnect loop's first backoff steps.
-    await sleep(15_000);
-    const end = await proxyState();
-    const endPage = await pageProbe(browser);
-    await app.screenshot("synbot-on-old-host");
+// A host built before SynBot answers `bots.*` with a connection-wide RPC Defect ("Unknown request
+// tag"), and it does not advertise the SynBot capability. The web app checks the capability and
+// refuses `bots.*` locally with FEATURE_UNAVAILABLE (apps/web/src/wsTransport.ts,
+// synbotRefusalForHost), so no Defect ever comes back: the page says SynBot is not available, once,
+// with no reconnect and no bots.* request on the wire.
+test("A host without SynBot says SynBot is not available, once, and keeps its socket", async ({
+  app,
+  browser,
+  screen,
+}) => {
+  await openApp(app, browser);
+  const start = await proxyState();
+  const startPage = await pageProbe(browser);
+  await navigate(browser, "/synbot");
+  // Long enough for the page to settle and for a reconnect loop's first backoff steps.
+  await sleep(15_000);
+  const end = await proxyState();
+  const endPage = await pageProbe(browser);
+  await app.screenshot("synbot-on-old-host");
 
-    const observed = {
-      message: (await screen.getByText(UNAVAILABLE).count()) > 0,
-      status: endPage.statuses.at(-1),
-      newSockets: endPage.sockets - startPage.sockets,
-      newProxyConnections: end.connections - start.connections,
-      // Asked once is fine (that is how the page learns); asked again and again is a loop.
-      botRequestsAfterSettling: 0,
-    };
-    // The bots.* requests sent in the second half of the window, when nothing should be asking.
-    const mid = await proxyState();
-    await sleep(8_000);
-    observed.botRequestsAfterSettling = (await proxyState()).botRequests - mid.botRequests;
-    expect(start.connections).toBeGreaterThan(0);
-    expect(
-      observed,
-      `statuses ${JSON.stringify(endPage.statuses)}; bots.* requests ${JSON.stringify(end.botTags)}`,
-    ).toEqual({
-      message: true,
-      status: "unavailable",
-      newSockets: 0,
-      newProxyConnections: 0,
-      botRequestsAfterSettling: 0,
-    });
-    await expect(screen.getByTestId("composer-editor")).toHaveCount(0);
-  },
-);
+  const observed = {
+    message: (await screen.getByText(UNAVAILABLE).count()) > 0,
+    status: endPage.statuses.at(-1),
+    newSockets: endPage.sockets - startPage.sockets,
+    newProxyConnections: end.connections - start.connections,
+    // Asked once is fine (that is how the page learns); asked again and again is a loop.
+    botRequestsAfterSettling: 0,
+  };
+  // The bots.* requests sent in the second half of the window, when nothing should be asking.
+  const mid = await proxyState();
+  await sleep(8_000);
+  observed.botRequestsAfterSettling = (await proxyState()).botRequests - mid.botRequests;
+  expect(start.connections).toBeGreaterThan(0);
+  expect(
+    observed,
+    `statuses ${JSON.stringify(endPage.statuses)}; bots.* requests ${JSON.stringify(end.botTags)}`,
+  ).toEqual({
+    message: true,
+    status: "unavailable",
+    newSockets: 0,
+    newProxyConnections: 0,
+    botRequestsAfterSettling: 0,
+  });
+  await expect(screen.getByTestId("composer-editor")).toHaveCount(0);
+});
 
 const PROJECT_PATH = nodePath.join(OLD_HOST.STATE_DIR, "project.json");
 
@@ -270,24 +266,22 @@ test("Control: through the same proxy with bots.* passed on, SynBot loads and a 
   }
 });
 
-// Expected to fail, same root cause as above: the Defect for `bots.subscribe` is counted as a
-// broken socket twice (startup, then the resubscribe after the reconnect), which trips the
-// transport's defect circuit breaker (DEFECT_CIRCUIT_BREAKER_THRESHOLD = 2 in
-// apps/web/src/wsTransport.ts). Recovery stops (every RPC then fails with "Connection recovery
-// stopped. Reload the app…"), the thread stays on "Loading conversation" while the composer says
-// "Reconnecting to Synara…", and the message is never sent: chats on that host stop working.
-test.fail(
-  "On a host without SynBot a plain chat still sends and gets its answer",
-  async ({ app, browser, screen }) => {
-    await setRenameBots(true);
-    const chat = await plainChat(app, browser, screen, "OLDHOST-PING");
-    expect(chat, JSON.stringify(chat)).toMatchObject({
-      answered: true,
-      unary: "ok",
-      reconnecting: false,
-      recoveryStopped: false,
-      newSockets: 0,
-      newProxyConnections: 0,
-    });
-  },
-);
+// Before the capability check, the Defect for `bots.subscribe` counted as a broken socket twice
+// (startup, then the resubscribe after the reconnect) and tripped the transport's defect circuit
+// breaker, so every RPC failed and chats on that host stopped working.
+test("On a host without SynBot a plain chat still sends and gets its answer", async ({
+  app,
+  browser,
+  screen,
+}) => {
+  await setRenameBots(true);
+  const chat = await plainChat(app, browser, screen, "OLDHOST-PING");
+  expect(chat, JSON.stringify(chat)).toMatchObject({
+    answered: true,
+    unary: "ok",
+    reconnecting: false,
+    recoveryStopped: false,
+    newSockets: 0,
+    newProxyConnections: 0,
+  });
+});
