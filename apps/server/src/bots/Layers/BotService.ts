@@ -139,6 +139,11 @@ const QUEUED_ITEM_STATES = new Set(["queued", "idle"]);
  * worker waiting on the user (an approval or a question) is mid-turn too. */
 const INTERRUPTIBLE_ITEM_STATES = new Set([...ACTIVE_ITEM_STATES, "waiting"]);
 /** Saved but never delivered: sent without a start, or still waiting for the user's Start. */
+/** The delegations a thread's event concerns: those to or from it; all of them for a sweep. */
+const relevantTo = (records: readonly BotDelegationRecord[], threadId: ThreadId | undefined) =>
+  threadId
+    ? records.filter((record) => record.toThreadId === threadId || record.fromThreadId === threadId)
+    : records;
 const isUndelivered = (record: BotDelegationRecord) =>
   record.settledAt === null &&
   ((record.state === "sent" && record.startedAt === null) || record.state === "awaiting-start");
@@ -1703,13 +1708,6 @@ const make = Effect.gen(function* () {
       yield* publishDelegation(next);
       return next;
     });
-
-  const relevantTo = (records: readonly BotDelegationRecord[], threadId: ThreadId | undefined) =>
-    threadId
-      ? records.filter(
-          (record) => record.toThreadId === threadId || record.fromThreadId === threadId,
-        )
-      : records;
 
   /**
    * The settle sweep. It runs every 10 s and on every thread event, so it costs nothing when no

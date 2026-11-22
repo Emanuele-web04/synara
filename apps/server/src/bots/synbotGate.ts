@@ -77,7 +77,7 @@ export function onServerAltoAccessRevoked(listener: AltoAccessRevokedListener): 
 }
 
 const notifyRevoked = (credentialDir: string) => {
-  for (const listener of [...revokedListeners]) {
+  for (const listener of revokedListeners) {
     try {
       listener(credentialDir);
     } catch {
