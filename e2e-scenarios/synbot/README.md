@@ -8,8 +8,12 @@ gateway, real web UI in a browser. The only fake is the model. A scripted ACP ag
 npm install                  # once, inside this folder (not part of the Bun workspace)
 npx e2e run                  # all scenarios, about 10 minutes
 npx e2e run scenarios/delegation-direct.e2e.ts --headed
-npx e2e run --config e2e.stable.config.ts   # the Stable gate, separate (about 10 s)
+npx e2e run --config e2e.stable.config.ts   # the Stable gate, separate (about 1 minute)
+npx e2e run --config e2e.cli.config.ts      # a server with no desktop flavor, separate (about 10 s)
 ```
+
+Set `SYNBOT_SCENARIO_DIR` to a folder of your own when another run may be going on: each run wipes
+its folder.
 
 ## How it works
 
@@ -32,7 +36,14 @@ npx e2e run --config e2e.stable.config.ts   # the Stable gate, separate (about 1
 (`SYNARA_DESKTOP_BUNDLE_ID=com.emanueledipietro.synara`) in its own folder
 (`<scenario folder>-stable`), with `SYNARA_ACCOUNT_URL` pointing at `fake-account.ts`, a local stand-in
 for the Account API. The scenario switches billing between Free, Alto and an outage through
-`POST /__scenario/billing`.
+`POST /__scenario/billing`, and counts the billing reads that reach it (`GET /__scenario/state`). A
+second test checks that chats that are not bots and an idle server cost no billing read, that Stop
+all still works after Alto lapses, that bot tools say `SUBSCRIPTION_REQUIRED`, and that an open
+`bots.subscribe` stream ends on sign-out.
+
+The default run names the Dev desktop flavor, where SynBot is free. `e2e.cli.config.ts` runs
+`cli-gate/` against a server with no desktop flavor (as `npx synara` runs) in
+`<scenario folder>-cli`: it requires Synara Alto like Stable.
 
 ## Limits
 

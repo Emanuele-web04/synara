@@ -1,5 +1,7 @@
 // Stable without Synara Alto: every way in is refused with SUBSCRIPTION_REQUIRED and no bot ever
 // runs. Signed out, signed in on Free, after losing Alto, and during an Account API outage.
+// Stopping is never refused. The second test checks what the gate costs (Account API billing reads)
+// and that a lapse or sign-out reaches running bots and open streams.
 import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as nodePath from "node:path";
@@ -128,11 +130,17 @@ const botCalls = (botId: string, threadId: string) =>
     ["bots.updateSettings", { maxParallelTasks: 8 }],
     ["bots.cardAction", { threadId, cardId: "synbot:card:x", optionId: "create:0" }],
     ["bots.suggest", { projectId: botId }],
-    ["bots.cancelDelegation", { delegationId: "dtamper" }],
     ["bots.mergeProof", { threadId }],
     ["bots.merge", { threadId, headSha: "0000000" }],
     ["bots.updateBranch", { threadId }],
+  ] as const;
+
+/** Ending work never needs Alto: these answer on their merits (here: nothing to end). */
+const endCalls = (threadId: string) =>
+  [
     ["bots.stopAll", {}],
+    ["bots.cancelDelegation", { delegationId: "dtamper" }],
+    ["bots.cardAction", { threadId, cardId: "synbot:card:x", optionId: "dismiss" }],
   ] as const;
 
 async function expectAllRefused(browser: Browser, botId: string, threadId: string) {
@@ -146,6 +154,13 @@ async function expectAllRefused(browser: Browser, botId: string, threadId: strin
       botCalls(botId, threadId).map(([method]) => [method, "SUBSCRIPTION_REQUIRED"]),
     ),
   );
+  const ends: string[] = [];
+  for (const [method, input] of endCalls(threadId)) {
+    const outcome = await call(browser, method, input);
+    ends.push(`${method}:${outcome.ok ? "ALLOWED" : (outcome.code ?? outcome.message)}`);
+  }
+  expect(ends[0]).toBe("bots.stopAll:ALLOWED");
+  for (const end of ends) expect(end).not.toContain("SUBSCRIPTION_REQUIRED");
 }
 
 async function expectGateOnRoutes(browser: Browser, screen: TestFixtures["screen"], botId: string) {
@@ -289,6 +304,10 @@ test("Stable without Alto refuses every SynBot entry point and never runs a bot"
     ["synara_bots_list", true],
     ["synara_bot_delegate", true],
   ]);
+  // The tools say why: the bot's chat is locked by the subscription, not "not a bot chat".
+  for (const result of results) {
+    expect(JSON.stringify(result.result)).toContain("SUBSCRIPTION_REQUIRED");
+  }
   expect(log.filter((e) => e.event === "tool" && e.forced !== true)).toEqual([]);
   // SynBot itself never ran.
   expect(log.filter((e) => e.event === "prompt")).toHaveLength(1);
@@ -310,4 +329,188 @@ test("Stable without Alto refuses every SynBot entry point and never runs a bot"
   ).value;
   expect(snapshot.delegations).toEqual([]);
   expect(snapshot.bots.map((b) => b.name).toSorted()).toEqual(["Paid bot", "SynBot"]);
+});
+
+const billingReads = async () => {
+  const response = await fetch(`${account()}/__scenario/state`);
+  return ((await response.json()) as { billingReads: number }).billingReads;
+};
+
+test("the gate costs nothing outside bot chats, and a lapse or sign-out reaches running work", async ({
+  app,
+  browser,
+}) => {
+  await openApp(app, browser);
+  // Left signed in by the first test. Make sure of it, on Alto.
+  const status = await call(browser, "account.status");
+  if (!status.ok || (status.value as { state?: string } | null)?.state !== "signed-in") {
+    expect((await call(browser, "account.sendOtp", { email: "scenario@example.invalid" })).ok).toBe(
+      true,
+    );
+    const signIn = await call(browser, "account.authenticateOtp", {
+      email: "scenario@example.invalid",
+      code: "123456",
+    });
+    expect(signIn.ok, JSON.stringify(signIn)).toBe(true);
+  }
+  await setBilling("alto");
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  // The first test's bot, or a new one when this test runs on its own.
+  expect((await call(browser, "bots.ensureMain", {})).ok).toBe(true);
+  const listed = await call(browser, "bots.list", {});
+  expect(listed.ok, JSON.stringify(listed)).toBe(true);
+  let paid = (
+    listed as { value: { bots: Array<{ id: string; name: string; threadId: string }> } }
+  ).value.bots.find((bot) => bot.name === "Paid bot");
+  if (!paid) {
+    const made = await call(browser, "bots.create", {
+      requestId: `stable-${nodeCrypto.randomUUID()}`,
+      name: "Paid bot",
+      role: "Made while Alto was active",
+      mascot: { shape: "circle", color: "#1a80fa" },
+      scope: { projects: "all", paths: [] },
+      modelSelection: ENGINE,
+      autonomy: "auto",
+    });
+    expect(made.ok, JSON.stringify(made)).toBe(true);
+    paid = (made as { value: { id: string; name: string; threadId: string } }).value;
+  }
+
+  // A plain project chat, no bot anywhere near it.
+  const projectId = nodeCrypto.randomUUID();
+  expect(
+    (
+      await call(browser, "orchestration.dispatchCommand", {
+        type: "project.create",
+        commandId: nodeCrypto.randomUUID(),
+        projectId,
+        kind: "project",
+        title: "demo-app",
+        workspaceRoot: STABLE.DEMO_REPO,
+        createdAt: new Date().toISOString(),
+      })
+    ).ok,
+  ).toBe(true);
+  const plainThread = nodeCrypto.randomUUID();
+  const created = await call(browser, "orchestration.dispatchCommand", {
+    type: "thread.create",
+    commandId: nodeCrypto.randomUUID(),
+    threadId: plainThread,
+    projectId,
+    title: "Plain chat",
+    modelSelection: ENGINE,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdAt: new Date().toISOString(),
+  });
+  expect(created.ok, JSON.stringify(created)).toBe(true);
+
+  const script: Script = {
+    rules: [
+      { match: "PLAIN-TURN", steps: [{ say: "Plain answer." }] },
+      { match: "LONG-WORK", steps: [{ sleepMs: 180_000 }, { say: "Long work done." }] },
+    ],
+    fallback: [{ say: "SILENT" }],
+  };
+  nodeFs.writeFileSync(SCRIPT_PATH, JSON.stringify(script));
+  const turnIn = (threadId: string, text: string) =>
+    call(browser, "orchestration.dispatchCommand", {
+      type: "thread.turn.start",
+      commandId: nodeCrypto.randomUUID(),
+      threadId,
+      message: { messageId: nodeCrypto.randomUUID(), role: "user", text, attachments: [] },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: new Date().toISOString(),
+    });
+
+  // (a) Without Alto, turns in a plain chat never ask the Account API. They are spaced past the
+  // gate's 5 s denial cache, so each would have been a fresh billing read.
+  await setBilling("free");
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  const beforeTurns = await billingReads();
+  for (let index = 1; index <= 3; index += 1) {
+    const sent = await turnIn(plainThread, `PLAIN-TURN ${index}`);
+    expect(sent.ok, JSON.stringify(sent)).toBe(true);
+    await expect
+      .poll(
+        () =>
+          readLog().filter((e) => e.event === "step" && e.say === "Plain answer.").length >= index,
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await sleep(6_000);
+  }
+  expect(await billingReads()).toBe(beforeTurns);
+
+  // (b) An idle server with no open delegation makes no billing read either (the settle sweep
+  // runs every 10 s).
+  const beforeIdle = await billingReads();
+  await sleep(26_000);
+  expect(await billingReads()).toBe(beforeIdle);
+
+  // (c) A bot works on Alto, then Alto lapses: Stop all still stops it.
+  await setBilling("alto");
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  expect((await turnIn(paid.threadId, "LONG-WORK please")).ok).toBe(true);
+  await expect
+    .poll(
+      () =>
+        readLog().some((e) => e.event === "prompt" && String(e.text ?? "").includes("LONG-WORK")),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await setBilling("free");
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  const refused = await call(browser, "bots.list", {});
+  expect(refused.ok ? "ALLOWED" : refused.code).toBe("SUBSCRIPTION_REQUIRED");
+  const stopped = await call(browser, "bots.stopAll", {});
+  expect(stopped.ok, JSON.stringify(stopped)).toBe(true);
+  expect(
+    (stopped as { value: { interruptedThreadIds: string[] } }).value.interruptedThreadIds,
+  ).toContain(paid.threadId);
+  // Stop reaches the engine: session/cancel, or the bot's process ends.
+  await expect
+    .poll(() => readLog().some((e) => e.event === "cancel" || e.event === "process_signal"), {
+      timeout: 30_000,
+    })
+    .toBe(true);
+  expect(readLog().some((e) => e.event === "step" && e.say === "Long work done.")).toBe(false);
+
+  // (e) An open bots.subscribe stream ends on sign-out. Opened on Alto, it delivers; after
+  // sign-out and a fresh sign-in on Alto, a change to a bot no longer reaches it, because the
+  // server ended it (the web does not re-open a stream refused this way).
+  await setBilling("alto");
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  await subscribe(browser, "liveStream");
+  await expect
+    .poll(() => received(browser, "liveStream"), { timeout: 20_000 })
+    .toContain("snapshot");
+  const renamed = await call(browser, "bots.update", { id: paid.id, name: "Paid bot 2" });
+  expect(renamed.ok, JSON.stringify(renamed)).toBe(true);
+  await expect
+    .poll(() => received(browser, "liveStream"), { timeout: 20_000 })
+    .toContain("bot-upserted");
+  expect((await call(browser, "account.signOut")).ok).toBe(true);
+  const seenAtSignOut = (await received(browser, "liveStream")).length;
+  expect((await call(browser, "account.sendOtp", { email: "scenario@example.invalid" })).ok).toBe(
+    true,
+  );
+  const again = await call(browser, "account.authenticateOtp", {
+    email: "scenario@example.invalid",
+    code: "123456",
+  });
+  expect(again.ok, JSON.stringify(again)).toBe(true);
+  expect((await call(browser, "account.billingStatus")).ok).toBe(true);
+  const renamedBack = await call(browser, "bots.update", { id: paid.id, name: "Paid bot" });
+  expect(renamedBack.ok, JSON.stringify(renamedBack)).toBe(true);
+  await sleep(3_000);
+  expect((await received(browser, "liveStream")).length).toBe(seenAtSignOut);
+  // A stream opened now works again.
+  await subscribe(browser, "afterSignIn");
+  await expect
+    .poll(() => received(browser, "afterSignIn"), { timeout: 20_000 })
+    .toContain("snapshot");
 });

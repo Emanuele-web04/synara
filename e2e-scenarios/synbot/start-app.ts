@@ -138,7 +138,9 @@ async function main() {
   delete baseEnv.SYNARA_AUTH_TOKEN;
   delete baseEnv.SYNARA_DESKTOP_BUNDLE_ID;
   delete baseEnv.SYNARA_ACCOUNT_URL;
-  const flavorEnv: Record<string, string> = BUNDLE_ID ? { SYNARA_DESKTOP_BUNDLE_ID: BUNDLE_ID } : {};
+  const flavorEnv: Record<string, string> = BUNDLE_ID
+    ? { SYNARA_DESKTOP_BUNDLE_ID: BUNDLE_ID }
+    : {};
   if (STABLE_MODE || CLI_MODE) {
     const fakeAccount = await startFakeAccount(LOOPBACK, await freePort());
     write(nodePath.join(STATE_DIR, "account.json"), JSON.stringify({ url: fakeAccount.url }));
