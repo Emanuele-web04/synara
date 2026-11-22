@@ -23,7 +23,7 @@ import { readNativeApi } from "~/nativeApi";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import { useStore } from "~/store";
 import { orderedBots } from "~/synbot/synbotState.logic";
-import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
+import { restartSynbotLiveSync, startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
 import { useOpenSynaraPlan } from "../../settings/BillingSettingsPanel";
 import { toastManager } from "../../ui/toast";
@@ -153,7 +153,9 @@ export function SynbotSettingsPanel() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (useSynbotStore.getState().status === "idle") startSynbotLiveSync();
+    const current = useSynbotStore.getState().status;
+    if (current === "subscription_required") restartSynbotLiveSync();
+    else if (current === "idle") startSynbotLiveSync();
   }, []);
 
   const openPlans = useOpenSynaraPlan();

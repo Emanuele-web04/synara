@@ -100,7 +100,11 @@ export default function SynbotPage() {
   const narrow = useNarrow(root);
 
   useEffect(() => {
-    startSynbotLiveSync();
+    if (useSynbotStore.getState().status === "subscription_required") {
+      restartSynbotLiveSync();
+    } else {
+      startSynbotLiveSync();
+    }
     void ensureSynbotMain();
   }, []);
   // When a previously locked user subscribes to Alto, re-open the stream immediately.

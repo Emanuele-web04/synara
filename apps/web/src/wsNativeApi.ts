@@ -192,7 +192,6 @@ const automationEventListeners = createListenerRegistry<AutomationStreamEvent>()
 const todoEventListeners = createListenerRegistry<TodoStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const projectAgentEventListeners = createListenerRegistry<ProjectAgentStreamEvent>();
-const botsEventListeners = createListenerRegistry<BotStreamEvent>();
 const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
@@ -218,7 +217,6 @@ function clearWsNativeApiListeners(): void {
   todoEventListeners.clear();
   deviceEventListeners.clear();
   projectAgentEventListeners.clear();
-  botsEventListeners.clear();
   computerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
@@ -574,12 +572,8 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.projectAgentEvent, (message) => {
     projectAgentEventListeners.emit(message.data);
   });
-  // SynBot is Beta-only; Stable never opens its stream (the server would refuse it).
-  if (SYNBOT_ON) {
-    transport.subscribe(WS_CHANNELS.botsEvent, (message) => {
-      botsEventListeners.emit(message.data);
-    });
-  }
+  // SynBot subscribes on demand via `api.bots.onEvent` so restarting sync after an Alto
+  // plan activation re-opens `bots.subscribe` cleanly without a permanent refused listener.
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
@@ -1115,7 +1109,12 @@ export function createWsNativeApi(): NativeApi {
       merge: (input) => executionRequest(WS_METHODS.botsMerge, input, { timeoutMs: 300_000 }),
       updateBranch: (input) => executionRequest(WS_METHODS.botsUpdateBranch, input),
       stopAll: (input) => executionRequest(WS_METHODS.botsStopAll, input ?? {}),
-      onEvent: botsEventListeners.subscribe,
+      onEvent: (callback) => {
+        if (!SYNBOT_ON) return () => undefined;
+        return transport.subscribe(WS_CHANNELS.botsEvent, (message) => {
+          callback(message.data);
+        });
+      },
     },
     automation: {
       list: (input) => executionRequest(WS_METHODS.automationList, input),
