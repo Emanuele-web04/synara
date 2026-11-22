@@ -9,6 +9,7 @@
       // task's cache key.
       "dependsOn": ["^transit"],
       "env": ["VITE_SYNARA_BILLING_ENABLED", "VITE_SYNARA_BILLING_SANDBOX"],
+      "passThroughEnv": ["SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR"],
     },
     "dev": {
       "persistent": true,

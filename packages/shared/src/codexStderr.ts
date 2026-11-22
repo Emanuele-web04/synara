@@ -40,6 +40,18 @@ export function isCodexMultiAgentDeprecationWarning(message: string): boolean {
   );
 }
 
+function isUserConfiguredMcpServer(server: string): boolean {
+  return server !== SYNARA_MCP_SERVER_NAME && !server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX);
+}
+
+export function isCodexUserMcpOAuthStartupError(server: string, error: string): boolean {
+  return (
+    isUserConfiguredMcpServer(server) &&
+    error ===
+      `The ${server} MCP server requires OAuth reauthentication. Run \`codex mcp login ${server}\`.`
+  );
+}
+
 // Read only the recognized refusal body, never infer a server from an anonymous worker log.
 export function readCodexMcpSubscriptionError(message: string): string | undefined {
   const quotedResponse = /UnexpectedServerResponse\(("(?:[^"\\]|\\.)*")\)$/.exec(message)?.[1];
@@ -129,11 +141,7 @@ export function classifyCodexStderr(
     const server = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/.exec(
       `${log.target}: ${log.message}`,
     )?.[1];
-    if (
-      server &&
-      server !== SYNARA_MCP_SERVER_NAME &&
-      !server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX)
-    ) {
+    if (server && isUserConfiguredMcpServer(server)) {
       return { kind: "user-mcp-oauth", server };
     }
   }

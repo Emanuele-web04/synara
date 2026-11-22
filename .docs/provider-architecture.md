@@ -69,9 +69,9 @@ Capability and discovery data should be authoritative. UI surfaces should consum
 
 ### ACP providers
 
-Cursor, Devin, Droid, and Grok share the Agent Client Protocol infrastructure under `provider/acp`, including `AcpSessionRuntime` and common adapter/session/event helpers. Provider-specific ACP support should extend that shared lifecycle and protocol machinery rather than duplicating it. Individual providers can still layer their own spawn, authentication, model-selection, or compatibility behavior around the shared ACP runtime.
+Antigravity, Cursor, Devin, Droid, and Grok share the Agent Client Protocol infrastructure under `provider/acp`, including `AcpSessionRuntime` and common adapter/session/event helpers. Provider-specific ACP support should extend that shared lifecycle and protocol machinery rather than duplicating it. Individual providers can still layer their own spawn, authentication, model-selection, or compatibility behavior around the shared ACP runtime.
 
-Codex, Claude, Antigravity, and Pi retain provider-specific integration paths where their native runtimes expose semantics that are not represented by the shared OpenCode or ACP families.
+Codex, Claude, and Pi retain provider-specific integration paths where their native runtimes expose semantics that are not represented by the shared OpenCode or ACP families.
 
 ## Adding a provider
 

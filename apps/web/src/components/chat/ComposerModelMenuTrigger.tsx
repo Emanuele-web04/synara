@@ -8,7 +8,7 @@ import type { ProviderKind } from "@synara/contracts";
 import { useState } from "react";
 
 import type { FastModeNotice } from "~/lib/fastModeState";
-import { ChevronDownIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, SettingsIcon, UltrafastModeIcon } from "~/lib/icons";
 import { FastModeBadgeIcon } from "./FastModeBadgeIcon";
 import { cn } from "~/lib/utils";
 import { ProviderAccountDot } from "../ProviderAccountMark";
@@ -40,6 +40,8 @@ export function ComposerModelMenuTrigger(props: {
   statusLabel: string | null;
   contextWindowLabel?: string | null | undefined;
   showsFastBadge: boolean;
+  /** Codex Ultrafast is on; its stacked bolt replaces the Fast badge. */
+  showsUltrafastBadge?: boolean | undefined;
   /** Fast mode was requested but is not serving; the badge turns into a muted outline. */
   fastModeNotice?: FastModeNotice | null | undefined;
   hideModelLabel?: boolean | undefined;
@@ -65,6 +67,7 @@ export function ComposerModelMenuTrigger(props: {
     statusLabel: props.statusLabel,
     contextWindowLabel: props.contextWindowLabel,
     showsFastBadge: props.showsFastBadge,
+    showsUltrafastBadge: props.showsUltrafastBadge ?? false,
   };
   const [frozenLabel, setFrozenLabel] = useState<typeof liveLabel | null>(null);
   if (freezesLabel && frozenLabel === null) setFrozenLabel(liveLabel);
@@ -89,7 +92,7 @@ export function ComposerModelMenuTrigger(props: {
       variant="chrome"
       disabled={props.disabled ?? false}
       className={cn(
-        "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
+        "min-w-0 max-w-full shrink justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
       aria-label={t("chat:modelEffort_changeModelAndReasoning")}
@@ -132,11 +135,19 @@ export function ComposerModelMenuTrigger(props: {
           {props.hideModelLabel ? (
             <span className="sr-only">{label.modelLabel}</span>
           ) : (
-            <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+            <span
+              data-composer-model-label=""
+              className="min-w-0 truncate text-[var(--color-text-foreground)]"
+            >
               {label.modelLabel}
             </span>
           )}
-          {label.showsFastBadge ? (
+          {label.showsUltrafastBadge ? (
+            <>
+              <UltrafastModeIcon className="text-[var(--color-text-foreground)]" />
+              <span className="sr-only">{t("chat:traitsPicker_ultrafast")}</span>
+            </>
+          ) : label.showsFastBadge ? (
             <FastModeBadgeIcon
               notice={props.fastModeNotice}
               className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"

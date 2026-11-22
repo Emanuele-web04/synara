@@ -332,9 +332,12 @@ const ultrafastEchoMask: CSSProperties = {
   maskComposite: "subtract",
 };
 
-export function UltrafastModeIcon() {
+export function UltrafastModeIcon(props: { className?: string | undefined }) {
   return (
-    <span aria-hidden="true" className="relative inline-block h-4 w-[1.125rem] shrink-0">
+    <span
+      aria-hidden="true"
+      className={cn("relative inline-block h-4 w-[1.125rem] shrink-0", props.className)}
+    >
       <span className="absolute inset-0 bg-current" style={ultrafastEchoMask} />
       <FastModeIcon className="absolute top-1/2 left-0 size-3.5 -translate-y-1/2" />
     </span>

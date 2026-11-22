@@ -3,7 +3,8 @@
 //          against the caller's `baseEnv`, not this process's, because the wrapper is written for
 //          the terminal that env describes.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -109,6 +110,45 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
     expect(env.PATH).toBeUndefined();
     expect(env.SYNARA_MANAGED_BIN_DIR).toBe(rootDir);
   });
+
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "follows ZDOTDIR changes across startup and keeps the CLI wrapper after PATH changes",
+    () => {
+      installFakeCli("codex");
+      const home = path.join(dir, "home");
+      const profileDir = path.join(home, "profile dir");
+      const rcDir = path.join(home, "rc dir");
+      mkdirSync(profileDir, { recursive: true });
+      mkdirSync(rcDir, { recursive: true });
+      writeFileSync(
+        path.join(home, ".zshenv"),
+        '[[ -v ZDOTDIR ]] || export ZDOTDIR="$HOME/profile dir"\n',
+      );
+      writeFileSync(path.join(profileDir, ".zprofile"), 'export ZDOTDIR="$HOME/rc dir"\n');
+      writeFileSync(
+        path.join(rcDir, ".zshrc"),
+        "export ZSHRC_PROBE=loaded\nexport PATH=/usr/bin:/bin\n",
+      );
+      writeFileSync(path.join(rcDir, ".zlogin"), "export ZLOGIN_PROBE=loaded\n");
+
+      const baseEnv = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+      const env = applyManagedTerminalAgentWrapperEnv(baseEnv, prepare(baseEnv));
+      const shell = spawnSync(
+        "/bin/zsh",
+        [
+          "-lic",
+          'print -r -- "${ZSHRC_PROBE:-missing}" "${ZLOGIN_PROBE:-missing}" "$ZDOTDIR"; whence -p codex',
+        ],
+        { env, encoding: "utf8", timeout: 5000 },
+      );
+
+      expect(shell.status, shell.stderr).toBe(0);
+      expect(shell.stdout.trim().split("\n")).toEqual([
+        `loaded loaded ${rcDir}`,
+        path.join(rootDir, "codex"),
+      ]);
+    },
+  );
 
   it("writes provider profiles even when Codex and Claude are not installed", () => {
     const targetPath = installFakeCli("opencode");

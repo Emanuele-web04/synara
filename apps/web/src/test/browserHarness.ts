@@ -5,6 +5,7 @@ import {
 } from "@synara/contracts";
 
 import { TASKS_COACHMARK } from "../components/OneTimeCoachmark";
+import { REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY } from "../components/hosts/RemoteConnectionsAnnouncement";
 import { FEATURE_TOUR_STORAGE_KEY } from "../featureTour/store";
 import { PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY } from "../projectImport/useProjectImportAnnouncement";
 
@@ -53,6 +54,9 @@ export function acknowledgeStartupAnnouncementsForTest(config: ServerConfig): vo
   );
   localStorage.setItem(TASKS_COACHMARK.storageKey, "seen");
   localStorage.setItem("synara:activity-onboarding:v1", "seen");
+  const connectionAnnouncementSeen = JSON.stringify({ acknowledged: true });
+  localStorage.setItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY, connectionAnnouncementSeen);
+  localStorage.setItem("synara:ios-beta-announcement:v1", connectionAnnouncementSeen);
 }
 
 export function createFullscreenTestHost(): HTMLDivElement {

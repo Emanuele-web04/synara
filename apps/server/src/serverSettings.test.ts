@@ -147,6 +147,40 @@ describe("ServerSettingsService", () => {
     ).toThrow();
   });
 
+  it("enables git attribution by default and validates its patch", () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({}).gitAttributionEnabled).toBe(true);
+    expect(
+      Schema.decodeSync(ServerSettingsSchema)({ gitAttributionEnabled: false })
+        .gitAttributionEnabled,
+    ).toBe(false);
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatchSchema)({ gitAttributionEnabled: "no" }),
+    ).toThrow();
+  });
+
+  it("persists a disabled git attribution setting across a service restart", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        yield* service.updateSettings({ gitAttributionEnabled: false });
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettings;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(result.gitAttributionEnabled).toBe(false);
+  });
+
   it("persists writing style and custom instructions across a service restart", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {

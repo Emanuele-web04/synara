@@ -19,6 +19,10 @@ import {
   decodeAnonymousProductRecord,
   isProductAnalyticsCommand,
   PRODUCT_COHORT_WINDOWS,
+  PRODUCT_CONNECTION_EVENTS,
+  PRODUCT_CONNECTION_FAILURES,
+  PRODUCT_CONNECTION_NETWORKS,
+  PRODUCT_CONNECTION_ROUTES,
   PRODUCT_TURN_FAILURES,
   ANONYMOUS_PRODUCT_RETRY_DAYS,
   type ProductAnalyticsCohortStage,
@@ -129,6 +133,10 @@ const PRODUCT_REASONS = new Set([
   "other",
 ]);
 const PRODUCT_TURN_FAILURE_SET = new Set<string>(PRODUCT_TURN_FAILURES);
+const PRODUCT_CONNECTION_EVENT_SET = new Set<string>(PRODUCT_CONNECTION_EVENTS);
+const PRODUCT_CONNECTION_FAILURE_SET = new Set<string>(PRODUCT_CONNECTION_FAILURES);
+const PRODUCT_CONNECTION_NETWORK_SET = new Set<string>(PRODUCT_CONNECTION_NETWORKS);
+const PRODUCT_CONNECTION_ROUTE_SET = new Set<string>(PRODUCT_CONNECTION_ROUTES);
 const PRODUCT_SURFACES = new Set(["desktop", "ios", "ipados"]);
 const PRODUCT_PLATFORMS = new Set(["darwin", "win32", "linux", "ios", "ipados", "other"]);
 const PRODUCT_MAX_EVENTS_PER_POST = 50;
@@ -163,6 +171,8 @@ interface NormalizedProductEvent {
   reason: string | null;
   failure: string | null;
   httpStatus: number | null;
+  network: string | null;
+  route: string | null;
   command: string | null;
   durationMs: number | null;
   inputTokens: number | null;
@@ -173,8 +183,9 @@ interface NormalizedProductEvent {
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
   event_id, ts, received_at, install_id, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, command, duration_ms,
-  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage, failure, http_status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage, failure, http_status,
+  network, route
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(event_id) DO UPDATE SET cohort_day = excluded.cohort_day, cohort_stage = excluded.cohort_stage
 WHERE product_events.cohort_stage IS NULL AND excluded.cohort_stage IS NOT NULL
   AND product_events.install_id = excluded.install_id AND julianday(product_events.ts) = julianday(excluded.ts)
@@ -210,6 +221,8 @@ function productEventStatement(
     event.cohortStage,
     event.failure,
     event.httpStatus,
+    event.network,
+    event.route,
   );
 }
 
@@ -330,14 +343,19 @@ export function normalizeProductEvent(
   ) {
     return null;
   }
-  // A turn that ended badly may name a fixed failure category; its status needs one.
+  // A turn that ended badly, or a failed connection attempt, may name a fixed
+  // failure category from its own set; its status needs one.
+  const connectionEvent = PRODUCT_CONNECTION_EVENT_SET.has(raw.event);
   const failure =
     raw.failure === undefined
       ? null
       : typeof raw.failure === "string" &&
-          PRODUCT_TURN_FAILURE_SET.has(raw.failure) &&
-          raw.event === "turn.completed" &&
-          (raw.outcome === "failed" || raw.outcome === "cancelled")
+          ((raw.event === "turn.completed" &&
+            PRODUCT_TURN_FAILURE_SET.has(raw.failure) &&
+            (raw.outcome === "failed" || raw.outcome === "cancelled")) ||
+            (connectionEvent &&
+              PRODUCT_CONNECTION_FAILURE_SET.has(raw.failure) &&
+              raw.outcome === "failed"))
         ? raw.failure
         : undefined;
   const httpStatus =
@@ -351,6 +369,15 @@ export function normalizeProductEvent(
         ? raw.httpStatus
         : undefined;
   if (failure === undefined || httpStatus === undefined) return null;
+  // Network kind and route describe connection attempts only.
+  const connectionDetail = (key: "network" | "route", allowed: Set<string>) => {
+    const value = raw[key];
+    if (value === undefined) return null;
+    return connectionEvent && typeof value === "string" && allowed.has(value) ? value : undefined;
+  };
+  const network = connectionDetail("network", PRODUCT_CONNECTION_NETWORK_SET);
+  const route = connectionDetail("route", PRODUCT_CONNECTION_ROUTE_SET);
+  if (network === undefined || route === undefined) return null;
   const command =
     raw.command === undefined
       ? null
@@ -420,6 +447,8 @@ export function normalizeProductEvent(
     reason,
     failure,
     httpStatus,
+    network,
+    route,
     command,
     durationMs,
     inputTokens,
@@ -2122,6 +2151,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       platformRows,
       reasonRows,
       turnFailureRows,
+      connectionFailureRows,
       hostExecutions,
       installerDownloads,
       anonymousEvents,
@@ -2316,6 +2346,31 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           installations: number;
           lastSeen: string;
         }>(),
+      // Failed connection attempts by where they stopped. Older clients leave the
+      // category, route and network NULL; those rows still count as failures.
+      env.DB.prepare(
+        `SELECT substr(ts, 1, 10) AS day, surface, app_version AS appVersion, mode, route,
+                  network, failure, http_status AS httpStatus, COUNT(*) AS attempts,
+                  COUNT(DISTINCT install_id) AS installations
+           FROM product_events
+           WHERE ${where} AND outcome = 'failed'
+             AND event IN (${PRODUCT_CONNECTION_EVENTS.map(() => "?").join(", ")})
+           GROUP BY day, surface, app_version, mode, route, network, failure, http_status
+           ORDER BY day DESC, attempts DESC, failure LIMIT 500`,
+      )
+        .bind(...binds, ...PRODUCT_CONNECTION_EVENTS)
+        .all<{
+          day: string;
+          surface: string;
+          appVersion: string;
+          mode: string | null;
+          route: string | null;
+          network: string | null;
+          failure: string | null;
+          httpStatus: number | null;
+          attempts: number;
+          installations: number;
+        }>(),
       readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
       loadInstallerDownloads(env.DB, productFilters),
       productFilters.surface && productFilters.surface !== "desktop"
@@ -2380,6 +2435,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
       turnFailures: turnFailureRows.results,
+      connectionFailures: connectionFailureRows.results,
       commands: commandRows.results,
       daily,
       features: featureRows.results,

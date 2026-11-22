@@ -38,6 +38,7 @@ import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 import {
   isCodexMultiAgentDeprecationWarning,
   isCodexUnstableFeaturesWarning,
+  isCodexUserMcpOAuthStartupError,
   readCodexMcpSubscriptionError,
 } from "@synara/shared/codexStderr";
 
@@ -1925,6 +1926,7 @@ function mapToRuntimeEvents(
     const name = asTrimmedString(payload?.name);
     const error = asTrimmedString(payload?.error);
     if (payload?.status === "failed" && name && error) {
+      if (isCodexUserMcpOAuthStartupError(name, error)) return [];
       const subscriptionError = readCodexMcpSubscriptionError(error);
       return [
         {
@@ -2878,6 +2880,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const nativeEvent = compactCodexNativeEventForIngress(
             hasUnmappedEvent ||
               mappedRuntimeEvents.some((runtimeEvent) => runtimeEvent.type === "runtime.warning") ||
+              stampedEvent.method === "mcpServer/startupStatus/updated" ||
               CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
               ? sanitizeUnmappedProviderEvent(stampedEvent)
               : stampedEvent,

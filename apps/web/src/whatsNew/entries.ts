@@ -22,6 +22,118 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.5",
+    date: "Nov 22",
+    features: [
+      {
+        id: "multilingual-chat-direction",
+        title: "Better reading order in multilingual chats",
+        description:
+          "Each transcript block follows its dominant writing direction. A Persian, Arabic, or Hebrew paragraph can start with an English product name and still read right to left. Code and table columns keep their original order.",
+      },
+      {
+        id: "opencode-reasoning-trace",
+        title: "Keep OpenCode reasoning in activity history",
+        description:
+          "When an OpenCode turn ends, its streamed reasoning is saved as a Reasoning trace in the activity log.",
+      },
+      {
+        id: "antigravity-planner-selection",
+        title: "Keep your Antigravity planner selection",
+        description:
+          "Synara honors the selected Orchestrator planner when resuming. If your chosen planner is unavailable, you can select one that the session offers.",
+      },
+    ],
+  },
+  {
+    version: "1.6.4",
+    date: "Nov 20",
+    features: [
+      {
+        id: "antigravity-connectors",
+        title: "Use connectors with Antigravity",
+        description:
+          "Antigravity can use Synara tools and connected services such as Notion and Linear. Chat shows live tool activity, reasoning, and questions in the same format as other providers.",
+        details:
+          "Requires Antigravity CLI 1.5.0 or newer. Start a new session to pick up newly connected services.",
+      },
+      {
+        id: "remote-thread-resume",
+        title: "Resume Remote chats with less data",
+        description:
+          "A cached chat can catch up on its own changes after unrelated activity on the desktop. Synara still reloads the full chat when it needs a fresh snapshot.",
+        details:
+          "In a loopback benchmark with 400 chats and 1,500 messages in the active chat, one sparse catch-up returned about 2 KB, down from 676 KB. Median time to apply the update in the iOS Simulator fell from 73 ms to 55 ms.",
+      },
+      {
+        id: "compact-chat-layout",
+        title: "Smoother sidebars and more room in chat",
+        description:
+          "The Environment panel floats when chat gets narrow, overlay cards stay within the chat column, and the composer keeps the model name visible longer.",
+        details:
+          "In a Chromium profile with four empty chat tabs, sidebar open and close each went from 14–16 React commits to 3.",
+      },
+      {
+        id: "codex-tool-summaries",
+        title: "Cleaner Codex tool summaries",
+        description:
+          "Reasoning stays with the surrounding tool run without adding to its tool count. MCP startup failures and app-server logs stay in diagnostics. Failed tool calls and turns remain visible in chat.",
+      },
+      {
+        id: "pull-request-attribution",
+        title: "Optional pull request attribution",
+        description:
+          "New pull requests created through Synara include a Created with Synara link by default. Turn it off in Settings → Models & writing → Add Synara attribution.",
+      },
+      {
+        id: "mac-worktree-setup",
+        title: "Restore macOS worktree setup",
+        description:
+          "New worktrees start without cloned dependencies. Use your project setup script or install dependencies in the new worktree.",
+      },
+    ],
+  },
+  {
+    version: "1.6.3",
+    date: "Nov 19",
+    features: [
+      {
+        id: "live-tool-activity",
+        title: "See what your agent is doing",
+        description:
+          "The chat's working indicator shows the current tool call or tells you when the agent needs approval or an answer. Completed tool runs fold into readable summaries.",
+      },
+      {
+        id: "long-chat-performance",
+        title: "Open long chats faster",
+        description:
+          "Chats begin loading when you press a sidebar row, and the transcript reuses parsed Markdown as you scroll back.",
+        details:
+          "In headless Chromium benchmarks with seeded conversations, median first-open time fell 16–20%. Scripting time on a repeat scroll fling fell 19–29% in the four cases that measured it.",
+      },
+      {
+        id: "mac-worktree-dependencies",
+        title: "Start macOS worktrees with dependencies",
+        description:
+          "New worktrees can inherit installed dependencies through APFS clones when the lockfiles match. Project setup scripts still run as configured.",
+        details:
+          "On the Synara checkout used for the benchmark, cloning 13 dependency directories took 1.9–3.2 seconds. A warm Bun install in a fresh worktree took 6.5 seconds.",
+      },
+      {
+        id: "codex-clarity",
+        title: "Clearer Codex speed and startup",
+        description:
+          "The model picker shows when Ultrafast is selected. OAuth notices for your own MCP servers stay in diagnostics, while tool failures and Synara connector warnings remain visible.",
+      },
+      {
+        id: "shell-and-runtime",
+        title: "Integrated Zsh and runtime fixes",
+        description:
+          "The terminal respects changes to ZDOTDIR during Zsh startup and keeps Synara's managed CLI available after shell setup. This release also updates Bun and Electron.",
+      },
+    ],
+  },
+  {
     version: "1.6.2",
     date: "Nov 17",
     features: [

@@ -9,13 +9,14 @@ import {
   LinkedAccountHost,
   type LinkStartRequest,
 } from "@synara/contracts";
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, eq, exists, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { decodeJwt } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 import type * as schema from "../db/schema";
-import { hosts, linkChallenges } from "../db/schema";
+import { hosts, linkChallenges, remoteTunnels } from "../db/schema";
 import { isUniqueViolation, toAccountHost } from "./hostRecords";
 import { hostEnvironmentLockKey } from "./environmentLock";
 import { HostAuthDomainError, type HostKeyRegistry, type HostRecord } from "./interfaces";
@@ -49,6 +50,28 @@ function expiredCleanupCutoff(): Date {
   return new Date(Date.now() - EXPIRED_CHALLENGE_GRACE_MS);
 }
 
+// Link-time appVersion was not refreshed on upgrade. Keep every registration
+// seen on or after the day Remote Connections shipped in Synara 1.5.0.
+const FIRST_STABLE_REMOTE_DAY = new Date("2026-11-10T00:00:00Z");
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Grace period before cleaning up a legacy Remote entry with a current replacement. */
+export const SUPERSEDED_HOST_IDLE_MS = 7 * DAY_MS;
+/** Longer grace period for legacy Remote entries that still advertise a managed tunnel. */
+export const ABANDONED_HOST_IDLE_MS = 30 * DAY_MS;
+/** Hosts unlinked per maintenance pass, oldest silence first. */
+export const STALE_HOST_SWEEP_BATCH = 25;
+
+/** Machine name as reinstalls report it: case-insensitive, mDNS `.local` suffix ignored. */
+function normalizedHostName(name: AnyPgColumn) {
+  return sql`regexp_replace(lower(${name}), '\\.local$', '')`;
+}
+
+/** The pre-Stable Remote channel this maintenance sweep is migrating. */
+function isLegacyRemoteHost(appVersion: AnyPgColumn) {
+  return sql`coalesce(${appVersion}, '') ~ '^1[.]0[.]6-remote[.][0-9]+$'`;
+}
+
 /** The one row→HostRecord projection, shared with the route layer. */
 export function hostRecordFromRow(row: HostRecord): HostRecord {
   return {
@@ -73,6 +96,7 @@ const HOST_PROOF_SCHEME = /^HostProof\s+(.+)$/i;
 
 type UnlinkScope =
   | { hostId: string }
+  | { hostIds: readonly string[] }
   | { environmentId: string; ownerUserId: string; excludeHostId: string };
 
 /**
@@ -92,12 +116,14 @@ async function unlinkHostRows(
   const where =
     "hostId" in scope
       ? and(eq(hosts.id, scope.hostId), isNotNull(hosts.publicKeyJwk))
-      : and(
-          eq(hosts.environmentId, scope.environmentId),
-          eq(hosts.ownerUserId, scope.ownerUserId),
-          ne(hosts.id, scope.excludeHostId),
-          isNotNull(hosts.publicKeyJwk),
-        );
+      : "hostIds" in scope
+        ? and(inArray(hosts.id, [...scope.hostIds]), isNotNull(hosts.publicKeyJwk))
+        : and(
+            eq(hosts.environmentId, scope.environmentId),
+            eq(hosts.ownerUserId, scope.ownerUserId),
+            ne(hosts.id, scope.excludeHostId),
+            isNotNull(hosts.publicKeyJwk),
+          );
   const unlinked = await tx
     .update(hosts)
     .set({
@@ -601,11 +627,15 @@ export function createHostKeyRegistry(
       );
     },
 
-    replaceEndpoints(authorization, hostId, endpoints) {
+    replaceEndpoints(authorization, hostId, endpoints, appVersion) {
       return withAuthenticatedHost(authorization, hostId, async (tx) => {
         const [row] = await tx
           .update(hosts)
-          .set({ endpoints: [...endpoints], lastSeenAt: new Date() })
+          .set({
+            endpoints: [...endpoints],
+            lastSeenAt: new Date(),
+            ...(appVersion === undefined ? {} : { appVersion }),
+          })
           .where(eq(hosts.id, hostId))
           .returning();
         if (!row) throw new HostAuthDomainError(404, "host_not_found", "Host not found");
@@ -634,6 +664,72 @@ export function createHostKeyRegistry(
         const [updated] = await unlinkHostRows(tx, { hostId });
         if (!updated) throw new HostAuthDomainError(404, "host_not_found", "Host not found");
         return toAccountHost(updated);
+      });
+    },
+
+    async retireStaleHosts() {
+      const now = Date.now();
+      const supersededBefore = new Date(now - SUPERSEDED_HOST_IDLE_MS);
+      const abandonedBefore = new Date(now - ABANDONED_HOST_IDLE_MS);
+      const newer = alias(hosts, "newer");
+      // A legacy host without a replacement must still have a desired tunnel.
+      const abandonedRule = and(
+        lt(hosts.lastSeenAt, abandonedBefore),
+        exists(
+          db
+            .select({ id: remoteTunnels.id })
+            .from(remoteTunnels)
+            .where(and(eq(remoteTunnels.hostId, hosts.id), eq(remoteTunnels.desired, true))),
+        ),
+      );
+      const supersededRule = and(
+        lt(hosts.lastSeenAt, supersededBefore),
+        exists(
+          db
+            .select({ id: newer.id })
+            .from(newer)
+            .where(
+              and(
+                eq(newer.ownerUserId, hosts.ownerUserId),
+                ne(newer.id, hosts.id),
+                eq(newer.platform, hosts.platform),
+                isNotNull(newer.publicKeyJwk),
+                gt(newer.createdAt, hosts.createdAt),
+                gt(newer.lastSeenAt, supersededBefore),
+                sql`NOT ${isLegacyRemoteHost(newer.appVersion)}`,
+                sql`coalesce(${newer.appVersion}, '') <> ''`,
+                sql`${normalizedHostName(newer.name)} = ${normalizedHostName(hosts.name)}`,
+              ),
+            ),
+        ),
+      );
+      return db.transaction(async (tx) => {
+        // Row locks match the proof-authenticated paths. SKIP LOCKED leaves a
+        // host that is heartbeating or relinking right now to the next pass,
+        // and the lock re-checks the idle cutoff against its latest row.
+        const stale = await tx
+          .select({ id: hosts.id, abandoned: sql<boolean>`coalesce(${abandonedRule}, false)` })
+          .from(hosts)
+          .where(
+            and(
+              isNotNull(hosts.publicKeyJwk),
+              isLegacyRemoteHost(hosts.appVersion),
+              lt(hosts.lastSeenAt, FIRST_STABLE_REMOTE_DAY),
+              or(abandonedRule, supersededRule),
+            ),
+          )
+          .orderBy(hosts.lastSeenAt)
+          .limit(STALE_HOST_SWEEP_BATCH)
+          .for("update", { skipLocked: true });
+        if (stale.length === 0) return { superseded: 0, abandoned: 0 };
+        const unlinked = new Set(
+          (await unlinkHostRows(tx, { hostIds: stale.map((host) => host.id) })).map(
+            (host) => host.id,
+          ),
+        );
+        const retired = stale.filter((host) => unlinked.has(host.id));
+        const abandoned = retired.filter((host) => host.abandoned).length;
+        return { superseded: retired.length - abandoned, abandoned };
       });
     },
   };

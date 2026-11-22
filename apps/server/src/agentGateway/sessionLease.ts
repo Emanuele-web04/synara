@@ -63,9 +63,8 @@ export function agentGatewaySessionLeaseOptionsFor(
 /**
  * Narrow a start input to the fields a later re-lease needs.
  *
- * Adapters that re-lease from a stored session context (Antigravity mints its
- * credential per turn; Pi rotates the credential when a turn completes) no
- * longer hold the start input by then. They keep this projection instead of a
+ * Adapters that re-lease from a stored session context (Pi rotates the
+ * credential when a turn completes) no longer hold the start input by then. They keep this projection instead of a
  * hand-picked flag, so the set of capability facts stays defined in one place.
  */
 export function captureAgentGatewayCapabilityInput(

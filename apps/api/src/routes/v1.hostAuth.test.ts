@@ -936,10 +936,13 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
             headers: { authorization: `HostProof ${valid}`, "content-type": "application/json" },
             body: JSON.stringify({
               endpoints: [{ url: "http://192.168.1.10:48090", transport: "lan" }],
+              appVersion: "1.6.4",
             }),
           })
         ).status,
       ).toBe(200);
+      const [updatedHost] = await db.select().from(hosts).where(eq(hosts.id, host.id));
+      expect(updatedHost?.appVersion).toBe("1.6.4");
       const authorization = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
         headers: { authorization: `HostProof ${valid}` },
       });

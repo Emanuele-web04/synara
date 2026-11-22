@@ -31,6 +31,18 @@ export const WS_COMPATIBILITY_QUERY = {
   serverInstanceId: "x-synara-server-instance",
 } as const;
 
+/**
+ * Feature-socket query flag by which a client declares it sits next to the backend (the
+ * desktop app on the backend it spawned) and wants no permessage-deflate: compressing a
+ * multi-megabyte snapshot only adds latency over loopback. It can only remove
+ * compression; authentication, admission and payload limits do not read it. Servers
+ * that predate it ignore it, and clients that omit it keep compression.
+ */
+export const WS_FEATURE_UNCOMPRESSED_QUERY = {
+  name: "x-synara-uncompressed",
+  value: "1",
+} as const;
+
 export const WS_NEGOTIATE_QUERY = {
   clientBuild: "x-synara-client-build",
   protocolEpoch: "x-synara-protocol-epoch",

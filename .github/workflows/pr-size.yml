@@ -12,11 +12,16 @@ permissions:
   contents: read
 
 jobs:
-  prepare-config:
-    name: Prepare PR size config
+  label:
+    name: Label PR size
     runs-on: ubuntu-24.04
-    outputs:
-      labels_json: ${{ steps.config.outputs.labels_json }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    concurrency:
+      group: pr-size-${{ github.event.pull_request.number || 'rollout' }}
+      cancel-in-progress: true
     steps:
       - id: config
         name: Build PR size label config
@@ -58,18 +63,11 @@ jobs:
             ];
 
             core.setOutput("labels_json", JSON.stringify(managedLabels));
-  sync-label-definitions:
-    name: Sync PR size label definitions
-    needs: prepare-config
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      issues: write
-    steps:
+
       - name: Ensure PR size labels exist
         uses: actions/github-script@v8
         env:
-          PR_SIZE_LABELS_JSON: ${{ needs.prepare-config.outputs.labels_json }}
+          PR_SIZE_LABELS_JSON: ${{ steps.config.outputs.labels_json }}
         with:
           script: |
             const managedLabels = JSON.parse(process.env.PR_SIZE_LABELS_JSON ?? "[]");
@@ -114,22 +112,11 @@ jobs:
                 }
               }
             }
-  label:
-    name: Label PR size
-    needs: [prepare-config, sync-label-definitions]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    concurrency:
-      group: pr-size-${{ github.event.pull_request.number || 'rollout' }}
-      cancel-in-progress: true
-    steps:
+
       - name: Sync PR size labels
         uses: actions/github-script@v8
         env:
-          PR_SIZE_LABELS_JSON: ${{ needs.prepare-config.outputs.labels_json }}
+          PR_SIZE_LABELS_JSON: ${{ steps.config.outputs.labels_json }}
         with:
           script: |
             const { owner, repo } = context.repo;

@@ -373,9 +373,15 @@ export type HostKeyRegistry = {
     authorization: string | undefined | null,
     hostId: string,
     endpoints: readonly AccountHostEndpoint[],
+    appVersion?: string,
   ): Promise<AccountHost>;
   unlink(hostId: string): Promise<AccountHost>;
   unlinkWithProof(authorization: string | undefined | null, hostId: string): Promise<AccountHost>;
+  /**
+   * Maintenance: retires a bounded batch of old Remote 1.0.6 host identities
+   * that have a recent replacement or a long-idle managed tunnel.
+   */
+  retireStaleHosts(): Promise<{ superseded: number; abandoned: number }>;
 };
 
 export type DeviceRegistry = {
