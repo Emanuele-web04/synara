@@ -1957,13 +1957,15 @@ const make = Effect.gen(function* () {
 
   const cardAction: BotServiceShape["cardAction"] = (input) =>
     Effect.gen(function* () {
-      yield* requireAvailable;
+      // "Not now" starts nothing, so it needs no entitlement; every other answer starts or
+      // accepts work. Refuse those before reading the card at all.
+      const dismissing = DISMISS_OPTION_IDS.has(input.optionId);
+      yield* dismissing ? requireAvailable : requireEnabled;
       const { card, resolved } = yield* findCard(input.threadId, input.cardId);
       if (resolved) return yield* Effect.fail(fail("This card was already answered.", "conflict"));
       const option = card.options.find((entry) => entry.id === input.optionId);
       if (!option) return yield* Effect.fail(fail("Unknown answer.", "invalid"));
-      // "Not now" starts nothing; every other answer starts or accepts work.
-      if (option.tone !== "dismiss") yield* requireEnabled;
+      if (dismissing && option.tone !== "dismiss") yield* requireEnabled;
       const createdBotIds: ProjectId[] = [];
       switch (card.kind) {
         case "bot-suggestions":
