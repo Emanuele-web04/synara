@@ -25,7 +25,13 @@ const LOG_PATH = nodePath.join(STATE_DIR, "log.ndjson");
 export type Step =
   | { readonly say: string }
   | { readonly think: string }
-  | { readonly tool: string; readonly args?: unknown; readonly saveAs?: string }
+  | {
+      readonly tool: string;
+      readonly args?: unknown;
+      readonly saveAs?: string;
+      /** Call it on Synara's gateway even when the gateway did not offer it (a tamper attempt). */
+      readonly force?: boolean;
+    }
   | { readonly sleepMs: number }
   | { readonly stop: "end_turn" | "refusal" | "max_tokens" | "cancelled" }
   | { readonly error: string };
@@ -372,7 +378,13 @@ export function startFakeAgent(options: {
             const toolCallId = `${state.id}-tool-${Date.now()}-${toolCounter}`;
             state.clients ??= connectMcp(state.mcpServers);
             const clients = await state.clients;
-            const found = await findTool(clients, step.tool);
+            const offered = await findTool(clients, step.tool);
+            const gateway = clients.find((c) => c.name.toLowerCase().includes("synara"));
+            const found =
+              offered ??
+              (step.force && gateway
+                ? { server: gateway.name, client: gateway.client, toolName: step.tool }
+                : undefined);
             await update({
               sessionUpdate: "tool_call",
               toolCallId,
@@ -400,7 +412,12 @@ export function startFakeAgent(options: {
               });
               continue;
             }
-            log("tool", { sessionId: state.id, tool: found.toolName, args: step.args ?? {} });
+            log("tool", {
+              sessionId: state.id,
+              tool: found.toolName,
+              args: step.args ?? {},
+              ...(offered ? {} : { forced: true }),
+            });
             let result: unknown;
             let failed = false;
             try {

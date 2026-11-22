@@ -1,18 +1,22 @@
 // Starts an isolated Synara (server + web dev server) for SynBot scenarios.
 //
-//   node start-app.ts <webPort>
+//   node start-app.ts <webPort> [--stable]
 //
 // Everything lives under `.scenario/`, recreated on every start: a scratch HOME (bot folders go to
 // ~/Documents/Synara/Groups), SYNARA_HOME, a disposable git repo that becomes the first project, and
 // the fake agent's script/log folder. Every provider but Grok is disabled and Grok's binary is the
 // scripted fake agent, so no real model can run.
+//
+// `--stable` starts the Stable desktop flavor instead, in its own folder (`STABLE` in paths.ts),
+// with a local fake Account API (fake-account.ts) whose address goes to `<state>/account.json`.
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import * as nodeFs from "node:fs";
 import * as nodeNet from "node:net";
 import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEMO_REPO, HOME, RUN_DIR, STATE_DIR, SYNARA_HOME } from "./paths.ts";
+import { startFakeAccount } from "./fake-account.ts";
+import { RUN_DIR, STABLE, runPaths } from "./paths.ts";
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const REPO = nodePath.resolve(HERE, "../..");
@@ -41,8 +45,11 @@ const write = (file: string, contents: string) => {
   nodeFs.writeFileSync(file, contents);
 };
 
+const STABLE_MODE = process.argv.includes("--stable");
+const { DEMO_REPO, HOME, STATE_DIR, SYNARA_HOME } = STABLE_MODE ? STABLE : runPaths(RUN_DIR);
+
 function prepare() {
-  nodeFs.rmSync(RUN_DIR, { recursive: true, force: true });
+  nodeFs.rmSync(STABLE_MODE ? STABLE.RUN_DIR : RUN_DIR, { recursive: true, force: true });
   for (const dir of [HOME, SYNARA_HOME, STATE_DIR, DEMO_REPO]) {
     nodeFs.mkdirSync(dir, { recursive: true });
   }
@@ -119,6 +126,16 @@ async function main() {
   const baseEnv = { ...process.env };
   delete baseEnv.SYNARA_AUTH_TOKEN;
   delete baseEnv.SYNARA_DESKTOP_BUNDLE_ID;
+  delete baseEnv.SYNARA_ACCOUNT_URL;
+  let stableEnv: Record<string, string> = {};
+  if (STABLE_MODE) {
+    const fakeAccount = await startFakeAccount(LOOPBACK, await freePort());
+    write(nodePath.join(STATE_DIR, "account.json"), JSON.stringify({ url: fakeAccount.url }));
+    stableEnv = {
+      SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara",
+      SYNARA_ACCOUNT_URL: fakeAccount.url,
+    };
+  }
 
   const server = spawn("bun", [nodePath.join(REPO, "apps/server/src/index.ts")], {
     cwd: DEMO_REPO,
@@ -134,6 +151,7 @@ async function main() {
       VITE_DEV_SERVER_URL: `http://${LOOPBACK}:${webPort}`,
       SYNBOT_FAKE_STATE_DIR: STATE_DIR,
       SYNBOT_NODE: process.execPath,
+      ...stableEnv,
     },
   });
   children.push(server);
