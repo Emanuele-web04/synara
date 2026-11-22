@@ -106,7 +106,10 @@ export const test = base.extend<{ synbot: Synbot }>({
       localStorage.setItem("synara:tasks-onboarding:v1", "seen");
     }, WORKTREES_DIR as never);
     nodeFs.mkdirSync(STATE_DIR, { recursive: true });
-    nodeFs.rmSync(LOG_PATH, { force: true });
+    // Keep the previous test's log next to it for debugging; every test starts a fresh one.
+    if (nodeFs.existsSync(LOG_PATH)) {
+      nodeFs.renameSync(LOG_PATH, nodePath.join(STATE_DIR, `log-${Date.now()}.ndjson`));
+    }
     nodeFs.writeFileSync(SCRIPT_PATH, JSON.stringify({ rules: [], fallback: [{ say: "SILENT" }] }));
 
     await app.open("/");
@@ -162,7 +165,11 @@ export const test = base.extend<{ synbot: Synbot }>({
           if (Date.now() > deadline) {
             throw new Error(
               `fake agent log never showed ${count} matching entr${count === 1 ? "y" : "ies"}; ` +
-                `last entries: ${JSON.stringify(readLog().slice(-8))}`,
+                `last entries: ${JSON.stringify(
+                  readLog()
+                    .slice(-8)
+                    .map((entry) => ({ ...entry, text: entry.text?.slice(-300) })),
+                )}`,
             );
           }
           await sleep(250);

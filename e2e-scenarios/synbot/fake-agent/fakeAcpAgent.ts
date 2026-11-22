@@ -340,7 +340,9 @@ export function startFakeAgent(options: {
           cwd: state.cwd,
           rule,
           length: text.length,
-          text: text.slice(-6000),
+          // The whole prompt: a bot's "You are <name>" line comes first, and the roster after it
+          // grows with every bot, so a clipped prompt would hide whose turn it is.
+          text,
         });
         log("rule", { sessionId: state.id, rule });
         const scope: Record<string, unknown> = { prompt: text, cwd: state.cwd, match, saved: {} };
