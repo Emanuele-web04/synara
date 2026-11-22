@@ -2482,7 +2482,11 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         targetThread.parentThreadId === null &&
         (targetThread.claudeCacheReview != null ||
           (isThreadRunning &&
-            (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
+            (dispatchMode === "queue" ||
+              !providerSupportsNativeTurnSteering(
+                activeProvider,
+                targetThread.session?.supportsNativeTurnSteering,
+              ))));
       const snoozeEvents: Array<Omit<OrchestrationEvent, "sequence">> =
         (command.dispatchOrigin ?? "user") === "user" &&
         (targetThread.snoozedUntil != null || targetThread.snoozeReminderAt != null)

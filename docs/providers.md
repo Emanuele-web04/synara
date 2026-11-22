@@ -321,6 +321,10 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+Antigravity uses the active ACP session's model catalog when available. Its model picker keeps
+planner IDs distinct and shows the thinking levels each model advertises. Older runtimes use
+the CLI catalog. A saved planner that the session no longer offers requires a new selection.
+
 OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
 model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
 selection that the runtime does not advertise requires an explicit model choice; Synara does
@@ -459,7 +463,14 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+Antigravity shows native questions in the composer, including in Full Access. For ACP
+sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
+session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
+
 ### Provider-native subagents
+
+Antigravity shows native launch roles and prompts in the transcript. Child details appear when
+the active provider profile records that the child belongs to that launch.
 
 Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
 brief, and any later message its launcher sends it on resume, opens the child thread as a
