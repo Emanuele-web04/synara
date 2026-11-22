@@ -8,7 +8,7 @@
 // Layer: SynBot UI (route component for /synbot)
 // Exports: default SynbotPage
 
-import { ThreadId } from "@synara/contracts";
+import { BOT_MASCOT_COLORS, ThreadId } from "@synara/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -30,7 +30,7 @@ import { Badge } from "../../ui/badge";
 import { BotSheetHost } from "../editor/BotSheet";
 import { useBotEditor } from "../editor/botEditorStore";
 import { CapsuleButton } from "../kit/controls";
-import { GhostMark } from "../kit/Mascot";
+import { BotMascot } from "../kit/Mascot";
 import { TaskPane } from "../thread/TaskPane";
 import { ThreadPane } from "../thread/ThreadPane";
 import "../kit/holobot.css";
@@ -63,7 +63,7 @@ function SynbotAltoGate() {
   return (
     <div className="synbot-shell__state">
       <div className="synbot-shell__alto">
-        <GhostMark size={48} mood="idle" />
+        <BotMascot shape="synara" color={BOT_MASCOT_COLORS[0]} size={48} mood="idle" />
         <div className="synbot-shell__alto-title">
           <h2 className="text-ui-lg font-medium text-foreground">{t("synbot:altoTitle")}</h2>
           <Badge variant="secondary" size="sm">
