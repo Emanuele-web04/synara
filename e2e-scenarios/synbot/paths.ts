@@ -23,3 +23,9 @@ export const { STATE_DIR, DEMO_REPO, HOME, SYNARA_HOME, WORKTREES_DIR } = runPat
 
 /** The Stable gate run (e2e.stable.config.ts) keeps its own state next to the default run's. */
 export const STABLE = runPaths(`${RUN_DIR}-stable`);
+
+/** The Beta flavor run (e2e.beta.config.ts). */
+export const BETA = runPaths(`${RUN_DIR}-beta`);
+
+/** The run against a host without SynBot (e2e.old-host.config.ts). */
+export const OLD_HOST = runPaths(`${RUN_DIR}-old-host`);
