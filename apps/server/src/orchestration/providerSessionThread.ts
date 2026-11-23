@@ -22,6 +22,11 @@ export function resolveProviderSessionThread(
     const visited = new Set<ThreadId>();
     while (thread && !visited.has(thread.id)) {
       visited.add(thread.id);
+      // A fusion sidekick shares the lead's checkout, never its provider
+      // session: without this it would resolve to the busy parent before its
+      // own session exists, and its first turn would park behind the lead's
+      // live turn (the lead is waiting on it — deadlock).
+      if (thread.creationSource === "fusion_sidekick") return thread;
       const synthetic = thread.id.startsWith("subagent:");
       if (!synthetic && thread.session) return thread;
       const parent = thread.parentThreadId

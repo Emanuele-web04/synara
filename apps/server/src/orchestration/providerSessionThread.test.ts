@@ -102,3 +102,26 @@ it("routes nested synthetic children through all sessionless ancestors", async (
   } as unknown as ProjectionSnapshotQueryShape;
   expect(await Effect.runPromise(resolveProviderSessionThread(query, inner.id))).toBe(root);
 });
+
+it("keeps a sessionless fusion sidekick on its own provider session", async () => {
+  const lead = {
+    id: "lead",
+    parentThreadId: null,
+    session: { providerName: "devin" },
+  } as unknown as OrchestrationThreadShell;
+  const sidekick = {
+    id: "fusion-sidekick:abc",
+    parentThreadId: lead.id,
+    session: null,
+    creationSource: "fusion_sidekick",
+  } as OrchestrationThreadShell;
+  const rows = new Map([
+    [lead.id, lead],
+    [sidekick.id, sidekick],
+  ]);
+  const query = {
+    getThreadShellById: (id: ThreadId) => Effect.succeed(Option.fromNullishOr(rows.get(id))),
+    findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
+  } as unknown as ProjectionSnapshotQueryShape;
+  expect(await Effect.runPromise(resolveProviderSessionThread(query, sidekick.id))).toBe(sidekick);
+});

@@ -2257,7 +2257,8 @@ const make = Effect.gen(function* () {
     if (
       projected !== null &&
       (projected.id !== threadId ||
-        (!projected.parentThreadId && !threadId.startsWith("subagent:")))
+        (!projected.parentThreadId && !threadId.startsWith("subagent:")) ||
+        projected.creationSource === "fusion_sidekick")
     )
       return projected;
 
@@ -2274,7 +2275,7 @@ const make = Effect.gen(function* () {
       (yield* projectionSnapshotQuery.threadIdExistsIncludingDeleted(threadId))
     )
       return null;
-    if (thread?.parentThreadId) {
+    if (thread?.parentThreadId && thread.creationSource !== "fusion_sidekick") {
       const parent =
         Option.getOrNull(
           yield* projectionSnapshotQuery.getThreadShellById(thread.parentThreadId),
