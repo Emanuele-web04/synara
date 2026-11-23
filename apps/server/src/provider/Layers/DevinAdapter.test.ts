@@ -2208,7 +2208,20 @@ describe("resolveRequestedModeId", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
-  it("maps auto to Ask when the local Auto gate is enabled", async () => {
+  it("maps auto to Accept Edits when the local Auto gate is enabled", async () => {
+    // Devin's Ask mode makes the agent read-only (no request_permission
+    // traffic), so the local gate must not select it; Accept Edits surfaces
+    // every non-edit action for local scoring instead.
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "bypass", availableModes: devin300067Modes },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+          autoEngine: "local",
+        }),
+      ),
+    ).resolves.toBe("accept-edits");
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2218,32 +2231,26 @@ describe("resolveRequestedModeId", () => {
           autoEngine: "local",
         }),
       ),
-    ).resolves.toBe("ask");
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: { currentModeId: "ask", availableModes: devin300067Modes },
-          runtimeMode: "auto",
-          interactionMode: undefined,
-          autoEngine: "local",
-        }),
-      ),
     ).resolves.toBeUndefined();
-    // Without Ask, fall back to Accept Edits, then Smart — still surfacing
-    // actions to the local gate.
+    // Ask is never selected under the local gate, even when it is the only
+    // non-bypass mode besides Smart.
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
           modeState: {
             currentModeId: "bypass",
-            availableModes: devin300067Modes.filter((mode) => mode.id !== "ask"),
+            availableModes: [
+              { id: "ask", name: "Ask" },
+              { id: "smart", name: "Smart" },
+              { id: "bypass", name: "Full Access" },
+            ],
           },
           runtimeMode: "auto",
           interactionMode: undefined,
           autoEngine: "local",
         }),
       ),
-    ).resolves.toBe("accept-edits");
+    ).resolves.toBe("smart");
     // approval-required is unaffected by the engine setting.
     await expect(
       Effect.runPromise(

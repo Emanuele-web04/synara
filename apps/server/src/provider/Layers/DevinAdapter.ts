@@ -805,9 +805,10 @@ function findModeByWholeTokenAliases(
   });
 }
 
-// When the local Auto gate owns approvals, Devin's Ask mode surfaces every
-// action to Synara instead of Devin's own classifier deciding.
-const ACP_ASK_MODE_ALIASES = ["ask everytime", "ask every time", "ask"] as const;
+// When the local Auto gate owns approvals, Devin's Ask mode is NOT usable: it
+// makes the agent read-only (no write/exec tools, no request_permission
+// traffic), so the gate would starve. Accept Edits is the most permissive mode
+// that still surfaces every non-edit action to Synara for local scoring.
 
 export function resolveRequestedModeId(input: {
   readonly modeState: AcpSessionModeState | undefined;
@@ -843,13 +844,19 @@ export function resolveRequestedModeId(input: {
       interactionMode === "plan"
         ? findModeByExactNormalizedAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)
         : runtimeMode === "auto" && autoEngine === "local"
-          ? // The Synara gate decides locally: surface as much as possible.
-            // Ask first (everything prompts), then Accept Edits, then Smart —
-            // each step only narrows what reaches the gate, never widens it.
-            (findModeByExactNormalizedAliases(modeState.availableModes, ACP_ASK_MODE_ALIASES) ??
-            findModeByExactNormalizedAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES) ??
+          ? // The Synara gate decides locally: surface as much as possible
+            // without starving the agent. Accept Edits prompts for every
+            // non-edit action; Ask is skipped because Devin treats it as
+            // read-only (verified on devin 3000.14: no request_permission
+            // traffic at all). Smart is the last fallback — its native
+            // classifier eats routine calls before the gate sees them.
+            (findModeByExactNormalizedAliases(
+              modeState.availableModes,
+              ACP_APPROVAL_MODE_ALIASES,
+            ) ??
+            findModeByWholeTokenAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES) ??
             findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
-            findModeByWholeTokenAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES))
+            findModeByWholeTokenAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES))
           : runtimeMode !== "full-access"
             ? // Smart first for both approval-required and auto (Devin's native
               // Auto), then the prompt-heavier Accept Edits fallbacks. Each step
