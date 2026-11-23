@@ -7,127 +7,7 @@
 //             and the shared path basename helper (file-icons).
 
 import { basenameOfPath } from "../file-icons";
-
-// Lightweight filename/extension -> Shiki language map so ChatMarkdown does not
-// eagerly pull `@pierre/diffs` into the initial chat bundle.
-const FILENAME_TO_LANGUAGE: Readonly<Record<string, string>> = {
-  dockerfile: "dockerfile",
-  makefile: "makefile",
-  gnumakefile: "makefile",
-  gemfile: "ruby",
-  rakefile: "ruby",
-  podfile: "ruby",
-  vagrantfile: "ruby",
-  cmakelists: "cmake",
-  "cmakelists.txt": "cmake",
-  ".gitignore": "ini",
-  ".gitattributes": "ini",
-  ".gitmodules": "ini",
-  ".env": "dotenv",
-  ".bashrc": "bash",
-  ".zshrc": "bash",
-  ".profile": "bash",
-  "package.json": "json",
-  "tsconfig.json": "jsonc",
-  "cargo.toml": "toml",
-  "go.mod": "go",
-};
-
-const EXTENSION_TO_LANGUAGE: Readonly<Record<string, string>> = {
-  ts: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  tsx: "tsx",
-  js: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  jsx: "jsx",
-  json: "json",
-  jsonc: "jsonc",
-  json5: "json5",
-  py: "python",
-  pyi: "python",
-  rb: "ruby",
-  rs: "rust",
-  go: "go",
-  java: "java",
-  kt: "kotlin",
-  kts: "kotlin",
-  swift: "swift",
-  c: "c",
-  h: "c",
-  cc: "cpp",
-  cpp: "cpp",
-  cxx: "cpp",
-  hpp: "cpp",
-  hh: "cpp",
-  cs: "csharp",
-  php: "php",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
-  fish: "fish",
-  ps1: "powershell",
-  sql: "sql",
-  html: "html",
-  htm: "html",
-  xml: "xml",
-  svg: "xml",
-  css: "css",
-  scss: "scss",
-  sass: "sass",
-  less: "less",
-  md: "markdown",
-  mdx: "mdx",
-  yml: "yaml",
-  yaml: "yaml",
-  toml: "toml",
-  ini: "ini",
-  cfg: "ini",
-  conf: "ini",
-  env: "dotenv",
-  graphql: "graphql",
-  gql: "graphql",
-  vue: "vue",
-  svelte: "svelte",
-  astro: "astro",
-  lua: "lua",
-  r: "r",
-  dart: "dart",
-  ex: "elixir",
-  exs: "elixir",
-  erl: "erlang",
-  hs: "haskell",
-  scala: "scala",
-  clj: "clojure",
-  ml: "ocaml",
-  zig: "zig",
-  nim: "nim",
-  tf: "hcl",
-  hcl: "hcl",
-  proto: "protobuf",
-  prisma: "prisma",
-  diff: "diff",
-  patch: "diff",
-  tex: "latex",
-  vim: "viml",
-  m: "objective-c",
-  mm: "objective-cpp",
-  dockerfile: "dockerfile",
-};
-
-export function resolveLanguageFromFileName(fileName: string): string {
-  const lower = fileName.toLowerCase();
-  const exact = FILENAME_TO_LANGUAGE[lower];
-  if (exact) return exact;
-  const dot = lower.lastIndexOf(".");
-  if (dot > 0 && dot < lower.length - 1) {
-    const ext = lower.slice(dot + 1);
-    const mapped = EXTENSION_TO_LANGUAGE[ext];
-    if (mapped) return mapped;
-  }
-  return "text";
-}
+import { resolveLanguageFromFileName } from "./fileLanguageMap";
 
 export interface CodeFenceInfo {
   /** Highlighter language id (a valid Shiki language/alias, falling back to "text"). */
@@ -153,6 +33,8 @@ function directoryFromPath(filePath: string, fileName: string): string | null {
 function fileReferenceInfo(filePath: string, lineRange: string | null): CodeFenceInfo {
   const fileName = basenameOfPath(filePath);
   return {
+    // Same filename→language map as the diff renderer, so chat code references
+    // and diff views resolve languages identically; unknown extensions yield "text".
     language: resolveLanguageFromFileName(fileName),
     isFileReference: true,
     filePath,

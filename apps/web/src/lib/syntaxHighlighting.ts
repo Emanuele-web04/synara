@@ -6,7 +6,7 @@
 import type { DiffsHighlighter, SupportedLanguages } from "@pierre/diffs";
 
 import { basenameOfPath } from "../file-icons";
-import { resolveLanguageFromFileName } from "./codeFence";
+import { resolveLanguageFromFileName } from "./fileLanguageMap";
 import { fnv1a32, resolveDiffThemeName, type DiffThemeName } from "./diffTheme";
 import { LRUCache } from "./lruCache";
 

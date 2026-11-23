@@ -67,19 +67,35 @@ export function useComposerSingleRow(input: {
   predictionRef.current = prediction;
   const singleRowRef = useRef(singleRow);
   singleRowRef.current = singleRow;
-  const syncRef = useRef<(() => void) | null>(null);
+  // The editor and surface currently measured, with the observer watching them.
+  const attachmentRef = useRef<{
+    readonly form: HTMLFormElement;
+    readonly editor: HTMLElement;
+    readonly surface: HTMLElement;
+    readonly observer: ResizeObserver | null;
+    readonly sync: () => void;
+  } | null>(null);
 
+  // Runs after every commit, because the composer form can mount after this hook's
+  // host (the pane content renders late) or be replaced without any measured input
+  // changing. The steady state is an identity check; the DOM is only queried, and the
+  // observer only rebuilt, when the form or its editor actually changed.
   useLayoutEffect(() => {
-    if (!eligible) {
-      syncRef.current = null;
+    const attached = attachmentRef.current;
+    const form = eligible ? formRef.current : null;
+    if (
+      attached !== null &&
+      attached.form === form &&
+      attached.editor.isConnected &&
+      attached.surface.isConnected
+    ) {
       return;
     }
-    const editor = formRef.current?.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    attached?.observer?.disconnect();
+    attachmentRef.current = null;
+    const editor = form?.querySelector<HTMLElement>(EDITOR_SELECTOR);
     const surface = editor?.closest<HTMLElement>(SURFACE_SELECTOR);
-    if (!editor || !surface) {
-      syncRef.current = null;
-      return;
-    }
+    if (!form || !editor || !surface) return;
     const sync = () => {
       const currentPrompt = promptRef.current;
       const currentPrediction = predictionRef.current;
@@ -113,27 +129,33 @@ export function useComposerSingleRow(input: {
       const lineWidth = ghost ? measureLineWidth(ghost, ghost) : measureDraftLineWidth(editor);
       setFits(lineWidth <= slotWidth - SLOT_FIT_MARGIN_PX);
     };
-    syncRef.current = sync;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            cachedLineHeightByElement.delete(editor);
+            sync();
+          });
+    observer?.observe(editor);
+    observer?.observe(surface);
+    attachmentRef.current = { form, editor, surface, observer, sync };
     sync();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      cachedLineHeightByElement.delete(editor);
-      sync();
-    });
-    observer.observe(editor);
-    observer.observe(surface);
-    return () => {
-      observer.disconnect();
-      if (syncRef.current === sync) {
-        syncRef.current = null;
-      }
-    };
-  }, [eligible, formRef]);
+  });
 
+  // Re-measure when the draft, the suggestion or the layout changes; the observer
+  // above covers size changes that happen without any of them changing.
   useLayoutEffect(() => {
     if (!eligible) return;
-    syncRef.current?.();
+    attachmentRef.current?.sync();
   }, [eligible, prediction, prompt, singleRow]);
+
+  useLayoutEffect(
+    () => () => {
+      attachmentRef.current?.observer?.disconnect();
+      attachmentRef.current = null;
+    },
+    [],
+  );
 
   return singleRow;
 }

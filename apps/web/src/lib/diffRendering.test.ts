@@ -473,6 +473,76 @@ describe("fileDiffStatsByPath", () => {
       ]),
     );
   });
+
+  it("counts removed and added lines that look like file headers", () => {
+    const patch = [
+      "diff --git a/db/schema.sql b/db/schema.sql",
+      "index 1111111..2222222 100644",
+      "--- a/db/schema.sql",
+      "+++ b/db/schema.sql",
+      "@@ -1,4 +1,4 @@",
+      " CREATE TABLE users (id INTEGER);",
+      // A removed SQL comment "-- drop legacy index" and an added "++ counter".
+      "--- drop legacy index",
+      "-DROP INDEX users_legacy;",
+      "+++ counter",
+      "+CREATE INDEX users_id ON users (id);",
+      " -- end",
+      "diff --git a/src/two.ts b/src/two.ts",
+      "index 3333333..4444444 100644",
+      "--- a/src/two.ts",
+      "+++ b/src/two.ts",
+      "@@ -1 +1 @@",
+      "-const two = 1;",
+      "+const two = 2;",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([
+        ["db/schema.sql", { additions: 2, deletions: 2 }],
+        ["src/two.ts", { additions: 1, deletions: 1 }],
+      ]),
+    );
+  });
+
+  it("separates files that have no diff --git line", () => {
+    const patch = [
+      "--- a/one.txt",
+      "+++ b/one.txt",
+      "@@ -1,2 +1,2 @@",
+      " keep",
+      "-old",
+      "+new",
+      "--- a/two.txt",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-first",
+      "-second",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([
+        ["one.txt", { additions: 1, deletions: 1 }],
+        ["two.txt", { additions: 0, deletions: 2 }],
+      ]),
+    );
+  });
+
+  it("still counts a hunk whose header understates its body", () => {
+    const patch = [
+      "--- a/one.txt",
+      "+++ b/one.txt",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "+extra line the header did not announce",
+      "\\ No newline at end of file",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([["one.txt", { additions: 2, deletions: 1 }]]),
+    );
+  });
 });
 
 describe("resolveFileDiffStatByChangedPath", () => {

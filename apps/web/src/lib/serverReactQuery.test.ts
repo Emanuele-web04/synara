@@ -4,7 +4,7 @@
 
 import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   hasReconciledServerProviderStatuses,
@@ -12,22 +12,40 @@ import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
+  serverConfigQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   serverRecapQueryOptions,
+  serverSettingsQueryOptions,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
 
 const nativeApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn<() => Promise<ServerConfig>>(),
+  getSettings: vi.fn<() => Promise<unknown>>(),
   getRecap: vi.fn(),
 }));
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
-    server: { getConfig: nativeApiMocks.getConfig },
+    server: { getConfig: nativeApiMocks.getConfig, getSettings: nativeApiMocks.getSettings },
     stats: { getRecap: nativeApiMocks.getRecap },
   }),
 }));
+const streamSnapshotMocks = vi.hoisted(() => ({
+  readLatestServerConfigSnapshot: vi.fn<() => ServerConfig | null>(),
+  waitForInitialServerConfigSnapshot: vi.fn<() => Promise<ServerConfig | null> | null>(),
+  readLatestServerSettingsSnapshot: vi.fn<() => unknown>(),
+  waitForInitialServerSettingsSnapshot: vi.fn<() => Promise<unknown> | null>(),
+}));
+vi.mock("~/wsNativeApi", () => streamSnapshotMocks);
+
+beforeEach(() => {
+  // No transport by default, as in the suites below that never open one.
+  streamSnapshotMocks.readLatestServerConfigSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.readLatestServerSettingsSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.waitForInitialServerSettingsSnapshot.mockReset().mockReturnValue(null);
+});
 
 const READY_CODEX_STATUS = {
   provider: "codex",
@@ -517,6 +535,53 @@ describe("server provider status reconciliation", () => {
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
     ]);
+  });
+});
+
+describe("server config and settings boot snapshots", () => {
+  it("seeds an empty config cache from the boot snapshot without a server read", async () => {
+    nativeApiMocks.getConfig.mockReset();
+    const snapshot = makeServerConfig([READY_CODEX_STATUS]);
+    streamSnapshotMocks.readLatestServerConfigSnapshot.mockReturnValue(snapshot);
+    const queryClient = new QueryClient();
+
+    const config = await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    expect(config.providers).toEqual([READY_CODEX_STATUS]);
+    expect(nativeApiMocks.getConfig).not.toHaveBeenCalled();
+  });
+
+  it("reads the config from the server when a hydrated cache is invalidated", async () => {
+    const snapshot = makeServerConfig([{ ...READY_CODEX_STATUS, status: "warning" }]);
+    streamSnapshotMocks.readLatestServerConfigSnapshot.mockReturnValue(snapshot);
+    nativeApiMocks.getConfig.mockReset().mockResolvedValue(makeServerConfig([READY_CODEX_STATUS]));
+    const queryClient = new QueryClient();
+    await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    // The snapshot is the server's state at subscribe time; the refetch must
+    // not write it back over whatever changed since.
+    await queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    const refreshed = await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
+    expect(refreshed.providers).toEqual([READY_CODEX_STATUS]);
+  });
+
+  it("reads settings from the server when a hydrated cache is invalidated", async () => {
+    streamSnapshotMocks.readLatestServerSettingsSnapshot.mockReturnValue({ source: "stream" });
+    nativeApiMocks.getSettings.mockReset().mockResolvedValue({ source: "server" });
+    const queryClient = new QueryClient();
+
+    expect(await queryClient.fetchQuery(serverSettingsQueryOptions())).toEqual({
+      source: "stream",
+    });
+    expect(nativeApiMocks.getSettings).not.toHaveBeenCalled();
+
+    await queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+    expect(await queryClient.fetchQuery(serverSettingsQueryOptions())).toEqual({
+      source: "server",
+    });
+    expect(nativeApiMocks.getSettings).toHaveBeenCalledTimes(1);
   });
 });
 

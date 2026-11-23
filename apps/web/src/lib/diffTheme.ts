@@ -123,8 +123,18 @@ function stripPatchHeaderPath(rawHeaderValue: string): string | null {
   return unquoted;
 }
 
+const HUNK_HEADER_PATTERN = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+const PLUS = 43;
+const MINUS = 45;
+const SPACE = 32;
+const BACKSLASH = 92;
+
 // Pure unified-diff line counter so transcript work rows can compute +N/-M stats
 // without eagerly importing `@pierre/diffs` into the initial chat bundle.
+//
+// Hunk bodies are consumed by the line counts in their `@@` header, not by
+// prefix: a removed line whose text starts with "-- " reads "--- ..." in the
+// patch and an added "++ ..." reads "+++ ...", exactly like file headers.
 export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
   const stats = new Map<string, FileDiffStat>();
   if (!patch) {
@@ -139,8 +149,11 @@ export function fileDiffStatsByPath(patch: string | undefined): Map<string, File
   let currentPath: string | null = null;
   let additions = 0;
   let deletions = 0;
-  let inHunk = false;
+  let sawHunk = false;
   let hasFileEntry = false;
+  // Lines the current hunk still owes on each side, from its header.
+  let oldRemaining = 0;
+  let newRemaining = 0;
 
   const flushCurrent = () => {
     const resolvedPath = currentPath ?? currentOldPath;
@@ -157,8 +170,38 @@ export function fileDiffStatsByPath(patch: string | undefined): Map<string, File
     currentPath = null;
     additions = 0;
     deletions = 0;
-    inHunk = false;
+    sawHunk = false;
     hasFileEntry = false;
+    oldRemaining = 0;
+    newRemaining = 0;
+  };
+
+  // Returns true when the line belonged to the hunk body the header announced.
+  const consumeCountedHunkLine = (line: string): boolean => {
+    const marker = line.length === 0 ? SPACE : line.charCodeAt(0);
+    if (marker === PLUS && newRemaining > 0) {
+      additions += 1;
+      newRemaining -= 1;
+      return true;
+    }
+    if (marker === MINUS && oldRemaining > 0) {
+      deletions += 1;
+      oldRemaining -= 1;
+      return true;
+    }
+    if (marker === BACKSLASH) {
+      // "\ No newline at end of file" annotates the previous line.
+      return true;
+    }
+    if (marker === SPACE) {
+      if (oldRemaining > 0) oldRemaining -= 1;
+      if (newRemaining > 0) newRemaining -= 1;
+      return true;
+    }
+    // The header's counts do not match the body; read the rest by prefix.
+    oldRemaining = 0;
+    newRemaining = 0;
+    return false;
   };
 
   let lineStart = 0;
@@ -168,26 +211,37 @@ export function fileDiffStatsByPath(patch: string | undefined): Map<string, File
     const rawLine = trimmed.slice(lineStart, lineEnd);
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
 
-    if (line.startsWith("diff --git ")) {
+    const inCountedHunk = oldRemaining > 0 || newRemaining > 0;
+    // No hunk line can start with "diff --git " (context lines are indented).
+    const consumed =
+      inCountedHunk && !line.startsWith("diff --git ") && consumeCountedHunkLine(line);
+    if (consumed) {
+      // Counted above.
+    } else if (line.startsWith("diff --git ")) {
       flushCurrent();
       hasFileEntry = true;
     } else if (line.startsWith("--- ")) {
-      if (inHunk) {
+      if (sawHunk) {
         flushCurrent();
       }
       hasFileEntry = true;
       currentOldPath = stripPatchHeaderPath(line.slice(4));
-      inHunk = false;
     } else if (line.startsWith("+++ ")) {
       hasFileEntry = true;
       currentPath = stripPatchHeaderPath(line.slice(4));
-      inHunk = false;
     } else if (line.startsWith("@@ ")) {
-      inHunk = true;
-    } else if (inHunk) {
-      if (line.startsWith("+") && !line.startsWith("+++ ")) {
+      sawHunk = true;
+      const counts = HUNK_HEADER_PATTERN.exec(line);
+      // A missing count means one line; an unreadable header leaves both at
+      // zero, so that hunk is read by prefix below.
+      oldRemaining = counts ? Number(counts[1] ?? 1) : 0;
+      newRemaining = counts ? Number(counts[2] ?? 1) : 0;
+    } else if (sawHunk) {
+      // Outside a counted body: an unreadable header, or more lines than the
+      // header announced. Headers were ruled out above, so prefix is all we have.
+      if (line.startsWith("+")) {
         additions += 1;
-      } else if (line.startsWith("-") && !line.startsWith("--- ")) {
+      } else if (line.startsWith("-")) {
         deletions += 1;
       }
     }

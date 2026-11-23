@@ -822,15 +822,19 @@ export default function ChatView({
   const crossTaskSourceThread = useStore((state) =>
     crossTaskSourceThreadId ? (state.threadShellById?.[crossTaskSourceThreadId] ?? null) : null,
   );
+  // Read outside the memo: React Compiler infers `crossTaskSourceThread?.modelSelection`
+  // for an in-memo read, which no longer matches the dependency list and makes it skip
+  // optimizing this whole component.
+  const crossTaskSourceProvider = crossTaskSourceThread?.modelSelection.provider ?? null;
   const crossTaskOrigin = useMemo(
     () =>
       crossTaskSourceThreadId
         ? {
             sourceThreadId: crossTaskSourceThreadId,
-            sourceProvider: crossTaskSourceThread?.modelSelection.provider ?? null,
+            sourceProvider: crossTaskSourceProvider,
           }
         : null,
-    [crossTaskSourceThread?.modelSelection.provider, crossTaskSourceThreadId],
+    [crossTaskSourceProvider, crossTaskSourceThreadId],
   );
   const forkSourceThreadId = serverThread?.sidechatSourceThreadId
     ? null

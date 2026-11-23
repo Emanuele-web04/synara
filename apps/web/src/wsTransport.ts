@@ -530,6 +530,9 @@ const SOCKET_OPEN_TIMEOUT_MS = 90_000;
 const SOCKET_SILENCE_TIMEOUT_MS = 180_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 180_000;
 const MAX_STREAM_OVERFLOW_RETRIES = 8;
+// How long a config subscription's opening snapshot may answer in place of a
+// `server.getConfig` round trip. It only needs to cover boot.
+const SERVER_CONFIG_BOOT_SNAPSHOT_MAX_AGE_MS = 10_000;
 
 interface ProtocolLayerHooks {
   readonly onProtocolFailure?: (error: unknown) => void;
@@ -1089,7 +1092,14 @@ export class WsTransport {
     (failure: WsThreadStreamFailure) => void
   >();
   private readonly latestPushByChannel = new Map<string, WsPush>();
+  // The config subscription's opening snapshot. It stands in for the boot
+  // `server.getConfig` only: it is the server's state at subscribe time, so it
+  // stops being offered once a later stream event or its age makes it stale.
   private latestServerConfigSnapshot: ServerConfig | null = null;
+  private latestServerConfigSnapshotAtMs = 0;
+  // True once this session's config stream delivered its first event. After
+  // that no opening snapshot is still on its way, so nothing may wait for one.
+  private serverConfigStreamSettled = false;
   private latestServerSettingsSnapshot: ServerSettingsUpdatedPayload["settings"] | null = null;
   private readonly initialServerConfigWaiters = new Set<(config: ServerConfig | null) => void>();
   private readonly initialServerSettingsWaiters = new Set<
@@ -1115,6 +1125,11 @@ export class WsTransport {
   }
 
   getLatestServerConfigSnapshot(): ServerConfig | null {
+    if (this.latestServerConfigSnapshot === null) return null;
+    if (Date.now() - this.latestServerConfigSnapshotAtMs > SERVER_CONFIG_BOOT_SNAPSHOT_MAX_AGE_MS) {
+      this.latestServerConfigSnapshot = null;
+      return null;
+    }
     return this.latestServerConfigSnapshot;
   }
 
@@ -1123,10 +1138,15 @@ export class WsTransport {
   }
 
   waitForInitialServerConfigSnapshot(timeoutMs = 1500): Promise<ServerConfig | null> | null {
-    if (this.latestServerConfigSnapshot !== null) {
-      return Promise.resolve(this.latestServerConfigSnapshot);
+    const snapshot = this.getLatestServerConfigSnapshot();
+    if (snapshot !== null) {
+      return Promise.resolve(snapshot);
     }
-    if (this.disposed || !this.listeners.has(WS_CHANNELS.serverConfigUpdated)) {
+    if (
+      this.disposed ||
+      this.serverConfigStreamSettled ||
+      !this.listeners.has(WS_CHANNELS.serverConfigUpdated)
+    ) {
       return null;
     }
     return new Promise((resolve) => {
@@ -1788,6 +1808,7 @@ export class WsTransport {
     this.threadStreamFailureListeners.clear();
     this.shellStreamFailureListeners.clear();
     this.latestServerConfigSnapshot = null;
+    this.serverConfigStreamSettled = false;
     this.latestServerSettingsSnapshot = null;
     this.resolveInitialServerConfigWaiters(null);
     this.resolveInitialServerSettingsWaiters(null);
@@ -1878,6 +1899,7 @@ export class WsTransport {
 
   private createSession() {
     this.latestServerConfigSnapshot = null;
+    this.serverConfigStreamSettled = false;
     this.latestServerSettingsSnapshot = null;
     this.resolveInitialServerConfigWaiters(null);
     this.resolveInitialServerSettingsWaiters(null);
@@ -2564,14 +2586,18 @@ export class WsTransport {
             client[WS_METHODS.subscribeServerConfig]({}),
             (event: ServerConfigStreamEvent) => {
               if (event.type === "snapshot") {
+                this.serverConfigStreamSettled = true;
                 this.latestServerConfigSnapshot = event.config;
+                this.latestServerConfigSnapshotAtMs = Date.now();
                 this.resolveInitialServerConfigWaiters(event.config);
                 this.emit(WS_CHANNELS.serverConfigUpdated, {
                   issues: event.config.issues,
                   providers: event.config.providers,
                 });
               } else if (event.type === "configUpdated") {
+                this.serverConfigStreamSettled = true;
                 this.latestServerConfigSnapshot = null;
+                this.resolveInitialServerConfigWaiters(null);
                 this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
               }
             },

@@ -2190,6 +2190,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           updatedAt: event.occurredAt,
         });
       } else if (cursorProjectors.length > 1) {
+        // Same monotonic guard as ProjectionStateRepository.upsert: a re-applied
+        // older event must never move a cursor that is already ahead.
         const rows = cursorProjectors.map((projector) => ({
           projector,
           last_applied_sequence: event.sequence,
@@ -2199,8 +2201,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           INSERT INTO projection_state ${sql.insert(rows)}
           ON CONFLICT (projector)
           DO UPDATE SET
-            last_applied_sequence = excluded.last_applied_sequence,
-            updated_at = excluded.updated_at
+            last_applied_sequence = CASE
+              WHEN excluded.last_applied_sequence > projection_state.last_applied_sequence
+              THEN excluded.last_applied_sequence
+              ELSE projection_state.last_applied_sequence
+            END,
+            updated_at = CASE
+              WHEN excluded.last_applied_sequence >= projection_state.last_applied_sequence
+              THEN excluded.updated_at
+              ELSE projection_state.updated_at
+            END
         `.pipe(
           Effect.asVoid,
           Effect.mapError(

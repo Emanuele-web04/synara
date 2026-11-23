@@ -1575,6 +1575,38 @@ function setCachedImmutableStaticAsset(key: string, entry: CachedImmutableStatic
   immutableStaticAssetCacheBytes += entry.byteLength;
 }
 
+// Immutable asset paths (source or sidecar) that a full lookup found absent.
+// The cache fast path may only skip a client's higher-ranked encoding when it
+// is listed here; an encoding it has never looked up must go through the full
+// lookup, or the first client to fetch an asset would pin its encoding for
+// every later client. This never short-circuits the full lookup itself.
+const IMMUTABLE_STATIC_MISSING_MAX_ENTRIES = 2048;
+const immutableStaticMissingPaths = new Set<string>();
+
+function rememberMissingImmutableStaticPath(servedPath: string): void {
+  if (immutableStaticMissingPaths.size >= IMMUTABLE_STATIC_MISSING_MAX_ENTRIES) {
+    immutableStaticMissingPaths.clear();
+  }
+  immutableStaticMissingPaths.add(servedPath);
+}
+
+function cachedImmutableStaticResponse(
+  cached: CachedImmutableStaticAsset,
+  cacheHeaders: { readonly "Cache-Control": string; readonly Vary: string },
+  ifNoneMatch: string | undefined,
+) {
+  const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
+  const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
+  if (ifNoneMatchSatisfies(ifNoneMatch, cached.etag)) {
+    return HttpServerResponse.empty({ status: 304, headers });
+  }
+  return HttpServerResponse.uint8Array(cached.data, {
+    status: 200,
+    contentType: cached.contentType,
+    headers,
+  });
+}
+
 export const staticAndDevEffectRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -1620,27 +1652,40 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     // symlinks, so a link inside the root pointing outside it would be served.
     // Canonicalize before opening anything. The root itself is canonicalized
     // too, otherwise a symlinked staticDir would fail its own check.
-    let canonicalStaticRoot = canonicalStaticRootCache.get(staticRoot);
-    if (canonicalStaticRoot === undefined) {
-      canonicalStaticRoot = yield* fileSystem
+    // Only a successful canonicalization is remembered: a root that does not
+    // exist yet (or is a symlink that is later retargeted) must not pin a stale
+    // answer that then refuses every file.
+    const canonicalizeStaticRoot = Effect.fn(function* () {
+      const resolved = yield* fileSystem
         .realPath(staticRoot)
-        .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
-      canonicalStaticRootCache.set(staticRoot, canonicalStaticRoot);
-    }
-    const isWithinCanonicalRoot = (candidate: string) =>
-      candidate === canonicalStaticRoot ||
-      candidate.startsWith(
-        canonicalStaticRoot.endsWith(path.sep)
-          ? canonicalStaticRoot
-          : `${canonicalStaticRoot}${path.sep}`,
-      );
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (resolved === null) {
+        canonicalStaticRootCache.delete(staticRoot);
+        return staticRoot;
+      }
+      canonicalStaticRootCache.set(staticRoot, resolved);
+      return resolved;
+    });
+    const isWithinRoot = (root: string, candidate: string) =>
+      candidate === root ||
+      candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
+    const cachedCanonicalStaticRoot = canonicalStaticRootCache.get(staticRoot);
     const resolvesInsideRoot = Effect.fn(function* (candidate: string) {
       const real = yield* fileSystem
         .realPath(candidate)
         .pipe(Effect.catch(() => Effect.succeed(null)));
       // A path that cannot be canonicalized does not exist; the caller's own
       // stat/readFile will fail it, and refusing here keeps 404 semantics.
-      return real === null ? false : isWithinCanonicalRoot(real);
+      if (real === null) return false;
+      if (
+        cachedCanonicalStaticRoot !== undefined &&
+        isWithinRoot(cachedCanonicalStaticRoot, real)
+      ) {
+        return true;
+      }
+      // Cache miss, or the remembered root no longer contains the file: decide
+      // against a freshly canonicalized root before refusing.
+      return isWithinRoot(yield* canonicalizeStaticRoot(), real);
     });
 
     let filePath = path.resolve(staticRoot, relativePath);
@@ -1676,18 +1721,7 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
         if (isImmutableAsset) {
           const cached = getCachedImmutableStaticAsset(servedPath);
-          if (cached) {
-            const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
-            const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
-            if (ifNoneMatchSatisfies(ifNoneMatch, cached.etag)) {
-              return HttpServerResponse.empty({ status: 304, headers });
-            }
-            return HttpServerResponse.uint8Array(cached.data, {
-              status: 200,
-              contentType: cached.contentType,
-              headers,
-            });
-          }
+          if (cached) return cachedImmutableStaticResponse(cached, cacheHeaders, ifNoneMatch);
         }
         // Canonicalize before opening: a symlink inside the root pointing
         // outside it passes the lexical guard but must not be served.
@@ -1695,7 +1729,10 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
         const info = yield* fileSystem
           .stat(servedPath)
           .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!info || info.type !== "File") return null;
+        if (!info || info.type !== "File") {
+          if (isImmutableAsset) rememberMissingImmutableStaticPath(servedPath);
+          return null;
+        }
         const etag = staticEtag(Number(info.size), info.mtime?.getTime() ?? 0, encoding);
         const encodingHeaders = encoding ? { "Content-Encoding": encoding } : {};
         const headers = { ...cacheHeaders, ...encodingHeaders, ETag: etag };
@@ -1707,6 +1744,7 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!data) return null;
         if (isImmutableAsset) {
+          immutableStaticMissingPaths.delete(servedPath);
           setCachedImmutableStaticAsset(servedPath, {
             data,
             etag,
@@ -1747,30 +1785,25 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
 
     // Fast path: if an immutable hashed asset is already cached in memory
     // (which only happens after passing resolvesInsideRoot + stat), skip the
-    // outer fileSystem.stat(filePath) probe completely.
-    const isImmutableRequestPath = relativePath.replaceAll("\\", "/").startsWith("assets/");
-    if (isImmutableRequestPath) {
+    // outer fileSystem.stat(filePath) probe completely. Candidates are walked in
+    // the client's ranked order and the walk stops at the first one whose
+    // availability is unknown, so a cached lower-ranked body is never served
+    // while a higher-ranked sidecar may exist on disk.
+    const immutableRequestPath = relativePath.replaceAll("\\", "/");
+    if (immutableRequestPath.startsWith("assets/")) {
       const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);
       for (const candidate of preference.candidates) {
         const servedPath =
           candidate === null ? filePath : `${filePath}${candidate.sidecarExtension}`;
         const cached = getCachedImmutableStaticAsset(servedPath);
         if (cached) {
-          const cacheHeaders = {
-            "Cache-Control": staticCacheControl(relativePath),
-            Vary: "Accept-Encoding",
-          };
-          const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
-          const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
-          if (ifNoneMatchSatisfies(request.headers["if-none-match"], cached.etag)) {
-            return HttpServerResponse.empty({ status: 304, headers });
-          }
-          return HttpServerResponse.uint8Array(cached.data, {
-            status: 200,
-            contentType: cached.contentType,
-            headers,
-          });
+          return cachedImmutableStaticResponse(
+            cached,
+            { "Cache-Control": staticCacheControl(immutableRequestPath), Vary: "Accept-Encoding" },
+            request.headers["if-none-match"],
+          );
         }
+        if (!immutableStaticMissingPaths.has(servedPath)) break;
       }
     }
 
