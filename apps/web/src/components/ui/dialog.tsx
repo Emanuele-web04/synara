@@ -82,12 +82,15 @@ function DialogPopup({
   showCloseButton: showCloseButtonProp,
   bottomStickOnMobile: bottomStickOnMobileProp,
   fullScreen = false,
+  backdropClassName,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
   /** Fill the whole window instead of floating a centered card. */
   fullScreen?: boolean;
+  /** Restyles the scrim, for a surface with its own (SynBot's lighter one). */
+  backdropClassName?: string;
 }) {
   const { t } = useTranslation();
 
@@ -95,7 +98,7 @@ function DialogPopup({
   const bottomStickOnMobile = !fullScreen && (bottomStickOnMobileProp ?? true);
   return (
     <DialogPortal>
-      <DialogBackdrop />
+      <DialogBackdrop className={backdropClassName} />
       <DialogViewport
         className={cn(
           fullScreen && "grid-rows-1 p-0",

@@ -1,8 +1,9 @@
 // FILE: taskCompletion.logic.ts
 // Purpose: Detects new thread lifecycle notifications and builds alert copy.
 // Layer: Notification logic
-// Exports: lifecycle detection helpers and notification copy helpers
+// Exports: lifecycle detection helpers, notification copy helpers, summarizeAssistantText
 
+import { isSilentCoordinatorCheckinReply } from "@synara/shared/coordinatorCheckin";
 import {
   defaultTerminalTitleForCliKind,
   type TerminalCliKind,
@@ -113,8 +114,9 @@ function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolea
 const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 
 // Reduce rich assistant output to readable notification context. Toasts and OS
-// notifications should never expose Markdown syntax or turn into mini transcripts.
-function summarizeAssistantText(text: string): string | null {
+// notifications (and SynBot's sidebar rows) should never expose Markdown syntax or turn into
+// mini transcripts.
+export function summarizeAssistantText(text: string): string | null {
   const plainText = markdownToPlainText(text);
   return plainText.length === 0
     ? null
@@ -272,13 +274,19 @@ export function collectCompletedThreadCandidates(
       continue;
     }
 
+    const assistantSummary = summarizeLatestAssistantMessage(thread);
+    // A coordinator's background check-in that found nothing to report ("SILENT")
+    // never renders in its chat, so it must not notify either.
+    if (assistantSummary !== null && isSilentCoordinatorCheckinReply(assistantSummary)) {
+      continue;
+    }
     candidates.push({
       threadId: thread.id,
       projectId: thread.projectId,
       title: thread.title,
       turnId: latestTurn.turnId,
       completedAt,
-      assistantSummary: summarizeLatestAssistantMessage(thread),
+      assistantSummary,
     });
   }
 

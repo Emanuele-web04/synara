@@ -56,6 +56,11 @@ export interface HubWorkSubmitInput {
   readonly callerTurnId?: TurnId;
   readonly requestId: string;
   readonly sourceMessages: readonly HubWorkSourceMessage[];
+  /**
+   * SynBot: message ids the server resolved through a delegation from another bot's chat.
+   * Those sources may live in that chat instead of this coordinator's (never model-supplied).
+   */
+  readonly delegatedSourceMessageIds?: ReadonlySet<string>;
   readonly tasks: readonly {
     readonly spec: HubWorkRecord["creationSpec"];
     readonly title?: string;
@@ -215,7 +220,11 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
           return yield* Effect.fail(fail("The hub work plan has no tasks.", "invalid"));
         if (
           input.sourceMessages.length === 0 ||
-          input.sourceMessages.some((message) => message.threadId !== config.coordinatorThreadId)
+          input.sourceMessages.some(
+            (message) =>
+              message.threadId !== config.coordinatorThreadId &&
+              !input.delegatedSourceMessageIds?.has(message.messageId),
+          )
         ) {
           return yield* Effect.fail(
             fail("Hub work requires original messages from this coordinator conversation."),

@@ -80,6 +80,7 @@ import {
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
 import { cn, getNavigatorPlatform } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
+import { useBotProjectIds, withoutBotHubs } from "~/synbot/botHubs";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -296,9 +297,15 @@ function ChatRouteGlobalShortcuts() {
       ),
     [activeSpaceId, projects, workspacePaths],
   );
+  // Bots are Hubs too, but a new Hub chat never lands in one.
+  const botProjectIds = useBotProjectIds();
   const groupProjects = useMemo(
-    () => projects.filter((project) => isGroupContainerProject(project, workspacePaths)),
-    [projects, workspacePaths],
+    () =>
+      withoutBotHubs(
+        projects.filter((project) => isGroupContainerProject(project, workspacePaths)),
+        botProjectIds,
+      ),
+    [botProjectIds, projects, workspacePaths],
   );
   const currentProjectId = resolveCurrentProjectTargetId(
     activeSpaceProjects,

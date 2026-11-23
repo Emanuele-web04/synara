@@ -66,6 +66,7 @@ import {
   DEVICE_WS_METHODS,
   type DeviceEvent,
   type ProjectAgentStreamEvent,
+  type BotStreamEvent,
   COMPUTER_WS_CHANNELS,
   COMPUTER_WS_METHODS,
   type ComputerEvent,
@@ -75,6 +76,7 @@ import { Schema } from "effect";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
+import { SYNBOT_ON } from "./betaFeatures";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
@@ -570,6 +572,8 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.projectAgentEvent, (message) => {
     projectAgentEventListeners.emit(message.data);
   });
+  // SynBot subscribes on demand via `api.bots.onEvent` so restarting sync after an Alto
+  // plan activation re-opens `bots.subscribe` cleanly without a permanent refused listener.
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
@@ -1089,6 +1093,28 @@ export function createWsNativeApi(): NativeApi {
         await transport.unsubscribeProjectAgentEvents(input.projectId);
       },
       onEvent: projectAgentEventListeners.subscribe,
+    },
+    bots: {
+      list: () => executionRequest(WS_METHODS.botsList, {}),
+      ensureMain: (input) => executionRequest(WS_METHODS.botsEnsureMain, input),
+      create: (input) => executionRequest(WS_METHODS.botsCreate, input),
+      update: (input) => executionRequest(WS_METHODS.botsUpdate, input),
+      remove: (input) => executionRequest(WS_METHODS.botsRemove, input),
+      updateSettings: (input) => executionRequest(WS_METHODS.botsUpdateSettings, input),
+      cardAction: (input) => executionRequest(WS_METHODS.botsCardAction, input),
+      suggest: (input) => executionRequest(WS_METHODS.botsSuggest, input),
+      cancelDelegation: (input) => executionRequest(WS_METHODS.botsCancelDelegation, input),
+      mergeProof: (input) => executionRequest(WS_METHODS.botsMergeProof, input),
+      // Merging waits on GitHub's asynchronous merge, past the default RPC deadline.
+      merge: (input) => executionRequest(WS_METHODS.botsMerge, input, { timeoutMs: 300_000 }),
+      updateBranch: (input) => executionRequest(WS_METHODS.botsUpdateBranch, input),
+      stopAll: (input) => executionRequest(WS_METHODS.botsStopAll, input ?? {}),
+      onEvent: (callback) => {
+        if (!SYNBOT_ON) return () => undefined;
+        return transport.subscribe(WS_CHANNELS.botsEvent, (message) => {
+          callback(message.data);
+        });
+      },
     },
     automation: {
       list: (input) => executionRequest(WS_METHODS.automationList, input),

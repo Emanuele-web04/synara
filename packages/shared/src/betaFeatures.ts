@@ -58,6 +58,14 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
+/**
+ * SynBot (Stable and Beta): bots built on Hubs, the main SynBot that routes work between them,
+ * delegations, bot cards and the merge proof. Not Beta-only: the server's own gate
+ * (apps/server/src/bots/synbotGate.ts) requires Synara Alto on every host but the Beta, Canary
+ * and Dev flavors. See docs/plans/synbot.md.
+ */
+export const SYNBOT_BETA_FEATURE = "synbot";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
 
 /**

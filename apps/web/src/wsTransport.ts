@@ -31,6 +31,8 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SYNBOT_CAPABILITY,
+  WsRpcError,
   type ClientOrchestrationCommand,
   type OrchestrationSettleTurnDispatchResult,
   DEVICE_WS_CHANNELS,
@@ -46,8 +48,10 @@ import {
   WsCompatibilityError,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
+  WsBotsRpcGroup,
   type AutomationStreamEvent,
   type TodoStreamEvent,
+  type BotStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
@@ -298,7 +302,10 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+    .merge(WsComputerRpcGroup)
+    .merge(WsProjectAgentRpcGroup)
+    .merge(WsBotsRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -671,6 +678,27 @@ function makeProtocolLayer(url: string, hooks?: ProtocolLayerHooks) {
   ).pipe(Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)));
 }
 
+const SYNBOT_METHOD_PREFIX = "bots.";
+const SYNBOT_HOST_UNAVAILABLE_MESSAGE = "SynBot is not available on this host.";
+
+/**
+ * A host built before SynBot answers `bots.*` with a connection-wide RPC defect, which would tear
+ * down every request on the socket. Such a host does not advertise the SynBot capability, so the
+ * client refuses the call locally with the same FEATURE_UNAVAILABLE a SynBot-less host sends.
+ */
+export function synbotRefusalForHost(
+  method: string,
+  capabilities: ReadonlyArray<string> | undefined,
+): WsRpcError | null {
+  if (!method.startsWith(SYNBOT_METHOD_PREFIX)) return null;
+  if (capabilities?.includes(WS_SYNBOT_CAPABILITY)) return null;
+  return new WsRpcError({
+    message: SYNBOT_HOST_UNAVAILABLE_MESSAGE,
+    code: "FEATURE_UNAVAILABLE",
+    retryable: false,
+  });
+}
+
 function causeToError(cause: Cause.Cause<unknown>): Error {
   const error = Cause.squash(cause);
   return error instanceof Error ? error : new Error(String(error));
@@ -698,9 +726,11 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // Retry only the overflowing subscription, preserving its applied cursor.
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
-  // A server that does not offer Tasks refuses its stream for good;
-  // reconnecting the socket would only be refused again.
+  // A server that does not offer Tasks or SynBot (or requires Alto for SynBot) refuses its
+  // stream for good; reconnecting the socket would only be refused again.
   TASKS_UNAVAILABLE_ERROR_CODE,
+  "FEATURE_UNAVAILABLE",
+  "SUBSCRIPTION_REQUIRED",
 ]);
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
@@ -1338,6 +1368,8 @@ export class WsTransport {
       try {
         sendAdmitted = true;
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        const synbotRefusal = synbotRefusalForHost(method, this.compatibility?.capabilities);
+        if (synbotRefusal) throw synbotRefusal;
         if (
           method === ORCHESTRATION_WS_METHODS.settleTurnDispatch &&
           !this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
@@ -2538,6 +2570,17 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.botsEvent) {
+          // A host without SynBot cannot answer bots.subscribe; its unary bots.* calls are refused
+          // locally with FEATURE_UNAVAILABLE, which is how the SynBot page learns it.
+          if (!this.compatibility?.capabilities.includes(WS_SYNBOT_CAPABILITY)) return;
+          this.startStream(
+            client,
+            "bots.events",
+            client[WS_METHODS.subscribeBotsEvents]({}),
+            (event: BotStreamEvent) => this.emit(WS_CHANNELS.botsEvent, event),
+            restartChannel,
+          );
         } else if (channel === WS_CHANNELS.todoEvent) {
           this.startStream(
             client,
@@ -2598,6 +2641,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
     else if (channel === WS_CHANNELS.todoEvent) this.stopStream("todo.events");
+    else if (channel === WS_CHANNELS.botsEvent) this.stopStream("bots.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)

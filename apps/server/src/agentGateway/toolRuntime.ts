@@ -77,6 +77,13 @@ export interface ToolEntry {
    * permission: capability checks, approval and audit all apply unchanged.
    */
   readonly discoveryOnly?: boolean;
+  /**
+   * Advertise in `tools/list` only to callers this predicate accepts (for example SynBot tools
+   * to bot chats). Like `discoveryOnly`, it is not a permission: handlers still check.
+   */
+  readonly advertisedTo?: (
+    context: Omit<ToolContext, "jsonRpcRequestId">,
+  ) => Effect.Effect<boolean>;
 }
 
 export interface McpToolEntry<Context, Capability extends string> {

@@ -21,6 +21,8 @@ export interface PullRequestServiceShape {
   readonly comment: (
     input: PullRequestCommentInput,
   ) => Effect.Effect<PullRequestActionResult, unknown>;
+  /** Brings the pull request's branch up to date with its base. */
+  readonly updateBranch: (input: PullRequestDetailInput) => Effect.Effect<void, unknown>;
   /** Pins pull requests and issues alike; see the note in `githubInbox.ts`. */
   readonly setPinned: (
     input: PullRequestSetPinnedInput,

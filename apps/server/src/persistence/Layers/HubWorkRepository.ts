@@ -46,7 +46,18 @@ export const makeHubWorkRepository = Effect.gen(function* () {
                 ) legacy WHERE NOT EXISTS (
                   SELECT 1 FROM project_agent_work_items tracked WHERE tracked.worker_thread_id = legacy.thread_id
                 ))
-            ) < MIN(8, COALESCE(json_extract(config.limits_json, '$.maxConcurrentWorkers'), 8))`;
+            ) < MIN(8, COALESCE(json_extract(config.limits_json, '$.maxConcurrentWorkers'), 8))
+            -- SynBot: bots also share one cap across every bot (Settings → SynBot → Parallel tasks).
+            AND (
+              NOT EXISTS (SELECT 1 FROM bot_profiles bot WHERE bot.project_id = queued.project_id)
+              OR (SELECT COUNT(*) FROM project_agent_work_items held
+                    JOIN bot_profiles held_bot ON held_bot.project_id = held.project_id
+                    WHERE held.slot_held = 1)
+                < COALESCE(
+                    (SELECT json_extract(settings_json, '$.maxParallelTasks') FROM bot_settings WHERE id = 1),
+                    3
+                  )
+            )`;
 
   const repository: HubWorkRepositoryShape = {
     submit: (input) =>
