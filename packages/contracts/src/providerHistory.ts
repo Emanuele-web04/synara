@@ -1,6 +1,6 @@
 import { Schema, SchemaIssue } from "effect";
 
-import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 /**
  * External provider history contracts.
@@ -160,6 +160,7 @@ export type ExternalHistoryBatchState = typeof ExternalHistoryBatchState.Type;
 // ===============================
 
 export const ExternalHistoryListSessionsInput = Schema.Struct({
+  sourceId: TrimmedNonEmptyString,
   scope: Schema.optional(Schema.String),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(NonNegativeInt),
@@ -174,6 +175,7 @@ export const ExternalHistoryListSessionsResult = Schema.Struct({
 export type ExternalHistoryListSessionsResult = typeof ExternalHistoryListSessionsResult.Type;
 
 export const ExternalHistoryReadHistoryInput = Schema.Struct({
+  sourceId: TrimmedNonEmptyString,
   externalSessionId: TrimmedNonEmptyString,
   cursor: Schema.optional(Schema.String),
 });
@@ -231,3 +233,42 @@ export class ProviderHistoryError extends Schema.TaggedErrorClass<ProviderHistor
     });
   }
 }
+
+// ===============================
+// Source discovery and import RPCs
+// ===============================
+
+export const ExternalHistoryListSourcesInput = Schema.Struct({});
+export type ExternalHistoryListSourcesInput = typeof ExternalHistoryListSourcesInput.Type;
+
+export const ExternalHistoryListSourcesResult = Schema.Struct({
+  sources: Schema.Array(ExternalHistorySourceDescriptor),
+});
+export type ExternalHistoryListSourcesResult = typeof ExternalHistoryListSourcesResult.Type;
+
+/** Counts the normalizer reports for one imported transcript. */
+export const ExternalHistoryImportFidelity = Schema.Struct({
+  readCount: NonNegativeInt,
+  includedCount: NonNegativeInt,
+  droppedSystem: NonNegativeInt,
+  droppedTool: NonNegativeInt,
+  droppedHiddenUser: NonNegativeInt,
+  droppedEmpty: NonNegativeInt,
+  droppedDuplicate: NonNegativeInt,
+});
+export type ExternalHistoryImportFidelity = typeof ExternalHistoryImportFidelity.Type;
+
+/**
+ * The import RPC payloads live in orchestration.ts beside `ModelSelection`;
+ * keeping them there avoids a schema-level import cycle.
+ */
+
+export const ExternalHistoryImportResult = Schema.Struct({
+  linkId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  /** Messages that were already staged when this call started (re-import dedup). */
+  alreadyStagedCount: NonNegativeInt,
+  importedCount: NonNegativeInt,
+  fidelity: ExternalHistoryImportFidelity,
+});
+export type ExternalHistoryImportResult = typeof ExternalHistoryImportResult.Type;

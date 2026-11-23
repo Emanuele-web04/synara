@@ -15,6 +15,11 @@ import {
   ListProjectImportsInput,
 } from "./projectImport";
 import {
+  ExternalHistoryListSessionsInput,
+  ExternalHistoryListSourcesInput,
+  ExternalHistoryReadHistoryInput,
+} from "./providerHistory";
+import {
   boundedTrimmedNonEmptyString,
   NonNegativeInt,
   ProjectId,
@@ -92,6 +97,7 @@ import {
 import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
+  ExternalHistoryImportInput,
   OrchestrationImportThreadInput,
   OrchestrationShellStreamItem,
   OrchestrationSubscribeShellInput,
@@ -581,6 +587,16 @@ const WebSocketRequestBody = Schema.Union([
     ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
     OrchestrationRegenerateThreadTitleInput,
   ),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.listExternalHistorySources,
+    ExternalHistoryListSourcesInput,
+  ),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.listExternalHistorySessions,
+    ExternalHistoryListSessionsInput,
+  ),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.readExternalHistory, ExternalHistoryReadHistoryInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.importExternalHistory, ExternalHistoryImportInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
   tagRequestBody(

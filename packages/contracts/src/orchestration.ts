@@ -8,6 +8,16 @@ import {
   ListProjectImportsResult,
 } from "./projectImport";
 import {
+  ExternalHistoryImportFidelity,
+  ExternalHistoryImportResult,
+  ExternalHistoryListSessionsInput,
+  ExternalHistoryListSessionsResult,
+  ExternalHistoryListSourcesInput,
+  ExternalHistoryListSourcesResult,
+  ExternalHistoryReadHistoryInput,
+  ExternalHistoryReadHistoryResult,
+} from "./providerHistory";
+import {
   AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
@@ -63,6 +73,10 @@ export const ORCHESTRATION_WS_METHODS = {
   listProjectImports: "orchestration.listProjectImports",
   importProject: "orchestration.importProject",
   loadProjectImportHistory: "orchestration.loadProjectImportHistory",
+  listExternalHistorySources: "orchestration.listExternalHistorySources",
+  listExternalHistorySessions: "orchestration.listExternalHistorySessions",
+  readExternalHistory: "orchestration.readExternalHistory",
+  importExternalHistory: "orchestration.importExternalHistory",
   regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -3437,6 +3451,15 @@ export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
 });
 export type OrchestrationUnsubscribeThreadInput = typeof OrchestrationUnsubscribeThreadInput.Type;
 
+export const ExternalHistoryImportInput = Schema.Struct({
+  sourceId: TrimmedNonEmptyString,
+  externalSessionId: TrimmedNonEmptyString,
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+  title: Schema.optional(TrimmedNonEmptyString),
+});
+export type ExternalHistoryImportInput = typeof ExternalHistoryImportInput.Type;
+
 export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
@@ -3475,6 +3498,22 @@ export const OrchestrationRpcSchemas = {
   loadProjectImportHistory: {
     input: LoadProjectImportHistoryInput,
     output: LoadProjectImportHistoryResult,
+  },
+  listExternalHistorySources: {
+    input: ExternalHistoryListSourcesInput,
+    output: ExternalHistoryListSourcesResult,
+  },
+  listExternalHistorySessions: {
+    input: ExternalHistoryListSessionsInput,
+    output: ExternalHistoryListSessionsResult,
+  },
+  readExternalHistory: {
+    input: ExternalHistoryReadHistoryInput,
+    output: ExternalHistoryReadHistoryResult,
+  },
+  importExternalHistory: {
+    input: ExternalHistoryImportInput,
+    output: ExternalHistoryImportResult,
   },
   regenerateThreadTitle: {
     input: OrchestrationRegenerateThreadTitleInput,
