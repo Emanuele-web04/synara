@@ -4,7 +4,6 @@
 
 import type { ProviderKind } from "@synara/contracts";
 
-import { antigravityUsageFetcher } from "./providers/antigravity";
 import { claudeUsageFetcher } from "./providers/claude";
 import { codexUsageFetcher } from "./providers/codex";
 import { cursorUsageFetcher } from "./providers/cursor";
@@ -19,7 +18,6 @@ export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsage
   codex: codexUsageFetcher,
   claudeAgent: claudeUsageFetcher,
   cursor: cursorUsageFetcher,
-  antigravity: antigravityUsageFetcher,
   grok: grokUsageFetcher,
   droid: droidUsageFetcher,
   opencode: opencodeUsageFetcher,

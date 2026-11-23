@@ -303,7 +303,6 @@ export async function collectProviderUsageSnapshots(
 
 const GENERIC_USAGE_DRIVERS: Partial<Record<ProviderKind, ProviderProcessEnvDriver>> = {
   cursor: "cursor",
-  antigravity: "gemini",
   grok: "grok",
   droid: "kilo",
   opencode: "opencode",

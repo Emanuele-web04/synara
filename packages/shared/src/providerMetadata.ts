@@ -72,10 +72,7 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     available: true,
     setupDocsHref: "https://trysynara.com/docs/providers/antigravity",
     supportsNativeTurnSteering: false,
-    usage: {
-      signInCommand: "agy",
-      learnMoreHref: "https://antigravity.google",
-    },
+    usage: null,
   },
   {
     kind: "grok",

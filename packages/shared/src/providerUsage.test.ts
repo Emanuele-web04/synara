@@ -23,15 +23,16 @@ function snapshot(
 }
 
 describe("provider usage metadata", () => {
-  it("keeps every unsigned card visible when nothing is connected", () => {
+  it("keeps supported unsigned cards visible when nothing is connected", () => {
     const snapshots = [
       snapshot("codex", "needs-auth"),
+      snapshot("cursor", "needs-auth"),
       snapshot("grok", "needs-auth"),
       snapshot("antigravity", "needs-auth"),
     ];
     expect(selectVisibleProviderUsageSnapshots(snapshots).map((item) => item.provider)).toEqual([
       "codex",
-      "antigravity",
+      "cursor",
       "grok",
     ]);
   });
@@ -41,7 +42,6 @@ describe("provider usage metadata", () => {
       snapshot("codex", "ok"),
       snapshot("claudeAgent", "needs-auth"),
       snapshot("grok", "ok"),
-      snapshot("antigravity", "needs-auth"),
     ];
     expect(selectVisibleProviderUsageSnapshots(snapshots).map((item) => item.provider)).toEqual([
       "codex",

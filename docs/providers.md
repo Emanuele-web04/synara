@@ -742,6 +742,8 @@ same account as the login. Imported directories and explicit environment values 
 These account environments block ambient API credentials; explicitly configured secrets remain
 available to managed sessions and the selected login process, and are never written into terminal shims.
 
+To check Antigravity account quotas and credits, open `agy` and run `/usage`.
+
 On macOS, managed Claude accounts keep the system home and username for Keychain access.
 Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
 login, chats, health checks, and usage use the same resolved account directories. Explicit home
