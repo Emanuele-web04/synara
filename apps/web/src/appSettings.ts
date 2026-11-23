@@ -374,6 +374,7 @@ export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
   claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => true)),
+  claudeCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
   // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -1669,6 +1670,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
     claudeConfirmColdCacheResume: settings.providers.claudeAgent.confirmColdCacheResume,
+    claudeCompactIdleThreads: settings.providers.claudeAgent.compactIdleThreads,
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
@@ -1901,6 +1903,7 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "claudeBinaryPath") ||
     hasOwn(patch, "claudeEnableArtifacts") ||
     hasOwn(patch, "claudeConfirmColdCacheResume") ||
+    hasOwn(patch, "claudeCompactIdleThreads") ||
     hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "customClaudeModels")
   ) {
@@ -1911,6 +1914,9 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
       ...(hasOwn(patch, "claudeConfirmColdCacheResume")
         ? { confirmColdCacheResume: Boolean(patch.claudeConfirmColdCacheResume) }
+        : {}),
+      ...(hasOwn(patch, "claudeCompactIdleThreads")
+        ? { compactIdleThreads: Boolean(patch.claudeCompactIdleThreads) }
         : {}),
       ...(hasOwn(patch, "claudeHomePath") ? { homePath: patch.claudeHomePath ?? "" } : {}),
       ...(hasOwn(patch, "customClaudeModels")

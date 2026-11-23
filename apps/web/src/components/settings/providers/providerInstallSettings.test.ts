@@ -37,6 +37,7 @@ describe("createProviderInstallResetPatch", () => {
       [
         "antigravityBinaryPath",
         "claudeBinaryPath",
+        "claudeCompactIdleThreads",
         "claudeConfirmColdCacheResume",
         "claudeEnableArtifacts",
         "claudeHomePath",

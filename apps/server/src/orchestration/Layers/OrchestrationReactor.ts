@@ -8,6 +8,7 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { SidechatExpiryReactor } from "../Services/SidechatExpiryReactor.ts";
+import { IdleCompactionReactor } from "../Services/IdleCompactionReactor.ts";
 import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
 import { ThreadGitMetadataReactor } from "../Services/ThreadGitMetadataReactor.ts";
 
@@ -18,6 +19,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const hubOutputReactor = yield* HubOutputReactor;
   const threadGitMetadataReactor = yield* ThreadGitMetadataReactor;
   const sidechatExpiryReactor = yield* SidechatExpiryReactor;
+  const idleCompactionReactor = yield* IdleCompactionReactor;
 
   const start: OrchestrationReactorShape["start"] = Effect.gen(function* () {
     yield* hubOutputReactor.start;
@@ -25,10 +27,11 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadGitMetadataReactor.start;
     yield* providerRuntimeIngestion.start;
     yield* sidechatExpiryReactor.start;
+    yield* idleCompactionReactor.start;
     // Install every runtime observer before provider command dispatch can
     // begin. Reverse-order finalization then drains provider commands first,
-    // side-chat expiry second, runtime ingestion third, Git metadata fourth,
-    // checkpoints fifth, and Hub output last.
+    // idle compaction second, side-chat expiry third, runtime ingestion
+    // fourth, Git metadata fifth, checkpoints sixth, and Hub output last.
     yield* providerCommandReactor.start;
   });
 

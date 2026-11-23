@@ -30,8 +30,18 @@ of at least 100,000 tokens whose last response is at least 70 minutes old requir
 the cache state. This applies to
 a resumed process and a long pause in the same process. Agent and automation messages, automatic
 goal continuations, usage-limit recovery, and `/compact` proceed without a new review. An unknown
-last-response time does not block ordinary use. There is no periodic inference to maintain or inspect
-the cache.
+last-response time does not block ordinary use.
+
+## Idle compaction before expiry
+
+While **Compact idle threads before the cache expires** is on in Settings → Providers → Claude
+(off by default), a periodic sweep reads the persisted observations above — it never asks the
+provider — and runs the native compact on an idle thread once its lease enters the last fifth of
+its observed TTL. A thread qualifies only when its last turn completed normally, no turn, approval,
+user input, cache review, or handoff is pending, and it is not archived, deleted, snoozed, a side
+chat, or a subagent. Below 20,000 context tokens the sweep stays quiet: a cold resume is cheaper
+than the maintenance request. Each lease compacts once; a fresh provider request renews it and can
+make the thread eligible again.
 
 The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider

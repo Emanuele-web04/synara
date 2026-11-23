@@ -42,6 +42,7 @@ type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
 type ProviderInstallBooleanKey =
   | "claudeEnableArtifacts"
   | "claudeConfirmColdCacheResume"
+  | "claudeCompactIdleThreads"
   | "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
@@ -173,6 +174,12 @@ export const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         settingsKey: "claudeConfirmColdCacheResume",
         label: "settings:askBeforeResumingALongIdleSession",
         description: "settings:onByDefaultAfter70MinutesWithoutA",
+      },
+      {
+        kind: "boolean",
+        settingsKey: "claudeCompactIdleThreads",
+        label: "settings:compactIdleThreadsBeforeTheCacheExpires",
+        description: "settings:offByDefaultASweepCompactsIdleThreads",
       },
     ],
   },
@@ -552,6 +559,7 @@ export function providerInstanceConfigKey(field: ProviderInstallField): string |
     // never from an account's config, so the switch lives on the default account only.
     case "claudeEnableArtifacts":
     case "claudeConfirmColdCacheResume":
+    case "claudeCompactIdleThreads":
       return null;
     case "piAgentDir":
     case "ompAgentDir":

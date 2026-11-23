@@ -68,6 +68,9 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   // window. Synara asks the way Claude Code's interactive resume prompt does;
   // embedded (SDK) Claude Code alone never asks.
   confirmColdCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  // Opt-in: a periodic sweep compacts idle Claude threads whose observed cache
+  // TTL is about to expire, so the next send still reads a warm prefix.
+  compactIdleThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
 
@@ -261,6 +264,7 @@ export const ServerSettingsPatch = Schema.Struct({
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
           enableArtifacts: Schema.optionalKey(Schema.Boolean),
           confirmColdCacheResume: Schema.optionalKey(Schema.Boolean),
+          compactIdleThreads: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       cursor: Schema.optionalKey(
