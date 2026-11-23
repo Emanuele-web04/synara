@@ -54,7 +54,7 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     CREATE INDEX idx_agent_gateway_operations_resume
-    ON agent_gateway_operations (created_at, operation_id)
+    ON agent_gateway_operations (status, operation_id, created_at)
     WHERE resume_context_json IS NOT NULL AND status = 'completed'
   `;
 });
