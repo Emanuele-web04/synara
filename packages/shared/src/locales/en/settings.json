@@ -1103,6 +1103,7 @@
   "runtimeCodexAsk": "Read-only sandbox: Codex asks before editing files or running commands",
   "runtimeCodexAuto": "Codex edits inside the project; its reviewer decides on anything that needs more access",
   "runtimeCodexFull": "No sandbox: Codex runs everything without asking, with full access to your computer",
+  "runtimeDevinAuto": "Devin's Smart mode: its classifier approves routine actions and asks on risky or uncertain ones",
   "keepAwakeTitle": "Keep computer awake",
   "keepAwakeOn": "On",
   "keepAwakeAgent": "Agent",

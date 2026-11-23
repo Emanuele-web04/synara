@@ -832,9 +832,10 @@ export function resolveRequestedModeId(input: {
     const targetMode =
       interactionMode === "plan"
         ? findModeByExactNormalizedAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)
-        : runtimeMode === "approval-required"
-          ? // Smart first, then the prompt-heavier Accept Edits fallbacks. Each
-            // step down only ever means more prompts, never less safety.
+        : runtimeMode !== "full-access"
+          ? // Smart first for both approval-required and auto (Devin's native
+            // Auto), then the prompt-heavier Accept Edits fallbacks. Each step
+            // down only ever means more prompts, never less safety.
             (findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
             findModeByExactNormalizedAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES) ??
             // Some Devin catalogs expose Ask Everytime instead of Code. Match the

@@ -1,6 +1,6 @@
 import type { ProviderKind, RuntimeMode } from "@synara/contracts";
 
-const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent"]);
+const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent", "devin"]);
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
@@ -12,7 +12,7 @@ export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean
 }
 
 export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): string {
-  return `Provider "${provider}" does not support Auto runtime mode. Auto is available only for Codex and Claude Code.`;
+  return `Provider "${provider}" does not support Auto runtime mode. Auto is available only for Codex, Claude Code, and Devin.`;
 }
 
 /**
