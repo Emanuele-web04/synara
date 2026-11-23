@@ -663,20 +663,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             onTabChange={setTab}
             onAddProviders={lockedProvider === null ? openProviderSettings : undefined}
           />
-          {props.fusion ? (
-            <FusionSection
-              fusion={props.fusion}
-              role={fusionRole}
-              leadModelLabel={composerModelDisplayName(activeProvider, modelLabel)}
-              onRoleChange={setFusionRole}
-              usableProviders={fusionUsableProviders}
-              onApplyPreset={(preset) => {
-                props.fusion?.onApplyPreset?.(preset);
-                setMenuOpen(false);
-                props.onSelectionCommitted?.();
-              }}
-            />
-          ) : null}
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 *:min-w-0">
             <SearchIcon aria-hidden="true" className={PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME} />
             <Input
@@ -712,6 +698,20 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
+            {props.fusion ? (
+              <FusionSection
+                fusion={props.fusion}
+                role={fusionRole}
+                leadModelLabel={composerModelDisplayName(activeProvider, modelLabel)}
+                onRoleChange={setFusionRole}
+                usableProviders={fusionUsableProviders}
+                onApplyPreset={(preset) => {
+                  props.fusion?.onApplyPreset?.(preset);
+                  setMenuOpen(false);
+                  props.onSelectionCommitted?.();
+                }}
+              />
+            ) : null}
             {modelSelectionIssue ? (
               <div role="status" className="px-2 py-1.5 text-ui leading-snug text-destructive">
                 {modelSelectionIssue}
