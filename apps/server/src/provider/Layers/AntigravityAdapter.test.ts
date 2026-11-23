@@ -815,47 +815,70 @@ describe("Antigravity ACP adapter", () => {
     ]);
   });
 
-  it("keeps a turn open until its background command finishes and the agent replies", async () => {
-    const fake = makeControllableRuntime();
-    const events = await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
-      Effect.gen(function* () {
-        const threadId = ThreadId.makeUnsafe("thread-agy-background");
-        yield* adapter.startSession(startInput(threadId));
-        const collector = yield* collectTurn(adapter);
-        yield* adapter.sendTurn({ threadId, input: "start it in the background", attachments: [] });
-        fake.emit(toolCall("call-bg", "inProgress"));
-        fake.emit(assistantText("started"));
-        yield* Effect.sleep("30 millis");
-        fake.finishPrompt("end_turn");
-        // The prompt returned, but the background command is still running.
-        yield* Effect.sleep("200 millis");
-        fake.emit(toolCall("call-bg", "completed"));
-        fake.emit(assistantText(" The background command finished."));
-        return yield* Fiber.join(collector).pipe(Effect.timeout("3 seconds"));
-      }),
-    );
-    const turnEvents = events.filter(
-      (event): event is ProviderRuntimeEvent => event.type !== "session.started",
-    );
-    const types = turnEvents.map((event) => event.type);
-    expect(types.at(-1)).toBe("turn.completed");
-    const completion = turnEvents.at(-1) as Extract<
-      ProviderRuntimeEvent,
-      { type: "turn.completed" }
-    >;
-    expect(completion.payload.state).toBe("completed");
-    const turnId = completion.turnId;
-    const followUp = turnEvents.find(
-      (event) =>
-        event.type === "content.delta" &&
-        event.payload.delta === " The background command finished.",
-    );
-    expect(followUp?.turnId).toBe(turnId);
-    const toolCompletion = turnEvents.find(
-      (event) => event.type === "item.completed" && event.payload.itemType === "command_execution",
-    );
-    expect(toolCompletion?.turnId).toBe(turnId);
-  });
+  it.each([
+    { state: "completed", steer: false, toolError: undefined },
+    { state: "cancelled", steer: true, toolError: undefined },
+    { state: "failed", steer: true, toolError: "The background build failed." },
+  ])(
+    "settles the original turn after its background command (outcome=$state)",
+    async ({ state, steer, toolError }) => {
+      const fake = makeControllableRuntime({ agentVersion: "1.5.1" });
+      const { events, turnId } = await runWithAdapter(
+        { makeRuntime: fake.makeRuntime },
+        (adapter) =>
+          Effect.gen(function* () {
+            const threadId = ThreadId.makeUnsafe("thread-agy-background");
+            yield* adapter.startSession(startInput(threadId));
+            const collector = yield* collectTurn(adapter);
+            const turn = yield* adapter.sendTurn({
+              threadId,
+              input: "start it in the background",
+              attachments: [],
+            });
+            fake.emit(toolCall("call-bg", "inProgress"));
+            fake.emit(assistantText("started"));
+            yield* Effect.sleep("30 millis");
+            fake.finishPrompt("end_turn", 0);
+            // The prompt returned, but the background command is still running.
+            yield* Effect.sleep("200 millis");
+            if (steer) {
+              yield* adapter.steerTurn!(
+                { threadId, input: "Check the build", attachments: [] },
+                { expectedTurnId: turn.turnId },
+              );
+              yield* Effect.promise(() => waitFor(() => fake.prompts.length === 2));
+            }
+            const tool = toolCall("call-bg", toolError ? "failed" : "completed");
+            fake.emit({
+              ...tool,
+              toolCall: { ...tool.toolCall, ...(toolError ? { detail: toolError } : {}) },
+            });
+            fake.emit(assistantText(" The background command finished."));
+            if (steer) fake.finishPrompt("cancelled", 1);
+            const events = yield* Fiber.join(collector).pipe(Effect.timeout("3 seconds"));
+            return { events, turnId: turn.turnId };
+          }),
+      );
+      const completion = events.at(-1);
+      expect(completion).toMatchObject({
+        type: "turn.completed",
+        turnId,
+        payload: { state, stopReason: steer ? "cancelled" : "end_turn" },
+      });
+      if (toolError) expect(completion?.payload).toMatchObject({ errorMessage: toolError });
+      const followUp = events.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.delta === " The background command finished.",
+      );
+      expect(followUp?.turnId).toBe(turnId);
+      const toolCompletion = events.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "command_execution",
+      );
+      expect(toolCompletion?.turnId).toBe(turnId);
+    },
+  );
 
   it("settles without waiting for a daemon and keeps its updates on the originating turn", async () => {
     const fake = makeControllableRuntime();

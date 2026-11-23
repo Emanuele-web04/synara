@@ -218,6 +218,7 @@ interface AntigravitySessionContext {
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   activeSteerRequests: number;
+  activeSteerCompletion: Pick<TurnOutcome, "state" | "stopReason" | "errorMessage"> | undefined;
   lastTurnActivityAt: number | undefined;
   finishingTurnId: TurnId | undefined;
   /** Recent tool calls and outstanding calls that can still report after their turn ends. */
@@ -635,15 +636,25 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
       });
 
     /** Emits the single terminal turn.completed for `turnId`; idempotent. */
-    const settleTurn = (ctx: AntigravitySessionContext, turnId: TurnId, outcome: TurnOutcome) =>
+    const settleTurn = (
+      ctx: AntigravitySessionContext,
+      turnId: TurnId,
+      initialOutcome: TurnOutcome,
+    ) =>
       Effect.suspend(() => {
         if (ctx.activeTurnId !== turnId || ctx.finishingTurnId === turnId)
           return Effect.succeed(false);
         ctx.finishingTurnId = turnId;
+        // An explicit Stop or transport failure retains ownership of the outcome.
+        const outcome =
+          initialOutcome.state === "completed" && ctx.activeSteerCompletion
+            ? { ...initialOutcome, ...ctx.activeSteerCompletion }
+            : initialOutcome;
         return Effect.gen(function* () {
           yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
           if (!clearAcpActiveTurn(ctx, turnId)) return false;
           ctx.backgroundWaitTurnId = undefined;
+          ctx.activeSteerCompletion = undefined;
           ctx.runningToolCallIds.clear();
           const completedCost = finalizeAcpActiveTurnCost(ctx);
           ctx.turns.push({ id: turnId, items: [outcome.item] });
@@ -1097,6 +1108,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             activeSteerRequests: 0,
+            activeSteerCompletion: undefined,
             lastTurnActivityAt: undefined,
             finishingTurnId: undefined,
             toolCallOwners: new Map(),
@@ -1672,6 +1684,28 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           ctx.activeTurnId !== turnId
             ? Effect.void
             : ctx.acp.prompt({ prompt }, { continueActiveTurn: true }).pipe(
+                Effect.tap((result) =>
+                  Effect.gen(function* () {
+                    if (result.stopReason !== "cancelled") return;
+                    // Apply late tool failures before releasing the background wait.
+                    yield* waitForQueuedTurnEventsDrained(ctx);
+                    if (
+                      ctx.activeTurnId !== turnId ||
+                      ctx.pendingTurnInterrupted ||
+                      ctx.finishingTurnId !== undefined ||
+                      ctx.stopped ||
+                      ctx.activeSteerCompletion?.state === "failed"
+                    )
+                      return;
+                    ctx.activeSteerCompletion = {
+                      ...classifyAcpPromptTurnCompletion({
+                        stopReason: result.stopReason,
+                        failedToolDetail: ctx.activeTurnFailedToolDetail,
+                      }),
+                      stopReason: result.stopReason,
+                    };
+                  }),
+                ),
                 Effect.catch((error) =>
                   Effect.gen(function* () {
                     if (ctx.pendingTurnInterrupted || ctx.stopped || ctx.activeTurnId !== turnId)
