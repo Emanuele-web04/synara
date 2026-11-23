@@ -18,6 +18,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { isLoopbackHost } from "../../startupAccess.ts";
+import { normalizeProviderProcessEnvironment } from "../providerProcessEnv.ts";
 import {
   collectSessionConfigOptionValues,
   extractModelConfigId,
@@ -68,6 +69,10 @@ const DEVIN_INTERACTIVE_AUTH_METHOD_IDS = new Set([
 // that some secret/credential injectors provide.
 const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY", "DEVIN_API_KEY", "windsurf_api_key"] as const;
 const DEVIN_API_SERVER_URL_ENV_KEYS = ["WINDSURF_API_SERVER_URL", "DEVIN_API_SERVER_URL"] as const;
+const DEVIN_AUTH_ENV_KEYS: ReadonlySet<string> = new Set([
+  ...DEVIN_API_KEY_ENV_KEYS,
+  ...DEVIN_API_SERVER_URL_ENV_KEYS,
+]);
 const DEVIN_COMPACT_COMMAND_NAME = "compact";
 const DEVIN_COMPACT_PROMPT = "/compact";
 
@@ -162,6 +167,22 @@ export function getDevinApiServerUrlEnv(env: NodeJS.ProcessEnv = process.env): s
     }
   }
   return undefined;
+}
+
+/** Keep the selected key and endpoint together when a profile supplies either. */
+function resolveDevinAcpEnvironment(
+  configured: DevinAcpRuntimeSettings["environment"],
+): NodeJS.ProcessEnv {
+  if (configured === undefined) return process.env;
+  const selected = normalizeProviderProcessEnvironment(configured);
+  const env = { ...process.env };
+  if (Object.keys(selected).some((name) => DEVIN_AUTH_ENV_KEYS.has(name))) {
+    // The ACP spawner overlays this environment on the base again, so use empty overrides.
+    for (const name of Object.keys(env)) {
+      if (DEVIN_AUTH_ENV_KEYS.has(name.toUpperCase())) env[name] = "";
+    }
+  }
+  return Object.assign(env, selected);
 }
 
 function parseDevinTomlString(rawValue: string): string | undefined {
@@ -350,11 +371,14 @@ export function buildDevinAcpSpawnInput(
     args.push("--model", model);
   }
 
-  // The Devin ACP server expects `WINDSURF_API_KEY`. If only the lowercase
-  // variant is present, normalize it to the canonical key for the child.
-  const baseEnv = childEnvironment ?? process.env;
+  // Use the CLI's canonical environment names when the profile supplies aliases.
+  const baseEnv = childEnvironment ?? resolveDevinAcpEnvironment(devinSettings?.environment);
   const apiKey = getDevinApiKeyEnv(baseEnv);
-  const overrides: NodeJS.ProcessEnv = apiKey ? { WINDSURF_API_KEY: apiKey } : {};
+  const apiServerUrl = getDevinApiServerUrlEnv(baseEnv);
+  const overrides: NodeJS.ProcessEnv = {
+    ...(apiKey ? { WINDSURF_API_KEY: apiKey } : {}),
+    ...(apiServerUrl ? { WINDSURF_API_SERVER_URL: apiServerUrl } : {}),
+  };
 
   return {
     command: resolveDevinBinaryPath(devinSettings?.binaryPath, { env: baseEnv }),
@@ -427,10 +451,7 @@ export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
-    const providerEnvironment = {
-      ...process.env,
-      ...(input.devinSettings?.environment ?? {}),
-    };
+    const providerEnvironment = resolveDevinAcpEnvironment(input.devinSettings?.environment);
     const storedCredentials = yield* Effect.tryPromise(() =>
       readDevinStoredCredentials(providerEnvironment),
     ).pipe(Effect.orElseSucceed(() => undefined));

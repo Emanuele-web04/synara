@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AcpSessionRuntime,
+  buildAcpSpawnProcessEnv,
   normalizeAcpIncomingJsonMessages,
   runAcpChildStderrTap,
   type AcpSessionRuntimeOptions,
@@ -443,7 +444,8 @@ describe("buildDevinAcpSpawnInput", () => {
 });
 
 describe("makeDevinAcpRuntime", () => {
-  it("falls back to the selected profile's API key when Devin returns an empty model selector", async () => {
+  const authProfiles = [{ endpoint: "https://devin.example.test" }, { endpoint: undefined }];
+  it.each(authProfiles)("uses profile endpoint $endpoint", async ({ endpoint }) => {
     const fakeRuntime = {} as AcpSessionRuntimeShape;
     let capturedOptions: AcpSessionRuntimeOptions | undefined;
     const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
@@ -453,10 +455,9 @@ describe("makeDevinAcpRuntime", () => {
     vi.stubEnv("HOME", "/tmp/synara-devin-acp-runtime-options-test");
     vi.stubEnv("XDG_DATA_HOME", "/tmp/synara-devin-acp-runtime-options-test");
     vi.stubEnv("APPDATA", "/tmp/synara-devin-acp-runtime-options-test");
-    vi.stubEnv("WINDSURF_API_KEY", "");
+    vi.stubEnv("WINDSURF_API_KEY", "ambient-key");
     vi.stubEnv("DEVIN_API_KEY", "");
-    vi.stubEnv("windsurf_api_key", "");
-    vi.stubEnv("WINDSURF_API_SERVER_URL", "");
+    vi.stubEnv("WINDSURF_API_SERVER_URL", "https://ambient.example.test");
     vi.stubEnv("DEVIN_API_SERVER_URL", "");
 
     try {
@@ -467,7 +468,7 @@ describe("makeDevinAcpRuntime", () => {
             environment: {
               APPDATA: "/native-profile/roaming",
               DEVIN_API_KEY: "profile-key",
-              DEVIN_API_SERVER_URL: "https://devin.example.test",
+              ...(endpoint ? { DEVIN_API_SERVER_URL: endpoint } : {}),
             },
           },
           runtimeMode: "approval-required",
@@ -479,10 +480,15 @@ describe("makeDevinAcpRuntime", () => {
       expect(runtime).toBe(fakeRuntime);
       expect(capturedOptions?.authPolicy).toBe("on-demand");
       expect(capturedOptions?.normalizeIncomingMessage).toBe(normalizeDevinGetOutputToolCall);
-      expect(capturedOptions?.spawn.env).toMatchObject({ APPDATA: "/native-profile/roaming" });
-      expect(capturedOptions?.authenticateMeta).toMatchObject({
+      expect(buildAcpSpawnProcessEnv(capturedOptions!.spawn)).toMatchObject({
+        APPDATA: "/native-profile/roaming",
+        WINDSURF_API_KEY: "profile-key",
+        WINDSURF_API_SERVER_URL: endpoint ?? "",
+      });
+      expect(capturedOptions?.authenticateMeta).toEqual({
+        headless: true,
         api_key: "profile-key",
-        api_server_url: "https://devin.example.test",
+        ...(endpoint ? { api_server_url: endpoint } : {}),
       });
 
       const initialize = initializeWithAuthMethods(["devin-browser"]);
