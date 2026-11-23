@@ -19,6 +19,11 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { isLoopbackHost } from "../../startupAccess.ts";
 import {
+  collectSessionConfigOptionValues,
+  extractModelConfigId,
+  findSessionConfigOption,
+} from "./AcpRuntimeModel.ts";
+import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
   type AcpSessionRuntimeShape,
@@ -43,7 +48,6 @@ export interface DevinAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly devinSettings: DevinAcpRuntimeSettings | null | undefined;
   readonly runtimeMode: RuntimeMode;
-  readonly sessionConfig?: { readonly childEnvironment: NodeJS.ProcessEnv };
 }
 
 const DEVIN_API_KEY_AUTH_METHOD_IDS = new Set([
@@ -102,6 +106,7 @@ export interface DevinAcpCredentials {
 
 export interface DevinAcpAuthInput {
   readonly apiKey?: string;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Host auth metadata sent in the ACP authenticate request for Devin. */
@@ -377,7 +382,7 @@ export const resolveDevinAcpAuthMethodId = (
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = (input.apiKey?.trim() || getDevinApiKeyEnv()) !== undefined;
+    const hasApiKey = (input.apiKey?.trim() || getDevinApiKeyEnv(input.env)) !== undefined;
     if (hasApiKey) {
       const apiKeyMethod = [...authMethodIds].find((methodId) =>
         DEVIN_API_KEY_AUTH_METHOD_IDS.has(methodId),
@@ -429,9 +434,10 @@ export const makeDevinAcpRuntime = (
     const storedCredentials = yield* Effect.tryPromise(() =>
       readDevinStoredCredentials(providerEnvironment),
     ).pipe(Effect.orElseSucceed(() => undefined));
-    const authenticateMeta = yield* buildDevinAcpAuthenticateMeta(
-      storedCredentials ? { credentials: storedCredentials } : {},
-    );
+    const authenticateMeta = yield* buildDevinAcpAuthenticateMeta({
+      env: providerEnvironment,
+      ...(storedCredentials ? { credentials: storedCredentials } : {}),
+    });
     const apiKey = authenticateMeta.api_key;
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
@@ -440,15 +446,24 @@ export const makeDevinAcpRuntime = (
           input.devinSettings,
           input.cwd,
           input.runtimeMode,
-          input.sessionConfig?.childEnvironment ?? providerEnvironment,
+          providerEnvironment,
         ),
+        // Devin may advertise only browser login even when its native login is active.
+        // An unauthed setup can succeed with an empty model selector and fail on prompt.
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
-        validateInitializeResult: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }).pipe(
-            Effect.asVoid,
-          ),
+          resolveDevinAcpAuthMethodId(initializeResult, {
+            env: providerEnvironment,
+            ...(apiKey ? { apiKey } : {}),
+          }),
+        authSetupHeuristic: (initializeResult, session) => {
+          if (!apiKey || !initializeResult.authMethods?.length) return false;
+          const model = findSessionConfigOption(
+            session.configOptions,
+            extractModelConfigId(session) ?? "",
+          );
+          return model?.type === "select" && collectSessionConfigOptionValues(model).length === 0;
+        },
         authenticateMeta,
         normalizeIncomingMessage: normalizeDevinGetOutputToolCall,
       }).pipe(
