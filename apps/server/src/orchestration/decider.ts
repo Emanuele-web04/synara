@@ -2335,11 +2335,13 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
       const gatewayCompletion = command.gatewayCompletionPrecondition;
+      // Stop records this turn's cancellation before the provider updates its status.
       if (
         gatewayCompletion !== undefined &&
         (targetThread.archivedAt != null ||
           targetThread.snoozedUntil != null ||
           targetThread.session?.status === "stopped" ||
+          targetThread.usageLimitRecoveryCancelledTurnId === gatewayCompletion.sourceTurnId ||
           targetThread.claudeCacheReview != null ||
           targetThread.hasPendingApprovals ||
           targetThread.hasPendingUserInput ||

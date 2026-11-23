@@ -14,6 +14,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 import { planQuitResumeTurns } from "./quitResume.ts";
 
 const NOW = "2026-07-19T00:00:00.000Z";
@@ -113,7 +114,41 @@ it("admits a delegated continuation only from the original completed turn and mo
   const decideWake = (readModel: OrchestrationReadModel) =>
     Effect.runPromise(Effect.result(decideOrchestrationCommand({ command: wake, readModel })));
   const latestTurn = makeLatestTurn("completed");
-  expect(await decideWake(makeReadModel({ latestTurn }))).toMatchObject({ _tag: "Success" });
+  const idle = makeReadModel({
+    latestTurn,
+    session: {
+      threadId: THREAD_ID,
+      status: "ready",
+      providerName: "codex",
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: NOW,
+    },
+  });
+  expect(await decideWake(idle)).toMatchObject({ _tag: "Success" });
+  const stop = await Effect.runPromise(
+    decideOrchestrationCommand({
+      readModel: idle,
+      command: {
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("stop-before-wake"),
+        threadId: THREAD_ID,
+        createdAt: NOW,
+      },
+    }),
+  );
+  let afterStop = idle;
+  for (const event of Array.isArray(stop) ? stop : [stop]) {
+    afterStop = await Effect.runPromise(
+      projectEvent(afterStop, { ...event, sequence: afterStop.snapshotSequence + 1 }),
+    );
+  }
+  expect(afterStop.threads[0]).toMatchObject({ latestTurn, session: { status: "ready" } });
+  expect(await decideWake(afterStop)).toMatchObject({
+    _tag: "Failure",
+    failure: { _tag: "OrchestrationCommandInvariantError" },
+  });
   for (const changed of [
     { latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("later-turn")) },
     { latestTurn: makeLatestTurn("running") },
