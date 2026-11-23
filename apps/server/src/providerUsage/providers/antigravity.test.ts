@@ -13,6 +13,8 @@ vi.mock("../../provider/antigravityCli", () => ({ runAntigravityHelperProcess: v
 const run = vi.mocked(runAntigravityHelperProcess);
 const ctx = { homeDir: "/unused", env: {}, platform: process.platform, nowMs: 0 };
 
+const supportedVersion = { code: 0, stderr: "", stdout: "agy 1.1.11" };
+
 function nativeOutput(groups: unknown[], numTurns = 0) {
   return JSON.stringify({
     status: "SUCCESS",
@@ -28,7 +30,7 @@ afterEach(() => {
 
 describe("Antigravity live limits", () => {
   it("renders the CLI buckets for Gemini, third-party models, and plan-specific groups", async () => {
-    run.mockResolvedValue({
+    run.mockResolvedValueOnce(supportedVersion).mockResolvedValueOnce({
       code: 0,
       stderr: "",
       stdout: nativeOutput([
@@ -76,16 +78,20 @@ describe("Antigravity live limits", () => {
   it("coalesces pending requests then reads the next native login state in the same profile", async () => {
     const initial =
       Promise.withResolvers<Awaited<ReturnType<typeof runAntigravityHelperProcess>>>();
-    run.mockReturnValueOnce(initial.promise).mockResolvedValueOnce({
-      code: 1,
-      stderr: "Authentication required. Please visit the URL to log in",
-      stdout: "",
-    });
+    run
+      .mockResolvedValueOnce(supportedVersion)
+      .mockReturnValueOnce(initial.promise)
+      .mockResolvedValueOnce(supportedVersion)
+      .mockResolvedValueOnce({
+        code: 1,
+        stderr: "Authentication required. Please visit the URL to log in",
+        stdout: "",
+      });
     const selectedProfile = { ...ctx, instanceId: defaultInstanceIdForProvider("antigravity") };
     const query = { provider: "antigravity" } as const;
     const first = collectProviderUsageSnapshots(selectedProfile, query);
     const concurrent = collectProviderUsageSnapshots(selectedProfile, query);
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     initial.resolve({
       code: 0,
       stderr: "",
@@ -98,7 +104,7 @@ describe("Antigravity live limits", () => {
     });
     const snapshots = await first;
     expect(await concurrent).toEqual(snapshots);
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(2);
     expect(snapshots).toMatchObject([
       { status: "ok", limits: [{ window: "5h", usedPercent: 50 }] },
     ]);
@@ -107,9 +113,22 @@ describe("Antigravity live limits", () => {
       { ...selectedProfile, nowMs: 1_000 },
       query,
     );
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(4);
     expect(signedOut).toMatchObject([{ status: "needs-auth", limits: [] }]);
   });
+
+  it.each(["agy 1.1.10", "version unavailable"])(
+    "does not send /usage as a prompt when the version probe returns %s",
+    async (stdout) => {
+      run.mockResolvedValueOnce({ code: 0, stderr: "", stdout });
+
+      const snapshot = await antigravityUsageFetcher.fetch(ctx);
+
+      expect(snapshot.status).toBe("error");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0]?.[1]).toEqual(["--version"]);
+    },
+  );
 
   it.each([
     {
@@ -136,7 +155,7 @@ describe("Antigravity live limits", () => {
     },
     { name: "a model turn", code: 0, stdout: nativeOutput([], 1), stderr: "", status: "error" },
   ])("handles $name without leaking native output", async ({ status, ...result }) => {
-    run.mockResolvedValue(result);
+    run.mockResolvedValueOnce(supportedVersion).mockResolvedValueOnce(result);
     const snapshot = await antigravityUsageFetcher.fetch(ctx);
     expect(snapshot).toMatchObject({ status, limits: [] });
     expect(snapshot.detail ?? "").not.toMatch(

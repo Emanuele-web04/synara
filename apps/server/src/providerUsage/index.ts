@@ -451,9 +451,10 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       (scope) => scope.includes(":") && !activeScopes.has(scope),
     ),
   );
-  const selected = input.provider
-    ? instances.filter((instance) => instance.driver === input.provider)
-    : instances;
+  const selected = instances.filter(
+    ({ driver }) =>
+      (!input.provider || driver === input.provider) && driver !== input.excludeProvider,
+  );
 
   return yield* Effect.tryPromise({
     try: async () => {

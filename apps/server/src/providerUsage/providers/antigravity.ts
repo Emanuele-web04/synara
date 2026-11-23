@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { ServerProviderUsageLimit } from "@synara/contracts";
 
 import { runAntigravityHelperProcess } from "../../provider/antigravityCli";
+import { compareSemverVersions, parseGenericCliVersion } from "../../provider/providerMaintenance";
 import {
   asRecord,
   asString,
@@ -21,6 +22,9 @@ import type { ProviderUsageFetcher } from "../types";
 
 const PROVIDER = "antigravity";
 const SOURCE = "antigravity-cli";
+// Earlier versions may send /usage to the model as a regular prompt in print mode.
+const MINIMUM_NATIVE_USAGE_VERSION = "1.1.11";
+const VERSION_PROBE_TIMEOUT_MS = 3_000;
 const SIGN_IN_PROMPT = "Authentication required. Please visit the URL to log in";
 const WINDOW_MINUTES = { "5h": 300, weekly: 10_080 } as const;
 
@@ -80,12 +84,35 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
   // The native login can change without the profile launch context changing.
   retainSnapshot: false,
   async fetch(ctx) {
+    const unavailable = () =>
+      errorSnapshot(
+        PROVIDER,
+        ctx.nowMs,
+        SOURCE,
+        "Could not read limits from Antigravity. Check that the Antigravity CLI is installed and up to date.",
+      );
+    const binaryPath = ctx.antigravityBinaryPath?.trim() || "agy";
+    const baseEnvironment = { HOME: ctx.homeDir, ...ctx.env, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
     let cwd: string | undefined;
     try {
       // A neutral cwd keeps the quota query outside projects and their local settings.
       cwd = await mkdtemp(join(tmpdir(), "synara-agy-usage-"));
+      const probe = await runAntigravityHelperProcess(binaryPath, ["--version"], {
+        cwd,
+        baseEnvironment,
+        timeoutMs: VERSION_PROBE_TIMEOUT_MS,
+      });
+      const version = parseGenericCliVersion(probe.stdout + "\n" + probe.stderr);
+      if (
+        probe.code !== 0 ||
+        version === null ||
+        compareSemverVersions(version, MINIMUM_NATIVE_USAGE_VERSION) < 0
+      ) {
+        return unavailable();
+      }
+
       const result = await runAntigravityHelperProcess(
-        ctx.antigravityBinaryPath?.trim() || "agy",
+        binaryPath,
         [
           "--print",
           "/usage",
@@ -101,7 +128,7 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
         ],
         {
           cwd,
-          baseEnvironment: { HOME: ctx.homeDir, ...ctx.env, AGY_CLI_DISABLE_AUTO_UPDATE: "true" },
+          baseEnvironment,
           timeoutMs: 12_000,
           stopOnStderr: SIGN_IN_PROMPT,
         },
@@ -124,11 +151,6 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
     } finally {
       if (cwd) await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
     }
-    return errorSnapshot(
-      PROVIDER,
-      ctx.nowMs,
-      SOURCE,
-      "Could not read limits from Antigravity. Check that the Antigravity CLI is installed and up to date.",
-    );
+    return unavailable();
   },
 };

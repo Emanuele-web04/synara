@@ -20,10 +20,7 @@ import {
 import { formatRateLimitMessage, type RateLimitStatus } from "~/lib/rateLimitStatus";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { MenuTrigger } from "~/components/ui/menu";
-import {
-  serverAllProviderUsageQueryOptions,
-  serverSettingsQueryOptions,
-} from "~/lib/serverReactQuery";
+import { useProviderUsageQuery, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 
 import { resolveEnvironmentProviderUsageSummary } from "./EnvironmentUsageSection.logic";
 import {
@@ -137,7 +134,7 @@ export function EnvironmentUsageSection({
 }) {
   const { t } = useTranslation();
 
-  const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
+  const usageQuery = useProviderUsageQuery({ providers: [provider] });
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = deriveProviderInstances(
     settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW,

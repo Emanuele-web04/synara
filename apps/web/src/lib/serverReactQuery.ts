@@ -3,14 +3,14 @@ import type {
   ProviderKind,
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
-  ServerListProviderUsageInput,
   ServerProviderStatus,
   ServerStopLocalServerInput,
   StatsGetRecapInput,
   StatsGetUsageAnalyticsInput,
   ThreadId,
 } from "@synara/contracts";
-import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
+import { mutationOptions, queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { ensureNativeApi } from "~/nativeApi";
 import {
   EXPENSIVE_READ_RETRY_OPTIONS,
@@ -34,6 +34,7 @@ export const serverQueryKeys = {
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  antigravityProviderUsage: () => ["server", "allProviderUsage", "antigravity"] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -440,9 +441,24 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
   });
 }
 
-export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
-  const api = ensureNativeApi();
-  return api.server.listProviderUsage(input);
+async function fetchProviderUsageBatch(antigravity: boolean, forceRefresh = false) {
+  const snapshots = await ensureNativeApi().server.listProviderUsage({
+    ...(antigravity ? { provider: "antigravity" } : { excludeProvider: "antigravity" }),
+    ...(forceRefresh ? { forceRefresh } : {}),
+  });
+  // Older remote hosts may ignore the exclusion, so keep cache membership disjoint.
+  return snapshots.filter((snapshot) => (snapshot.provider === "antigravity") === antigravity);
+}
+
+export async function refreshProviderUsageQueries(queryClient: QueryClient) {
+  await Promise.all([
+    fetchProviderUsageBatch(false, true).then((data) =>
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), data),
+    ),
+    fetchProviderUsageBatch(true, true).then((data) =>
+      queryClient.setQueryData(serverQueryKeys.antigravityProviderUsage(), data),
+    ),
+  ]);
 }
 
 export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
@@ -553,24 +569,50 @@ export function serverUsageAnalyticsQueryOptions(
   });
 }
 
-// Live remaining-usage for every provider. Always fetches the full batch under a single query
-// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
-export function serverAllProviderUsageQueryOptions(
-  input:
-    | boolean
-    | {
-        enabled?: boolean;
-      } = true,
-) {
-  const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+function providerUsageBatchQueryOptions(antigravity: boolean, enabled: boolean) {
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(),
+    queryKey: antigravity
+      ? serverQueryKeys.antigravityProviderUsage()
+      : serverQueryKeys.allProviderUsage(),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(),
+    queryFn: () => fetchProviderUsageBatch(antigravity),
   });
+}
+
+// Antigravity launches a CLI read. Its cache and polling must not delay other providers.
+export function useProviderUsageQuery({
+  enabled = true,
+  providers,
+}: { enabled?: boolean; providers?: readonly ProviderKind[] } = {}) {
+  const wantsAntigravity = providers === undefined || providers.includes("antigravity");
+  const wantsOtherProviders =
+    providers === undefined || providers.some((provider) => provider !== "antigravity");
+  const otherUsage = useQuery(
+    providerUsageBatchQueryOptions(false, enabled && wantsOtherProviders),
+  );
+  const antigravityUsage = useQuery(
+    providerUsageBatchQueryOptions(true, enabled && wantsAntigravity),
+  );
+  const otherData = wantsOtherProviders ? otherUsage.data : undefined;
+  const antigravityData = wantsAntigravity ? antigravityUsage.data : undefined;
+  const data = useMemo(
+    () =>
+      otherData && antigravityData
+        ? [...otherData, ...antigravityData]
+        : (otherData ?? antigravityData),
+    [otherData, antigravityData],
+  );
+  return {
+    data,
+    isPending:
+      (wantsOtherProviders && otherUsage.isPending) ||
+      (wantsAntigravity && antigravityUsage.isPending),
+    isFetching:
+      (wantsOtherProviders && otherUsage.isFetching) ||
+      (wantsAntigravity && antigravityUsage.isFetching),
+  };
 }

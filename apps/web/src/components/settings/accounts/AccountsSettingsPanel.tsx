@@ -7,7 +7,6 @@
 // Exports: AccountsSettingsPanel, AccountsSettingsPanelProps
 
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderUsageSnapshot } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import {
@@ -20,7 +19,7 @@ import { useTranslation } from "~/i18n";
 import { ChevronLeftIcon } from "~/lib/icons";
 import { isProviderListedOnAccounts, isProviderOnAccountsPage } from "~/lib/providerAccountSummary";
 import { providerStatusesByInstance } from "~/lib/providerAvailability";
-import { serverAllProviderUsageQueryOptions } from "~/lib/serverReactQuery";
+import { useProviderUsageQuery } from "~/lib/serverReactQuery";
 
 import { Button } from "../../ui/button";
 import { ProviderUsageCard } from "../ProviderUsageSettingsPanel";
@@ -49,8 +48,8 @@ export function AccountsSettingsPanel({
   const { t } = useTranslation();
   const statuses = useProviderStatusesForLocalConfig();
   const statusByInstance = useMemo(() => providerStatusesByInstance(statuses), [statuses]);
-  // One usage fetch for the whole page; nothing is fetched while the page is closed.
-  const usageQuery = useQuery(serverAllProviderUsageQueryOptions({ enabled: active }));
+  // Usage polls only while the account settings are open.
+  const usageQuery = useProviderUsageQuery({ enabled: active });
   const usageByInstance = useMemo(
     () =>
       new Map<string, ServerProviderUsageSnapshot>(

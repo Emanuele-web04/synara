@@ -11,10 +11,7 @@ import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 
 import { useAppSettings, type RailUsageWindow } from "~/appSettings";
-import {
-  serverAllProviderUsageQueryOptions,
-  serverSettingsQueryOptions,
-} from "~/lib/serverReactQuery";
+import { useProviderUsageQuery, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 
 import { appRailButtonClassName } from "./AppRail";
@@ -223,7 +220,9 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
       t,
     ),
   );
-  const usageQuery = useQuery(serverAllProviderUsageQueryOptions({ enabled: accounts.length > 0 }));
+  const usageQuery = useProviderUsageQuery({
+    providers: accounts.map((account) => account.instance.driver),
+  });
 
   if (accounts.length === 0) {
     return null;
