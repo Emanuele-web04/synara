@@ -427,6 +427,8 @@ describe("wsNativeApi", () => {
 
     const payload = {
       settings: {
+        autoEngine: "native" as const,
+        autoGateThresholdPreset: "balanced" as const,
         autoResumeAfterUsageLimits: false,
         usageLimitRecoveryEpoch: 0,
         enableAssistantStreaming: true,

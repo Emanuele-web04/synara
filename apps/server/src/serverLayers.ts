@@ -80,6 +80,7 @@ import { PullRequestAutoFixServiceLive } from "./pullRequestAutoFix/Layers/PullR
 import { ComposerPredictionServiceLive } from "./composerPrediction/Layers/ComposerPredictionService";
 import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { AutoGateLive } from "./provider/autoGate/AutoGate";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryLive } from "./hostConnections/registry";
@@ -397,6 +398,7 @@ export function makeServerApplicationLayers() {
   // single ServerSettings service instead of capturing private defaults.
   const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
     Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(AutoGateLive.pipe(Layer.provideMerge(ServerSettingsLive))),
   );
   return {
     runtimeServicesLayer,

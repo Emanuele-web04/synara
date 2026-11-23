@@ -60,6 +60,7 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { AutoGate } from "../autoGate/AutoGate.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -504,6 +505,7 @@ export function makeCursorAdapter(
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
+    const autoGate = Option.getOrUndefined(yield* Effect.serviceOption(AutoGate));
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -992,6 +994,25 @@ export function makeCursorAdapter(
                 });
                 if (policyOutcome !== undefined) {
                   return { outcome: policyOutcome };
+                }
+                if (autoGate !== undefined) {
+                  const gateOutcome = yield* autoGate.decide({
+                    provider: PROVIDER,
+                    runtimeMode: input.runtimeMode,
+                    toolCall: {
+                      title:
+                        typeof params.toolCall.title === "string"
+                          ? params.toolCall.title
+                          : undefined,
+                      rawInput: params.toolCall.rawInput,
+                    },
+                    options: params.options,
+                    logVerdict: (entry) =>
+                      logNative(input.threadId, "synara/auto_gate_verdict", entry, "acp.jsonrpc"),
+                  });
+                  if (gateOutcome !== undefined) {
+                    return { outcome: gateOutcome };
+                  }
                 }
                 const permissionRequest = parsePermissionRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());

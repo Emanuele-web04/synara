@@ -111,6 +111,7 @@ import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { buildModelSelection } from "~/providerModelOptions";
+import { useAutoEngine } from "~/hooks/useAutoEngine";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useStore } from "~/store";
@@ -896,6 +897,7 @@ export function AutomationModelPicker({
   readonly onAutoModeSupportChange?: (supported: boolean) => void;
 }) {
   const { settings } = useAppSettings();
+  const autoEngine = useAutoEngine();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
@@ -944,6 +946,7 @@ export function AutomationModelPicker({
     value.provider,
     selectedRuntimeModel ?? persistedRuntimeModel,
     providerStatus,
+    autoEngine,
   );
   useEffect(() => {
     onAutoModeSupportChange?.(autoModeSupported);
@@ -1029,6 +1032,7 @@ export function AutomationDialog({
   readonly busy: boolean;
 }) {
   const { t, formatLocale } = useTranslation();
+  const autoEngine = useAutoEngine();
 
   const warnings: readonly AutomationDraftWarning[] = warningsProp ?? [];
   const acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId> =
@@ -1084,7 +1088,11 @@ export function AutomationDialog({
       ...form,
       projectId,
       modelSelection,
-      runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, modelSelection.provider),
+      runtimeMode: normalizeRuntimeModeForProvider(
+        form.runtimeMode,
+        modelSelection.provider,
+        autoEngine,
+      ),
       targetThreadId: targetStillMatches ? form.targetThreadId : "",
     });
   };
@@ -1270,7 +1278,11 @@ export function AutomationDialog({
                 onFormChange({
                   ...form,
                   modelSelection: value,
-                  runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, value.provider),
+                  runtimeMode: normalizeRuntimeModeForProvider(
+                    form.runtimeMode,
+                    value.provider,
+                    autoEngine,
+                  ),
                 });
               }}
               onAutoModeSupportChange={handleAutoModeSupportChange}

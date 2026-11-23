@@ -230,6 +230,7 @@ import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegist
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { AutoGate } from "./provider/autoGate/AutoGate";
 import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
@@ -605,6 +606,7 @@ const makeWsRpcHandlersLayer = () =>
       );
       const agentGateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway));
       const serverSettings = yield* ServerSettingsService;
+      const autoGate = Option.getOrUndefined(yield* Effect.serviceOption(AutoGate));
       const keepAwake = yield* KeepAwakeService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
@@ -2706,6 +2708,36 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverDesktopUpdate]: (input) => desktopUpdates.action(input),
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
+        [WS_METHODS.serverGetAutoGateStatus]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              if (autoGate === undefined) {
+                return {
+                  available: false,
+                  model: { state: "not-downloaded" as const },
+                  modelDir: "",
+                  counts: { allowed: 0, denied: 0, escalated: 0 },
+                };
+              }
+              const status = yield* autoGate.status;
+              return { available: true, ...status };
+            }),
+            "Failed to read Auto gate status",
+          ),
+        [WS_METHODS.serverDownloadAutoGateModel]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              if (autoGate === undefined) {
+                return yield* Effect.fail(
+                  new Error("Local Auto gate is not available on this server"),
+                );
+              }
+              yield* autoGate.ensureReady;
+              const status = yield* autoGate.status;
+              return { available: true, ...status };
+            }),
+            "Failed to download the Auto gate model",
+          ),
         [WS_METHODS.serverUpdateSettings]: (input) =>
           rpcEffect(
             (input.legacyProviders === undefined && input.legacyProviderInstances === undefined

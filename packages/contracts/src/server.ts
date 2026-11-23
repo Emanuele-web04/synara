@@ -16,7 +16,12 @@ import {
   ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "./providerInstance";
-import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
+import {
+  AutoGateStatusView,
+  KeepAwakeMode,
+  ServerSettingsPatch,
+  ServerSettingsView,
+} from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
@@ -737,6 +742,9 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 
 export const ServerProviderUpdateResult = ServerProviderStatusesUpdatedPayload;
 export type ServerProviderUpdateResult = typeof ServerProviderUpdateResult.Type;
+
+export const ServerGetAutoGateStatusResult = AutoGateStatusView;
+export type ServerGetAutoGateStatusResult = typeof ServerGetAutoGateStatusResult.Type;
 
 export const ServerGetSettingsResult = ServerSettingsView;
 export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;

@@ -1,6 +1,17 @@
-import type { ProviderKind, RuntimeMode } from "@synara/contracts";
+import type { AutoEngine, ProviderKind, RuntimeMode } from "@synara/contracts";
 
 const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent", "devin"]);
+// Providers whose ACP permission flow the local Auto gate drives when
+// `autoEngine: "local"` — every ACP adapter emitting request_permission.
+// OpenCode and Pi use non-ACP permission plumbing; wiring them is follow-up.
+const LOCAL_AUTO_GATE_PROVIDERS = new Set<ProviderKind>([
+  "devin",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "omp",
+]);
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
@@ -9,6 +20,10 @@ const RUNTIME_MODE_PRIVILEGE = {
 
 export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean {
   return AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
+}
+
+export function providerSupportsLocalAutoGate(provider: ProviderKind): boolean {
+  return LOCAL_AUTO_GATE_PROVIDERS.has(provider);
 }
 
 export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): string {
@@ -58,8 +73,11 @@ export function runtimeModeEscalatesPrivilege(
 export function normalizeRuntimeModeForProvider(
   runtimeMode: RuntimeMode,
   provider: ProviderKind,
+  autoEngine?: AutoEngine,
 ): RuntimeMode {
-  return runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)
+  return runtimeMode === "auto" &&
+    !providerSupportsAutoRuntimeMode(provider) &&
+    !(autoEngine === "local" && providerSupportsLocalAutoGate(provider))
     ? "approval-required"
     : runtimeMode;
 }

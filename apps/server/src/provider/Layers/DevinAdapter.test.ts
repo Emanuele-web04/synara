@@ -2208,6 +2208,55 @@ describe("resolveRequestedModeId", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
+  it("maps auto to Ask when the local Auto gate is enabled", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+          autoEngine: "local",
+        }),
+      ),
+    ).resolves.toBe("ask");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "ask", availableModes: devin300067Modes },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+          autoEngine: "local",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    // Without Ask, fall back to Accept Edits, then Smart — still surfacing
+    // actions to the local gate.
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: {
+            currentModeId: "bypass",
+            availableModes: devin300067Modes.filter((mode) => mode.id !== "ask"),
+          },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+          autoEngine: "local",
+        }),
+      ),
+    ).resolves.toBe("accept-edits");
+    // approval-required is unaffected by the engine setting.
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "ask", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+          autoEngine: "local",
+        }),
+      ),
+    ).resolves.toBe("smart");
+  });
+
   it("keeps Plan precedence over Smart for approval-required threads", async () => {
     await expect(
       Effect.runPromise(

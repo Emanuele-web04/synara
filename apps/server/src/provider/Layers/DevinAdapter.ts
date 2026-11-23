@@ -31,6 +31,7 @@ import {
   TurnId,
   type ProviderSessionStartInput,
   type RuntimeMode,
+  type AutoEngine,
 } from "@synara/contracts";
 import {
   getDevinStaticModelVariants,
@@ -74,6 +75,8 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig } from "../../config.ts";
+import { AutoGate } from "../autoGate/AutoGate.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -438,6 +441,8 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   turns: Array<ProviderThreadTurnSnapshot>;
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
+  // Latest user prompt, fed to the local Auto gate's classifier as context.
+  lastUserText: string | undefined;
   activeTurnHadAssistantContent: boolean;
   readonly activeAssistantItemsWithContent: Set<string>;
   readonly replayRegisteredTaskIds: Set<string>;
@@ -800,13 +805,18 @@ function findModeByWholeTokenAliases(
   });
 }
 
+// When the local Auto gate owns approvals, Devin's Ask mode surfaces every
+// action to Synara instead of Devin's own classifier deciding.
+const ACP_ASK_MODE_ALIASES = ["ask everytime", "ask every time", "ask"] as const;
+
 export function resolveRequestedModeId(input: {
   readonly modeState: AcpSessionModeState | undefined;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly autoEngine?: AutoEngine | undefined;
 }): Effect.Effect<string | undefined, ProviderAdapterValidationError> {
   return Effect.gen(function* () {
-    const { modeState, runtimeMode, interactionMode } = input;
+    const { modeState, runtimeMode, interactionMode, autoEngine = "native" } = input;
 
     if (!modeState) {
       const requiredBy =
@@ -832,24 +842,35 @@ export function resolveRequestedModeId(input: {
     const targetMode =
       interactionMode === "plan"
         ? findModeByExactNormalizedAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)
-        : runtimeMode !== "full-access"
-          ? // Smart first for both approval-required and auto (Devin's native
-            // Auto), then the prompt-heavier Accept Edits fallbacks. Each step
-            // down only ever means more prompts, never less safety.
-            (findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
+        : runtimeMode === "auto" && autoEngine === "local"
+          ? // The Synara gate decides locally: surface as much as possible.
+            // Ask first (everything prompts), then Accept Edits, then Smart —
+            // each step only narrows what reaches the gate, never widens it.
+            (findModeByExactNormalizedAliases(modeState.availableModes, ACP_ASK_MODE_ALIASES) ??
             findModeByExactNormalizedAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES) ??
-            // Some Devin catalogs expose Ask Everytime instead of Code. Match the
-            // full name: the separate Ask mode must never count as approval mode.
-            findModeByExactNormalizedAliases(modeState.availableModes, [
-              "ask everytime",
-              "ask every time",
-            ]) ??
+            findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
             findModeByWholeTokenAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES))
-          : (findModeByExactNormalizedAliases(
-              modeState.availableModes,
-              ACP_FULL_ACCESS_MODE_ALIASES,
-            ) ??
-            findModeByWholeTokenAliases(modeState.availableModes, ACP_FULL_ACCESS_MODE_ALIASES));
+          : runtimeMode !== "full-access"
+            ? // Smart first for both approval-required and auto (Devin's native
+              // Auto), then the prompt-heavier Accept Edits fallbacks. Each step
+              // down only ever means more prompts, never less safety.
+              (findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
+              findModeByExactNormalizedAliases(
+                modeState.availableModes,
+                ACP_APPROVAL_MODE_ALIASES,
+              ) ??
+              // Some Devin catalogs expose Ask Everytime instead of Code. Match the
+              // full name: the separate Ask mode must never count as approval mode.
+              findModeByExactNormalizedAliases(modeState.availableModes, [
+                "ask everytime",
+                "ask every time",
+              ]) ??
+              findModeByWholeTokenAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES))
+            : (findModeByExactNormalizedAliases(
+                modeState.availableModes,
+                ACP_FULL_ACCESS_MODE_ALIASES,
+              ) ??
+              findModeByWholeTokenAliases(modeState.availableModes, ACP_FULL_ACCESS_MODE_ALIASES));
 
     if (!targetMode) {
       if (runtimeMode === "full-access" && interactionMode !== "plan") {
@@ -874,6 +895,7 @@ export function applyDevinSessionConfiguration(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "getModeState" | "setMode">;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly autoEngine?: AutoEngine | undefined;
 }): Effect.Effect<string | undefined, ProviderAdapterError> {
   return Effect.gen(function* () {
     const readModeState = () =>
@@ -889,6 +911,7 @@ export function applyDevinSessionConfiguration(input: {
       modeState,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
+      autoEngine: input.autoEngine,
     });
 
     if (requestedModeId) {
@@ -908,6 +931,7 @@ export function applyDevinSessionConfiguration(input: {
         modeState: modeStateAfter,
         runtimeMode: input.runtimeMode,
         interactionMode: input.interactionMode,
+        autoEngine: input.autoEngine,
       }).pipe(
         Effect.mapError(
           (error) =>
@@ -1748,6 +1772,15 @@ export function makeDevinAdapter(
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
+    const serverSettings = yield* Effect.serviceOption(ServerSettingsService);
+    const autoGate = Option.getOrUndefined(yield* Effect.serviceOption(AutoGate));
+    const readAutoEngine = () =>
+      serverSettings._tag === "Some"
+        ? serverSettings.value.getSettings.pipe(
+            Effect.map((s) => s.autoEngine),
+            Effect.catch(() => Effect.succeed("native" as const)),
+          )
+        : Effect.succeed("native" as const);
 
     let nativeEventLogger = options?.nativeEventLogger;
     let managedNativeEventLogger: EventNdjsonLogger | undefined;
@@ -2772,6 +2805,23 @@ export function makeDevinAdapter(
                 if (policyOutcome !== undefined) {
                   return { outcome: policyOutcome };
                 }
+                if (autoGate !== undefined) {
+                  const gateOutcome = yield* autoGate.decide({
+                    provider: PROVIDER,
+                    runtimeMode: input.runtimeMode,
+                    toolCall: {
+                      title: permissionRequest.detail,
+                      rawInput: toolCallRawInput,
+                    },
+                    options: params.options,
+                    userRequest: ctx?.lastUserText,
+                    logVerdict: (entry) =>
+                      logNative(input.threadId, "synara/auto_gate_verdict", entry),
+                  });
+                  if (gateOutcome !== undefined) {
+                    return { outcome: gateOutcome };
+                  }
+                }
 
                 // "Always allow this session" sticks to the exact request it
                 // covered — same kind AND same command/tool — never the whole
@@ -3033,6 +3083,7 @@ export function makeDevinAdapter(
             turns: [],
             activeInteractionMode: undefined,
             activeTurnId: undefined,
+            lastUserText: undefined,
             activeTurnHadAssistantContent: false,
             activeAssistantItemsWithContent: new Set(),
             assistantItemOwners: new Map(),
@@ -3662,6 +3713,7 @@ export function makeDevinAdapter(
               runtime: acp,
               runtimeMode: input.runtimeMode,
               interactionMode: undefined,
+              autoEngine: yield* readAutoEngine(),
             });
             if (
               input.runtimeMode === "approval-required" &&
@@ -4088,7 +4140,9 @@ export function makeDevinAdapter(
           runtime: ctx.acp,
           runtimeMode: ctx.session.runtimeMode,
           interactionMode,
+          autoEngine: yield* readAutoEngine(),
         });
+        ctx.lastUserText = input.input;
 
         const promptParts = yield* buildDevinPromptParts({
           text: input.input,

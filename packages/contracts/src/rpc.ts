@@ -383,6 +383,7 @@ import {
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
+  ServerGetAutoGateStatusResult,
   ServerGetSettingsResult,
   ServerKeepAwakeUpdatedPayload,
   ServerListLocalServersResult,
@@ -1471,6 +1472,18 @@ export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   error: WsRpcError,
 });
 
+export const WsServerGetAutoGateStatusRpc = Rpc.make(WS_METHODS.serverGetAutoGateStatus, {
+  payload: Schema.Struct({}),
+  success: ServerGetAutoGateStatusResult,
+  error: WsRpcError,
+});
+
+export const WsServerDownloadAutoGateModelRpc = Rpc.make(WS_METHODS.serverDownloadAutoGateModel, {
+  payload: Schema.Struct({}),
+  success: ServerGetAutoGateStatusResult,
+  error: WsRpcError,
+});
+
 export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: ServerUpdateSettingsInput,
   success: ServerUpdateSettingsResult,
@@ -2443,6 +2456,8 @@ export type WsFeatureRpc =
   | typeof WsServerDesktopUpdateStatusRpc
   | typeof WsServerDesktopUpdateRpc
   | typeof WsServerGetSettingsRpc
+  | typeof WsServerGetAutoGateStatusRpc
+  | typeof WsServerDownloadAutoGateModelRpc
   | typeof WsServerUpdateSettingsRpc
   | typeof WsServerRefreshProvidersRpc
   | typeof WsServerUpdateProviderRpc
@@ -2650,6 +2665,8 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsServerDesktopUpdateStatusRpc,
   WsServerDesktopUpdateRpc,
   WsServerGetSettingsRpc,
+  WsServerGetAutoGateStatusRpc,
+  WsServerDownloadAutoGateModelRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

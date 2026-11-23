@@ -345,6 +345,7 @@ import type {
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
+  ServerGetAutoGateStatusResult,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
@@ -1411,6 +1412,8 @@ export interface NativeApi {
     getConfig: () => Promise<ServerConfig>;
     getEnvironment: () => Promise<ServerGetEnvironmentResult>;
     getSettings: () => Promise<ServerGetSettingsResult>;
+    getAutoGateStatus: () => Promise<ServerGetAutoGateStatusResult>;
+    downloadAutoGateModel: () => Promise<ServerGetAutoGateStatusResult>;
     updateSettings: (input: ServerUpdateSettingsInput) => Promise<ServerUpdateSettingsResult>;
     getAuthSession: () => Promise<AuthSessionState>;
     bootstrapAuth: (input: AuthBootstrapInput) => Promise<AuthBootstrapResult>;
