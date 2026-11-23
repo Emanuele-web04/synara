@@ -449,6 +449,15 @@ async function dispatchDraftThreadOnce(
                 fusion: {
                   lead: modelSelection,
                   sidekick: draftComposerState.fusion.sidekick,
+                  ...(draftComposerState.fusion.briefStyle
+                    ? { briefStyle: draftComposerState.fusion.briefStyle }
+                    : {}),
+                  ...(draftComposerState.fusion.sidekickMayPushBack !== undefined
+                    ? { sidekickMayPushBack: draftComposerState.fusion.sidekickMayPushBack }
+                    : {}),
+                  ...(draftComposerState.fusion.delegateExploration !== undefined
+                    ? { delegateExploration: draftComposerState.fusion.delegateExploration }
+                    : {}),
                 },
               }
             : {}),

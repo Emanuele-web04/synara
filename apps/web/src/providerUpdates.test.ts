@@ -58,6 +58,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     autoEngine: "native",
     autoGateThresholdPreset: "balanced",
     autoResumeAfterUsageLimits: false,
+    fusionPresets: [],
     usageLimitRecoveryEpoch: 0,
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,

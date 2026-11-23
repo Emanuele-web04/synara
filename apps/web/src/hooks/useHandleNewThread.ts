@@ -339,7 +339,19 @@ export function useHandleNewThread() {
           workingDirectory: creationState.workingDirectory,
           lastKnownPr: creationState.lastKnownPr,
           ...(draftFusion?.sidekick
-            ? { fusion: { lead: creationState.modelSelection, sidekick: draftFusion.sidekick } }
+            ? {
+                fusion: {
+                  lead: creationState.modelSelection,
+                  sidekick: draftFusion.sidekick,
+                  ...(draftFusion.briefStyle ? { briefStyle: draftFusion.briefStyle } : {}),
+                  ...(draftFusion.sidekickMayPushBack !== undefined
+                    ? { sidekickMayPushBack: draftFusion.sidekickMayPushBack }
+                    : {}),
+                  ...(draftFusion.delegateExploration !== undefined
+                    ? { delegateExploration: draftFusion.delegateExploration }
+                    : {}),
+                },
+              }
             : {}),
           createdAt: new Date().toISOString(),
         },

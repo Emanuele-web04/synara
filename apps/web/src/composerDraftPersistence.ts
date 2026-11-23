@@ -321,7 +321,14 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   ),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   fusion: Schema.optionalKey(
-    Schema.NullOr(Schema.Struct({ sidekick: Schema.NullOr(ModelSelection) })),
+    Schema.NullOr(
+      Schema.Struct({
+        sidekick: Schema.NullOr(ModelSelection),
+        briefStyle: Schema.optionalKey(Schema.Literals(["prescriptive", "goal-level"])),
+        sidekickMayPushBack: Schema.optionalKey(Schema.Boolean),
+        delegateExploration: Schema.optionalKey(Schema.Boolean),
+      }),
+    ),
   ),
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   runtimeMode: Schema.optionalKey(RuntimeMode),
@@ -1078,7 +1085,18 @@ function normalizePersistedDraftsByThreadId(
       persistedFusion?.sidekick == null
         ? null
         : (normalizeModelSelection(persistedFusion.sidekick) ?? null);
-    const fusion = persistedFusion ? { sidekick: fusionSidekick } : null;
+    const fusion = persistedFusion
+      ? {
+          sidekick: fusionSidekick,
+          ...(persistedFusion.briefStyle ? { briefStyle: persistedFusion.briefStyle } : {}),
+          ...(persistedFusion.sidekickMayPushBack !== undefined
+            ? { sidekickMayPushBack: persistedFusion.sidekickMayPushBack }
+            : {}),
+          ...(persistedFusion.delegateExploration !== undefined
+            ? { delegateExploration: persistedFusion.delegateExploration }
+            : {}),
+        }
+      : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,

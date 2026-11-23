@@ -1,7 +1,13 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, RuntimeMode, ThreadEnvironmentMode } from "./orchestration";
+import {
+  FusionPairingPreset,
+  ModelSelection,
+  ProviderKind,
+  RuntimeMode,
+  ThreadEnvironmentMode,
+} from "./orchestration";
 import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
@@ -240,6 +246,9 @@ export const ServerSettings = Schema.Struct({
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   providerInstances: ProviderInstanceConfigMap.pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  // Saved Fusion pairings (RFC #1301): lead+sidekick presets the composer's
+  // Fusion section offers ahead of an ad-hoc pick.
+  fusionPresets: Schema.Array(FusionPairingPreset).pipe(Schema.withDecodingDefault(() => [])),
   newThreadDefaults: NewThreadDefaults.pipe(Schema.withDecodingDefault(() => ({}))),
   // When the first-run welcome tour was completed or skipped. Server-backed so a
   // browser-storage reset does not replay setup on an already configured install.
@@ -272,6 +281,7 @@ const ProviderSettingsBasePatch = {
 };
 
 export const ServerSettingsPatch = Schema.Struct({
+  fusionPresets: Schema.optionalKey(Schema.Array(FusionPairingPreset)),
   autoResumeAfterUsageLimits: Schema.optionalKey(Schema.Boolean),
   autoEngine: Schema.optionalKey(AutoEngine),
   autoGateThresholdPreset: Schema.optionalKey(AutoGateThresholdPreset),

@@ -42,6 +42,7 @@ import {
   KeyboardShortcutsSettingsPanel,
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
+import { FusionSettingsPanel } from "../components/settings/FusionSettingsPanel";
 import { ModelsSettingsPanel } from "../components/settings/ModelsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProvidersSettingsPanel } from "../components/settings/providers/ProvidersSettingsPanel";
@@ -306,6 +307,7 @@ function SettingsRouteView() {
                 />
                 <WorktreesSettingsPanel active={activeSection === "worktrees"} />
                 <ArchivedSettingsPanel active={activeSection === "archived"} />
+                <FusionSettingsPanel active={activeSection === "fusion"} />
                 <ModelsSettingsPanel
                   active={activeSection === "models"}
                   settings={settings}

@@ -51,6 +51,7 @@ import {
   type ReactNode,
 } from "react";
 import { useAutoEngine } from "~/hooks/useAutoEngine";
+import { useFusionPresets } from "~/hooks/useFusionPresets";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -681,6 +682,7 @@ export default function ChatView({
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings, updateSettings } = useAppSettings();
   const autoEngine = useAutoEngine();
+  const fusionPresets = useFusionPresets();
   const newChatDefault = useNewChatDefault(settings);
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -5202,6 +5204,7 @@ export default function ChatView({
       fusion={{
         enabled: composerDraft?.fusion != null,
         sidekick: composerDraft?.fusion?.sidekick ?? null,
+        presets: fusionPresets,
         onToggle: (enabled) =>
           setComposerFusion(
             threadId,
@@ -5217,6 +5220,26 @@ export default function ChatView({
           if (sidekick) {
             setComposerFusionSidekick(threadId, sidekick);
           }
+        },
+        // A preset commits the lead through the ordinary selection path and
+        // stages sidekick + the pairing knobs on the draft in one gesture.
+        onApplyPreset: (preset) => {
+          handleProviderModelChange(preset.pairing.lead.provider, preset.pairing.lead.model, {
+            ...(preset.pairing.lead.options ? { modelOptions: preset.pairing.lead.options } : {}),
+            ...(preset.pairing.lead.instanceId
+              ? { instanceId: preset.pairing.lead.instanceId }
+              : {}),
+          });
+          setComposerFusion(threadId, {
+            sidekick: preset.pairing.sidekick,
+            ...(preset.pairing.briefStyle ? { briefStyle: preset.pairing.briefStyle } : {}),
+            ...(preset.pairing.sidekickMayPushBack !== undefined
+              ? { sidekickMayPushBack: preset.pairing.sidekickMayPushBack }
+              : {}),
+            ...(preset.pairing.delegateExploration !== undefined
+              ? { delegateExploration: preset.pairing.delegateExploration }
+              : {}),
+          });
         },
       }}
       onProviderModelChange={handleProviderModelChange}

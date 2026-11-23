@@ -222,7 +222,13 @@ export interface ComposerThreadDraftState {
    * the resolved `modelSelection`; `sidekick` is the second model picked in the
    * picker's Fusion section. Null/absent = ordinary single-model thread.
    */
-  fusion?: { readonly sidekick: ModelSelection | null } | null;
+  fusion?: {
+    readonly sidekick: ModelSelection | null;
+    // Pairing knobs staged by an applied preset (FusionPairing minus `lead`).
+    readonly briefStyle?: "prescriptive" | "goal-level";
+    readonly sidekickMayPushBack?: boolean;
+    readonly delegateExploration?: boolean;
+  } | null;
   // Per-thread provider start options staged for dispatch (e.g. a group's worker
   // routing defaults). Unset means the global settings-derived options apply.
   providerOptionsForDispatch?: ProviderStartOptions | undefined;

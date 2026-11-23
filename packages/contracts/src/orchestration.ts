@@ -1156,6 +1156,18 @@ export const FusionPairing = Schema.Struct({
 });
 export type FusionPairing = typeof FusionPairing.Type;
 
+/**
+ * FusionPairingPreset — a named, reusable pairing saved in settings (#1301 P5).
+ * The picker lists presets first; resolution against installed/authenticated
+ * providers happens at apply time, never at save time.
+ */
+export const FusionPairingPreset = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  pairing: FusionPairing,
+});
+export type FusionPairingPreset = typeof FusionPairingPreset.Type;
+
 export const OrchestrationThread = Schema.Struct({
   ...UsageLimitRecoveryFields,
   /** Durable project-import provenance; ordinary chats never request imported history. */

@@ -6,6 +6,7 @@
 //   model storage, and shared menu primitives.
 
 import {
+  type FusionPairingPreset,
   type ModelSlug,
   type ModelSelection,
   type ProviderAgentDescriptor,
@@ -35,6 +36,7 @@ import {
   type ProviderModelOption,
   type ProviderOptions,
 } from "../../providerModelOptions";
+import { fusionPresetSummary, usableFusionPresets } from "~/lib/fusionPresets";
 import { SearchIcon } from "~/lib/icons";
 import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
@@ -133,12 +135,16 @@ type ComposerModelPickerProps = {
   fusion?: {
     enabled: boolean;
     sidekick: ModelSelection | null;
+    /** Saved (settings) + shipped pairing presets, listed first in the section. */
+    presets?: ReadonlyArray<FusionPairingPreset>;
     onToggle: (enabled: boolean) => void;
     onSidekickModelChange: (
       provider: ProviderKind,
       model: ModelSlug,
       options?: ComposerModelSelectionOptions,
     ) => void;
+    /** Applies a preset: lead commits on the main selection path, sidekick+knobs stage on the draft. */
+    onApplyPreset?: (preset: FusionPairingPreset) => void;
   };
   onProviderModelChange: (
     provider: ProviderKind,
@@ -361,6 +367,13 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   });
   const activeProviderTab = providerTabs.find(
     (providerTab) => providerTab.instanceId === activeInstanceId,
+  );
+  // Providers with at least one usable account (not blocked, no setup gate) — the
+  // signal Fusion presets resolve against so dead pairings stay hidden.
+  const fusionUsableProviders = new Set(
+    providerTabs
+      .filter((providerTab) => !providerTab.blocked && !providerTab.setupMessage)
+      .map((providerTab) => providerTab.provider),
   );
   // Reset to the fastest starting point on every open: presets when the user has any,
   // unless the composer's own account is waiting to be set up.
@@ -651,7 +664,17 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             onAddProviders={lockedProvider === null ? openProviderSettings : undefined}
           />
           {props.fusion ? (
-            <FusionSection fusion={props.fusion} role={fusionRole} onRoleChange={setFusionRole} />
+            <FusionSection
+              fusion={props.fusion}
+              role={fusionRole}
+              onRoleChange={setFusionRole}
+              usableProviders={fusionUsableProviders}
+              onApplyPreset={(preset) => {
+                props.fusion?.onApplyPreset?.(preset);
+                setMenuOpen(false);
+                props.onSelectionCommitted?.();
+              }}
+            />
           ) : null}
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 *:min-w-0">
             <SearchIcon aria-hidden="true" className={PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME} />
@@ -829,63 +852,86 @@ function FusionSection(props: {
   fusion: NonNullable<ComposerModelPickerProps["fusion"]>;
   role: "lead" | "sidekick";
   onRoleChange: (role: "lead" | "sidekick") => void;
+  usableProviders: ReadonlySet<ProviderKind>;
+  onApplyPreset: (preset: FusionPairingPreset) => void;
 }) {
   const { t } = useTranslation();
   const { fusion } = props;
+  // Presets whose lead+sidekick both resolve to a usable provider account.
+  const presets = usableFusionPresets(fusion.presets ?? [], props.usableProviders);
   return (
-    <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={fusion.enabled}
-        onClick={() => {
-          const nextEnabled = !fusion.enabled;
-          fusion.onToggle(nextEnabled);
-          if (!nextEnabled) props.onRoleChange("lead");
-        }}
-        className={cn(
-          "inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
-          fusion.enabled ? "bg-primary" : "bg-muted",
-        )}
-        aria-label={t("chat:fusionPairing")}
-      >
-        <span
+    <div className="flex shrink-0 flex-col border-b border-border">
+      <div className="flex items-center gap-1 px-3 py-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={fusion.enabled}
+          onClick={() => {
+            const nextEnabled = !fusion.enabled;
+            fusion.onToggle(nextEnabled);
+            if (!nextEnabled) props.onRoleChange("lead");
+          }}
           className={cn(
-            "size-3 rounded-full bg-white shadow transition-transform",
-            fusion.enabled ? "translate-x-3.5" : "translate-x-0.5",
+            "inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
+            fusion.enabled ? "bg-primary" : "bg-muted",
           )}
-        />
-      </button>
-      <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
-        {t("chat:fusion")}
-      </span>
-      {fusion.enabled ? (
-        <div className="ml-auto flex items-center gap-1">
-          {(
-            [
-              ["lead", t("chat:lead")],
-              ["sidekick", t("chat:sidekick")],
-            ] as const
-          ).map(([role, roleLabel]) => (
+          aria-label={t("chat:fusionPairing")}
+        >
+          <span
+            className={cn(
+              "size-3 rounded-full bg-white shadow transition-transform",
+              fusion.enabled ? "translate-x-3.5" : "translate-x-0.5",
+            )}
+          />
+        </button>
+        <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+          {t("chat:fusion")}
+        </span>
+        {fusion.enabled ? (
+          <div className="ml-auto flex items-center gap-1">
+            {(
+              [
+                ["lead", t("chat:lead")],
+                ["sidekick", t("chat:sidekick")],
+              ] as const
+            ).map(([role, roleLabel]) => (
+              <button
+                key={role}
+                type="button"
+                onClick={() => props.onRoleChange(role)}
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-ui-xs",
+                  props.role === role
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {role === "lead"
+                  ? roleLabel
+                  : fusion.sidekick
+                    ? `${roleLabel}: ${composerModelDisplayName(
+                        fusion.sidekick.provider,
+                        fusion.sidekick.model,
+                      )}`
+                    : roleLabel}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {fusion.enabled && presets.length > 0 ? (
+        <div className="flex flex-col gap-px px-1 pb-1">
+          {presets.map((preset) => (
             <button
-              key={role}
+              key={preset.id}
               type="button"
-              onClick={() => props.onRoleChange(role)}
-              className={cn(
-                "rounded-full px-2 py-0.5 text-ui-xs",
-                props.role === role
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              onClick={() => props.onApplyPreset(preset)}
+              className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
             >
-              {role === "lead"
-                ? roleLabel
-                : fusion.sidekick
-                  ? `${roleLabel}: ${composerModelDisplayName(
-                      fusion.sidekick.provider,
-                      fusion.sidekick.model,
-                    )}`
-                  : roleLabel}
+              <span className="truncate text-ui-xs font-medium text-foreground">{preset.name}</span>
+              <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
+                {fusionPresetSummary(preset, composerModelDisplayName)}
+              </span>
             </button>
           ))}
         </div>

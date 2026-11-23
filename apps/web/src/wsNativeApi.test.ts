@@ -430,6 +430,7 @@ describe("wsNativeApi", () => {
         autoEngine: "native" as const,
         autoGateThresholdPreset: "balanced" as const,
         autoResumeAfterUsageLimits: false,
+        fusionPresets: [],
         usageLimitRecoveryEpoch: 0,
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
