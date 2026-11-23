@@ -61,6 +61,7 @@ export function ReadyStep(props: {
   readonly live: ReadonlySet<ProviderKind>;
   readonly onProjectAdded: (result: OnboardingProjectResult) => void;
   readonly onExplore: () => void;
+  readonly onBack: () => void;
   readonly onBusyChange: (busy: boolean) => void;
 }) {
   const adder = useProjectAdder({
@@ -74,6 +75,20 @@ export function ReadyStep(props: {
     event.preventDefault();
     void adder.addProject(path);
   };
+
+  const backButton = (
+    <Button
+      type="button"
+      shape="capsule"
+      size="lg"
+      variant="ghost"
+      className="px-4"
+      disabled={adder.busy}
+      onClick={props.onBack}
+    >
+      {t("common:app_back")}
+    </Button>
+  );
 
   return (
     <OnboardingScreen
@@ -95,17 +110,24 @@ export function ReadyStep(props: {
             }
           : undefined
       }
-      secondary={{
-        label: t("onboarding:readyExploreFirst"),
-        onClick: props.onExplore,
-        disabled: adder.busy,
-      }}
+      // The browser build's primary action is the path form below, so its secondary
+      // actions sit in that row instead of above it.
+      secondary={
+        isElectron
+          ? {
+              label: t("onboarding:readyExploreFirst"),
+              onClick: props.onExplore,
+              disabled: adder.busy,
+            }
+          : undefined
+      }
+      actionsExtra={isElectron ? backButton : null}
       aside={<Receipt rows={props.receipt} />}
       footnote={
         <>
           {isElectron ? null : (
-            <form onSubmit={submitPath} className="flex max-w-[520px] items-center gap-2">
-              <InputGroup className="h-10 min-w-0 flex-1 rounded-full sm:h-9">
+            <form onSubmit={submitPath} className="flex flex-wrap items-center gap-2 pt-1.5">
+              <InputGroup className="h-10 w-[340px] max-w-full min-w-0 rounded-full sm:h-9">
                 <InputGroupAddon>
                   <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden />
                 </InputGroupAddon>
@@ -136,6 +158,18 @@ export function ReadyStep(props: {
               >
                 {t("workspace:sections_addProject")}
               </Button>
+              <Button
+                type="button"
+                shape="capsule"
+                size="lg"
+                variant="outline"
+                className="bg-background/70 px-4"
+                disabled={adder.busy}
+                onClick={props.onExplore}
+              >
+                {t("onboarding:readyExploreFirst")}
+              </Button>
+              {backButton}
             </form>
           )}
           {adder.error ? (

@@ -134,7 +134,7 @@ export function Group({
           className="flex items-center gap-1.5 text-ui-sm font-normal text-muted-foreground"
         >
           {label}
-          <span className="text-muted-foreground/60 tabular-nums">{count}</span>
+          <span className="text-muted-foreground tabular-nums">{count}</span>
         </h2>
         {action}
       </div>

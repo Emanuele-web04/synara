@@ -1,6 +1,7 @@
 #import "AXBridge.h"
 
-#import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 

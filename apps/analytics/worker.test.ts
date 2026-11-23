@@ -46,7 +46,7 @@ describe("normalizeEvent", () => {
     });
   });
 
-  it("accepts app.error and redacts free text server-side", () => {
+  it("accepts app.error as technical metadata without trusting its content-derived fingerprint", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.error",
@@ -60,9 +60,9 @@ describe("normalizeEvent", () => {
     });
     expect(row).not.toBeNull();
     expect(row!.source).toBe("renderer");
-    expect(row!.fingerprint).toBe("abcdef0123456789");
-    expect(row!.message).toContain("<email>");
-    expect(row!.message).toContain("~/…/x");
+    expect(row!.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(row!.fingerprint).not.toBe("abcdef0123456789");
+    expect(row!.message).toBe("Error at renderer:1:1");
     expect(JSON.stringify(row)).not.toContain("user@example.com");
     expect(JSON.stringify(row)).not.toContain("sk-AbCd");
     expect(JSON.stringify(row)).not.toContain("alice");
@@ -101,10 +101,10 @@ describe("normalizeEvent", () => {
       event: "update.error",
       payload: { kind, outcome: "error", reason: "customer-secret" },
     });
-    expect(row!.reason).toBe("");
+    expect(row).toBeNull();
   });
 
-  it("accepts crash events with a redacted logTail", () => {
+  it("keeps crash categories and drops the log tail", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.child-process-crash",
@@ -115,8 +115,7 @@ describe("normalizeEvent", () => {
         logTail: "dial 10.0.0.8:8080 failed, password=hunter2",
       },
     });
-    expect(row!.logTail).toContain("<ip>");
-    expect(row!.logTail).not.toContain("hunter2");
+    expect(row!.logTail).toBeNull();
     expect(row!.processType).toBe("backend");
   });
 
@@ -150,7 +149,7 @@ describe("normalizeEvent", () => {
     expect(normalizeEvent(noId)!.clientId).toBeNull();
   });
 
-  it("caps payload.kind and other free strings", () => {
+  it("rejects invented payload kinds instead of retaining truncated text", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.error",
@@ -161,7 +160,7 @@ describe("normalizeEvent", () => {
         fingerprint: "abcdef0123456789",
       },
     });
-    expect(row!.kind.length).toBeLessThanOrEqual(16);
+    expect(row).toBeNull();
   });
 });
 
@@ -227,6 +226,109 @@ describe("normalizeProductEvent", () => {
   ])("rejects %s", (_name, patch) => {
     const raw = { ...productEvent, ...patch };
     expect(normalizeProductEvent(raw, Date.parse(productEvent.ts))).toBeNull();
+  });
+
+  it("accepts a fixed failure category and HTTP status only on turns that ended badly", () => {
+    const turn = { ...productEvent, event: "turn.completed", feature: undefined };
+    const now = Date.parse(productEvent.ts);
+    expect(
+      normalizeProductEvent(
+        { ...turn, outcome: "failed", failure: "edge_blocked", httpStatus: 403 },
+        now,
+      ),
+    ).toMatchObject({ failure: "edge_blocked", httpStatus: 403 });
+    expect(
+      normalizeProductEvent({ ...turn, outcome: "cancelled", failure: "network" }, now),
+    ).toMatchObject({ failure: "network", httpStatus: null });
+    expect(normalizeProductEvent({ ...turn, outcome: "failed" }, now)).toMatchObject({
+      failure: null,
+      httpStatus: null,
+    });
+    for (const patch of [
+      { outcome: "failed", failure: "free text from the provider" },
+      { outcome: "succeeded", failure: "auth" },
+      { outcome: "failed", httpStatus: 403 },
+      { outcome: "failed", failure: "auth", httpStatus: 99 },
+      { outcome: "failed", failure: "auth", httpStatus: 403.5 },
+    ]) {
+      expect(normalizeProductEvent({ ...turn, ...patch }, now)).toBeNull();
+    }
+    expect(
+      normalizeProductEvent(
+        { ...productEvent, event: "chat.request", outcome: "failed", failure: "auth" },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts a fixed connection failure, network and route only on connection events", () => {
+    const now = Date.parse(productEvent.ts);
+    const attempt = {
+      ...productEvent,
+      surface: "ios",
+      platform: "ios",
+      event: "connection.reconnect",
+      feature: undefined,
+      mode: "remote",
+    };
+    expect(
+      normalizeProductEvent(
+        {
+          ...attempt,
+          outcome: "failed",
+          failure: "route_upgrade",
+          httpStatus: 502,
+          network: "cellular",
+          route: "tunnel",
+        },
+        now,
+      ),
+    ).toMatchObject({
+      failure: "route_upgrade",
+      httpStatus: 502,
+      network: "cellular",
+      route: "tunnel",
+    });
+    for (const event of ["connection.pair", "connection.connect"]) {
+      expect(
+        normalizeProductEvent(
+          { ...attempt, event, outcome: "failed", failure: "subscription_required" },
+          now,
+        ),
+      ).toMatchObject({ event, failure: "subscription_required", network: null, route: null });
+    }
+    // Network and route also describe attempts that started or succeeded.
+    expect(
+      normalizeProductEvent(
+        { ...attempt, outcome: "succeeded", network: "wifi", route: "local" },
+        now,
+      ),
+    ).toMatchObject({ failure: null, network: "wifi", route: "local" });
+    expect(normalizeProductEvent(attempt, now)).toMatchObject({ network: null, route: null });
+    for (const patch of [
+      { outcome: "failed", failure: "connection refused by 203.0.113.7" },
+      // Each event family keeps its own category set.
+      { outcome: "failed", failure: "edge_blocked" },
+      { outcome: "succeeded", failure: "timeout" },
+      { outcome: "cancelled", failure: "timeout" },
+      { outcome: "failed", httpStatus: 502 },
+      { outcome: "failed", failure: "route_upgrade", httpStatus: 600 },
+      { network: "5g" },
+      { network: null },
+      { route: "relay" },
+      { route: "host.example.test" },
+    ]) {
+      expect(normalizeProductEvent({ ...attempt, ...patch }, now)).toBeNull();
+    }
+    const turn = { ...productEvent, event: "turn.completed", feature: undefined };
+    for (const patch of [
+      { outcome: "failed", failure: "tls_handshake" },
+      { network: "wifi" },
+      { route: "direct" },
+    ]) {
+      expect(normalizeProductEvent({ ...turn, ...patch }, now)).toBeNull();
+    }
+    expect(normalizeProductEvent({ ...productEvent, network: "wifi" }, now)).toBeNull();
   });
 
   it("rejects timestamps outside the 7-day and 5-minute ingest window", () => {
@@ -354,55 +456,24 @@ describe("usage + beta events", () => {
     ).toBeNull();
   });
 
-  it("usage.daily merges duplicate providers and clamps counts", () => {
-    const row = normalizeEvent({
-      ...baseEvent,
-      event: "usage.daily",
-      payload: {
-        kind: "usage",
-        providers: [
-          { provider: "claudeAgent", threads: 3.9, turns: 9.9, turnsFailed: 1 },
-          { provider: "claudeAgent", threads: 1, turns: Number.NaN, turnsFailed: -2 },
-          { provider: "opencode", threads: 200_000, turns: 4, turnsFailed: 0 },
-          { provider: "not a provider!", threads: 9, turns: 9, turnsFailed: 9 },
-        ],
-        projects: 7.7,
-        activeThreads: -1,
-      },
-    });
-    expect(row).not.toBeNull();
-    expect(row!.providers).toEqual([
-      { provider: "claudeAgent", threads: 4, turns: 9, turnsFailed: 1 },
-      { provider: "opencode", threads: 100_000, turns: 4, turnsFailed: 0 },
-    ]);
-    expect(row!.projects).toBe(7);
-    expect(row!.activeThreads).toBe(0);
-  });
-
-  it("drops usage.daily when providers is not an array", () => {
-    expect(
-      normalizeEvent({
+  it.each([undefined, "legacy-provider", [{ provider: "codex", threads: 1, turns: 99 }]])(
+    "keeps fixed health counts and drops retired provider payload %j",
+    (providers) => {
+      const row = normalizeEvent({
         ...baseEvent,
         event: "usage.daily",
-        payload: { kind: "usage", providers: "claudeAgent", projects: 1, activeThreads: 1 },
-      }),
-    ).toBeNull();
-    expect(
-      normalizeEvent({
-        ...baseEvent,
-        event: "usage.daily",
-        payload: { kind: "usage", projects: 1, activeThreads: 1 },
-      }),
-    ).toBeNull();
-    // An empty array is still a valid (empty) snapshot.
-    expect(
-      normalizeEvent({
-        ...baseEvent,
-        event: "usage.daily",
-        payload: { kind: "usage", providers: [], projects: 0, activeThreads: 0 },
-      })!.providers,
-    ).toEqual([]);
-  });
+        payload: {
+          kind: "usage",
+          providers,
+          projects: 7.7,
+          activeThreads: -1,
+        },
+      });
+      expect(row).toMatchObject({ projects: 7, activeThreads: 0 });
+      expect(row).not.toHaveProperty("providers");
+      expect(row).not.toHaveProperty("turns");
+    },
+  );
 });
 
 describe("releaseHealth bands", () => {
@@ -885,10 +956,10 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const get = (key: string) =>
       worker.fetch(new Request(`http://x/api/issues/${key}`, { headers }), env);
-    expect((await get(encodeURIComponent("err:abc123"))).status).toBe(404);
+    expect((await get(encodeURIComponent("err:abcdef12"))).status).toBe(404);
     expect((await get(encodeURIComponent("crash:renderer:oom"))).status).toBe(404);
     expect((await get(encodeURIComponent("update:download"))).status).toBe(404);
-    // Real crash reasons contain '='; printable text after the prefix is fine.
+    // Backend exit reasons keep validated numeric codes, never arbitrary text.
     expect((await get(encodeURIComponent("crash:backend:code=1"))).status).toBe(404);
     // 404 means the key validated and no events matched; bad keys get 400.
     expect((await get(encodeURIComponent("../x"))).status).toBe(400);
@@ -900,7 +971,7 @@ describe("issue key + status endpoint validation", () => {
   it("requires a session for status writes", async () => {
     const { env } = makeEnv();
     const res = await worker.fetch(
-      new Request("http://x/api/issues/err%3Aabc/status", {
+      new Request("http://x/api/issues/err%3Aabcdef12/status", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "resolved" }),
@@ -915,7 +986,7 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const post = (contentType: string, body: string) =>
       worker.fetch(
-        new Request("http://x/api/issues/err%3Aabc/status", {
+        new Request("http://x/api/issues/err%3Aabcdef12/status", {
           method: "POST",
           headers: { "content-type": contentType, ...headers },
           body,
@@ -932,7 +1003,7 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const post = (status: string) =>
       worker.fetch(
-        new Request("http://x/api/issues/err%3Aabc/status", {
+        new Request("http://x/api/issues/err%3Aabcdef12/status", {
           method: "POST",
           headers: { "content-type": "application/json", ...headers },
           body: JSON.stringify({ status }),
@@ -942,9 +1013,9 @@ describe("issue key + status endpoint validation", () => {
     expect(await (await post("open")).json()).toEqual({ status: "open" });
     expect(await (await post("resolved")).json()).toEqual({ status: "resolved" });
     expect(calls[0]!.sql).toContain("DELETE FROM issue_status");
-    expect(calls[0]!.binds).toEqual(["err:abc"]);
+    expect(calls[0]!.binds).toEqual(["err:abcdef12"]);
     expect(calls[1]!.sql).toContain("ON CONFLICT");
-    expect(calls[1]!.binds[0]).toBe("err:abc");
+    expect(calls[1]!.binds[0]).toBe("err:abcdef12");
     expect(calls[1]!.binds[1]).toBe("resolved");
   });
 });

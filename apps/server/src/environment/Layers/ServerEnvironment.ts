@@ -104,6 +104,7 @@ export const makeServerEnvironment = Effect.fn(function* () {
       remoteConnections: remoteUnavailableReason === undefined,
       remoteResources: remoteUnavailableReason === undefined,
       ...(remoteUnavailableReason ? { remoteUnavailableReason } : {}),
+      composerPredictions: true,
     },
     ...(machineId ? { machineId } : {}),
   };

@@ -4,9 +4,25 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./parentBoundProcess": {
+      "types": "./src/parentBoundProcess.ts",
+      "import": "./src/parentBoundProcess.ts"
+    },
+    "./hostUsage": {
+      "types": "./src/hostUsage.ts",
+      "import": "./src/hostUsage.ts"
+    },
+    "./backgroundTasks": {
+      "types": "./src/backgroundTasks.ts",
+      "import": "./src/backgroundTasks.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
+    },
+    "./turnResume": {
+      "types": "./src/turnResume.ts",
+      "import": "./src/turnResume.ts"
     },
     "./inboxDay": {
       "types": "./src/inboxDay.ts",
@@ -87,6 +103,10 @@
     "./githubRepository": {
       "types": "./src/githubRepository.ts",
       "import": "./src/githubRepository.ts"
+    },
+    "./threadPullRequestLinks": {
+      "types": "./src/threadPullRequestLinks.ts",
+      "import": "./src/threadPullRequestLinks.ts"
     },
     "./logging": {
       "types": "./src/logging.ts",
@@ -300,6 +320,10 @@
       "types": "./src/automationMode.ts",
       "import": "./src/automationMode.ts"
     },
+    "./automationRunLifecycle": {
+      "types": "./src/automationRunLifecycle.ts",
+      "import": "./src/automationRunLifecycle.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"
@@ -315,6 +339,10 @@
     "./text": {
       "types": "./src/text.ts",
       "import": "./src/text.ts"
+    },
+    "./markdownPlainText": {
+      "types": "./src/markdownPlainText.ts",
+      "import": "./src/markdownPlainText.ts"
     },
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
@@ -355,6 +383,10 @@
     "./editorIcons": {
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"
+    },
+    "./usageAnalytics": {
+      "types": "./src/usageAnalytics.ts",
+      "import": "./src/usageAnalytics.ts"
     },
     "./providerUsage": {
       "types": "./src/providerUsage.ts",
@@ -520,21 +552,17 @@
       "types": "./src/uiLocalizationResources.ts",
       "import": "./src/uiLocalizationResources.ts"
     },
-    "./uiLocalizationResourcesEn": {
-      "types": "./src/uiLocalizationResourcesEn.ts",
-      "import": "./src/uiLocalizationResourcesEn.ts"
-    },
-    "./uiLocalizationResourcesEs": {
-      "types": "./src/uiLocalizationResourcesEs.ts",
-      "import": "./src/uiLocalizationResourcesEs.ts"
-    },
-    "./uiLocalizationResourcesZhCn": {
-      "types": "./src/uiLocalizationResourcesZhCn.ts",
-      "import": "./src/uiLocalizationResourcesZhCn.ts"
-    },
     "./nativeLocalizationResources": {
       "types": "./src/nativeLocalizationResources.ts",
       "import": "./src/nativeLocalizationResources.ts"
+    },
+    "./installerDownloads": {
+      "types": "./src/installerDownloads.ts",
+      "import": "./src/installerDownloads.ts"
+    },
+    "./releaseDownloads": {
+      "types": "./src/releaseDownloads.ts",
+      "import": "./src/releaseDownloads.ts"
     }
   },
   "scripts": {

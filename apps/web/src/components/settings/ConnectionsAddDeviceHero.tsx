@@ -4,22 +4,13 @@
 // Layer: Settings UI components
 // Exports: ConnectionsAddDeviceHero, AddDeviceHeroVariant
 
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { CheckIcon, DeviceComputerIcon, DeviceMobileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { DIALOG_HERO_ITEM_SHADOW_CLASS_NAME, DialogHeroBand } from "../DialogHeroBand";
 
 export type AddDeviceHeroVariant = "phone" | "computer" | "linked";
-
-// A faint dot grid with a soft sky glow where the illustration stands.
-const HERO_BACKGROUND: CSSProperties = {
-  backgroundImage:
-    "radial-gradient(circle at 50% 120%, color-mix(in srgb, var(--color-sky-400) 14%, transparent), transparent 62%), radial-gradient(color-mix(in srgb, var(--foreground) 8%, transparent) 1px, transparent 1.3px)",
-  backgroundSize: "100% 100%, 14px 14px",
-};
-
-const DEVICE_SHADOW_CLASS_NAME =
-  "shadow-[0_12px_32px_-12px_rgba(0,0,0,0.25)] dark:shadow-[0_16px_40px_-12px_rgba(0,0,0,0.7)]";
 
 export function ConnectionsAddDeviceHero({
   variant,
@@ -29,15 +20,11 @@ export function ConnectionsAddDeviceHero({
   computerNoun: string;
 }) {
   return (
-    <div
-      aria-hidden
-      className="relative h-40 shrink-0 overflow-hidden bg-muted/60 select-none"
-      style={HERO_BACKGROUND}
-    >
+    <DialogHeroBand>
       {variant === "phone" ? <PhoneScreen computerNoun={computerNoun} /> : null}
       {variant === "computer" ? <SettingsWindow computerNoun={computerNoun} /> : null}
       {variant === "linked" ? <LinkedDevices /> : null}
-    </div>
+    </DialogHeroBand>
   );
 }
 
@@ -46,7 +33,7 @@ function PhoneScreen({ computerNoun }: { computerNoun: string }) {
     <div
       className={cn(
         "absolute top-6 left-1/2 h-60 w-44 -translate-x-1/2 rounded-[34px] bg-[color-mix(in_srgb,var(--foreground)_14%,var(--popover))] p-1.5",
-        DEVICE_SHADOW_CLASS_NAME,
+        DIALOG_HERO_ITEM_SHADOW_CLASS_NAME,
       )}
     >
       <div className="flex h-full flex-col items-center rounded-[28px] bg-popover px-3.5 py-2.5">
@@ -70,7 +57,7 @@ function SettingsWindow({ computerNoun }: { computerNoun: string }) {
     <div
       className={cn(
         "absolute top-6.5 left-1/2 flex h-48 w-80 -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-popover",
-        DEVICE_SHADOW_CLASS_NAME,
+        DIALOG_HERO_ITEM_SHADOW_CLASS_NAME,
       )}
     >
       <div className="flex h-5.5 shrink-0 items-center gap-1.25 px-2.25">

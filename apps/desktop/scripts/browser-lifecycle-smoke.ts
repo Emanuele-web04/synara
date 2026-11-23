@@ -5,9 +5,12 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app, BrowserWindow, type WebContents } from "electron";
-import { BetterWright, NetworkPolicy } from "betterwright";
+import { BetterWright } from "betterwright";
 import { configureElectronNetwork } from "betterwright/electron";
 import { WebSocketServer } from "ws";
+import { getBetterwrightNetworkGuard } from "../src/browserAutomation/betterwrightNetworkGuard";
+import { runBetterwright } from "../src/browserAutomation/betterwrightRuntime";
+import { captureBrowserScreenshot } from "../src/browserAutomation/screenshotCapture";
 import { synaraHostTarget } from "../src/browserAutomation/betterwrightHostTarget";
 import { BrowserVaultCapture } from "../src/browserAutomation/browserVaultCapture";
 import type { BrowserVault } from "../src/browserAutomation/browserVault";
@@ -34,7 +37,7 @@ async function checkCookieImportMetadata(contents: WebContents) {
     adBlock: false,
     headless: false,
     parkBackgroundPages: false,
-    policy: new NetworkPolicy({ allowLoopback: true }),
+    policy: getBetterwrightNetworkGuard(contents.session).policy,
   });
   let includeCookie = true;
   // Stub only local-profile extraction. The installed client must derive
@@ -82,6 +85,80 @@ async function checkCookieImportMetadata(contents: WebContents) {
   }
 }
 
+// Exercise Synara's actual call boundary, which tears down each CDP worker.
+async function checkRunRequestLifetime(contents: WebContents, url: string) {
+  const run = (code: string, signal = new AbortController().signal, timeoutMs = 10_000) =>
+    runBetterwright({ home: join(home, "request-worker"), contents, code, signal, timeoutMs });
+  const started = Date.now();
+  await contents.executeJavaScript("startXHR()");
+  for (let i = 0; i < 6; i++) {
+    assert.equal(
+      await run("await page.getByRole('button', { name: 'Request' }).click(); return 'clicked'"),
+      "clicked",
+    );
+  }
+  await assert.rejects(
+    run(
+      "await page.getByRole('button', { name: 'Request' }).click(); throw new Error('fixture failure')",
+    ),
+  );
+  const requests = (await contents.executeJavaScript(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => requests.every(item => item.status !== null) ? resolve(requests)
+      : Date.now() > deadline ? reject(new Error('XHR did not settle')) : setTimeout(poll, 20);
+    poll();
+  })`)) as Array<{ status: number; bytes: number }>;
+  assert.equal(requests.length, 8);
+  for (const request of requests) assert.deepEqual(request, { status: 200, bytes: 4_900_011 });
+  console.log(
+    `XHR: ${requests.length} responses, each 4,900,011 bytes, ${Date.now() - started} ms total`,
+  );
+
+  const navigation = once(contents, "did-finish-load");
+  await run(
+    "await page.evaluate(() => { location.href = '/slow-document'; }); return 'navigating'",
+  );
+  await navigation;
+  assert.equal(contents.getTitle(), "Navigation survived");
+  await contents.loadURL(url);
+
+  // An unacknowledged renderer operation still requires forced cancellation.
+  const controller = new AbortController();
+  const cancelling = run(
+    "await page.evaluate(() => new Promise(resolve => { window.releaseCancelled = resolve; })); await page.evaluate(() => { window.lateMutation = true; });",
+    controller.signal,
+  );
+  const rejected = assert.rejects(cancelling, /fixture cancellation/);
+  await contents.executeJavaScript(`new Promise(resolve => {
+    const poll = () => typeof releaseCancelled === 'function' ? resolve() : setTimeout(poll, 20);
+    poll();
+  })`);
+  controller.abort(new Error("fixture cancellation"));
+  await rejected;
+  await contents.executeJavaScript("window.releaseCancelled?.(); void 0");
+  assert.equal(await run("return await page.title()"), "Lifecycle fixture");
+  assert.equal(await contents.executeJavaScript("window.lateMutation === true"), false);
+  await assert.rejects(
+    run(
+      "await page.evaluate(() => new Promise(resolve => { window.releaseTimedOut = resolve; })); await page.evaluate(() => { window.lateMutation = true; });",
+      undefined,
+      1_000,
+    ),
+  );
+  await contents.executeJavaScript("window.releaseTimedOut?.(); void 0");
+  assert.equal(await run("return await page.title()"), "Lifecycle fixture");
+  assert.equal(await contents.executeJavaScript("window.lateMutation === true"), false);
+
+  const screenshot = await captureBrowserScreenshot(
+    { webContents: contents, tabId: "request-fixture" } as BrowserAutomationVisibleRuntime,
+    { fullPage: false },
+  );
+  const bytes = Buffer.from(screenshot.image.data, "base64");
+  assert.equal(bytes.toString("base64"), screenshot.image.data);
+  assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(bytes.length, screenshot.structuredContent.image.byteLength);
+}
+
 async function smoke() {
   await app.whenReady();
   let blockedRequests = 0;
@@ -100,7 +177,19 @@ async function smoke() {
   const blockedUrl = `http://127.0.0.1:${blockedPort}`;
   const allowed = createServer((request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
-    if (request.url === "/redirect") {
+    if (request.url?.startsWith("/slow")) {
+      setTimeout(() => {
+        response.setHeader(
+          "Content-Type",
+          request.url === "/slow-document" ? "text/html" : "application/json",
+        );
+        response.end(
+          request.url === "/slow-document"
+            ? "<!doctype html><title>Navigation survived</title>"
+            : JSON.stringify({ data: "a".repeat(4_900_000) }),
+        );
+      }, 1_000);
+    } else if (request.url === "/redirect") {
       response.writeHead(302, { location: `${blockedUrl}/redirected` }).end();
     } else if (request.url === "/sw.js") {
       response.setHeader("Content-Type", "application/javascript");
@@ -113,7 +202,13 @@ async function smoke() {
     } else {
       response.setHeader("Content-Type", "text/html");
       response.end(`<!doctype html><title>Lifecycle fixture</title>
-        <form action="/accepted"><input name="username" autocomplete="username"><input name="password" type="password" autocomplete="current-password"><button>Sign in</button></form>`);
+        <button onclick="startXHR()">Request</button>
+        <script>window.requests = []; function startXHR() {
+          const item = { status: null, bytes: 0 }; requests.push(item);
+          const xhr = new XMLHttpRequest(); xhr.open('GET', '/slow'); xhr.timeout = 30000;
+          xhr.onloadend = () => { item.status = xhr.status; item.bytes = xhr.responseText.length; };
+          xhr.send();
+        }</script><form action="/accepted"><input name="username" autocomplete="username"><input name="password" type="password" autocomplete="current-password"><button>Sign in</button></form>`);
     }
   });
   const sockets = new WebSocketServer({ server: allowed });
@@ -133,10 +228,13 @@ async function smoke() {
   const contents = window.webContents;
   const session = contents.session;
   session.on("will-download", (event) => event.preventDefault());
-  const baselineProxy = await session.resolveProxy(allowedUrl);
+  const networkGuard = getBetterwrightNetworkGuard(session);
+  networkGuard.policy.blockHosts.push(`127.0.0.1:${blockedPort}`);
   // Seed a direct connection before leasing; acquisition must drain it.
   assert.equal(await (await session.fetch(`${blockedUrl}/warmup`)).text(), "blocked fixture");
   blockedRequests = 0;
+  await networkGuard.initialize();
+  const guardedProxy = await session.resolveProxy(allowedUrl);
   await contents.loadURL(allowedUrl);
   await sibling.loadURL(allowedUrl);
   const target = synaraHostTarget(contents);
@@ -159,7 +257,7 @@ async function smoke() {
     adBlock: false,
     headless: false,
     parkBackgroundPages: false,
-    policy: new NetworkPolicy({ allowLoopback: true, blockHosts: [`127.0.0.1:${blockedPort}`] }),
+    policy: networkGuard.policy,
   });
   const siblingTarget = synaraHostTarget(sibling.webContents);
   const siblingQueued = Promise.withResolvers<void>();
@@ -181,16 +279,13 @@ async function smoke() {
     adBlock: false,
     headless: false,
     parkBackgroundPages: false,
-    policy: new NetworkPolicy({ allowLoopback: true, blockHosts: [`127.0.0.1:${blockedPort}`] }),
+    policy: networkGuard.policy,
   });
   try {
     const first = await browser.run("return await page.title()", { automaticUI: false });
     assert.ok(first.ok, JSON.stringify(first));
     assert.equal(first.result, "Lifecycle fixture");
-    assert.match(
-      await session.resolveProxy(allowedUrl),
-      new RegExp(`:${new URL(proxyUrls[0]!).port}$`),
-    );
+    assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
     assert.equal(await (await session.fetch(`${allowedUrl}/data`)).text(), "allowed fixture");
     await assert.rejects(session.fetch(`${blockedUrl}/session-owned`, { cache: "no-store" }));
     await assert.rejects(session.fetch(`${allowedUrl}/redirect`, { cache: "no-store" }));
@@ -225,7 +320,7 @@ async function smoke() {
     await siblingQueued.promise;
     assert.equal(siblingConnected, false, "Concurrent tab bypassed the session queue");
     // A closed transport causes the actual client to replace its worker. The
-    // new worker supplies a new SOCKS proxy; the same host target must adopt it.
+    // new worker supplies a new SOCKS proxy; the session keeps its own guard.
     await leases[0]!.close();
     const rotated = await browser.run(
       `await page.goto(${JSON.stringify(allowedUrl)}); return await page.title()`,
@@ -235,10 +330,7 @@ async function smoke() {
     assert.equal(rotated.result, "Lifecycle fixture");
     assert.equal(proxyUrls.length, 2);
     assert.notEqual(proxyUrls[0], proxyUrls[1]);
-    assert.match(
-      await session.resolveProxy(allowedUrl),
-      new RegExp(`:${new URL(proxyUrls[1]!).port}$`),
-    );
+    assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
     await assert.rejects(session.fetch(`${blockedUrl}/after-rotation`, { cache: "no-store" }));
     assert.equal(blockedRequests, 0);
     assert.equal(siblingConnected, false, "Rotation surrendered the current run's session turn");
@@ -252,13 +344,11 @@ async function smoke() {
     assert.equal(blockedRequests, 0);
     await siblingTarget.revokeAll(false);
     await siblingBrowser.close();
-    assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
-    assert.equal(
-      await (await session.fetch(`${blockedUrl}/restored`, { cache: "no-store" })).text(),
-      "blocked fixture",
-    );
+    assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
+    await assert.rejects(session.fetch(`${blockedUrl}/between-runs`, { cache: "no-store" }));
     await checkCookieImportMetadata(contents);
-    assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
+    assert.equal(await session.resolveProxy(allowedUrl), guardedProxy);
+    await checkRunRequestLifetime(contents, allowedUrl);
 
     // Install the real upstream capture sensor into a live Electron isolated
     // world, then verify its script, scoped binding, and disposal.
@@ -290,14 +380,18 @@ async function smoke() {
       await capture.dispose();
     }
     assert.equal(contents.debugger.listenerCount("message"), listeners);
+    await networkGuard.dispose();
+    await assert.rejects(session.fetch(`${allowedUrl}/after-shutdown`, { cache: "no-store" }));
+    assert.equal(blockedRequests, 0);
     console.log(
-      "PASS: real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, proxy restoration, cookie import metadata, and capture sensor.",
+      "PASS: 4.9 MB XHRs across six ephemeral workers, pending XHR across completed failure, navigation after run end, abort/timeout recovery, PNG base64, session shutdown, real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, persistent guard, cookie import metadata, and capture sensor.",
     );
   } finally {
     await siblingTarget.revokeAll(true);
     await siblingBrowser.close();
     await target.revokeAll(true);
     await browser.close();
+    await networkGuard.dispose();
     window.destroy();
     sibling.destroy();
     await session.clearStorageData();

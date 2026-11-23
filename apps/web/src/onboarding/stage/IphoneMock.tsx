@@ -86,9 +86,9 @@ function StatusBar(props: { readonly time: string }) {
 }
 
 function useGreeting(date: Date): string {
-  const { t, formatLocale } = useTranslation();
+  const { t } = useTranslation();
   const hour = date.getHours();
-  const weekday = new Intl.DateTimeFormat(formatLocale, { weekday: "long" }).format(date);
+  const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(date);
   return t(
     hour < 12
       ? "onboarding:phoneGreetingMorning"
@@ -97,8 +97,8 @@ function useGreeting(date: Date): string {
         : "onboarding:phoneGreetingEvening",
     {
       // Starts a sentence, so capitalized in languages that write weekdays in lowercase.
-      weekday: weekday.charAt(0).toLocaleUpperCase(formatLocale) + weekday.slice(1),
-      date: new Intl.DateTimeFormat(formatLocale, { day: "numeric", month: "long" }).format(date),
+      weekday: weekday.charAt(0).toUpperCase() + weekday.slice(1),
+      date: new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" }).format(date),
     },
   );
 }
@@ -186,7 +186,13 @@ export function IosInboxScreen(props: {
           ))}
         </span>
       </div>
-      <div className="flex flex-col gap-[6px] px-[20px] pt-[18px] pb-[16px]">
+      {/* A landed notification covers the toolbar; the title starts clear of it. */}
+      <div
+        className={cn(
+          "flex flex-col gap-[6px] px-[20px] pb-[16px]",
+          props.banner ? "pt-[52px]" : "pt-[18px]",
+        )}
+      >
         <span className="text-[34px] leading-[40px] font-bold tracking-[-0.01em]">
           {t("workspace:inbox")}
         </span>

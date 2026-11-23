@@ -42,6 +42,7 @@ import {
   ProviderHealth,
   type ProviderHealthShape,
 } from "../src/provider/Services/ProviderHealth.ts";
+import { ProviderDiscoveryServiceLive } from "../src/provider/Layers/ProviderDiscoveryService.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
@@ -294,33 +295,21 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    const providerLayer = useRealCodex
-      ? makeProviderServiceLive().pipe(
-          Layer.provide(providerSessionDirectoryLayer),
-          Layer.provide(realCodexRegistry),
-          Layer.provide(ServerSettingsService.layerTest(options?.serverSettings)),
-          Layer.provide(
-            Layer.succeed(ServerSecretStore, {
-              get: () => Effect.succeed(null),
-              set: () => Effect.void,
-              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
-              remove: () => Effect.void,
-            }),
-          ),
-        )
-      : makeProviderServiceLive().pipe(
-          Layer.provide(providerSessionDirectoryLayer),
-          Layer.provide(fakeRegistry!),
-          Layer.provide(ServerSettingsService.layerTest(options?.serverSettings)),
-          Layer.provide(
-            Layer.succeed(ServerSecretStore, {
-              get: () => Effect.succeed(null),
-              set: () => Effect.void,
-              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
-              remove: () => Effect.void,
-            }),
-          ),
-        );
+    const providerRegistryLayer = fakeRegistry ?? realCodexRegistry;
+    const settingsLayer = ServerSettingsService.layerTest(options?.serverSettings);
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(providerSessionDirectoryLayer),
+      Layer.provide(providerRegistryLayer),
+      Layer.provide(settingsLayer),
+      Layer.provide(
+        Layer.succeed(ServerSecretStore, {
+          get: () => Effect.succeed(null),
+          set: () => Effect.void,
+          getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+          remove: () => Effect.void,
+        }),
+      ),
+    );
 
     const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
     const runtimeServicesLayer = Layer.mergeAll(
@@ -353,13 +342,20 @@ export const makeOrchestrationIntegrationHarness = (
       updateProvider: () => Effect.die("updateProvider unsupported in harness"),
       streamChanges: Stream.empty,
     } as unknown as ProviderHealthShape);
+    // Match the application graph: discovery uses the same adapter and settings as turn dispatch.
+    const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
+      Layer.provide(providerRegistryLayer),
+      Layer.provide(providerHealthLayer),
+      Layer.provide(settingsLayer),
+    );
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+      Layer.provide(providerDiscoveryLayer),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(providerHealthLayer),
       Layer.provideMerge(hubOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
-      Layer.provideMerge(ServerSettingsService.layerTest(options?.serverSettings)),
+      Layer.provideMerge(settingsLayer),
       Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
@@ -386,7 +382,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(ProviderRuntimeEventRepositoryLive),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
-      Layer.provideMerge(ServerSettingsService.layerTest(options?.serverSettings)),
+      Layer.provideMerge(settingsLayer),
       Layer.provideMerge(NodeServices.layer),
     );
 

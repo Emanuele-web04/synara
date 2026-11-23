@@ -316,8 +316,9 @@ export function serverNameFromMcpConnectorMentionPath(path: string): string | nu
 }
 
 /**
- * Providers whose sessions receive connector servers. ACP agents negotiate
- * HTTP or use Synara's stdio proxy; Pi, Devin, and Antigravity receive none.
+ * Providers whose sessions receive connector servers. ACP agents (including
+ * Antigravity's `agy acp`) negotiate HTTP or use Synara's stdio proxy; Pi and
+ * Devin receive none.
  */
 export const MCP_CONNECTOR_PROVIDER_IDS = [
   "claudeAgent",
@@ -327,6 +328,7 @@ export const MCP_CONNECTOR_PROVIDER_IDS = [
   "grok",
   "droid",
   "omp",
+  "antigravity",
 ] as const;
 const MCP_CONNECTOR_PROVIDERS = new Set<string>(MCP_CONNECTOR_PROVIDER_IDS);
 

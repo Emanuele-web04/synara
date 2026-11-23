@@ -4,7 +4,7 @@
 // Layer: Root web overlay
 
 import { AnnouncementSheet } from "~/components/AnnouncementSheet";
-import { ProjectImportGlyph } from "./ProjectImportGlyph";
+import { ProjectImportHeroScene } from "./ProjectImportHeroScene";
 import { useProjectImportDialogStore } from "./projectImportDialogStore";
 import { useProjectImportAnnouncement } from "./useProjectImportAnnouncement";
 import { useTranslation } from "~/i18n";
@@ -16,11 +16,10 @@ export function ProjectImportAnnouncementDialog() {
   return (
     <AnnouncementSheet
       open={visible}
-      // Inset keeps the rotated tiles clear of the sheet edge.
-      hero={<ProjectImportGlyph size="lg" className="ps-1" />}
+      hero={<ProjectImportHeroScene />}
       title={t("workspace:importProjects")}
       description={t("workspace:bringYourClaudeCodeAndCodexProjectsIntoSynara")}
-      dismissLabel="Not now"
+      dismissLabel={t("common:notNow")}
       confirmLabel={t("workspace:importProjects")}
       onDismiss={markSeen}
       onConfirm={() => {

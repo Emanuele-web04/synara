@@ -2,7 +2,7 @@ import { useTranslation } from "~/i18n";
 // FILE: ComposerRunningAgentsCapsule.tsx
 // Purpose: Compact "N agents running" capsule above the composer while any of the
 // thread's subagents is still at work, during the turn and after it settles. A
-// click brings the newest running agent's transcript card into view.
+// click opens the Subagents list on the right, like the Environment panel.
 // Layer: Chat composer UI
 // Exports: ComposerRunningAgentsCapsule
 
@@ -14,7 +14,7 @@ import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./composerStackedPanelSt
 
 interface ComposerRunningAgentsCapsuleProps {
   count: number;
-  /** Scrolls to the running agent; omitted when no transcript row stands for it. */
+  /** Opens the Subagents list beside the chat. */
   onShow?: (() => void) | undefined;
 }
 

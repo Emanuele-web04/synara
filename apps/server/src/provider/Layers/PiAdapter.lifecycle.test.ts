@@ -28,6 +28,23 @@ import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive } from "./PiAdapter.ts";
 
+// Lifecycle tests replace the selected CLI's transport here, while retaining the real SDK.
+vi.mock("../piSdkImports.ts", async (importOriginal) => {
+  const loader = await importOriginal<typeof import("../piSdkImports.ts")>();
+  const importAi = loader.makePiPackageImporter(
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  );
+  return {
+    ...loader,
+    resolvePiInstallation: async () => ({
+      importPackage: (specifier: string) =>
+        specifier === "@earendil-works/pi-coding-agent"
+          ? import("@earendil-works/pi-coding-agent")
+          : importAi(specifier),
+    }),
+  };
+});
+
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
   modelSystemPrompts: [] as string[],

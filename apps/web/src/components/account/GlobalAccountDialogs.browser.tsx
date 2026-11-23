@@ -133,7 +133,7 @@ describe("GlobalAccountDialogs — status-authoritative dismissal", () => {
   // only fires while the sign-in view is open.
   it("does not reopen after an explicit close while signed out", async () => {
     const { queryClient } = renderDialogs();
-    await page.getByRole("button", { name: "Continue without an account" }).click();
+    await page.getByRole("button", { name: "Not now" }).click();
     await vi.waitFor(() => {
       expect(useAccountDialogStore.getState().view).toBe("closed");
     });

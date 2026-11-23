@@ -42,7 +42,7 @@ it("does not throw a second renderer error when exception details have a throwin
       },
     });
     target.dispatchEvent(Object.assign(new Event("error"), { error, message: error.message }));
-    expect(reports).toEqual([{ message: "Renderer error details unavailable" }]);
+    expect(reports).toEqual([{ message: "Error" }]);
   } finally {
     dispose?.();
   }
@@ -61,7 +61,7 @@ it.each([
     target.dispatchEvent(
       Object.assign(new Event(event), event === "error" ? { error } : { reason: error }),
     );
-    expect(reports).toEqual([{ message: "Renderer error details unavailable" }]);
+    expect(reports).toEqual([{ message: "Error" }]);
   } finally {
     dispose?.();
   }
@@ -75,33 +75,30 @@ it.each([
     field: "message",
     limit: DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
   },
-] as const)(
-  "redacts a PEM block spanning the $event $field IPC limit",
-  ({ event, field, limit }) => {
-    const { reports, target, dispose } = installTestDiagnostics();
-    try {
-      // Short synthetic key lines evade the generic long-token rule if the PEM
-      // footer is cut off before the shared redactor can recognize the block.
-      const details =
-        "Renderer failure:\n-----BEGIN PRIVATE KEY-----\n" +
-        "SyntheticKeyPart+/12\n".repeat(limit) +
-        "-----END PRIVATE KEY-----\n    at render (app.ts:10:5)";
-      const error = new Error("Renderer failure");
-      Object.defineProperty(error, field, { value: details });
-      target.dispatchEvent(
-        Object.assign(new Event(event), event === "error" ? { error } : { reason: details }),
-      );
-      expect(reports).toHaveLength(1);
-      const output = reports[0]?.[field];
-      expect(output).toContain("[redacted private key]");
-      expect(output).not.toContain("SyntheticKeyPart");
-      expect(output).toContain("at render (app.ts:10:5)");
-      expect(output?.length).toBeLessThanOrEqual(limit);
-    } finally {
-      dispose?.();
-    }
-  },
-);
+] as const)("drops a PEM block spanning the $event $field IPC limit", ({ event, field, limit }) => {
+  const { reports, target, dispose } = installTestDiagnostics();
+  try {
+    // Short synthetic key lines evade the generic long-token rule if the PEM
+    // footer is cut off before the shared redactor can recognize the block.
+    const details =
+      "Renderer failure:\n-----BEGIN PRIVATE KEY-----\n" +
+      "SyntheticKeyPart+/12\n".repeat(limit) +
+      "-----END PRIVATE KEY-----\n    at render (app.ts:10:5)";
+    const error = new Error("Renderer failure");
+    Object.defineProperty(error, field, { value: details });
+    target.dispatchEvent(
+      Object.assign(new Event(event), event === "error" ? { error } : { reason: details }),
+    );
+    expect(reports).toHaveLength(1);
+    const output = reports[0]?.[field] ?? "";
+    expect(output).not.toContain("PRIVATE KEY");
+    expect(output).not.toContain("SyntheticKeyPart");
+    expect(JSON.stringify(reports)).not.toContain("app.ts");
+    expect(output?.length).toBeLessThanOrEqual(limit);
+  } finally {
+    dispose?.();
+  }
+});
 
 it("records fixed action categories without reading private RPC fields", () => {
   const { activities, target, dispose } = installTestDiagnostics();

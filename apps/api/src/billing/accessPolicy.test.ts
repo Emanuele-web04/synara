@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   decideRemoteBillingAccess,
+  isProfileBillingEntitled,
+  PROFILE_RENEWAL_GRACE_MS,
   REMOTE_BILLING_MAX_STATUS_AGE_MS,
   type RemoteBillingAccessInput,
 } from "./accessPolicy";
@@ -92,5 +94,31 @@ describe("remote subscription admission policy", () => {
       };
       expect(decideRemoteBillingAccess(input)).toEqual(unavailable);
     }
+  });
+});
+
+describe("isProfileBillingEntitled", () => {
+  const future = new Date(nowMs + 86_400_000).toISOString();
+  // Just ended: inside the renewal grace, so the page stays up while the webhook lands.
+  const justEnded = new Date(nowMs - 1).toISOString();
+  const pastGrace = new Date(nowMs - PROFILE_RENEWAL_GRACE_MS).toISOString();
+
+  it("shows every public profile while enforcement is off", () => {
+    expect(isProfileBillingEntitled({ nowMs })).toBe(true);
+    expect(isProfileBillingEntitled({ enforcementEnabled: false, stored: null, nowMs })).toBe(true);
+  });
+
+  it("shows a profile only for a stored grant within its period plus the renewal grace", () => {
+    const entitled = (stored: Parameters<typeof isProfileBillingEntitled>[0]["stored"]) =>
+      isProfileBillingEntitled({ enforcementEnabled: true, stored, nowMs });
+    expect(entitled({ accessGranted: true, validUntil: future })).toBe(true);
+    // A granted benefit without a period end lasts until a webhook revokes it.
+    expect(entitled({ accessGranted: true, validUntil: null })).toBe(true);
+    expect(entitled({ accessGranted: true, validUntil: justEnded })).toBe(true);
+    expect(entitled({ accessGranted: true, validUntil: pastGrace })).toBe(false);
+    expect(entitled({ accessGranted: true, validUntil: "not a date" })).toBe(false);
+    expect(entitled({ accessGranted: false, validUntil: future })).toBe(false);
+    expect(entitled(null)).toBe(false);
+    expect(entitled(undefined)).toBe(false);
   });
 });

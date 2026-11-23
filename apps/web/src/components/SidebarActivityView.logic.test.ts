@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ProjectId, ThreadId } from "@synara/contracts";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationThreadPullRequest,
+  type OrchestrationThreadPullRequestLink,
+} from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
 
@@ -11,12 +16,19 @@ import {
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
   excludeActivityPriorityThreads,
+  expandActivityFamilyThreadIds,
+  groupActivityChildFamilies,
+  mostUrgentActivityPriorityTier,
+  resolveChildThreadsTier,
+  splitActivityFamilyChildren,
+  type ActivityPriorityTier,
   findNextThreadNeedingAttention,
   groupActivityThreadsByProject,
   hasActivityNeedingAttention,
   resolveActivityDateBucket,
   resolveActivityPriority,
   resolveActivityPriorityTier,
+  resolveActivityRowPullRequests,
   resolveActivityScope,
   resolveActivitySectionRows,
   resolveActivityThreadReadAt,
@@ -26,6 +38,32 @@ import {
 } from "./SidebarActivityView.logic";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
+
+function pullRequest(
+  number: number,
+  state: OrchestrationThreadPullRequest["state"],
+): OrchestrationThreadPullRequest {
+  return {
+    number,
+    title: `PR ${number}`,
+    url: `https://github.com/acme/synara/pull/${number}`,
+    baseBranch: "main",
+    headBranch: `branch-${number}`,
+    state,
+  };
+}
+
+function link(
+  pr: OrchestrationThreadPullRequest,
+  linkedAt: string,
+  dismissedAt?: string,
+): OrchestrationThreadPullRequestLink {
+  return { pullRequest: pr, source: "user", linkedAt, ...(dismissedAt ? { dismissedAt } : {}) };
+}
+
+function pullRequestNumbers(prs: readonly OrchestrationThreadPullRequest[]): number[] {
+  return prs.map((pr) => pr.number);
+}
 
 function makeSession(status: ThreadSession["status"]): ThreadSession {
   return {
@@ -1153,5 +1191,129 @@ describe("findNextThreadNeedingAttention", () => {
     });
     const running = makeThread({ id: "running", hasLiveTailWork: true });
     expect(findNextThreadNeedingAttention([snoozed, archived, running], null, tier)).toBeNull();
+  });
+});
+
+describe("agent-created child families", () => {
+  const tid = (id: string) => ThreadId.makeUnsafe(id);
+  const child = (id: string, sourceId: string) => ({
+    ...makeThread({ id, latestTurn: completedTurn("2026-08-01T10:00:00.000Z") }),
+    creationSource: "synara_mcp" as const,
+    sourceThreadId: tid(sourceId),
+  });
+  const parent = makeThread({ id: "p", latestTurn: completedTurn("2026-08-01T10:00:00.000Z") });
+  const ids = (threads: readonly SidebarThreadSummary[]) => threads.map((thread) => thread.id);
+  const tiers =
+    (map: Record<string, ActivityPriorityTier | null>) => (thread: SidebarThreadSummary) =>
+      map[thread.id] ?? null;
+
+  it("folds descendants under their top-most creator, depth-first", () => {
+    const families = groupActivityChildFamilies([
+      child("c1", "p"),
+      parent,
+      child("g", "c1"),
+      child("c2", "p"),
+      makeThread({ id: "solo" }),
+    ]);
+    expect(ids(families.roots)).toEqual([tid("p"), tid("solo")]);
+    expect(ids(families.childrenByRootId.get(tid("p")) ?? [])).toEqual([
+      tid("c1"),
+      tid("g"),
+      tid("c2"),
+    ]);
+    expect(families.childrenByRootId.has(tid("solo"))).toBe(false);
+  });
+
+  it("keeps a detached (pinned) child on its own row with its children", () => {
+    const families = groupActivityChildFamilies(
+      [parent, child("c1", "p"), child("g", "c1")],
+      new Set([tid("c1")]),
+    );
+    expect(ids(families.roots)).toEqual([tid("p"), tid("c1")]);
+    expect(families.childrenByRootId.has(tid("p"))).toBe(false);
+    expect(ids(families.childrenByRootId.get(tid("c1")) ?? [])).toEqual([tid("g")]);
+  });
+
+  it("keeps a child top-level when its creator is not in the feed", () => {
+    const families = groupActivityChildFamilies([child("c1", "gone")]);
+    expect(ids(families.roots)).toEqual([tid("c1")]);
+    expect(families.childrenByRootId.size).toBe(0);
+  });
+
+  it("keeps snoozed chats out of active families", () => {
+    const snoozedUntil = "2026-08-02T09:00:00.000Z";
+    const snoozedChild = { ...child("snoozed-child", "p"), snoozedUntil };
+    const activeGrandchild = child("active-grandchild", "snoozed-child");
+    const families = groupActivityChildFamilies([parent, snoozedChild, activeGrandchild]);
+    const model = buildActivityViewModel({ threads: families.roots, pinnedThreadIdSet: new Set() });
+    expect(ids(model.snoozed)).toEqual([snoozedChild.id]);
+    expect(ids(model.active)).toEqual(expect.arrayContaining([parent.id, activeGrandchild.id]));
+    expect(families.childrenByRootId.size).toBe(0);
+  });
+
+  it("ranks tiers waiting, then unread, then working", () => {
+    expect(mostUrgentActivityPriorityTier(null, "working")).toBe("working");
+    expect(mostUrgentActivityPriorityTier("working", "unread")).toBe("unread");
+    expect(mostUrgentActivityPriorityTier("waiting", "unread")).toBe("waiting");
+    expect(mostUrgentActivityPriorityTier(null, null)).toBeNull();
+    const children = [child("a", "p"), child("b", "p"), child("c", "p")];
+    expect(resolveChildThreadsTier(children, tiers({ a: "working", b: "waiting" }))).toBe(
+      "waiting",
+    );
+    expect(resolveChildThreadsTier(children, tiers({}))).toBeNull();
+  });
+
+  it("lists a row's PRs: its own first, then the other visible links, open and newest first", () => {
+    const links = [
+      link(pullRequest(1, "merged"), "2026-08-01T10:00:00.000Z"),
+      link(pullRequest(2, "closed"), "2026-08-01T12:00:00.000Z"),
+      link(pullRequest(3, "open"), "2026-08-01T09:00:00.000Z"),
+      link(pullRequest(4, "open"), "2026-08-01T11:00:00.000Z", "2026-08-01T11:30:00.000Z"),
+      link(pullRequest(5, "open"), "2026-08-01T13:00:00.000Z"),
+    ];
+
+    // The row's own PR (here with a live state newer than its stored link) leads and decides
+    // the glyph; the unlinked #4 stays out; the rest go open first, then newest first.
+    const live = { ...pullRequest(5, "merged"), url: "https://github.com/ACME/synara/pull/5/" };
+    const listed = resolveActivityRowPullRequests(live, links);
+    expect(pullRequestNumbers(listed)).toEqual([5, 3, 2, 1]);
+    expect(listed[0]).toBe(live);
+    // A PR found from the branch but not linked still leads.
+    expect(
+      pullRequestNumbers(resolveActivityRowPullRequests(pullRequest(9, "open"), links)),
+    ).toEqual([9, 5, 3, 2, 1]);
+    // One PR stays one; a row whose PR was ruled out shows none, links or not.
+    expect(
+      pullRequestNumbers(resolveActivityRowPullRequests(pullRequest(1, "merged"), [links[0]!])),
+    ).toEqual([1]);
+    expect(resolveActivityRowPullRequests(pullRequest(1, "merged"), undefined)).toHaveLength(1);
+    expect(resolveActivityRowPullRequests(null, links)).toEqual([]);
+  });
+
+  it("shows children with news and the open one, folding quiet ones into +N done", () => {
+    const children = [child("run", "p"), child("done", "p"), child("open", "p"), child("old", "p")];
+    const split = splitActivityFamilyChildren(children, {
+      resolveTier: tiers({ run: "working" }),
+      activeThreadId: tid("open"),
+      showQuiet: false,
+    });
+    expect(ids(split.visible)).toEqual([tid("run"), tid("open")]);
+    expect(split.quietCount).toBe(2);
+    const revealed = splitActivityFamilyChildren(children, {
+      resolveTier: tiers({ run: "working" }),
+      activeThreadId: null,
+      showQuiet: true,
+    });
+    expect(revealed.visible).toHaveLength(4);
+    expect(revealed.quietCount).toBe(0);
+  });
+
+  it("lists each root's visible children right after it for keyboard jumps", () => {
+    expect(
+      expandActivityFamilyThreadIds(
+        [tid("p"), tid("solo")],
+        new Map([[tid("p"), [tid("c1"), tid("c2")]]]),
+      ),
+    ).toEqual([tid("p"), tid("c1"), tid("c2"), tid("solo")]);
   });
 });

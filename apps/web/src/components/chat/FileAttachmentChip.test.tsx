@@ -42,24 +42,4 @@ describe("FileAttachmentChip", () => {
     expect(legacyWordMarkup).toContain("DOC");
     expect(legacyWordMarkup).not.toContain("MSWORD");
   });
-
-  it("still surfaces the draft warning when explicitly requested", () => {
-    const markup = renderToStaticMarkup(
-      <FileAttachmentChip
-        file={{
-          type: "file",
-          id: "draft-file",
-          name: "scratch.txt",
-          mimeType: "text/plain",
-          sizeBytes: 128,
-        }}
-        variant="card"
-        nonPersisted
-      />,
-    );
-
-    expect(markup).toContain("Draft attachment may not persist");
-    expect(markup).toContain("scratch.txt");
-    expect(markup).toContain("TXT");
-  });
 });

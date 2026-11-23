@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "1.1.0",
+  "version": "1.6.5",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,15 +23,12 @@
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
+    "test": "vitest run"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
     "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@anthropic-ai/sdk": "^0.100.0",
-    "@earendil-works/pi-agent-core": "^1.4.0",
-    "@earendil-works/pi-ai": "^1.4.0",
-    "@earendil-works/pi-coding-agent": "^1.4.0",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -41,6 +38,7 @@
     "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
+    "import-meta-resolve": "4.2.0",
     "jose": "^6.1.0",
     "mdast-util-from-markdown": "^2.0.3",
     "node-pty": "^1.1.0",
@@ -48,11 +46,15 @@
     "reflect-metadata": "0.2.2",
     "smol-toml": "^1.7.0",
     "typescript": "catalog:",
+    "undici": "8.10.2",
     "ws": "^8.21.0",
     "yaml": "^2.8.3",
     "zod": "4.3.6"
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@synara/contracts": "workspace:*",

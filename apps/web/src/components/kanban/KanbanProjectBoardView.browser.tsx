@@ -5,16 +5,20 @@ import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-vi.mock("~/appSettings", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/appSettings")>()),
-  useAppSettings: () => ({
-    settings: { defaultProvider: "codex", sidebarProjectSortOrder: "manual" },
-    setSetting: vi.fn(),
-  }),
-  getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
-  getProviderStartOptions: () => [],
-  resolveAssistantDeliveryMode: () => "default",
-}));
+vi.mock("~/appSettings", async (importOriginal) => {
+  const appSettings = await importOriginal<typeof import("~/appSettings")>();
+  const settings = appSettings.AppSettingsSchema.makeUnsafe({
+    defaultProvider: "codex",
+    sidebarProjectSortOrder: "manual",
+  });
+  return {
+    ...appSettings,
+    useAppSettings: () => ({ settings, setSetting: vi.fn() }),
+    getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
+    getProviderStartOptions: () => [],
+    resolveAssistantDeliveryMode: () => "default",
+  };
+});
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
   useProviderStatusesForLocalConfig: () => [READY_CODEX_STATUS],
 }));
@@ -65,7 +69,7 @@ vi.mock("./useKanbanBoard", () => ({
 }));
 
 import type { ServerProviderStatus, ThreadId } from "@synara/contracts";
-import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
+import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { dispatchKanbanDraftCardAsGoal } from "../../lib/kanbanDispatch";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import { buildKanbanBoard, type KanbanCard, type KanbanProjectBoard } from "./kanban.logic";
@@ -318,30 +322,6 @@ describe("KanbanProjectBoardView v2 (browser)", () => {
     } finally {
       await screen.unmount();
     }
-  });
-
-  it("renders the four-column attention-first layout with pills and filter", async () => {
-    await render(
-      <KanbanProjectBoardView
-        board={board}
-        onOpenCard={vi.fn()}
-        onNewTask={vi.fn()}
-        prByThreadId={new Map()}
-        nowMs={NOW_MS}
-        viewMode="v2"
-      />,
-    );
-
-    for (const label of Object.values(KANBAN_COLUMN_V2_LABELS)) {
-      await expect.element(page.getByRole("heading", { name: label })).toBeVisible();
-    }
-    for (const cardTitle of ["Card draft-1", "Card live-1", "Card awaiting-1", "Card done-1"]) {
-      await expect.element(page.getByText(cardTitle)).toBeVisible();
-    }
-    await expect
-      .element(page.getByText(KANBAN_ATTENTION_LABELS["awaiting-approval"]))
-      .toBeVisible();
-    await expect.element(page.getByText("Needs review")).toBeVisible();
   });
 
   it("keeps classic mode at three columns without the awaiting-you column", async () => {

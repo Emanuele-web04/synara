@@ -22,6 +22,458 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.5",
+    date: "Nov 22",
+    features: [
+      {
+        id: "multilingual-chat-direction",
+        title: "Better reading order in multilingual chats",
+        description:
+          "Each transcript block follows its dominant writing direction. A Persian, Arabic, or Hebrew paragraph can start with an English product name and still read right to left. Code and table columns keep their original order.",
+      },
+      {
+        id: "opencode-reasoning-trace",
+        title: "Keep OpenCode reasoning in activity history",
+        description:
+          "When an OpenCode turn ends, its streamed reasoning is saved as a Reasoning trace in the activity log.",
+      },
+      {
+        id: "antigravity-planner-selection",
+        title: "Keep your Antigravity planner selection",
+        description:
+          "Synara honors the selected Orchestrator planner when resuming. If your chosen planner is unavailable, you can select one that the session offers.",
+      },
+    ],
+  },
+  {
+    version: "1.6.4",
+    date: "Nov 20",
+    features: [
+      {
+        id: "antigravity-connectors",
+        title: "Use connectors with Antigravity",
+        description:
+          "Antigravity can use Synara tools and connected services such as Notion and Linear. Chat shows live tool activity, reasoning, and questions in the same format as other providers.",
+        details:
+          "Requires Antigravity CLI 1.5.0 or newer. Start a new session to pick up newly connected services.",
+      },
+      {
+        id: "remote-thread-resume",
+        title: "Resume Remote chats with less data",
+        description:
+          "A cached chat can catch up on its own changes after unrelated activity on the desktop. Synara still reloads the full chat when it needs a fresh snapshot.",
+        details:
+          "In a loopback benchmark with 400 chats and 1,500 messages in the active chat, one sparse catch-up returned about 2 KB, down from 676 KB. Median time to apply the update in the iOS Simulator fell from 73 ms to 55 ms.",
+      },
+      {
+        id: "compact-chat-layout",
+        title: "Smoother sidebars and more room in chat",
+        description:
+          "The Environment panel floats when chat gets narrow, overlay cards stay within the chat column, and the composer keeps the model name visible longer.",
+        details:
+          "In a Chromium profile with four empty chat tabs, sidebar open and close each went from 14–16 React commits to 3.",
+      },
+      {
+        id: "codex-tool-summaries",
+        title: "Cleaner Codex tool summaries",
+        description:
+          "Reasoning stays with the surrounding tool run without adding to its tool count. MCP startup failures and app-server logs stay in diagnostics. Failed tool calls and turns remain visible in chat.",
+      },
+      {
+        id: "pull-request-attribution",
+        title: "Optional pull request attribution",
+        description:
+          "New pull requests created through Synara include a Created with Synara link by default. Turn it off in Settings → Models & writing → Add Synara attribution.",
+      },
+      {
+        id: "mac-worktree-setup",
+        title: "Restore macOS worktree setup",
+        description:
+          "New worktrees start without cloned dependencies. Use your project setup script or install dependencies in the new worktree.",
+      },
+    ],
+  },
+  {
+    version: "1.6.3",
+    date: "Nov 19",
+    features: [
+      {
+        id: "live-tool-activity",
+        title: "See what your agent is doing",
+        description:
+          "The chat's working indicator shows the current tool call or tells you when the agent needs approval or an answer. Completed tool runs fold into readable summaries.",
+      },
+      {
+        id: "long-chat-performance",
+        title: "Open long chats faster",
+        description:
+          "Chats begin loading when you press a sidebar row, and the transcript reuses parsed Markdown as you scroll back.",
+        details:
+          "In headless Chromium benchmarks with seeded conversations, median first-open time fell 16–20%. Scripting time on a repeat scroll fling fell 19–29% in the four cases that measured it.",
+      },
+      {
+        id: "mac-worktree-dependencies",
+        title: "Start macOS worktrees with dependencies",
+        description:
+          "New worktrees can inherit installed dependencies through APFS clones when the lockfiles match. Project setup scripts still run as configured.",
+        details:
+          "On the Synara checkout used for the benchmark, cloning 13 dependency directories took 1.9–3.2 seconds. A warm Bun install in a fresh worktree took 6.5 seconds.",
+      },
+      {
+        id: "codex-clarity",
+        title: "Clearer Codex speed and startup",
+        description:
+          "The model picker shows when Ultrafast is selected. OAuth notices for your own MCP servers stay in diagnostics, while tool failures and Synara connector warnings remain visible.",
+      },
+      {
+        id: "shell-and-runtime",
+        title: "Integrated Zsh and runtime fixes",
+        description:
+          "The terminal respects changes to ZDOTDIR during Zsh startup and keeps Synara's managed CLI available after shell setup. This release also updates Bun and Electron.",
+      },
+    ],
+  },
+  {
+    version: "1.6.2",
+    date: "Nov 17",
+    features: [
+      {
+        id: "local-video",
+        title: "Play local videos",
+        description:
+          "Play and seek local videos in file previews and inline in chat, with download and retry options when playback is unavailable.",
+      },
+      {
+        id: "codex-ultrafast",
+        title: "Choose Codex Ultrafast",
+        description:
+          "Choose Standard, Fast or Ultrafast for Codex models that offer those speeds on your account.",
+      },
+      {
+        id: "worktrees",
+        title: "Faster, more reliable worktrees",
+        description:
+          "Worktree creation no longer waits for unrelated Git and GitHub refreshes, and copying local changes preserves relative symlinks.",
+      },
+      {
+        id: "remote-and-iphone",
+        title: "Synara for iPhone is in beta",
+        description:
+          "Discover the iPhone beta from Synara and remove empty Remote projects without deleting their files.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable agents and capture",
+        description:
+          "Pi chats use their dedicated workspace, OpenCode refreshes changed model configuration, and macOS capture stops more reliably after work ends.",
+      },
+    ],
+  },
+  {
+    version: "1.6.1",
+    date: "Nov 17",
+    features: [
+      {
+        id: "resume-task",
+        title: "Resume an interrupted task",
+        description:
+          "Resume eligible stopped or interrupted work directly from the empty composer, without adding a new message to the conversation.",
+      },
+      {
+        id: "provider-sign-in",
+        title: "A clearer way to connect agents",
+        description:
+          "Guided provider sign-in helps you open the login link, enter a code when needed, and see when an agent needs attention.",
+      },
+      {
+        id: "account-handoff",
+        title: "Continue a chat on another account",
+        description:
+          "Hand off a started conversation to another account of the same provider while keeping the conversation in the same thread.",
+      },
+      {
+        id: "usage-limits",
+        title: "See and recover from usage limits",
+        description:
+          "A usage-limit card shows reset information and available resume controls. Automatic recovery now arms more reliably when eligible.",
+      },
+      {
+        id: "activity-and-suggestions",
+        title: "Find work and follow up more easily",
+        description:
+          "Activity shows the latest reply and groups multiple pull requests. Composer suggestions retry more reliably and can be accepted with Right Arrow as well as Tab.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable startup and queued work",
+        description:
+          "Desktop startup recovers from an unanswered browser network-guard call, queued messages keep their order when leaving a chat, and supported simulator actions can boot a stopped simulator.",
+      },
+    ],
+  },
+  {
+    version: "1.6.0",
+    date: "Nov 15",
+    features: [
+      {
+        id: "composer-suggestions",
+        title: "Pick up the conversation faster",
+        description:
+          "After a reply, Synara can suggest a follow-up in the empty composer. Press Tab to insert it as an editable draft; it is never sent automatically.",
+        details:
+          "Suggestions use the current chat's supported provider and can be turned off in Settings → Chat behavior → Show suggestions.",
+      },
+      {
+        id: "desktop-performance",
+        title: "A lighter, faster desktop",
+        description:
+          "Synara starts less work up front, uses less memory in some workloads, and can quit faster after launch.",
+        details:
+          "In source-build tests on one Mac, three streaming Claude threads used 27% less process-tree memory, and a later startup optimization reduced median relaunch-to-typing by 12.8%. Results depend on the workload; packaged apps, Windows and Linux were not measured.",
+      },
+      {
+        id: "chat-tables",
+        title: "Read and copy chat tables",
+        description:
+          "Tables keep short values and numbers together, scroll horizontally when needed, and offer a Copy table action for their Markdown.",
+      },
+      {
+        id: "pi-cli",
+        title: "Install Pi separately",
+        description:
+          "Pi now uses your installed Pi CLI instead of a bundled SDK. Install the CLI to use Pi in Synara.",
+      },
+      {
+        id: "reliability-polish",
+        title: "More reliable work and clearer chats",
+        description:
+          "Long-running Claude commands stay in one activity row, worktree creation can finish on slow disks, and right-to-left questions and composer placeholders display more naturally.",
+      },
+    ],
+  },
+  {
+    version: "1.5.4",
+    date: "Nov 14",
+    features: [
+      {
+        id: "multiple-pull-requests",
+        title: "Manage multiple pull requests in one chat",
+        description:
+          "Link, view and manage several pull requests from the same thread, including stacked work.",
+      },
+      {
+        id: "multi-folder-worktrees",
+        title: "Use worktrees with multi-folder projects",
+        description:
+          "Add or remove source folders in Edit project and start worktree chats in multi-folder projects.",
+        details:
+          "Only the primary folder is isolated in the worktree. Additional folders remain live and changes in them affect the original folders.",
+      },
+      {
+        id: "remote-reconnect",
+        title: "Reconnect to your computers more easily",
+        description:
+          "Remote computers reconnect automatically when possible, and the computer picker offers a reconnect action. Folder browsing also recovers more gracefully from errors.",
+      },
+      {
+        id: "background-tasks",
+        title: "Keep track of background work",
+        description:
+          "Background tasks now live in the Environment panel. Status stays more accurate, and replies resumed by completed tasks are easier to follow and copy.",
+      },
+      {
+        id: "safer-diffs",
+        title: "Keep incoming Git history out of turn changes",
+        description:
+          "Turn diffs and file Undo avoid treating qualifying merged or checked-out history as edits, while retaining actual changes and conflict resolutions.",
+      },
+      {
+        id: "skills-plans-reliability",
+        title: "More reliable skills and Claude plans",
+        description:
+          "Typed and shared skills reach Claude and Codex more reliably, and Claude turn plans appear again. Temporary Cloudflare blocks are distinguished from sign-in failures; Claude retries blocked turns automatically.",
+      },
+      {
+        id: "performance",
+        title: "Less waiting and background work",
+        description:
+          "Synara starts more promptly, opens large threads with less backend work and avoids warming unused providers. The new-chat background pauses after five seconds without input.",
+        details:
+          "In a Linux source-build test with 20 open threads across 12 projects, median process-tree memory fell from 3,009 MB to 766 MB. Results depend on installed providers and workload; packaged apps and other platforms were not measured.",
+      },
+      {
+        id: "chat-polish",
+        title: "Clearer chat details",
+        description:
+          "The project appears beside the chat title when tabs are off, and images sharing a paragraph with text get their own row.",
+      },
+    ],
+  },
+  {
+    version: "1.5.3",
+    date: "Nov 12",
+    features: [
+      {
+        id: "settings-accounts",
+        title: "Find settings and manage accounts more easily",
+        description:
+          "Settings are grouped by purpose, with a dedicated Accounts page for provider sign-ins and a choice of default account for new chats.",
+        details:
+          "Search accounts and edit their settings separately. Resetting the agents list keeps your accounts and sign-in folders.",
+      },
+      {
+        id: "subagent-work",
+        title: "Follow subagents alongside your chat",
+        description:
+          "Open a subagent next to its parent conversation, and follow related agent-created threads together in the sidebar and Activity.",
+        details:
+          "Running subagents remain visible after the parent finishes. The running-agents indicator opens the Subagents list.",
+      },
+      {
+        id: "calmer-chats",
+        title: "Clearer conversations",
+        description:
+          "Tool activity and provider warnings are less noisy, questions use a compact composer, and choosing a starred model keeps its picker open.",
+      },
+      {
+        id: "claude-usage",
+        title: "Avoid unnecessary Claude usage",
+        description:
+          "New installs ask before resuming a large, long-idle Claude session and offer to continue from a summary.",
+        details:
+          "Existing installations keep their preference. Claude is also guided to avoid unrequested subagents when parallel work does not clearly help.",
+      },
+      {
+        id: "account-reliability",
+        title: "More reliable sign-in and Remote work",
+        description:
+          "Temporary account refresh failures no longer force a sign-out. Sign-in and background account requests handle delays and retries more gracefully.",
+      },
+      {
+        id: "performance-recovery",
+        title: "Less background work, smoother recovery",
+        description:
+          "Idle account polling and usage synchronization do less work, while interrupted chats and Remote project placement recover more reliably.",
+        details:
+          "Account API changes also reduce database and service round trips; their availability depends on the deployed service.",
+      },
+      {
+        id: "browser-errors",
+        title: "More useful browser automation errors",
+        description:
+          "Supported browser script failures provide a safe, actionable cause and guidance without exposing arbitrary page text.",
+      },
+    ],
+  },
+  {
+    version: "1.5.2",
+    date: "Nov 11",
+    features: [
+      {
+        id: "linux-arm64",
+        title: "Synara for Linux ARM64",
+        description:
+          "Download the new ARM64 AppImage alongside the existing x86_64 build. Each architecture uses its own update feed.",
+      },
+      {
+        id: "usage-analytics",
+        title: "Explore your usage",
+        description:
+          "The new Analytics tab in Usage & limits shows token and activity trends by provider, model and project, with API-rate costs.",
+        details:
+          "Costs are reported or estimated at API rates, not what your subscription bills. On a Mac, you can also include local Codex and Claude Code sessions.",
+      },
+      {
+        id: "computer-settings",
+        title: "Choose which computer to configure",
+        description:
+          "Select a connected computer in Settings to view and change its settings, and see the signed-in account for supported providers.",
+      },
+      {
+        id: "chat-reliability",
+        title: "More reliable chats and connections",
+        description:
+          "Account recovery, chat sends, queued work and Remote connections handle interruptions more reliably. Provider and checkpoint warnings now appear in the environment panel.",
+      },
+      {
+        id: "desktop-refinements",
+        title: "A smoother desktop experience",
+        description:
+          "macOS update preparation and shutdown are more reliable, simulator control stays active across chats, and onboarding and rate-limit messages are clearer.",
+      },
+    ],
+  },
+  {
+    version: "1.5.1",
+    date: "Nov 11",
+    features: [
+      {
+        id: "stable-upgrade",
+        title: "Upgrade older Stable databases safely",
+        description:
+          "The affected upgrade from an older Stable release now creates a migration backup and continues automatically.",
+        details:
+          "Only the exact known released history takes this path. Unrecognized database histories still require review, and backup and recovery safeguards remain active.",
+      },
+      {
+        id: "remote-reliability-totals",
+        title: "Optional anonymous Remote reliability totals",
+        description:
+          "With product sharing enabled, Synara counts approved pairings, live Remote connections, reconnects, connection timeouts and unexpected crashes.",
+        details:
+          "These separate daily totals contain no account, device or installation identifiers, chat text, file contents or error messages. Stable sharing stays off by default. Crash reporting is best-effort.",
+      },
+      {
+        id: "website-alto-checkout",
+        title: "Start Alto checkout from the website",
+        description:
+          "Choose a monthly or yearly plan on the Synara pricing page and verify your account by email before checkout.",
+        details:
+          "The checkout is linked to the verified Synara account. Account credentials stay out of the website response.",
+      },
+    ],
+  },
+  {
+    version: "1.5.0",
+    date: "Nov 10",
+    features: [
+      {
+        id: "remote-connections",
+        title: "Connect to your agents with Synara Alto",
+        description:
+          "Pair computers running Synara on macOS, Windows x64, or Linux x64. Open remote workspaces, steer chats and handle approvals on the computer doing the work.",
+        details:
+          "Sign in to the same Synara account, open Connections and approve the pairing on the source computer. Keep it online for live work. The managed connector on a Mac requires macOS 15 or newer. iPhone and iPad support is coming soon.",
+      },
+      {
+        id: "private-inbox-history",
+        title: "Read your saved Inbox recaps offline",
+        description:
+          "A signed-in computer automatically saves daily activity recaps to your private Synara account. Open Inbox → Saved recaps to read them when the source computer is offline.",
+        details:
+          "Saved recaps include project names and activity totals. They do not include prompt or chat text and never appear on your public profile. You can delete a saved recap from the history.",
+      },
+      {
+        id: "public-profile",
+        title: "Share your Synara profile",
+        description:
+          "Alto lets you publish a profile at trysynara.com/@handle and choose what appears on it.",
+      },
+      {
+        id: "daily-fixes",
+        title: "More reliable browser and Git actions",
+        description:
+          "Browser automation keeps in-flight requests alive, unstaging a rename handles both paths, and Windows terminal paths and local images resolve correctly.",
+      },
+      {
+        id: "account-and-interface",
+        title: "Simpler sign-in and clearer settings",
+        description:
+          "A redesigned sign-in helps you connect your devices. The interface uses English, and Restore defaults counts both theme packs and the system UI font.",
+      },
+    ],
+  },
+  {
     version: "1.1.0",
     date: "Nov 2",
     features: [

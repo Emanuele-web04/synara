@@ -820,7 +820,7 @@ function AutomationDetailView() {
                         value={String(schedule.dayOfWeek)}
                         options={[0, 1, 2, 3, 4, 5, 6].map((day) => ({
                           value: String(day),
-                          label: weekdayLabel(day, formatLocale),
+                          label: weekdayLabel(day),
                         }))}
                         disabled={!editable}
                         title={editDisabledTitle}

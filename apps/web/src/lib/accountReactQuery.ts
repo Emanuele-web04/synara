@@ -1,4 +1,4 @@
-import { reconcileWorkspaceAccount } from "./hosts/workspaceSessions";
+import { readWorkspaceSessions, reconcileWorkspaceAccount } from "./hosts/workspaceSessions";
 import {
   controlAccountScope,
   accountStatusScope,
@@ -47,6 +47,26 @@ export function accountBillingQueryOptions(status: AccountStatus | null) {
 }
 
 /**
+ * How often the status is re-read while a remote workspace is open: an account
+ * change made elsewhere must close that workspace's frames promptly (see
+ * watchAccountIdentityChanges), even in a window that is not focused.
+ */
+export const ACCOUNT_STATUS_REMOTE_WORKSPACE_INTERVAL_MS = 60_000;
+
+/**
+ * How often it is re-read otherwise. Each read is a `/me` on the account API
+ * (and, once the 5-minute access token has expired, a refresh too); focus,
+ * reconnect and the account mutations already re-read it when it can change.
+ */
+export const ACCOUNT_STATUS_INTERVAL_MS = 10 * 60_000;
+
+function accountStatusRefetchInterval(): number {
+  return readExecutionContext()?.remote || readWorkspaceSessions().length > 0
+    ? ACCOUNT_STATUS_REMOTE_WORKSPACE_INTERVAL_MS
+    : ACCOUNT_STATUS_INTERVAL_MS;
+}
+
+/**
  * The account session for this machine. The server refreshes tokens as part of
  * answering, so the result is authoritative; it changes only through the
  * mutations in useAccount (which invalidate) or a sign-in finishing in another
@@ -62,7 +82,9 @@ export function accountStatusQueryOptions() {
     staleTime: 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
-    refetchInterval: 60_000,
+    // Re-evaluated whenever the query settles or an observer re-renders, so
+    // opening a remote workspace tightens it without waiting out 10 minutes.
+    refetchInterval: accountStatusRefetchInterval,
     retry: 1,
   });
 }

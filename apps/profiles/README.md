@@ -7,20 +7,21 @@ separate database or authentication system.
 
 ## Application activation
 
-The account profile flow is a controlled Beta/development trial. Start the
-Synara server with `SYNARA_ACCOUNT_PROFILE_SYNC=1` to enable it. Stable rejects
-it even when this variable is set. Without it, the local profile remains
+The account profile flow is available in Stable and Beta. Stable and Remote
+enable it for signed-in accounts by default; `SYNARA_ACCOUNT_PROFILE_SYNC=0`
+disables it. Beta/development and generic servers retain the explicit
+`SYNARA_ACCOUNT_PROFILE_SYNC=1` opt-in. When disabled, the local profile remains
 available and account profile RPCs and usage reporting stay disabled. Signed-in
 Settings and the sidebar still display the same account identity; editing is
 disabled rather than silently saving a photo to the signed-out local profile. The web
 UI reads the server's `accountProfileSync` capability; old servers default off.
 
-Opting in starts the existing reporter for signed-in accounts, including the
+Enabling the feature starts the existing reporter for signed-in accounts, including the
 initial backfill of historical aggregate usage to the account service recorded
 at sign-in. Use an isolated Synara home and a test account for qualification.
 This is separate from making a profile public: new profiles are private, and
 Edit profile controls publication. No chat text is part of the usage buckets.
-Remove the variable and restart to disable the trial without deleting data.
+Set `SYNARA_ACCOUNT_PROFILE_SYNC=0` and restart to disable it without deleting data.
 
 ## Privacy and rendering
 

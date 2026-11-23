@@ -87,7 +87,7 @@ describe("resolvePreferredComposerModelSelection", () => {
       },
       threadModelSelection: null,
       projectModelSelection: null,
-      defaultProvider: "claudeAgent",
+      newChatDefault: { defaultProvider: "claudeAgent", defaultProviderInstanceId: null },
       resolveProviderForInstanceId: (instanceId) =>
         instanceId === ProviderInstanceId.makeUnsafe("claude_work") ||
         instanceId === ProviderInstanceId.makeUnsafe("claude_personal")
@@ -100,6 +100,74 @@ describe("resolvePreferredComposerModelSelection", () => {
       instanceId: "claudeAgent",
       model: "claude-sonnet-5",
     });
+  });
+});
+
+function resolveClaudeAccounts(instanceId: string) {
+  return instanceId === "claude_work" ? ("claudeAgent" as const) : null;
+}
+
+describe("resolvePreferredComposerModelSelection default account", () => {
+  it("starts on the default account when the default agent decides the provider", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: null,
+        threadModelSelection: null,
+        projectModelSelection: null,
+        newChatDefault: {
+          defaultProvider: "claudeAgent",
+          defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+        },
+        resolveProviderForInstanceId: resolveClaudeAccounts,
+      }),
+    ).toEqual({ provider: "claudeAgent", instanceId: "claude_work", model: "claude-sonnet-5" });
+  });
+
+  it("keeps the sticky last-used selection ahead of the default account", () => {
+    const sticky = modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" });
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: { modelSelectionByProvider: { claudeAgent: sticky }, activeProvider: "claudeAgent" },
+        threadModelSelection: null,
+        projectModelSelection: null,
+        newChatDefault: {
+          defaultProvider: "claudeAgent",
+          defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+        },
+        resolveProviderForInstanceId: resolveClaudeAccounts,
+      }),
+    ).toEqual(sticky);
+  });
+
+  it("keeps a project selection's own account", () => {
+    const project = modelSelection("claudeAgent", "claude-opus-4-6");
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: null,
+        threadModelSelection: null,
+        projectModelSelection: project,
+        newChatDefault: {
+          defaultProvider: "claudeAgent",
+          defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+        },
+        resolveProviderForInstanceId: resolveClaudeAccounts,
+      }),
+    ).toEqual(project);
+  });
+
+  it("ignores an account that belongs to another agent", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: null,
+        threadModelSelection: null,
+        projectModelSelection: null,
+        newChatDefault: {
+          defaultProvider: "codex",
+          defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("claude_work"),
+        },
+        resolveProviderForInstanceId: resolveClaudeAccounts,
+      }),
+    ).toMatchObject({ provider: "codex", instanceId: "codex" });
   });
 });
 

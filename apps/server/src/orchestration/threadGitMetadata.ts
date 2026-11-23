@@ -1,5 +1,6 @@
 import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { threadPullRequestsEqual } from "@synara/shared/threadPullRequestLinks";
 
 export type ThreadPullRequestLookup =
   | {
@@ -10,35 +11,19 @@ export type ThreadPullRequestLookup =
 
 export interface ThreadGitMetadataPatch {
   readonly branch?: string | null;
-  readonly lastKnownPr?: OrchestrationThreadPullRequest | null;
+  /** The branch-managed (`discovered`) PR; explicit links are never part of this patch. */
+  readonly discoveredPullRequest?: OrchestrationThreadPullRequest | null;
   readonly associatedWorktreePath?: string | null;
   readonly associatedWorktreeBranch?: string | null;
   readonly associatedWorktreeRef?: string | null;
 }
 
-function pullRequestsEqual(
-  left: OrchestrationThreadPullRequest | null,
-  right: OrchestrationThreadPullRequest | null,
-): boolean {
-  if (left === right) return true;
-  if (left === null || right === null) return false;
-  return (
-    left.number === right.number &&
-    left.title === right.title &&
-    left.url === right.url &&
-    left.baseBranch === right.baseBranch &&
-    left.headBranch === right.headBranch &&
-    left.state === right.state &&
-    (left.isDraft ?? false) === (right.isDraft ?? false) &&
-    (left.mergeability ?? "unknown") === (right.mergeability ?? "unknown") &&
-    (left.additions ?? null) === (right.additions ?? null) &&
-    (left.deletions ?? null) === (right.deletions ?? null) &&
-    (left.changedFiles ?? null) === (right.changedFiles ?? null)
-  );
-}
-
 /**
  * Derives the durable thread metadata observed at a provider-turn boundary.
+ *
+ * The PR rules below only govern the branch-managed link. PRs the user, the agent, or the app's
+ * own create/checkout flows linked explicitly are separate links that branch movement never
+ * removes.
  *
  * Dedicated worktree: a successful lookup may intentionally clear a prior PR when the current
  * branch has none. A transient lookup failure preserves a PR on an unchanged branch, but clears
@@ -51,6 +36,7 @@ function pullRequestsEqual(
  */
 export function deriveThreadGitMetadataPatch(input: {
   readonly currentBranch: string | null;
+  /** The thread's current branch-managed PR (not the overall current PR). */
   readonly currentPullRequest: OrchestrationThreadPullRequest | null;
   readonly observedBranch: string | null;
   readonly pullRequestLookup: ThreadPullRequestLookup;
@@ -83,7 +69,7 @@ export function deriveThreadGitMetadataPatch(input: {
     nextPullRequest = null;
   }
 
-  const pullRequestChanged = !pullRequestsEqual(input.currentPullRequest, nextPullRequest);
+  const pullRequestChanged = !threadPullRequestsEqual(input.currentPullRequest, nextPullRequest);
   const dedicatedWorktree = input.dedicatedWorktree;
   const associatedPathChanged =
     dedicatedWorktree !== undefined && dedicatedWorktree.currentPath !== dedicatedWorktree.cwd;
@@ -109,7 +95,7 @@ export function deriveThreadGitMetadataPatch(input: {
 
   return {
     ...(branchChanged ? { branch: input.observedBranch } : {}),
-    ...(pullRequestChanged ? { lastKnownPr: nextPullRequest } : {}),
+    ...(pullRequestChanged ? { discoveredPullRequest: nextPullRequest } : {}),
     ...(associatedWorktreePatch ?? {}),
   };
 }

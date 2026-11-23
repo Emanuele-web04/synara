@@ -749,21 +749,23 @@ describe("createAccountClient", () => {
       ).resolves.toMatchObject({ accessToken: expect.any(String) });
     });
 
-    it("throws AccountApiError with the service's message when the refresh token is spent", async () => {
+    it.each([
+      { code: "unauthorized", status: 401, message: "The session has expired — sign in again" },
+      {
+        code: "refresh_not_attempted",
+        status: 429,
+        message: "Too many refresh attempts — wait a minute",
+      },
+    ])("preserves the refresh service's $code result", async ({ code, status, message }) => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValue(
-          jsonResponse(
-            { error: "unauthorized", message: "The session has expired — sign in again" },
-            { status: 401 },
-          ),
-        );
+        .mockResolvedValue(jsonResponse({ error: code, message }, { status }));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
       await expect(client.refreshAccessToken({ refreshToken: "burned" })).rejects.toMatchObject({
-        code: "unauthorized",
-        status: 401,
-        message: "The session has expired — sign in again",
+        code,
+        status,
+        message,
       });
     });
   });

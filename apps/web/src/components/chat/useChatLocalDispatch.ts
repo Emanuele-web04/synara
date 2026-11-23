@@ -1,6 +1,6 @@
 import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useSyncExternalStore, type SetStateAction } from "react";
-import { create } from "zustand";
+import { updateThreadDispatch, useThreadDispatchStore } from "../../lib/chatDispatchStore";
 import { markPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { getWsSettlingThreadIds, subscribeWsTurnSettlements } from "../../wsTransportEvents";
 import { derivePhase } from "../../session-logic";
@@ -20,14 +20,6 @@ import {
 } from "../ChatView.logic";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
 // Preparation belongs to the task, so navigation can reconnect its controls.
-interface ThreadDispatchState {
-  localDispatch: LocalDispatchSnapshot | null;
-  pendingAction: WorktreeSetupResolutionAction | null;
-  serverAcknowledged?: boolean;
-}
-export const useThreadDispatchStore = create<{
-  threads: Partial<Record<ThreadId, ThreadDispatchState>>;
-}>(() => ({ threads: {} }));
 const setupResolutions = new Map<ThreadId, WorktreeSetupResolution>();
 function threadSetupResolutionRef(threadId: ThreadId) {
   return {
@@ -39,19 +31,6 @@ function threadSetupResolutionRef(threadId: ThreadId) {
       else setupResolutions.delete(threadId);
     },
   };
-}
-function updateThreadDispatch(
-  threadId: ThreadId,
-  patch: (current: ThreadDispatchState) => ThreadDispatchState,
-) {
-  useThreadDispatchStore.setState((state) => {
-    const current = state.threads[threadId] ?? { localDispatch: null, pendingAction: null };
-    const next = patch(current);
-    const threads = { ...state.threads };
-    if (next.localDispatch === null && next.pendingAction === null) delete threads[threadId];
-    else threads[threadId] = next;
-    return { threads };
-  });
 }
 const EMPTY_MESSAGES: ChatMessage[] = [];
 interface ChatLocalDispatchInput {
@@ -186,12 +165,12 @@ export function useChatLocalDispatch({
     setLocalDispatch(null);
   }, [setLocalDispatch]);
 
-  // Clears only the setup stepper from the dispatch marker: after "Work
-  // locally" the send continues (composer stays busy, Thinking shimmer takes
-  // over) but the worktree card animates out.
+  // "Work locally" starts the takeover deadline when the send leaves setup.
   const clearLocalDispatchWorktreeSetup = useCallback(() => {
     setLocalDispatch((current) =>
-      current?.worktreeSetup ? { ...current, worktreeSetup: null } : current,
+      current?.worktreeSetup
+        ? { ...current, startedAt: new Date().toISOString(), worktreeSetup: null }
+        : current,
     );
   }, [setLocalDispatch]);
 

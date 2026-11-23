@@ -7,7 +7,7 @@
 import type { ProjectId } from "@synara/contracts";
 import { useEffect, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import { resolveNewChatDefault, useAppSettings } from "~/appSettings";
 import { isElectron } from "~/env";
 import { useWindowFolderDrop } from "~/hooks/useWindowFolderDrop";
 import { useTranslation } from "~/i18n";
@@ -55,7 +55,7 @@ export function useProjectAdder(props: {
         workspaceRoot,
         // Files the project in Void; the sidebar follows it once the tour closes.
         spaceId: null,
-        defaultProvider: settings.defaultProvider,
+        newChatDefault: resolveNewChatDefault(settings),
         loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
       });
       if (result.snapshot) {

@@ -59,6 +59,7 @@ const ALL_OK = {
 
 /** A helper whose attach always succeeds; capability gating runs before it. */
 class StubHelper {
+  readonly running = true;
   get attachedDevice() {
     return {
       udid: DEVICE,
@@ -72,7 +73,6 @@ class StubHelper {
     };
   }
   start(): void {}
-  invalidateAttachment(): void {}
   /** Forced re-attaches, which rebuild the helper's input client. */
   static forcedAttaches = 0;
   async attach(_udid?: string, options: { readonly force?: boolean } = {}) {
@@ -193,14 +193,23 @@ describe("availability from the capability probe", () => {
     expect(availability.toolchain?.xcodeVersion).toBe("26.3");
   });
 
-  it("probes once per helper binary rather than on every availability check", async () => {
-    const { backend, probeCalls } = await makeBackend(ALL_OK);
+  it("reuses the helper identity and probe for repeated availability checks and actions", async () => {
+    let versionCalls = 0;
+    const { backend, probeCalls } = await makeBackend(ALL_OK, {
+      xcodeVersion: () => {
+        versionCalls += 1;
+        return undefined;
+      },
+    });
 
     await backend.availability();
     await backend.availability();
+    await backend.tap(DEVICE, 10, 10);
+    await backend.describeUi(DEVICE);
 
-    // The answer only changes when the toolchain does, and that produces a
-    // different binary path.
+    // Two availability checks still validate the license; the repeated cache
+    // lookups and native actions share one helper identity lookup.
+    expect(versionCalls).toBe(3);
     expect(probeCalls).toHaveLength(1);
     expect(probeCalls[0]).toEqual(["--probe"]);
   });

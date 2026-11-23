@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appNotaryArchiveArgs,
   appNotaryStateDirectory,
   notarizeMacPayload,
   payloadDigest,
@@ -90,6 +91,21 @@ describe.skipIf(process.platform === "win32")("Apple submission retention", () =
     expect(readFileSync(f.log, "utf8").trim()).toBe("validate");
     expect(wait).not.toHaveBeenCalled();
   });
+  it("archives the whole app for Apple with fast compression", () => {
+    // Same flags as before plus the compression level; the bundle and its
+    // resource forks are archived unchanged.
+    expect(appNotaryArchiveArgs("/stage/Synara.app", "/stage/app.zip")).toEqual([
+      "-c",
+      "-k",
+      "--sequesterRsrc",
+      "--keepParent",
+      "--zlibCompressionLevel",
+      "1",
+      "/stage/Synara.app",
+      "/stage/app.zip",
+    ]);
+  });
+
   it("keeps retained submission directories out of packaged app discovery", () => {
     const entries = [basename(appNotaryStateDirectory("/stage/Synara.app")), "Synara.app"];
     expect(entries.filter((entry) => entry.endsWith(".app"))).toEqual(["Synara.app"]);

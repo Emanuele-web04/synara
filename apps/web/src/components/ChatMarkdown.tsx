@@ -23,6 +23,7 @@ import type { ChatAttachment } from "~/types";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import { remarkGithubAlerts, type GithubAlertKind } from "../lib/remarkGithubAlerts";
 import { remarkHtmlBreaks } from "../lib/remarkHtmlBreaks";
+import { MARKDOWN_IMAGE_ROW_CLASS_NAME, remarkImageRows } from "../lib/remarkImageRows";
 import React, {
   Children,
   createContext,
@@ -46,14 +47,21 @@ import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
+import { copyTextToClipboard, useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffTheme";
+import { LRUCache } from "../lib/lruCache";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
 import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
-import { isLocalImageMarkdownSrc, normalizeMarkdownImagePath } from "../lib/localImageUrls";
+import {
+  isLocalImageMarkdownSrc,
+  isLocalVideoMarkdownSrc,
+  normalizeMarkdownImagePath,
+} from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
+import { resolveMarkdownTextDirection, scriptDirection } from "../lib/markdownDirection";
+import { extractTableMarkdown, rehypeTableLayout } from "../lib/markdownTableLayout";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import {
   ChatLinkActionsContext,
@@ -62,6 +70,7 @@ import {
 } from "../lib/linkContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { useStableValue } from "../hooks/useStableValue";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
@@ -75,6 +84,7 @@ import {
 } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { GeneratedMarkdownVideo } from "./chat/GeneratedMarkdownVideo";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
 import type { ParsedTerminalContextEntry } from "../lib/terminalContext";
 import { formatInlineTerminalContextLabel } from "./chat/userMessageTerminalContexts";
@@ -157,9 +167,13 @@ interface ChatMarkdownProps {
   imageAttachments?: ReadonlyArray<ChatAttachment> | undefined;
   wikiLinkRoot?: string | undefined;
   /**
-   * Assigns native bidi ownership to transcript markdown blocks. The default
-   * keeps the shared renderer's existing direction behavior for previews,
-   * plans, and other non-transcript consumers.
+   * Opts a transcript message into direction detection. The message takes a base
+   * direction from its dominant script, and every prose block overrides it from
+   * its own dominant script (see `markdownDirection`), so a Persian reply stays
+   * RTL even when a paragraph opens with a Latin name or a code chip, and an
+   * English paragraph in the same reply stays LTR. The default keeps the shared
+   * renderer's existing direction behavior for previews, plans, and other
+   * non-transcript consumers.
    */
   directionMode?: "off" | "auto-blocks";
   isStreaming?: boolean;
@@ -187,6 +201,12 @@ interface ChatMarkdownProps {
    * text.
    */
   parseHtml?: boolean | undefined;
+  /**
+   * Shares the parsed tree of this settled text with every other mount of the same
+   * text (see `parsedMarkdownCache`). Only for transcript rows, whose settled text is
+   * immutable and remounts as the list scrolls.
+   */
+  shareParse?: boolean | undefined;
   onOpenThread?: ((threadId: ThreadId) => void) | undefined;
   /** Terminal selections rendered as inline chips inside user-message markdown. */
   terminalContexts?: ReadonlyArray<ParsedTerminalContextEntry> | undefined;
@@ -246,6 +266,38 @@ interface ParsedMarkdownProps {
   remarkPlugins: MarkdownRemarkPlugins;
   rehypePlugins: MarkdownRehypePlugins;
   components: Components;
+  /**
+   * Everything besides the text that shapes the parse output, when the parse may be
+   * shared through `parsedMarkdownCache`; null for streaming or per-message plugins.
+   */
+  parseCacheScope: string | null;
+}
+
+// Parsed element trees of settled transcript messages, keyed by parse scope and source
+// text. A virtualized transcript unmounts rows that scroll away and remounts them on the
+// way back, which re-ran the whole unified pipeline for every remount. Element trees are
+// immutable and every render-time input (theme, find highlights, file chips, links) is
+// read from context by the markdown components, so one tree serves every mount of the
+// same text.
+//
+// Sharing is opt-in (`shareParse`): only transcript rows remount the same settled text.
+// Other surfaces (file previews, PR bodies, dialogs) render text that changes while it
+// is shown or can be very large, and would only fill the cache with dead versions.
+// Measured retained size: ~13.5 bytes per source character (10.4 MB for the 770 KB of
+// a fully read 300-message prose thread); 14 is used. One entry may not exceed
+// `PARSED_MARKDOWN_CACHE_MAX_SOURCE_CHARS`: the LRU admits an entry larger than its
+// whole budget by evicting everything else, so a huge message would flush the cache.
+const PARSED_MARKDOWN_CACHE_MAX_ENTRIES = 600;
+const PARSED_MARKDOWN_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const PARSED_MARKDOWN_BYTES_PER_SOURCE_CHAR = 14;
+const PARSED_MARKDOWN_CACHE_MAX_SOURCE_CHARS = 64 * 1024;
+const parsedMarkdownCache = new LRUCache<readonly ReactNode[]>(
+  PARSED_MARKDOWN_CACHE_MAX_ENTRIES,
+  PARSED_MARKDOWN_CACHE_MAX_BYTES,
+);
+
+export function getSharedParseCacheSizeForTests(): number {
+  return parsedMarkdownCache.size;
 }
 
 // react-markdown's `Markdown` is synchronous and hook-free, so calling it as a
@@ -269,9 +321,34 @@ interface MarkdownParseOptions {
   readonly remarkPlugins: MarkdownRemarkPlugins;
   readonly rehypePlugins: MarkdownRehypePlugins;
   readonly components: Components;
+  readonly parseCacheScope: string | null;
 }
 
 function parseMarkdownBlock(
+  block: StreamingMarkdownBlock,
+  options: MarkdownParseOptions,
+): readonly ReactNode[] {
+  // Only a whole-message parse (offset 0, not split for streaming) is shared.
+  if (
+    options.parseCacheScope === null ||
+    block.offset !== 0 ||
+    block.text.length > PARSED_MARKDOWN_CACHE_MAX_SOURCE_CHARS
+  ) {
+    return parseMarkdownBlockUncached(block, options);
+  }
+  const cacheKey = `${options.parseCacheScope}\u0000${block.text}`;
+  const cached = parsedMarkdownCache.get(cacheKey);
+  if (cached !== null) return cached;
+  const children = parseMarkdownBlockUncached(block, options);
+  parsedMarkdownCache.set(
+    cacheKey,
+    children,
+    block.text.length * PARSED_MARKDOWN_BYTES_PER_SOURCE_CHAR,
+  );
+  return children;
+}
+
+function parseMarkdownBlockUncached(
   block: StreamingMarkdownBlock,
   options: MarkdownParseOptions,
 ): readonly ReactNode[] {
@@ -295,11 +372,17 @@ const ParsedMarkdown = memo(function ParsedMarkdown({
   remarkPlugins,
   rehypePlugins,
   components,
+  parseCacheScope,
 }: ParsedMarkdownProps) {
   const children = useStreamingMarkdownChildren(
     text,
     splitBlocks,
-    { remarkPlugins, rehypePlugins, components },
+    {
+      remarkPlugins,
+      rehypePlugins,
+      components,
+      parseCacheScope: splitBlocks ? null : parseCacheScope,
+    },
     parseMarkdownBlock,
   );
   return <>{children}</>;
@@ -345,6 +428,7 @@ function buildAuthoredHtmlPlugins(
         ...(baseSchema.attributes?.blockquote ?? []),
         ["dataGithubAlert", "note", "tip", "important", "warning", "caution"],
       ],
+      span: [...(baseSchema.attributes?.span ?? []), ["className", MARKDOWN_IMAGE_ROW_CLASS_NAME]],
     },
     protocols: {
       ...baseSchema.protocols,
@@ -406,12 +490,13 @@ const BASE_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   remarkGithubAlerts,
   remarkHtmlBreaks,
+  remarkImageRows,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
 // render because it closes over the message's mention references).
 const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
-const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
+const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [rehypeTableLayout];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
 // `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
 // to shorten the protected string, which shifted every downstream source offset (find positions
@@ -469,61 +554,136 @@ function rehypeRestoreLiteralDollars() {
   };
 }
 
-const BASE_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [rehypeRestoreLiteralDollars];
+const BASE_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
+  // Classify literal dollars while leaving the math nodes and source offsets for KaTeX.
+  [rehypeTableLayout, restoreLiteralDollarPlaceholders],
+  rehypeRestoreLiteralDollars,
+];
 
 type BidiHastNode = {
   type?: string;
   tagName?: string;
   properties?: Record<string, unknown>;
+  value?: string;
   children?: BidiHastNode[];
 };
 
-const TOP_LEVEL_BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6"]);
-const NESTED_BIDI_OWNER_TAGS = new Set(["li", "blockquote", "th", "td"]);
+const BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "th", "td"]);
+const BIDI_CONTAINER_TAGS = new Set(["ul", "ol", "blockquote"]);
+const BIDI_OPAQUE_TAGS = new Set(["pre", "code", "script", "style"]);
 
-function setBidiDirection(node: BidiHastNode, direction: "auto" | "ltr"): void {
-  node.properties = { ...node.properties, dir: direction };
+function isBidiOpaque(node: BidiHastNode): boolean {
+  if (!node.tagName) return false;
+  if (BIDI_OPAQUE_TAGS.has(node.tagName)) return true;
+  const className = node.properties?.className;
+  return className === "katex" || (Array.isArray(className) && className.includes("katex"));
 }
 
-function applyNestedBidiOwners(node: BidiHastNode): void {
-  if (node.type === "element" && node.tagName) {
-    if (NESTED_BIDI_OWNER_TAGS.has(node.tagName)) {
-      setBidiDirection(node, "auto");
-    } else if (
-      node.tagName === "pre" ||
-      node.tagName === "table" ||
-      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex")) ||
-      node.properties?.className === "katex"
-    ) {
-      // Code, tables, and rendered math retain source/LTR ordering and must
-      // not contribute their Latin text to an enclosing prose block's scan.
-      setBidiDirection(node, "ltr");
-    }
-  }
+function ownsItsDirection(node: BidiHastNode): boolean {
+  return Boolean(
+    node.tagName &&
+    (BIDI_OWNER_TAGS.has(node.tagName) ||
+      BIDI_CONTAINER_TAGS.has(node.tagName) ||
+      node.tagName === "table"),
+  );
+}
 
-  for (const child of node.children ?? []) {
-    applyNestedBidiOwners(child);
+/** GFM links named after their address carry no additional prose. */
+function isAutomaticBidiLink(node: BidiHastNode): boolean {
+  const href = node.properties?.href;
+  if (node.tagName !== "a" || typeof href !== "string" || node.children?.length !== 1) {
+    return false;
   }
+  let labelNode = node.children[0];
+  // Transcript search wraps plain labels in a source-position node.
+  if (labelNode?.tagName === CHAT_FIND_TEXT_TAG_NAME && labelNode.children?.length === 1) {
+    labelNode = labelNode.children[0];
+  }
+  const label = labelNode?.type === "text" ? labelNode.value : undefined;
+  if (!label) return false;
+  return (
+    (href === label && /^[a-z][a-z0-9+.-]*:\/\//i.test(label)) ||
+    (/^www\./i.test(label) && href === `http://${label}`) ||
+    href === `mailto:${label}`
+  );
 }
 
 /**
- * Let the browser's Unicode bidi algorithm choose each prose block's first
- * strong direction. Regular anchors intentionally remain direction-neutral:
- * a link label is part of its paragraph's content, so setting dir=auto on the
- * anchor would isolate it and make a link-only Arabic paragraph resolve LTR.
+ * Collects a block's own prose, joined with spaces so identifiers that sit in
+ * separate inline nodes stay separate words. Nested blocks (a list inside a list
+ * item, a paragraph inside a quote) resolve their own direction, so they are
+ * skipped, as are code, math, and other non-prose runs.
+ */
+function collectBlockText(node: BidiHastNode): string {
+  const parts: string[] = [];
+
+  const walk = (child: BidiHastNode) => {
+    if (child.type === "text") {
+      parts.push(child.value ?? "");
+      return;
+    }
+    if (isBidiOpaque(child) || ownsItsDirection(child) || isAutomaticBidiLink(child)) return;
+    for (const grandchild of child.children ?? []) walk(grandchild);
+  };
+
+  for (const child of node.children ?? []) walk(child);
+  return parts.join(" ");
+}
+
+function majorityDirection(directions: ReadonlyArray<"rtl" | "ltr">): "rtl" | "ltr" | undefined {
+  let rtl = 0;
+  let ltr = 0;
+  for (const direction of directions) {
+    if (direction === "rtl") rtl += 1;
+    else ltr += 1;
+  }
+  if (rtl + ltr === 0) return undefined;
+  return rtl > ltr ? "rtl" : "ltr";
+}
+
+function setBidiDirection(node: BidiHastNode, direction: "rtl" | "ltr"): void {
+  node.properties = { ...node.properties, dir: direction };
+}
+
+function resolveBidiDirections(node: BidiHastNode): "rtl" | "ltr" | undefined {
+  if (node.type === "text" || isBidiOpaque(node)) return undefined;
+
+  const childDirections: Array<"rtl" | "ltr"> = [];
+  for (const child of node.children ?? []) {
+    const direction = resolveBidiDirections(child);
+    if (direction) childDirections.push(direction);
+  }
+
+  if (node.type !== "element" || !node.tagName) {
+    return majorityDirection(childDirections);
+  }
+  if (BIDI_OWNER_TAGS.has(node.tagName)) {
+    // Loose list items and table cells hold nested paragraphs; when they carry no
+    // inline text of their own, follow the blocks they contain.
+    const direction =
+      scriptDirection(collectBlockText(node)) ?? majorityDirection(childDirections) ?? undefined;
+    if (direction) setBidiDirection(node, direction);
+    return direction;
+  }
+  if (BIDI_CONTAINER_TAGS.has(node.tagName)) {
+    const direction = majorityDirection(childDirections);
+    if (direction) setBidiDirection(node, direction);
+    return direction;
+  }
+  return undefined;
+}
+
+/**
+ * Gives every prose block its own direction from the dominant script of that
+ * block. First-strong (`dir="auto"`) is not enough in technical Persian: a
+ * paragraph that opens with `netkeep`, `**Stripe، Linear:**`, or `*.github.com`
+ * would otherwise be laid out in logical LTR order. Containers follow the
+ * majority of their items so list markers, gutters, and quote borders stay on
+ * the same side as the text they decorate.
  */
 function rehypeBidiBlockDirection() {
   return (tree: BidiHastNode) => {
-    for (const child of tree.children ?? []) {
-      if (
-        child.type === "element" &&
-        child.tagName &&
-        TOP_LEVEL_BIDI_OWNER_TAGS.has(child.tagName)
-      ) {
-        setBidiDirection(child, "auto");
-      }
-      applyNestedBidiOwners(child);
-    }
+    resolveBidiDirections(tree);
   };
 }
 
@@ -1217,6 +1377,48 @@ function MarkdownCodeBlock({
   );
 }
 
+// Short columns keep their width and the table scrolls sideways only when they cannot all fit
+// (see lib/markdownTableLayout.ts). Copy puts the table's own Markdown on the clipboard.
+function MarkdownTable({
+  source,
+  children,
+  ...props
+}: React.ComponentProps<"table"> & {
+  source: { start: number; end: number; column: number } | null;
+}) {
+  const { t } = useTranslation();
+  const readSourceText = useContext(MarkdownSourceTextReaderContext);
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 1200 });
+  const copyLabel = isCopied ? t("chat:theme_copied") : t("chat:copyTable");
+  const handleCopy = () => {
+    if (!source) return;
+    const markdown = extractTableMarkdown(readSourceText(), source);
+    if (markdown) copyToClipboard(markdown);
+  };
+
+  return (
+    <div className="chat-markdown-table">
+      {source ? (
+        <div className="chat-markdown-table__actions">
+          <IconButton
+            className="chat-markdown-table__action"
+            onClick={handleCopy}
+            title={copyLabel}
+            label={copyLabel}
+            size="icon-xs"
+            variant="ghost"
+          >
+            {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          </IconButton>
+        </div>
+      ) : null}
+      <div className="chat-markdown-table__scroll">
+        <table {...props}>{children}</table>
+      </div>
+    </div>
+  );
+}
+
 interface SuspenseShikiCodeBlockProps {
   language: string;
   code: string;
@@ -1371,6 +1573,8 @@ const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(n
 // inline code read it, so it stays out of MarkdownRenderContext and the links,
 // images and chips of settled blocks do not re-render per token.
 const MarkdownSourceTextContext = createContext("");
+// Reads the same text on demand (a table's Copy), without re-rendering per token.
+const MarkdownSourceTextReaderContext = createContext<() => string>(() => "");
 
 // Stable component types preserve code highlighting timers, copy state and image state.
 const GITHUB_ALERTS: Record<GithubAlertKind, { titleKey: string; icon: LucideIcon }> = {
@@ -1392,6 +1596,10 @@ function TechnicalBidiIsolate(props: { active: boolean; children: ReactNode }) {
   );
 }
 
+/**
+ * A table keeps its columns in source order (`dir="ltr"` on the table), so cells
+ * get their own direction from the rehype plugin instead of inheriting it.
+ */
 const MARKDOWN_COMPONENTS: Components = {
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
     const { t } = useTranslation();
@@ -1521,6 +1729,27 @@ const MARKDOWN_COMPONENTS: Components = {
       </TechnicalBidiIsolate>
     );
   },
+  table: function MarkdownTableElement({ node, children, ...props }) {
+    const { usesAutomaticBlockDirection } = useContext(MarkdownRenderContext)!;
+    const start = node?.position?.start;
+    const end = node?.position?.end;
+    const source =
+      start?.offset === undefined || end?.offset === undefined
+        ? null
+        : { start: start.offset, end: end.offset, column: start.column };
+    return (
+      // Column order follows the table's own direction, not the prose around
+      // it, so an RTL message keeps its columns in source order. Cells carry
+      // their own direction instead.
+      <MarkdownTable
+        source={source}
+        {...props}
+        dir={usesAutomaticBlockDirection ? "ltr" : undefined}
+      >
+        {children}
+      </MarkdownTable>
+    );
+  },
   pre: function MarkdownPre({ node, children, ...props }) {
     const { diffThemeName, isStreaming, isUserVariant, usesAutomaticBlockDirection } =
       useContext(MarkdownRenderContext)!;
@@ -1528,7 +1757,11 @@ const MARKDOWN_COMPONENTS: Components = {
     const renderInlineVisual = useContext(InlineVisualEmbedContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
-      return <pre {...props}>{children}</pre>;
+      return (
+        <pre {...props} dir={usesAutomaticBlockDirection ? "ltr" : undefined}>
+          {children}
+        </pre>
+      );
     }
 
     const rawFenceInfo = extractRawFenceInfo(codeBlock.className);
@@ -1643,6 +1876,18 @@ const MARKDOWN_COMPONENTS: Components = {
           threadId={threadId}
           attachmentId={attachmentId}
           onImageExpand={onImageExpand}
+          isLinked={isInsideLink}
+        />
+      );
+    }
+    // Local videos play inline; remote video URLs keep the plain <img> path.
+    if (isLocalVideoMarkdownSrc(restoredSrc)) {
+      return (
+        <GeneratedMarkdownVideo
+          src={restoredSrc}
+          alt={alt}
+          cwd={cwd}
+          threadId={threadId}
           isLinked={isInsideLink}
         />
       );
@@ -1775,6 +2020,7 @@ function ChatMarkdown({
   terminalContexts,
   onOpenThread,
   parseHtml: parseHtmlProp,
+  shareParse: shareParseProp,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
@@ -1784,6 +2030,14 @@ function ChatMarkdown({
   const variant = variantProp ?? "assistant";
   const directionMode = directionModeProp ?? "off";
   const usesAutomaticBlockDirection = directionMode === "auto-blocks";
+  // The message's own direction is the inherited default (bare text, images, and
+  // blocks with no letters of their own); each prose block then overrides it from
+  // its own dominant script, so a bilingual reply keeps Persian paragraphs RTL
+  // and English paragraphs LTR in the same message.
+  const textDirection = useMemo(
+    () => (usesAutomaticBlockDirection ? resolveMarkdownTextDirection(text) : undefined),
+    [text, usesAutomaticBlockDirection],
+  );
   const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
@@ -1883,6 +2137,7 @@ function ChatMarkdown({
   // then instead of recomputing it (and every text node) per streamed token.
   const normalizedFindQuery = normalizeFindQuery(findQuery);
   const findSourceText = normalizedFindQuery.length > 0 ? sourceText : "";
+  const readSourceText = useStableCallback(() => sourceText);
   const composerChipsRemarkPlugin = useMemo(
     () =>
       isUserVariant
@@ -1903,7 +2158,13 @@ function ChatMarkdown({
     }
     return [
       ...(activeMathPlugin
-        ? [remarkGfm, activeMathPlugin.remarkMath, remarkGithubAlerts, remarkHtmlBreaks]
+        ? [
+            remarkGfm,
+            activeMathPlugin.remarkMath,
+            remarkGithubAlerts,
+            remarkHtmlBreaks,
+            remarkImageRows,
+          ]
         : BASE_MARKDOWN_REMARK_PLUGINS),
       [remarkWikiLinks, { root: wikiLinkRoot ?? cwd }],
       remarkFindableText,
@@ -1916,7 +2177,11 @@ function ChatMarkdown({
     // immediately after parsing so scripts, event handlers, and unsafe URL
     // schemes never reach React's renderer.
     const mathAndLiteralRehype: MarkdownRehypePlugins = activeMathPlugin
-      ? [activeMathPlugin.rehypeKatex, rehypeRestoreLiteralDollars]
+      ? [
+          [rehypeTableLayout, restoreLiteralDollarPlaceholders],
+          activeMathPlugin.rehypeKatex,
+          rehypeRestoreLiteralDollars,
+        ]
       : BASE_MARKDOWN_REHYPE_PLUGINS;
     const basePlugins: MarkdownRehypePlugins = isUserVariant
       ? USER_MARKDOWN_REHYPE_PLUGINS
@@ -1925,6 +2190,13 @@ function ChatMarkdown({
         : mathAndLiteralRehype;
     return usesAutomaticBlockDirection ? [...basePlugins, rehypeBidiBlockDirection] : basePlugins;
   }, [isUserVariant, activeAuthoredHtmlPlugins, activeMathPlugin, usesAutomaticBlockDirection]);
+  // The parse depends on the text plus exactly these inputs (see remarkPlugins and
+  // rehypePlugins above). User messages carry per-message chip plugins and are not shared.
+  // Only opted-in callers share (see `parsedMarkdownCache`).
+  const parseCacheScope =
+    !shareParseProp || isStreaming || composerChipsRemarkPlugin
+      ? null
+      : `${activeAuthoredHtmlPlugins ? 1 : 0}${activeMathPlugin ? 1 : 0}${usesAutomaticBlockDirection ? 1 : 0}:${wikiLinkRoot ?? cwd ?? ""}`;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hadFindHighlightRef = useRef(false);
   useLayoutEffect(() => {
@@ -1974,6 +2246,7 @@ function ChatMarkdown({
       ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
       {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
+      dir={textDirection}
       style={style}
     >
       <ChatFindRenderProvider
@@ -1983,13 +2256,16 @@ function ChatMarkdown({
       >
         <MarkdownRenderContext.Provider value={renderContext}>
           <MarkdownSourceTextContext.Provider value={findSourceText}>
-            <ParsedMarkdown
-              text={renderedText}
-              splitBlocks={splitBlocks}
-              remarkPlugins={remarkPlugins}
-              rehypePlugins={rehypePlugins}
-              components={MARKDOWN_COMPONENTS}
-            />
+            <MarkdownSourceTextReaderContext.Provider value={readSourceText}>
+              <ParsedMarkdown
+                text={renderedText}
+                splitBlocks={splitBlocks}
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={rehypePlugins}
+                components={MARKDOWN_COMPONENTS}
+                parseCacheScope={parseCacheScope}
+              />
+            </MarkdownSourceTextReaderContext.Provider>
           </MarkdownSourceTextContext.Provider>
         </MarkdownRenderContext.Provider>
       </ChatFindRenderProvider>

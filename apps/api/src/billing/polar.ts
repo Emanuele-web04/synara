@@ -1,4 +1,5 @@
 // Polar protocol stays here; callers receive only account-scoped commercial facts.
+import { PolarError } from "@polar-sh/sdk";
 import { createPolar, errors, webhooks, type models } from "@polar-sh/sdk/2026-10";
 import type {
   AccountBillingEnvironment,
@@ -14,6 +15,9 @@ export class BillingCheckoutNotCreatedError extends Error {
     this.name = "BillingCheckoutNotCreatedError";
   }
 }
+
+// A catalog failure blocks purchases while the customer and portal APIs can still work.
+export class BillingCatalogUnavailableError extends Error {}
 
 export type BillingSnapshot = {
   customerId: string;
@@ -173,7 +177,11 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
     async plans() {
       return Promise.all(
         (["month", "year"] as const).map(async (interval) => {
-          const product = await polar.products.get(productId(interval));
+          const product = await polar.products.get(productId(interval)).catch((error: unknown) => {
+            if (error instanceof PolarError)
+              throw new BillingCatalogUnavailableError("Polar catalog is temporarily unavailable");
+            throw error;
+          });
           if (
             product.organization_id !== config.organizationId ||
             product.is_archived ||
@@ -185,7 +193,9 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
                 benefit.id === config.desktopBenefitId && benefit.type === "feature_flag",
             )
           )
-            throw new Error("Polar catalog is not configured for this plan");
+            throw new BillingCatalogUnavailableError(
+              "Polar catalog is not configured for this plan",
+            );
           const prices = product.prices.filter((price) => !price.is_archived);
           const price = prices[0];
           if (
@@ -196,12 +206,14 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
             price.price_amount <= 0 ||
             !/^[a-z]{3}$/.test(price.price_currency)
           )
-            throw new Error("Polar plan requires one fixed catalog price");
+            throw new BillingCatalogUnavailableError("Polar plan requires one fixed catalog price");
           if (
             config.environment === "production" &&
             (product.trial_interval !== null || product.trial_interval_count !== null)
           )
-            throw new Error("Production Polar catalog must not configure a trial");
+            throw new BillingCatalogUnavailableError(
+              "Production Polar catalog must not configure a trial",
+            );
           const expected = config.expectedCatalog;
           if (
             expected &&
@@ -210,7 +222,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
                 (interval === "month" ? expected.monthlyAmountMinor : expected.yearlyAmountMinor) ||
               price.tax_behavior !== expected.taxBehavior)
           )
-            throw new Error(
+            throw new BillingCatalogUnavailableError(
               "Polar catalog does not match the expected price, currency or tax behavior",
             );
           return {

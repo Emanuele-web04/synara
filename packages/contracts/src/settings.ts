@@ -63,10 +63,11 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   // Claude Code keeps Artifact publishing (and `/design`, `/slides`) off for
   // Agent SDK sessions unless the host opts in.
   enableArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
-  // Off by default: embedded (SDK) Claude Code never asks before resuming a
-  // large session after a long pause. When on, Synara asks the way Claude
-  // Code's interactive resume prompt does.
-  confirmColdCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  // On by default: resuming a large session after a long pause re-caches the
+  // whole history in one request, which can take several percent of a usage
+  // window. Synara asks the way Claude Code's interactive resume prompt does;
+  // embedded (SDK) Claude Code alone never asks.
+  confirmColdCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
 
@@ -176,6 +177,8 @@ export const ServerSettings = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
     Schema.withDecodingDefault(() => ""),
   ),
+  // Ends the description of a pull request Synara creates with a "Created with Synara" link.
+  gitAttributionEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -239,6 +242,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
   sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
+  gitAttributionEnabled: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({

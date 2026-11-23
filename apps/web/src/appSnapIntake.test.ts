@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopAppSnapCapture } from "@synara/contracts";
 
@@ -67,6 +67,8 @@ describe("insertAppSnapCaptureIntoDraft", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations; the full-draft case below overrides this one.
+    addImage.mockReturnValue(true);
     prepareComposerImageAttachmentsFromFiles.mockResolvedValue({
       images: [preparedImage("image-1")],
       error: null,
@@ -83,6 +85,10 @@ describe("insertAppSnapCaptureIntoDraft", () => {
       syncPersistedAttachments,
       removeImage,
     } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("persists the capture into the thread draft with appsnap provenance", async () => {

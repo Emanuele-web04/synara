@@ -95,3 +95,130 @@ index 429dc05..7e53848 100644
        warnings?: CookieSyncWarning[];
        profileMode?: "persistent" | "ephemeral";
      }
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,6 +8,11 @@
+   "main": "dist/src/index.js",
+   "types": "types/index.d.ts",
+   "exports": {
++    "./guard-proxy": {
++      "types": "./types/guard-proxy.d.ts",
++      "import": "./dist/src/guard-proxy.js",
++      "default": "./dist/src/guard-proxy.js"
++    },
+     "./capture": {
+       "types": "./types/capture.d.ts",
+       "import": "./dist/src/vault-capture.js",
+diff --git a/types/guard-proxy.d.ts b/types/guard-proxy.d.ts
+new file mode 100644
+--- /dev/null
++++ b/types/guard-proxy.d.ts
+@@ -0,0 +1,14 @@
++// Host-owned browser sessions can keep guarded sockets alive across worker leases.
++import type { NetworkDecision, NetworkRequestDetails } from "./policy.js";
++
++export function createGuardProxy(options: {
++  guardUrl: (
++    url: string,
++    details: NetworkRequestDetails,
++    executeId: string,
++  ) => Promise<NetworkDecision>;
++  executeId: () => string;
++}): {
++  ensure(): Promise<number>;
++  close(): Promise<void>;
++};
+diff --git a/types/common.d.ts b/types/common.d.ts
+--- a/types/common.d.ts
++++ b/types/common.d.ts
+@@ -66,5 +66,7 @@
+ export interface FailedRunResult extends ResultEnvelopeBase {
+   ok: false;
++  /** Trusted worker receipt: the snippet settled without requiring worker restart. */
++  executionSettled?: boolean;
+   error: string;
+   errorCode?: string;
+   /** Cancellation cannot undo effects already committed by the page. */
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -6940,4 +6940,5 @@ async function execute(message) {
+     const firstEvent = session.events.length;
+     const firstArtifact = session.artifacts.length;
+     let restartWorker = false;
++    let executionSettled = false;
+     let downloadRunConfigured = false;
+@@ -7010,2 +7011,8 @@ async function execute(message) {
+-        const scriptOutcome = Promise.resolve(promise).then((result) => ({ ok: true, result }), (error) => ({ ok: false, error }));
++        const scriptOutcome = Promise.resolve(promise).then((result) => {
++            executionSettled = true;
++            return { ok: true, result };
++        }, (error) => {
++            executionSettled = true;
++            return { ok: false, error };
++        });
+         const executionOutcome = scriptOutcome.then(async (outcome) => {
+@@ -7132,4 +7139,5 @@ async function execute(message) {
+             challenges,
+             ok: false,
++            executionSettled: executionSettled && !restartWorker,
+             error: redactText(failure?.message || String(failure)),
+             restartWorker,
+diff --git a/dist/src/human.js b/dist/src/human.js
+--- a/dist/src/human.js
++++ b/dist/src/human.js
+@@ -115,6 +115,16 @@
+         return true;
+     return isInsertOf(baseline, afterText, request);
+ }
++// Synara: expected keystroke time for typeText, so callers can refuse text that
++// cannot finish before their deadline instead of leaving it half-typed. The
++// pause model mirrors typeText; perKeyOverheadMs covers each key round trip.
++export function estimateTypeTextMs(text, options = {}, perKeyOverheadMs = 12) {
++    const minDelay = Math.max(10, Number(options?.minDelay) || 35);
++    const maxDelay = Math.max(minDelay, Number(options?.maxDelay) || 95);
++    const count = [...String(text)].length;
++    const pause = 0.92 * ((minDelay + maxDelay) / 2) + 0.08 * 300;
++    return Math.round(Math.max(0, count - 1) * pause + count * perKeyOverheadMs);
++}
+ export async function typeText(keyboard, text, options = {}) {
+     const minDelay = Math.max(10, Number(options.minDelay) || 35);
+     const maxDelay = Math.max(minDelay, Number(options.maxDelay) || 95);
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -28,7 +28,7 @@
+ import { mkdirPrivate, writePrivate, writePrivateBytes } from "./fs-private.js";
+ import { createGuardProxy, httpGetViaProxy, parseUpstreamProxy, } from "./guard-proxy.js";
+ import { createGuardUrl } from "./guard-url.js";
+-import { movePointer, pointInside, pressPointer, scrollWheel, typedTextLanded, typeText, } from "./human.js";
++import { estimateTypeTextMs, movePointer, pointInside, pressPointer, scrollWheel, typedTextLanded, typeText, } from "./human.js";
+ import { buildLaunchIdentityPlan, resolveGeoIdentity } from "./launch-identity.js";
+ import { createLiveViewServer } from "./live-view.js";
+ import { liveViewHtml, liveViewLoginHtml } from "./live-view-html.js";
+@@ -4458,6 +4458,16 @@
+     });
+     human.type = realm.safeFunction(async (target, text, options = {}) => {
+         const page = await ensureSessionPage(session);
++        // Synara: human pacing cannot stop midway without leaving half-typed
++        // text, so refuse up front when it cannot finish in this execution.
++        if (Number.isFinite(execution.deadline)) {
++            const count = [...String(text)].length;
++            const neededMs = estimateTypeTextMs(text, options);
++            const remainingMs = Math.max(0, Math.round(execution.deadline - Date.now() - 1_000));
++            if (neededMs > remainingMs) {
++                throw new Error(`human.type needs about ${neededMs} ms to type ${count} characters at human pace, but about ${remainingMs} ms remain in this call. Nothing was typed. Use locator.fill(text) or page.keyboard.insertText(text) for long text, or raise timeoutMs.`);
++            }
++        }
+         const clickedTarget = await humanClickTarget(page, session, target, options);
+         const clear = options?.clear !== false;
+         if (clear)
+@@ -7007,6 +7017,7 @@
+         });
+         const timeoutMs = Math.max(1_000, Number(message.timeoutMs || 30_000));
+         downloadDeadline = Date.now() + timeoutMs;
++        execution.deadline = downloadDeadline;
+         let timer;
+         const scriptOutcome = Promise.resolve(promise).then((result) => {
+             executionSettled = true;

@@ -47,12 +47,17 @@ import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
+import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { NewThreadDefaultsSyncCoordinator } from "../components/NewThreadDefaultsSyncCoordinator";
 import { settingsChangedBeyondNewThreadDefaults } from "@synara/shared/serverSettings";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import {
+  isSessionOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+} from "../session-logic";
 import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
 import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 const FeedbackDialog = lazy(() =>
@@ -182,7 +187,6 @@ import {
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useComputerEventBridge } from "../hooks/useComputerEventBridge";
 import { useDeviceEventBridge } from "../hooks/useDeviceEventBridge";
-import { useProductAnalyticsAccount } from "../hooks/useProductAnalyticsAccount";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
   useProviderAuthRefreshOnFocus,
@@ -411,6 +415,7 @@ function RootRouteView() {
               </SafariAccessOnboarding>
               <GlobalOnboardingDialog />
               <ProjectImportAnnouncementDialog />
+              <ConnectionLaunchAnnouncements />
             </>
           )}
           <GlobalProjectImportDialog />
@@ -716,6 +721,7 @@ async function runProviderUpdateAll(params: {
         manualCommands.length > 0
           ? t("common:copyTheCommandsBelowToUpdateManuallyInA", {
               failures: failureLines,
+              count: manualCommands.length,
             })
           : failureLines,
       data: {
@@ -1199,8 +1205,7 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
 function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnRunning(thread?.session?.orchestrationStatus, thread?.latestTurn?.state) ||
     hasPendingTurnDispatch(threadId)
   );
 }
@@ -1276,9 +1281,10 @@ function isPendingInteractionDetailMissing(threadId: ThreadId): boolean {
 function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "starting" ||
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnStartingOrRunning(
+      thread?.session?.orchestrationStatus,
+      thread?.latestTurn?.state,
+    ) ||
     thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
       true ||
     isPendingInteractionDetailMissing(threadId) ||
@@ -1313,7 +1319,6 @@ function EventRouter() {
 
   useDeviceEventBridge();
   useComputerEventBridge();
-  useProductAnalyticsAccount();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
@@ -1856,10 +1861,17 @@ function EventRouter() {
     };
 
     const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return false;
+      if (shouldApplyBootstrapShellSnapshot(snapshot)) {
+        return applyAuthoritativeShellSnapshot(snapshot);
       }
-      return applyAuthoritativeShellSnapshot(snapshot);
+      // A fresh empty-shell proof can settle route recovery without replacing hydrated state.
+      return (
+        !disposed &&
+        shellSnapshotSequence >= 0 &&
+        snapshot.snapshotSequence >= shellSnapshotSequence &&
+        snapshot.emptyThreadShellVerified === true &&
+        snapshot.threads.length === 0
+      );
     };
 
     // The live shell stream normally delivers the bootstrap snapshot. Only

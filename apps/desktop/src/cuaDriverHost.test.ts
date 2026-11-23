@@ -92,6 +92,7 @@ async function fixture(
     dropCancel?: boolean;
     startupTimeoutMs?: number;
     deathFlag?: string;
+    teardownFlag?: string;
     ownPids?: () => ReadonlySet<number>;
     cursorStyle?: () => { fill?: string; rim?: string; shadow?: string } | null | undefined;
     checkPermissions?: (options?: { readonly force: boolean }) => Promise<{
@@ -127,13 +128,21 @@ async function fixture(
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const log = join(directory, "events.jsonl");
   const binary = join(directory, "driver");
-  options = { ...options, deathFlag: join(directory, "session-died") };
+  // The teardown flag appears only after the test body: from then on the fake
+  // driver skips its modeled acknowledgement and exit delays, so cleanup takes
+  // the same path without paying ~180 ms of sleeps per test.
+  options = {
+    ...options,
+    deathFlag: join(directory, "session-died"),
+    teardownFlag: join(directory, "teardown"),
+  };
   await writeFile(
     binary,
     `#!${process.execPath}
 const net=require('node:net'),fs=require('node:fs');
 const log=${JSON.stringify(log)}, options=${JSON.stringify(options)};
 const write=event=>fs.appendFileSync(log,JSON.stringify({event,pid:process.pid,time:Date.now()})+'\\n');
+const modeledDelay=ms=>fs.existsSync(options.teardownFlag)?0:ms;
 write('start');
 if(!options.unpatched){
   if(!process.argv.includes('--compact-cursor')) throw new Error('Missing compact cursor profile');
@@ -169,7 +178,7 @@ net.createServer(s=>{
       setTimeout(()=>{
         write('cleanup-ack');
         reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:!browserCleanupPending&&options.cleanup!=='incomplete',pending_input:browserCleanupPending||options.cleanup==='incomplete'?1:0});
-      },30);
+      },modeledDelay(30));
     }
     else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
     else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
@@ -242,7 +251,7 @@ net.createServer(s=>{
   s.on('error',()=>{});
 }).listen(socket);
 let retiring=false;
-function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},150)}
+function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},modeledDelay(150))}
 process.on('SIGTERM',retire);
 process.stdin.resume(); process.stdin.on('end',retire);
 `,
@@ -273,6 +282,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
       .split("\n")
       .map((row) => JSON.parse(row));
   cleanups.push(async () => {
+    await writeFile(options.teardownFlag!, "");
     try {
       await host.dispose();
     } catch (error) {

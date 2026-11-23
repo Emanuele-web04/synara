@@ -1,3 +1,4 @@
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import { Effect, Option } from "effect";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
@@ -886,6 +887,12 @@ describe("reconcileRestartStuckTurns selection", () => {
       );
       await Effect.runPromise(
         reconcileRestartStuckTurns.pipe(
+          Effect.provideService(ProviderCommandReactor, {
+            withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+          } as Pick<
+            (typeof ProviderCommandReactor)["Service"],
+            "withRestartOrphanedThread"
+          > as never),
           Effect.provideService(OrchestrationEngineService, {
             getReadModel: () =>
               Effect.succeed({ threads: [thread, makeThread("untouched", { activities: [] })] }),

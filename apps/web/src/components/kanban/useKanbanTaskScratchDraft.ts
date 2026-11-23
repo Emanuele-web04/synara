@@ -5,7 +5,7 @@
 // Exports: useKanbanTaskScratchDraft
 
 import type { ProviderKind } from "@synara/contracts";
-import type { AppSettings } from "../../appSettings";
+import type { AppSettings, NewChatDefault } from "../../appSettings";
 import { useCallback, useEffect, useRef } from "react";
 
 import {
@@ -21,7 +21,7 @@ import { type ComposerImageAttachment, useComposerDraftStore } from "../../compo
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: {
-  readonly defaultProvider: AppSettings["defaultProvider"];
+  readonly newChatDefault: NewChatDefault;
   readonly settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"

@@ -3,32 +3,27 @@ import { useRouter } from "@tanstack/react-router";
 
 /** Warms code-split route chunks once the browser is idle.
  *
- *  Settings and thread routes are reached through programmatic `navigate()`
- *  calls (sidebar gear, keyboard shortcut, the "New thread" button), so the
- *  router's intent-based preloading never fires for them — without this, the
- *  first open pays the chunk download/parse cost. For a brand-new thread that
- *  cost lands right on the draft-landing paint, so warming the thread chunk is
- *  the largest single lever for new-chat startup time.
+ *  The thread route is reached through programmatic `navigate()` calls (the
+ *  "New thread" button, keyboard shortcuts), so warming its chunk avoids paying
+ *  the chunk download/parse cost on the draft-landing paint. Settings relies on
+ *  TanStack Router's intent-based preloading instead of downloading ~460 KB
+ *  unconditionally on every cold boot.
  */
 export function usePreloadRouteChunks() {
   const router = useRouter();
 
   useEffect(() => {
-    // Defer thread-route warming until the browser is idle so it never competes
-    // with initial paint, WebSocket hydration, or landing-page interactivity.
-    // Settings relies on TanStack Router's `defaultPreload: "intent"` on hover/focus
-    // instead of downloading ~450 KB unconditionally on every cold boot.
-    const preloadThreadRoute = () => {
-      router.preloadRoute({ to: "/$threadId", params: { threadId: "chunk-preload" } }).catch(() => {
-        // Preloading is best-effort; navigation falls back to loading on demand.
-      });
+    const warmChunk = async (routeId: "/_chat/$threadId") => {
+      try {
+        // Preload the code without a speculative route match. Navigation can
+        // evict a component-only match while its chunk is still loading.
+        await router.loadRouteChunk(router.routesById[routeId]);
+      } catch {
+        // Warming is best-effort; navigation loads the route on demand.
+      }
     };
 
-    if (typeof requestIdleCallback === "function") {
-      const idleCallbackId = requestIdleCallback(preloadThreadRoute, { timeout: 4000 });
-      return () => cancelIdleCallback(idleCallbackId);
-    }
-    const timeoutId = setTimeout(preloadThreadRoute, 2500);
-    return () => clearTimeout(timeoutId);
+    // Start before idle callbacks so the first New chat can reuse this load.
+    void warmChunk("/_chat/$threadId");
   }, [router]);
 }

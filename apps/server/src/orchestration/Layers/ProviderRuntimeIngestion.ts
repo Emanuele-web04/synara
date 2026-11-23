@@ -480,7 +480,8 @@ function reasoningSummaryBufferKey(
   if (
     (event.provider !== "codex" &&
       event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
+      event.provider !== "claudeAgent" &&
+      event.provider !== "opencode") ||
     !event.itemId
   ) {
     return null;
@@ -488,7 +489,9 @@ function reasoningSummaryBufferKey(
   if (
     event.type === "content.delta" &&
     (event.payload.streamKind === "reasoning_summary_text" ||
-      ((event.provider === "antigravity" || event.provider === "claudeAgent") &&
+      ((event.provider === "antigravity" ||
+        event.provider === "claudeAgent" ||
+        event.provider === "opencode") &&
         event.payload.streamKind === "reasoning_text"))
   ) {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
@@ -521,11 +524,9 @@ function withBufferedReasoningSummary(
   event: ProviderRuntimeEvent,
   summary: BufferedReasoningSummary | undefined,
 ): ProviderRuntimeEvent {
+  // The caller has already verified the provider through the reasoning buffer key.
   if (
     event.type !== "item.completed" ||
-    (event.provider !== "codex" &&
-      event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
     event.payload.itemType !== "reasoning" ||
     readableReasoningDetail(event.payload.detail)
   ) {
@@ -640,6 +641,16 @@ function stableActivityState(activity: {
     sequence: activity.sequence,
     terminalStatus: status === "failed" || status === "completed" ? status : undefined,
   };
+}
+
+// A stable activity keeps its first createdAt so its row stays anchored; the
+// payload carries when this update was observed so live rows can report recent
+// activity and elapsed time from the latest update, not the first.
+function withLastActivityAt(
+  payload: OrchestrationThreadActivity["payload"],
+  lastActivityAt: string,
+): OrchestrationThreadActivity["payload"] {
+  return isJsonObject(payload) ? { ...payload, lastActivityAt } : payload;
 }
 
 /**
@@ -1212,6 +1223,7 @@ const make = Effect.gen(function* () {
       event.payload.itemType === "reasoning";
     const hasStableActivity =
       isClaudeReasoning || providerRuntimeCommandProgressKey(event) !== undefined;
+    let updatedAt: string | undefined;
     if (hasStableActivity) {
       const cached = Option.getOrUndefined(yield* Cache.getOption(stableActivityById, activity.id));
       const durable = cached
@@ -1233,6 +1245,7 @@ const make = Effect.gen(function* () {
             asObject(activity.payload)?.status !== "completed")
         )
           return;
+        updatedAt = activity.createdAt;
         activity = { ...activity, createdAt: previous.createdAt, sequence: previous.sequence };
       }
     }
@@ -1243,6 +1256,10 @@ const make = Effect.gen(function* () {
       if (Option.isSome(previous) && previous.value === fingerprint) {
         return;
       }
+    }
+    // Stamped after the fingerprint: a repeated identical snapshot stays a duplicate.
+    if (updatedAt !== undefined) {
+      activity = { ...activity, payload: withLastActivityAt(activity.payload, updatedAt) };
     }
 
     yield* orchestrationEngine.dispatch({
@@ -1606,7 +1623,8 @@ const make = Effect.gen(function* () {
                   ),
                   threadId,
                   type: "item.completed",
-                  ...(summary.sourceEvent.provider === "claudeAgent"
+                  ...(summary.sourceEvent.provider === "claudeAgent" ||
+                  summary.sourceEvent.provider === "opencode"
                     ? { createdAt: summary.createdAt }
                     : {}),
                   payload: {
@@ -3210,6 +3228,14 @@ const make = Effect.gen(function* () {
                 Effect.provideService(ServerSettingsService, recoverySettings.value),
                 Effect.provideService(ServerConfig, serverConfig),
                 Effect.timeoutOption("8 seconds"),
+                Effect.tap((result) =>
+                  Option.isNone(result)
+                    ? Effect.logWarning(
+                        "usage-limit recovery unavailable: provider account binding timed out",
+                        { threadId: thread.id, turnId: eventTurnId, provider: event.provider },
+                      )
+                    : Effect.void,
+                ),
                 Effect.map((result) => Option.getOrNull(result)),
                 Effect.catch(() => Effect.succeed(null)),
               );

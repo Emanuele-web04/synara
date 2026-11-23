@@ -5,6 +5,7 @@
   "main": "cloudflare/worker.ts",
   "compatibility_date": "2026-09-28",
   "compatibility_flags": ["nodejs_compat"],
+  "keep_vars": true,
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": true, "head_sampling_rate": 0.1 },

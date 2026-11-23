@@ -25,7 +25,9 @@ vi.mock("node:fs/promises", async () => {
 const tempDirectories: Array<string> = [];
 
 async function makeDbPath(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-db-lock-"));
+  // Rename hooks compare against the canonical path used by the lock.
+  const tempRoot = await fs.realpath(os.tmpdir());
+  const directory = await fs.mkdtemp(path.join(tempRoot, "synara-db-lock-"));
   tempDirectories.push(directory);
   return path.join(directory, "state.sqlite");
 }

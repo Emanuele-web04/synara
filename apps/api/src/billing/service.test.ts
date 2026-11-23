@@ -226,6 +226,169 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
     ).toBeNull();
     expect(provider.plans).not.toHaveBeenCalled();
   });
+  it("answers a recent authorization with one read-only statement until the 30 second window ends", async () => {
+    const { service, provider, paid } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    const original = await service.access(userId);
+    expect(provider.state).toHaveBeenCalledTimes(1);
+    const checkedAt = new Date(original.checkedAt!).getTime();
+    const query = vi.spyOn(pool, "query");
+    const connect = vi.spyOn(pool, "connect");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(checkedAt + 30_000);
+      expect(await service.access(userId)).toEqual(original);
+      expect(provider.state).toHaveBeenCalledTimes(1);
+      // pool.query checks a client out through connect(callback) internally;
+      // a transaction needs an explicit checkout, which never happens here.
+      expect(connect.mock.calls.filter((args) => typeof args[0] !== "function")).toHaveLength(0);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(String(query.mock.calls[0]![0])).not.toMatch(
+        // Whole keywords only: the statement reads the `deleted_at` column.
+        /\b(insert|update|delete|for update|begin|pg_advisory\w*)\b/i,
+      );
+      vi.setSystemTime(checkedAt + 30_001);
+      expect(await service.access(userId)).toMatchObject({ access: "granted" });
+      expect(provider.state).toHaveBeenCalledTimes(2);
+      expect(connect.mock.calls.filter((args) => typeof args[0] !== "function")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      query.mockRestore();
+      connect.mockRestore();
+    }
+  });
+  it("re-decides a missing ledger row under the lock", async () => {
+    const { service, provider, paid } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    expect(
+      (await pool.query("SELECT count(*) FROM billing_accounts WHERE user_id=$1", [userId])).rows[0]
+        .count,
+    ).toBe("0");
+    expect(await service.access(userId)).toMatchObject({ access: "granted" });
+    expect(provider.state).toHaveBeenCalledTimes(1);
+    expect(
+      (await pool.query("SELECT access_granted FROM billing_accounts WHERE user_id=$1", [userId]))
+        .rows[0].access_granted,
+    ).toBe(true);
+  });
+  it("never serves a recent grant once erasure was requested", async () => {
+    const { service, provider, paid } = fixture();
+    const fenced = randomUUID(),
+      tombstoned = randomUUID();
+    for (const userId of [fenced, tombstoned]) {
+      paid(userId);
+      await service.access(userId);
+    }
+    // Erasure intent alone, before the ledger copied it into deleted_at.
+    await pool.query("INSERT INTO account_deletions(user_id) VALUES($1)", [fenced]);
+    // The ledger tombstone alone.
+    await pool.query("UPDATE billing_accounts SET deleted_at=now() WHERE user_id=$1", [tombstoned]);
+    // Erasure intent before any ledger row exists.
+    const unledgered = randomUUID();
+    paid(unledgered);
+    await pool.query("INSERT INTO account_deletions(user_id) VALUES($1)", [unledgered]);
+    for (const userId of [fenced, tombstoned, unledgered])
+      await expect(service.access(userId)).rejects.toMatchObject({ status: 409 });
+    expect(provider.state).toHaveBeenCalledTimes(2);
+  });
+  it("asks the provider without holding a pooled connection, transaction or ledger lock", async () => {
+    const { service, provider, paid, states } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    await service.access(userId);
+    await pool.query(
+      "UPDATE billing_accounts SET checked_at=now()-interval '31 seconds' WHERE user_id=$1",
+      [userId],
+    );
+    const snapshot = states.get(userId)!;
+    const observed: { lockFree: boolean; checkedOut: number }[] = [];
+    vi.mocked(provider.state).mockImplementation(async () => {
+      const { rows } = await pool.query<{ locked: boolean }>(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS locked",
+        [`billing:${userId}`],
+      );
+      // Today's in-transaction call held one client and the lock for this whole wait.
+      observed.push({ lockFree: rows[0]!.locked, checkedOut: pool.totalCount - pool.idleCount });
+      return snapshot;
+    });
+    expect(await service.access(userId)).toMatchObject({ access: "granted" });
+    expect(await service.status(userId)).toMatchObject({ access: "granted" });
+    expect(observed).toEqual([
+      { lockFree: true, checkedOut: 0 },
+      { lockFree: true, checkedOut: 0 },
+    ]);
+  });
+  it("makes one provider call for concurrent refreshes of one user and still refreshes each status read", async () => {
+    const { service, provider, paid } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    const results = await Promise.all(Array.from({ length: 5 }, () => service.access(userId)));
+    expect(new Set(results.map((result) => result.checkedAt)).size).toBe(1);
+    expect(provider.state).toHaveBeenCalledTimes(1);
+    // A pending webhook still forces every queued authorization to reconcile.
+    await service.webhook(JSON.stringify({ eventId: randomUUID(), userId }), {});
+    await Promise.all(Array.from({ length: 3 }, () => service.access(userId)));
+    expect(provider.state).toHaveBeenCalledTimes(4);
+    await Promise.all([service.status(userId), service.status(userId)]);
+    expect(provider.state).toHaveBeenCalledTimes(6);
+  });
+  it("re-decides under the lock when the ledger changed while the provider answered", async () => {
+    const { service, provider, paid, states } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    await service.access(userId);
+    const stale =
+      "UPDATE billing_accounts SET checked_at=now()-interval '31 seconds' WHERE user_id=$1";
+    await pool.query(stale, [userId]);
+    // A concurrent writer reconciles first: its fresh, webhook-free check is reused.
+    vi.mocked(provider.state).mockImplementationOnce(async () => {
+      await pool.query(
+        "UPDATE billing_accounts SET checked_at=now(), access_granted=false WHERE user_id=$1",
+        [userId],
+      );
+      return states.get(userId)!;
+    });
+    expect(await service.access(userId)).toMatchObject({ access: "none" });
+    expect(provider.state).toHaveBeenCalledTimes(2);
+    // A changed product scope invalidates the snapshot: the provider is asked again under the lock.
+    await pool.query(stale, [userId]);
+    const added = randomUUID();
+    vi.mocked(provider.state).mockImplementationOnce(async () => {
+      await pool.query(
+        "UPDATE billing_accounts SET product_ids=product_ids || to_jsonb($2::text) WHERE user_id=$1",
+        [userId, added],
+      );
+      return null;
+    });
+    expect(await service.access(userId)).toMatchObject({ access: "granted" });
+    expect(provider.state).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(provider.state).mock.calls[3]![1]).toContain(added);
+  });
+  it("never writes a provider snapshot once erasure is requested during the call", async () => {
+    const { service, provider, paid, states } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    await service.access(userId);
+    await pool.query(
+      "UPDATE billing_accounts SET checked_at=now()-interval '31 seconds' WHERE user_id=$1",
+      [userId],
+    );
+    const before = (
+      await pool.query("SELECT checked_at FROM billing_accounts WHERE user_id=$1", [userId])
+    ).rows[0].checked_at;
+    vi.mocked(provider.state).mockImplementationOnce(async () => {
+      await pool.query("INSERT INTO account_deletions(user_id) VALUES($1)", [userId]);
+      return states.get(userId)!;
+    });
+    await expect(service.access(userId)).rejects.toMatchObject({ status: 409 });
+    expect(
+      (await pool.query("SELECT checked_at FROM billing_accounts WHERE user_id=$1", [userId]))
+        .rows[0].checked_at,
+    ).toEqual(before);
+    expect(provider.state).toHaveBeenCalledTimes(2);
+  });
   it("isolates accounts, serializes duplicate checkout and survives a service restart", async () => {
     const { service, provider, paid } = fixture();
     const a = randomUUID(),

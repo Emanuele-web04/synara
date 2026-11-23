@@ -598,7 +598,11 @@ describe("DeviceManager agent-owned idle lifetime", () => {
   it("rechecks ownership after asynchronous stream teardown before shutting down", async () => {
     const { manager, backend } = makeManager();
     await manager.boot(DEVICE_A);
+    // Start a user preview, then leave its stream held by the agent attachment.
+    // A background-only agent no longer starts a stream that can delay shutdown.
+    await manager.attach(THREAD_B, DEVICE_A);
     await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    await manager.detach(THREAD_B);
     const finish = deferred();
     const detached = deferred();
     const detachStream = backend.detachStream.bind(backend);
@@ -774,6 +778,54 @@ describe("DeviceManager device switching", () => {
     // The user started this one; it outlives the session either way.
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
   });
+
+  it.each([
+    ["stream teardown", "detachStream", 0],
+    ["poweroff", "shutdown", 1],
+  ] as const)(
+    "keeps a simulator usable for an agent that arrives during switch %s",
+    async (_stage, operation, poweroffs) => {
+      const { backend, manager } = makeManager();
+      await manager.boot(DEVICE_A);
+      await manager.boot(DEVICE_B);
+      await manager.attach(THREAD_A, DEVICE_A);
+      await waitForStream(backend, DEVICE_A, true);
+
+      const operationStarted = deferred();
+      const finishOperation = deferred();
+      const proceed = backend[operation].bind(backend);
+      backend[operation] = async (udid) => {
+        if (udid === DEVICE_A) {
+          operationStarted.resolve();
+          await finishOperation.promise;
+        }
+        await proceed(udid);
+      };
+      const switching = manager.attach(THREAD_A, DEVICE_B);
+      await operationStarted.promise;
+
+      const allowTap = deferred();
+      const tap = manager.withAgentActivity(
+        THREAD_B,
+        async () => {
+          await allowTap.promise;
+          await manager.tap(DEVICE_A, 1, 1);
+        },
+        { udid: DEVICE_A, turnId: "new-turn" },
+      );
+      finishOperation.resolve();
+      try {
+        await switching;
+      } finally {
+        allowTap.resolve();
+      }
+      await expect(tap).resolves.toBeUndefined();
+      expect(backend.callsOfKind("shutdown")).toHaveLength(poweroffs);
+      expect(backend.callsOfKind("boot").filter((call) => call.udid === DEVICE_A)).toHaveLength(
+        poweroffs + 1,
+      );
+    },
+  );
 
   it("keeps a device another thread is still watching booted", async () => {
     const { backend, manager } = makeManager();
@@ -1052,7 +1104,7 @@ describe("DeviceManager screen recording", () => {
 });
 
 describe("DeviceManager agent auto-attach", () => {
-  it("attaches an unattached thread to the device the agent is using", async () => {
+  it("keeps background agent control available and starts video only when a pane watches", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
 
@@ -1062,7 +1114,27 @@ describe("DeviceManager agent auto-attach", () => {
     // watches a black phone while the agent works.
     const state = await manager.getThreadState(THREAD_A);
     expect(state.attachedDeviceUdid).toBe(DEVICE_A);
+    expect(backend.hasStream(DEVICE_A)).toBe(false);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(0);
+    expect(state.attachPhase).toBeNull();
+
+    await manager.tap(DEVICE_A, 0.5, 0.5);
+    expect((await manager.screenshot(DEVICE_A)).udid).toBe(DEVICE_A);
+
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await waitForStream(backend, DEVICE_A, true);
     expect(backend.hasStream(DEVICE_A)).toBe(true);
+
+    unsubscribe();
+    await waitForStream(backend, DEVICE_A, false);
+    await manager.tap(DEVICE_A, 0.25, 0.25);
+    expect(backend.callsOfKind("tap")).toHaveLength(2);
+    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
+    await manager.dispose();
   });
 
   it("never steals a thread already attached to a different device", async () => {
@@ -1121,7 +1193,7 @@ describe("DeviceManager agent auto-attach", () => {
 
     const opened = events.filter((event) => event.type === "device.open-pane-requested");
     expect(opened).toHaveLength(1);
-    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(0);
   });
 
   it("surfaces again when the agent moves the thread to another device", async () => {

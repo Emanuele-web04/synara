@@ -411,10 +411,10 @@ export class HostConnectionRegistry {
         this.remove(hostId, 4403, "Controller account changed");
     }
   }
-  closeAll(): void {
+  closeAll(code = 1001, reason = "shutting down"): void {
     this.#lifecycleGeneration++;
     for (const hostId of new Set([...this.#desired.keys(), ...this.#views.keys()]))
-      this.remove(hostId, 1001, "shutting down");
+      this.remove(hostId, code, reason);
   }
   private closeAttachment(id: string, code: number, reason: string): void {
     const entry = this.#attachments.get(id);

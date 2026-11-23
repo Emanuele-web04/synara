@@ -55,7 +55,12 @@ function liveThread(messages: ChatMessage[]): Thread {
 
 function WorkLogProbe(props: { thread: Thread; results: WorkLogResult[] }) {
   props.results.push(
-    useChatWorkLog({ activeThread: props.thread, latestTurnSettled: false, latestTurnLive: true }),
+    useChatWorkLog({
+      activeThread: props.thread,
+      latestTurnSettled: false,
+      latestTurnLive: true,
+      keepMissingCheckpointNotices: false,
+    }),
   );
   return null;
 }

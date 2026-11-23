@@ -376,6 +376,52 @@ describe("AcpRuntimeModel", () => {
     });
   });
 
+  it.each([
+    { kind: "read", title: "Read `/home/gabriel`" },
+    { kind: "search", title: "Find `foo` in `src`" },
+    { kind: "edit", title: "Edit `src/app.ts`" },
+  ] as const)(
+    "does not promote a backticked $kind title fragment into data.command",
+    ({ kind, title }) => {
+      // Grok wraps targets in backticks ("Read `/home/gabriel`"); for non-execute
+      // kinds that fragment is a path, not a command — the transcript rendered
+      // "Ran /home/gabriel" until the extraction was gated.
+      const parsed = parseSessionUpdateEvent({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: `${kind}-call`,
+          title,
+          kind,
+          status: "in_progress",
+          rawInput: { _toolName: kind === "read" ? "read_file" : kind },
+        },
+      } satisfies Acp.SessionNotification);
+
+      const event = parsed.events[0];
+      if (event?._tag !== "ToolCallUpdated") throw new Error("Expected tool update");
+      expect(event.toolCall.data).not.toHaveProperty("command");
+    },
+  );
+
+  it("keeps command extraction for execute and kindless calls", () => {
+    const execute = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "bash-1",
+        title: "Run `ls -la`",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "ls -la" },
+      },
+    } satisfies Acp.SessionNotification);
+
+    const executeEvent = execute.events[0];
+    if (executeEvent?._tag !== "ToolCallUpdated") throw new Error("Expected tool update");
+    expect(executeEvent.toolCall.data.command).toBe("ls -la");
+  });
+
   it("infers Cursor placeholder kinds before deriving display titles", () => {
     const findPending = parseSessionUpdateEvent({
       sessionId: "session-1",

@@ -34,7 +34,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+      # macOS is the sole consumer of its node_modules key; Linux restores the
+      # entry CI's typecheck job saves, and Windows never archives modules.
       - uses: ./.github/actions/setup-workspace
+        with:
+          save-modules: ${{ matrix.os == 'macos-15' }}
       - name: Test real compiler and DAP lifecycle
         env:
           SYNARA_TEST_JS_DEBUG: "1"

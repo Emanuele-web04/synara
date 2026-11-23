@@ -107,6 +107,7 @@ type ProviderOptionValidation =
       readonly capability: "supportsFastMode" | "supportsThinkingToggle";
     }
   | { readonly kind: "context-window" }
+  | { readonly kind: "ultrafast" }
   | { readonly kind: "non-empty-string" };
 
 interface ProviderTargetOptionRuleSpec extends Omit<AgentGatewayTargetOptionRule, "key"> {
@@ -166,6 +167,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
       fastMode: providerOptionRule("boolean", [], "model-discovery", {
         advertised: false,
         validation: { kind: "boolean-capability", capability: "supportsFastMode" },
+      }),
+      serviceTier: providerOptionRule("string", ["ultrafast"], "model-discovery", {
+        advertised: false,
+        validation: { kind: "ultrafast" },
       }),
     },
   }),
@@ -560,6 +565,7 @@ function validateOptionsWithoutCatalog(target: ModelSelection): void {
           failUnavailableOption(target, optionId);
         }
         break;
+      case "ultrafast":
       case "context-window":
         failUnavailableOption(target, optionId);
       case "non-empty-string":
@@ -631,6 +637,11 @@ function validateKnownProviderOption(
     case "boolean-capability":
       if (typeof value !== "boolean") failUnavailableOption(target, rule.key);
       if (value === true && descriptor[rule.validation.capability] !== true) {
+        failUnavailableOption(target, rule.key);
+      }
+      return;
+    case "ultrafast":
+      if (value !== "ultrafast" || descriptor.supportsUltrafastMode !== true) {
         failUnavailableOption(target, rule.key);
       }
       return;

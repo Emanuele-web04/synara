@@ -5,7 +5,7 @@ description: Install, authenticate, verify, and run the Pi coding agent through 
 
 Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
 
-Synara runs its bundled Pi SDK (currently 1.4.0) for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
+Pi is optional. Synara loads the SDK from the Pi CLI you select in provider settings or the `pi` executable it finds on the server's `PATH`. Use a Pi installation you trust because its SDK runs inside the Synara server. Extensions must be compatible with that installation's Pi version.
 
 ## Install
 
@@ -71,7 +71,7 @@ This verifies the package, provider credentials, model registry, and working dir
 
 ### Enable Pi
 
-Open provider settings and confirm that Synara detects `pi`.
+Open provider settings and confirm that Synara detects `pi`. If you have more than one installation, select the executable for the account you want to use.
 
 </Step>
 <Step>
@@ -121,7 +121,7 @@ Pi extensions and packages execute with the permissions of your user account. Re
 
 ## Updating
 
-Update Synara to update its bundled Pi runtime, then fully quit and reopen Synara before refreshing Pi models. Updating the standalone CLI does not replace the SDK that runs Synara tasks.
+Update the Pi installation selected in Synara, then fully quit and reopen Synara before refreshing Pi models.
 
 Update the standalone Pi CLI and its unpinned packages from Pi itself:
 
@@ -143,7 +143,7 @@ Pi 1.3 moved Kimi Code to Chat Completions. Synara routes the old official `http
 
 ## Model catalog refresh
 
-Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the bundled Pi SDK recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.
+Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the Pi SDK loaded from the installed `pi` CLI recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.
 
 Discovery shares cached results and bounds retries. The currently selected provider takes priority over background prefetch; a discovery failure remains visible rather than being treated as proof that a static fallback is current.
 
@@ -164,7 +164,7 @@ If Anthropic authentication works but Fable 5.1 is missing, refresh Pi in Synara
 
 ### ChatGPT models appear in Pi but not in Synara
 
-Confirm Synara is updated and fully restarted: a newer `pi --version` alone does not update the bundled SDK. Refresh Pi models and look for `openai/` models after `/login openai`, or `openai-codex/` for the legacy login. Compare the same configured Pi account and agent directory in both applications; another profile’s successful login does not authenticate this account.
+Confirm both applications use the same Pi executable and agent directory. Restart Synara if you updated that installation, then refresh Pi models and look for `openai/` after `/login openai` or `openai-codex/` for the legacy login.
 
 If Pi itself reports an expired or invalid login, authenticate again in that same profile and refresh Synara. A working current login does not need to be deleted or repeated just to upgrade Synara.
 

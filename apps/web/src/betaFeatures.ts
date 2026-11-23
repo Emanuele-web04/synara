@@ -1,7 +1,7 @@
 // FILE: betaFeatures.ts
 // Purpose: The web app's read of the shared Beta-only feature list.
 // Layer: Route/UI support
-// Exports: DESKTOP_FLAVOR, isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
+// Exports: isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
 
 import {
   ACCOUNT_INBOX_BETA_FEATURE,
@@ -21,7 +21,7 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 // build serves `synara:` too, so import.meta.env.DEV disambiguates it. SSR and
 // tests have no window and resolve to "unknown", which keeps Beta-only
 // features on — the server gate is the authoritative one.
-export const DESKTOP_FLAVOR = desktopFlavorFromProtocol(
+const DESKTOP_FLAVOR = desktopFlavorFromProtocol(
   typeof window === "undefined" ? undefined : window.location?.protocol,
   import.meta.env.DEV,
 );
@@ -40,7 +40,7 @@ export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
-/** Account-saved Inbox history is Beta-only; Stable shows only the local recap. */
+/** Account-saved Inbox history is available in Stable and Beta. */
 export const ACCOUNT_INBOX_ON = isBetaFeatureOn(ACCOUNT_INBOX_BETA_FEATURE);
 
 /**

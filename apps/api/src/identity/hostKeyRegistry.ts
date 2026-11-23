@@ -9,13 +9,14 @@ import {
   LinkedAccountHost,
   type LinkStartRequest,
 } from "@synara/contracts";
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, eq, exists, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { decodeJwt } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 import type * as schema from "../db/schema";
-import { hosts, linkChallenges } from "../db/schema";
+import { hosts, linkChallenges, remoteTunnels } from "../db/schema";
 import { isUniqueViolation, toAccountHost } from "./hostRecords";
 import { hostEnvironmentLockKey } from "./environmentLock";
 import { HostAuthDomainError, type HostKeyRegistry, type HostRecord } from "./interfaces";
@@ -49,8 +50,30 @@ function expiredCleanupCutoff(): Date {
   return new Date(Date.now() - EXPIRED_CHALLENGE_GRACE_MS);
 }
 
+// Link-time appVersion was not refreshed on upgrade. Keep every registration
+// seen on or after the day Remote Connections shipped in Synara 1.5.0.
+const FIRST_STABLE_REMOTE_DAY = new Date("2026-11-10T00:00:00Z");
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Grace period before cleaning up a legacy Remote entry with a current replacement. */
+export const SUPERSEDED_HOST_IDLE_MS = 7 * DAY_MS;
+/** Longer grace period for legacy Remote entries that still advertise a managed tunnel. */
+export const ABANDONED_HOST_IDLE_MS = 30 * DAY_MS;
+/** Hosts unlinked per maintenance pass, oldest silence first. */
+export const STALE_HOST_SWEEP_BATCH = 25;
+
+/** Machine name as reinstalls report it: case-insensitive, mDNS `.local` suffix ignored. */
+function normalizedHostName(name: AnyPgColumn) {
+  return sql`regexp_replace(lower(${name}), '\\.local$', '')`;
+}
+
+/** The pre-Stable Remote channel this maintenance sweep is migrating. */
+function isLegacyRemoteHost(appVersion: AnyPgColumn) {
+  return sql`coalesce(${appVersion}, '') ~ '^1[.]0[.]6-remote[.][0-9]+$'`;
+}
+
 /** The one row→HostRecord projection, shared with the route layer. */
-export function hostRecordFromRow(row: typeof hosts.$inferSelect): HostRecord {
+export function hostRecordFromRow(row: HostRecord): HostRecord {
   return {
     id: row.id,
     ownerUserId: row.ownerUserId,
@@ -73,6 +96,7 @@ const HOST_PROOF_SCHEME = /^HostProof\s+(.+)$/i;
 
 type UnlinkScope =
   | { hostId: string }
+  | { hostIds: readonly string[] }
   | { environmentId: string; ownerUserId: string; excludeHostId: string };
 
 /**
@@ -92,12 +116,14 @@ async function unlinkHostRows(
   const where =
     "hostId" in scope
       ? and(eq(hosts.id, scope.hostId), isNotNull(hosts.publicKeyJwk))
-      : and(
-          eq(hosts.environmentId, scope.environmentId),
-          eq(hosts.ownerUserId, scope.ownerUserId),
-          ne(hosts.id, scope.excludeHostId),
-          isNotNull(hosts.publicKeyJwk),
-        );
+      : "hostIds" in scope
+        ? and(inArray(hosts.id, [...scope.hostIds]), isNotNull(hosts.publicKeyJwk))
+        : and(
+            eq(hosts.environmentId, scope.environmentId),
+            eq(hosts.ownerUserId, scope.ownerUserId),
+            ne(hosts.id, scope.excludeHostId),
+            isNotNull(hosts.publicKeyJwk),
+          );
   const unlinked = await tx
     .update(hosts)
     .set({
@@ -140,11 +166,20 @@ export function createHostKeyRegistry(
 
   type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-  async function withAuthenticatedHost<T>(
-    authorization: string | undefined | null,
-    expectedHostId: string,
-    action: (tx: Transaction, row: typeof hosts.$inferSelect, host: HostRecord) => Promise<T>,
-  ): Promise<T> {
+  const hostProofColumns = {
+    id: hosts.id,
+    ownerUserId: hosts.ownerUserId,
+    ownerOrgId: hosts.ownerOrgId,
+    environmentId: hosts.environmentId,
+    publicKeyJwk: hosts.publicKeyJwk,
+    keyGeneration: hosts.keyGeneration,
+    discoverable: hosts.discoverable,
+    lastSeenAt: hosts.lastSeenAt,
+  };
+  type HostProofRow = HostRecord & { lastSeenAt: Date };
+
+  /** The proof's claims, checked against the route before any database work. */
+  function parseHostProof(authorization: string | undefined | null, expectedHostId: string) {
     const match = authorization ? /^HostProof\s+(.+)$/i.exec(authorization) : null;
     const proof = match?.[1];
     if (!proof) throw new HostAuthDomainError(401, "unauthorized", "Host proof required");
@@ -157,43 +192,104 @@ export function createHostKeyRegistry(
     if (claims.sub !== expectedHostId) {
       throw new HostAuthDomainError(401, "unauthorized", "Host proof does not match this host");
     }
+    return { proof, claims };
+  }
+
+  /** Signature, issuer, audience, age and key generation against the stored row. */
+  async function verifyHostProof(
+    proof: string,
+    claims: typeof HostProofClaims.Type,
+    row: HostProofRow | undefined,
+  ): Promise<HostProofRow> {
+    if (!row?.publicKeyJwk) {
+      throw new HostAuthDomainError(401, "host_not_linked", "Host is not linked");
+    }
+    try {
+      await verifyJwtWithEmbeddedJwk(proof, {
+        typ: HOST_PROOF_JWT_TYP,
+        audience: apiIssuer,
+        issuer: `synara-host:${row.environmentId}`,
+        algorithms: ["EdDSA"],
+        maxAgeSeconds: HOST_PROOF_MAX_AGE_SECONDS,
+        publicKeyJwk: row.publicKeyJwk,
+      });
+    } catch {
+      throw new HostAuthDomainError(401, "bad_proof", "Host proof is invalid");
+    }
+    if (claims.keyGeneration !== row.keyGeneration) {
+      throw new HostAuthDomainError(401, "bad_proof", "Host proof key generation is stale");
+    }
+    return row;
+  }
+
+  // Fleet hosts poll proof-authed routes constantly; rewriting the row each
+  // time is pure MVCC churn. One-minute granularity is plenty for a
+  // historical-metadata column, and actions that update the row anyway
+  // (replaceEndpoints) carry their own fresh lastSeenAt.
+  const LAST_SEEN_GRANULARITY_MS = 60_000;
+
+  async function withAuthenticatedHost<T>(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+    action: (tx: Transaction, host: HostRecord) => Promise<T>,
+  ): Promise<T> {
+    const { proof, claims } = parseHostProof(authorization, expectedHostId);
     return db.transaction(async (tx) => {
       // The lock is held through the protected action. A relink/unlink cannot
       // land after proof verification but before the effect or signed ticket.
-      const [row] = await tx
-        .select()
+      const [selected] = await tx
+        .select(hostProofColumns)
         .from(hosts)
         .where(eq(hosts.id, claims.sub))
         .limit(1)
         .for("update");
-      if (!row?.publicKeyJwk) {
-        throw new HostAuthDomainError(401, "host_not_linked", "Host is not linked");
+      const row = await verifyHostProof(proof, claims, selected);
+      const now = new Date();
+      // The row is still locked, so this decision cannot race another heartbeat.
+      // Avoid a database round trip even when the conditional UPDATE would do nothing.
+      if (row.lastSeenAt.getTime() < now.getTime() - LAST_SEEN_GRANULARITY_MS) {
+        await tx.update(hosts).set({ lastSeenAt: now }).where(eq(hosts.id, row.id));
       }
-      try {
-        await verifyJwtWithEmbeddedJwk(proof, {
-          typ: HOST_PROOF_JWT_TYP,
-          audience: apiIssuer,
-          issuer: `synara-host:${row.environmentId}`,
-          algorithms: ["EdDSA"],
-          maxAgeSeconds: HOST_PROOF_MAX_AGE_SECONDS,
-          publicKeyJwk: row.publicKeyJwk,
-        });
-      } catch {
-        throw new HostAuthDomainError(401, "bad_proof", "Host proof is invalid");
-      }
-      if (claims.keyGeneration !== row.keyGeneration) {
-        throw new HostAuthDomainError(401, "bad_proof", "Host proof key generation is stale");
-      }
-      // Fleet hosts poll proof-authed routes constantly; rewriting the row
-      // each time is pure MVCC churn. One-minute granularity is plenty for a
-      // historical-metadata column, and actions that update the row anyway
-      // (replaceEndpoints) carry their own fresh lastSeenAt.
-      await tx
-        .update(hosts)
-        .set({ lastSeenAt: new Date() })
-        .where(and(eq(hosts.id, row.id), lt(hosts.lastSeenAt, new Date(Date.now() - 60_000))));
-      return action(tx, row, hostRecordFromRow(row));
+      return action(tx, hostRecordFromRow(row));
     });
+  }
+
+  /**
+   * The same verification without a transaction or row lock, for the
+   * read-only polls. It reads the last committed row, so a concurrent unlink
+   * or relink is ordered entirely before or after this read: the proof is
+   * checked against one consistent key and generation, never a mix.
+   */
+  async function readAuthenticatedHost(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+  ): Promise<HostRecord> {
+    const { proof, claims } = parseHostProof(authorization, expectedHostId);
+    const [selected] = await db
+      .select(hostProofColumns)
+      .from(hosts)
+      .where(eq(hosts.id, claims.sub))
+      .limit(1);
+    const row = await verifyHostProof(proof, claims, selected);
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - LAST_SEEN_GRANULARITY_MS);
+    if (row.lastSeenAt.getTime() < staleBefore.getTime()) {
+      // Without the row lock, the condition is what keeps this to one write a
+      // minute under concurrent polls, and off a row unlinked or relinked
+      // since it was read.
+      await db
+        .update(hosts)
+        .set({ lastSeenAt: now })
+        .where(
+          and(
+            eq(hosts.id, row.id),
+            lt(hosts.lastSeenAt, staleBefore),
+            eq(hosts.keyGeneration, row.keyGeneration),
+            isNotNull(hosts.publicKeyJwk),
+          ),
+        );
+    }
+    return hostRecordFromRow(row);
   }
 
   return {
@@ -524,17 +620,22 @@ export function createHostKeyRegistry(
       );
     },
 
+    readAuthenticatedHost,
     withAuthenticatedHost(authorization, expectedHostId, action) {
-      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, _row, host) =>
+      return withAuthenticatedHost(authorization, expectedHostId, async (_tx, host) =>
         action(host),
       );
     },
 
-    replaceEndpoints(authorization, hostId, endpoints) {
+    replaceEndpoints(authorization, hostId, endpoints, appVersion) {
       return withAuthenticatedHost(authorization, hostId, async (tx) => {
         const [row] = await tx
           .update(hosts)
-          .set({ endpoints: [...endpoints], lastSeenAt: new Date() })
+          .set({
+            endpoints: [...endpoints],
+            lastSeenAt: new Date(),
+            ...(appVersion === undefined ? {} : { appVersion }),
+          })
           .where(eq(hosts.id, hostId))
           .returning();
         if (!row) throw new HostAuthDomainError(404, "host_not_found", "Host not found");
@@ -563,6 +664,72 @@ export function createHostKeyRegistry(
         const [updated] = await unlinkHostRows(tx, { hostId });
         if (!updated) throw new HostAuthDomainError(404, "host_not_found", "Host not found");
         return toAccountHost(updated);
+      });
+    },
+
+    async retireStaleHosts() {
+      const now = Date.now();
+      const supersededBefore = new Date(now - SUPERSEDED_HOST_IDLE_MS);
+      const abandonedBefore = new Date(now - ABANDONED_HOST_IDLE_MS);
+      const newer = alias(hosts, "newer");
+      // A legacy host without a replacement must still have a desired tunnel.
+      const abandonedRule = and(
+        lt(hosts.lastSeenAt, abandonedBefore),
+        exists(
+          db
+            .select({ id: remoteTunnels.id })
+            .from(remoteTunnels)
+            .where(and(eq(remoteTunnels.hostId, hosts.id), eq(remoteTunnels.desired, true))),
+        ),
+      );
+      const supersededRule = and(
+        lt(hosts.lastSeenAt, supersededBefore),
+        exists(
+          db
+            .select({ id: newer.id })
+            .from(newer)
+            .where(
+              and(
+                eq(newer.ownerUserId, hosts.ownerUserId),
+                ne(newer.id, hosts.id),
+                eq(newer.platform, hosts.platform),
+                isNotNull(newer.publicKeyJwk),
+                gt(newer.createdAt, hosts.createdAt),
+                gt(newer.lastSeenAt, supersededBefore),
+                sql`NOT ${isLegacyRemoteHost(newer.appVersion)}`,
+                sql`coalesce(${newer.appVersion}, '') <> ''`,
+                sql`${normalizedHostName(newer.name)} = ${normalizedHostName(hosts.name)}`,
+              ),
+            ),
+        ),
+      );
+      return db.transaction(async (tx) => {
+        // Row locks match the proof-authenticated paths. SKIP LOCKED leaves a
+        // host that is heartbeating or relinking right now to the next pass,
+        // and the lock re-checks the idle cutoff against its latest row.
+        const stale = await tx
+          .select({ id: hosts.id, abandoned: sql<boolean>`coalesce(${abandonedRule}, false)` })
+          .from(hosts)
+          .where(
+            and(
+              isNotNull(hosts.publicKeyJwk),
+              isLegacyRemoteHost(hosts.appVersion),
+              lt(hosts.lastSeenAt, FIRST_STABLE_REMOTE_DAY),
+              or(abandonedRule, supersededRule),
+            ),
+          )
+          .orderBy(hosts.lastSeenAt)
+          .limit(STALE_HOST_SWEEP_BATCH)
+          .for("update", { skipLocked: true });
+        if (stale.length === 0) return { superseded: 0, abandoned: 0 };
+        const unlinked = new Set(
+          (await unlinkHostRows(tx, { hostIds: stale.map((host) => host.id) })).map(
+            (host) => host.id,
+          ),
+        );
+        const retired = stale.filter((host) => unlinked.has(host.id));
+        const abandoned = retired.filter((host) => host.abandoned).length;
+        return { superseded: retired.length - abandoned, abandoned };
       });
     },
   };

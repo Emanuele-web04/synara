@@ -56,6 +56,10 @@ vi.mock("~/appSettings", () => ({
   resolveAssistantDeliveryMode: () => "buffered" as const,
   getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
   getProviderStartOptions: () => undefined,
+  resolveNewChatDefault: (settings: { defaultProvider: string }) => ({
+    defaultProvider: settings.defaultProvider,
+    defaultProviderInstanceId: null,
+  }),
 }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({
   useCopyPathToClipboard: () => vi.fn(),

@@ -8,7 +8,9 @@
 
 import { describe, expect, it } from "vitest";
 
-import { upgradePathAllowsCompression } from "./nodeHttpServer";
+import { WS_FEATURE_UNCOMPRESSED_QUERY } from "@synara/contracts";
+
+import { upgradeOptsOutOfCompression, upgradePathAllowsCompression } from "./nodeHttpServer";
 
 describe("upgradePathAllowsCompression", () => {
   it("allows the feature route in every spelling the router accepts", () => {
@@ -63,6 +65,36 @@ describe("upgradePathAllowsCompression", () => {
       "/ws\u0000",
     ]) {
       expect(upgradePathAllowsCompression(target), String(target)).toBe(false);
+    }
+  });
+});
+
+describe("upgradeOptsOutOfCompression", () => {
+  const flag = `${WS_FEATURE_UNCOMPRESSED_QUERY.name}=${WS_FEATURE_UNCOMPRESSED_QUERY.value}`;
+
+  it("reads the declared opt-out from the query of any target form", () => {
+    for (const target of [
+      `/ws?${flag}`,
+      `/ws?wsToken=abc&${flag}`,
+      `/WS/?x=1&${flag}#fragment`,
+      `http://host/ws?${flag}`,
+    ]) {
+      expect(upgradeOptsOutOfCompression(target), target).toBe(true);
+    }
+  });
+
+  it("keeps compression without the exact flag", () => {
+    for (const target of [
+      undefined,
+      "",
+      "/ws",
+      "/ws?wsToken=abc",
+      `/ws?${WS_FEATURE_UNCOMPRESSED_QUERY.name}=0`,
+      `/ws?${WS_FEATURE_UNCOMPRESSED_QUERY.name}=true`,
+      `/ws?${WS_FEATURE_UNCOMPRESSED_QUERY.name}`,
+      `/ws#${flag}`,
+    ]) {
+      expect(upgradeOptsOutOfCompression(target), String(target)).toBe(false);
     }
   });
 });

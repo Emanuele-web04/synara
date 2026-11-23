@@ -382,6 +382,48 @@ describe("threadDetailSubscriptionRetention", () => {
     ]);
   });
 
+  it("leases background work ahead of sessions that are only alive", () => {
+    // Every live session reads as eviction-unsafe, so without a narrower tier a
+    // thread whose tasks still run competes with idle ready sessions on
+    // insertion order and freezes its "In Background" status.
+    const ready = Array.from({ length: WS_STREAM_LIMITS.threadPerClient }, (_, index) =>
+      ThreadId.makeUnsafe(`ready-${index}`),
+    );
+    const backgrounded = ThreadId.makeUnsafe("backgrounded");
+    for (const threadId of [...ready, backgrounded]) {
+      registerIdleSidebarThread(threadId);
+    }
+    const summaries = useStore.getState().sidebarThreadSummaryById;
+    const readySession = {
+      provider: "claudeAgent" as const,
+      status: "ready" as const,
+      orchestrationStatus: "ready" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    useStore.setState({
+      sidebarThreadSummaryById: Object.fromEntries(
+        [...ready, backgrounded].map((threadId) => [
+          threadId,
+          {
+            ...summaries[threadId]!,
+            session: readySession,
+            pendingBackgroundWorkCount: threadId === backgrounded ? 1 : 0,
+          },
+        ]),
+      ),
+    });
+    const retained = [...ready, backgrounded];
+
+    expect(
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds: [],
+        retainedThreadIds: retained,
+        serverThreadIds: new Set(retained),
+      }),
+    ).toEqual([backgrounded, ...ready.slice(0, WS_STREAM_LIMITS.threadPerClient - 1)]);
+  });
+
   it("does not keep hidden side chats subscribed through cache retention", () => {
     const visibleSidechat = ThreadId.makeUnsafe("sidechat-visible");
     const hiddenSidechat = ThreadId.makeUnsafe("sidechat-hidden");

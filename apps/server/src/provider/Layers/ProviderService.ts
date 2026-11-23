@@ -37,6 +37,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@synara/contracts";
+import { reportReliabilityIssue } from "../../reliability";
 import {
   mergeProviderStartOptions,
   providerStartOptionsFromInstance,
@@ -52,6 +53,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   Cause,
+  Clock,
   Deferred,
   Duration,
   Effect,
@@ -264,6 +266,8 @@ type InteractionResponse =
  */
 const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
 const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
+// Leave the rest of the desktop watchdog budget for provider teardown and finalizers.
+const PROVIDER_SHUTDOWN_EXIT_DRAIN_TIMEOUT = Duration.seconds(1);
 const PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING = "priorTranscriptBootstrapPending";
 
 function toValidationError(
@@ -521,14 +525,17 @@ function readPersistedContinuationResetRequested(
   return runtimePayloadRecord(runtimePayload).continuationResetRequested === true;
 }
 
-// Claude launch options that only change how the runtime behaves. They never
-// decide which native session store or account owns a resume cursor, so
-// changing one in Settings (Artifacts, for example) must keep existing threads
-// resumable. Home, binary, and environment still have to match.
+// Compare the launch options that affect native session ownership. Claude
+// behavior-only settings and the location of the Pi installation can change
+// while the same profile still owns a saved session.
 function continuationOwningProviderOptions(
   provider: ProviderKind,
   options: ProviderStartOptions | undefined,
 ): unknown {
+  if (provider === "pi" && options?.pi !== undefined) {
+    const { binaryPath: _binaryPath, ...owning } = options.pi;
+    return Object.keys(owning).length > 0 ? owning : undefined;
+  }
   if (provider !== "claudeAgent" || options?.claudeAgent === undefined) {
     return options?.[provider];
   }
@@ -1388,19 +1395,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             `Model selection provider '${input.modelSelection.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
           );
         }
+        const configuredOptions = providerStartOptionsFromInstance(instance);
         return {
           instance,
           modelSelection: modelSelectionForInstance(input.modelSelection, instance),
+          // Pi loads an SDK in-process. Session input, including old bindings, cannot select it.
           providerOptions:
-            input.providerOptionsPrecedence === "caller"
-              ? mergeProviderStartOptions(
-                  providerStartOptionsFromInstance(instance),
-                  input.providerOptions,
-                )
-              : mergeProviderStartOptions(
-                  input.providerOptions,
-                  providerStartOptionsFromInstance(instance),
-                ),
+            instance.driver === "pi"
+              ? configuredOptions
+              : input.providerOptionsPrecedence === "caller"
+                ? mergeProviderStartOptions(configuredOptions, input.providerOptions)
+                : mergeProviderStartOptions(input.providerOptions, configuredOptions),
         } as const;
       });
 
@@ -1675,6 +1680,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     let runtimeCursorWriteVersion = 0;
     let shutdownStartedAt: string | undefined;
+    let shutdownSessionExits:
+      | {
+          readonly pending: Map<
+            ThreadId,
+            {
+              readonly provider: ProviderSession["provider"];
+              readonly generation: string | undefined;
+            }
+          >;
+          readonly drained: Deferred.Deferred<void>;
+        }
+      | undefined;
+    const recordShutdownSessionExit = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+      Effect.sync(() => {
+        if (
+          event.type !== "session.exited" ||
+          isSubagentChildRuntimeEvent(event) ||
+          !shutdownSessionExits
+        )
+          return;
+        const expected = shutdownSessionExits.pending.get(event.threadId);
+        if (
+          !expected ||
+          expected.provider !== event.provider ||
+          expected.generation !== event.lifecycleGeneration
+        ) {
+          return;
+        }
+        shutdownSessionExits.pending.delete(event.threadId);
+        if (shutdownSessionExits.pending.size === 0) {
+          Deferred.doneUnsafe(shutdownSessionExits.drained, Effect.void);
+        }
+      });
     const latestRuntimeCursorWriteByThread = new Map<
       ThreadId,
       { readonly version: number; readonly resumeCursor: unknown }
@@ -2208,6 +2246,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     }).pipe(
                       Effect.andThen(updateSessionBindingFromRuntimeEvent(canonicalEvent)),
                       Effect.andThen(publishRuntimeEvent(canonicalEvent, persisted)),
+                      Effect.andThen(recordShutdownSessionExit(canonicalEvent)),
                       Effect.andThen(scheduleRetiredGatewaySessionRecovery(canonicalEvent)),
                     ),
                   ),
@@ -2607,6 +2646,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             };
             // Prompt construction has already happened here. Only explicit startup
             // may replace lost native history and request a transcript recap.
+            if (shutdownStartedAt !== undefined) {
+              return yield* toValidationError(
+                input.operation,
+                "The provider service is shutting down.",
+              );
+            }
             inheritedRuntimeGenerations.delete(threadId);
             const resumed = yield* adapter.startSession(resumeStartInput);
             if (resumed.provider !== adapter.provider) {
@@ -2665,7 +2710,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
 
       return Effect.suspend(() => {
-        if (retiredGatewaySessionRecoveries.has(event.threadId)) {
+        if (
+          shutdownStartedAt !== undefined ||
+          retiredGatewaySessionRecoveries.has(event.threadId)
+        ) {
           return Effect.void;
         }
         retiredGatewaySessionRecoveries.add(event.threadId);
@@ -2676,7 +2724,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           // next turn does not pay for process teardown and thread/resume.
           yield* Effect.yieldNow;
           const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-          if (!binding) return;
+          if (!binding || shutdownStartedAt !== undefined) return;
           yield* recoverSessionForThread({
             binding,
             operation: "ProviderService.proactiveGatewayCredentialRotation",
@@ -3131,11 +3179,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   `Provider instance '${resolved.instance.instanceId}' changed while its session was starting.`,
                 );
               }
+              const freshAccountHandoff =
+                outcomeOptions?.startFreshForAccountHandoff === true &&
+                persistedBinding?.provider === resolved.instance.driver &&
+                persistedProviderInstanceId !== resolved.instance.instanceId;
               const hasExplicitResumeCursor = input.resumeCursor !== undefined;
               const currentContinuationIdentity =
-                (hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
-                (persistedBinding !== undefined &&
-                  persistedBinding.provider === resolved.instance.driver)
+                !freshAccountHandoff &&
+                ((hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
+                  persistedBinding?.provider === resolved.instance.driver)
                   ? yield* prepareContinuationIdentityForCompatibility({
                       operation: "ProviderService.startSession",
                       provider: resolved.instance.driver,
@@ -3177,9 +3229,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const continuationResetRequested =
                 persistedBinding !== undefined &&
                 readPersistedContinuationResetRequested(persistedBinding.runtimePayload);
-              // Only a switch to another driver may abandon the persisted
-              // continuation implicitly; a same-driver home or account change
-              // still has to be resolved by the user.
+              // A stored rebind can leave another driver. Leaving the current
+              // account within one driver requires an explicit handoff.
               const abandonsOtherProviderContinuation =
                 outcomeOptions?.abandonOtherProviderContinuation === true &&
                 persistedBinding !== undefined &&
@@ -3192,6 +3243,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 persistedBinding !== undefined &&
                 !continuationResetRequested &&
                 !abandonsOtherProviderContinuation &&
+                !freshAccountHandoff &&
                 ((!hasAvailableResumeCursor && !exactPersistedLaunchMatch) ||
                   (hasAvailableResumeCursor && !continuationCompatible)) &&
                 (providerUsesProtectedNativeContinuation(persistedBinding.provider) ||
@@ -3210,7 +3262,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
               const effectiveResumeCursor =
-                input.forkSourceResumeCursor !== undefined
+                freshAccountHandoff || input.forkSourceResumeCursor !== undefined
                   ? undefined
                   : (input.resumeCursor ??
                     // A replacement retired for another account or endpoint must
@@ -3352,6 +3404,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
                   abandonsOtherProviderContinuation ||
+                  freshAccountHandoff ||
                   ((nativeResumeAttempted ||
                     outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true) &&
                     !nativeResumeSucceeded);
@@ -3365,6 +3418,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const sessionWithInstance: ProviderSession = {
                   ...session,
                   providerInstanceId: resolved.instance.instanceId,
+                  // An account can start before it has a cursor to persist.
+                  ...(freshAccountHandoff && session.resumeCursor === undefined
+                    ? { resumeCursor: null }
+                    : {}),
                 };
 
                 yield* withBindingWriteLock(
@@ -5228,6 +5285,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
+    const getSessionAdditionalDirectories: NonNullable<
+      ProviderServiceShape["getSessionAdditionalDirectories"]
+    > = (threadId) =>
+      directory.getBinding(threadId).pipe(
+        Effect.map((bindingOption) => {
+          const binding = Option.getOrUndefined(bindingOption);
+          return binding ? readPersistedAdditionalDirectories(binding.runtimePayload) : undefined;
+        }),
+      );
+
     stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
         if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
@@ -5652,6 +5719,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             .flatMap((sessions) => sessions)
             .map(({ adapter, session }) => [session.threadId, { adapter, session }] as const),
         );
+        if (options?.persistRuntimeEvent && activeSessionByThreadId.size > 0) {
+          // In the durable runtime, even a native-ready session can have a
+          // completion queued behind another journal write. Its exit is the
+          // barrier for earlier events from that session.
+          const pending = new Map(
+            [...activeSessionByThreadId.values()].map(
+              ({ session }) =>
+                [
+                  session.threadId,
+                  {
+                    provider: session.provider,
+                    generation: lifecycle.currentGeneration(session.threadId),
+                  },
+                ] as const,
+            ),
+          );
+          shutdownSessionExits = { pending, drained: Deferred.makeUnsafe<void>() };
+        }
         const activeSessionWrites = yield* Effect.forEach(
           activeSessionByThreadId.values(),
           ({ adapter, session }) =>
@@ -5709,6 +5794,28 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* settleConcurrentTeardowns(shutdownWork, (teardown) => teardown);
       });
 
+    const awaitShutdownSessionExits = Effect.suspend(() => {
+      const exits = shutdownSessionExits;
+      if (!exits || exits.pending.size === 0) return Effect.void;
+      return Deferred.await(exits.drained).pipe(
+        Effect.timeoutOption(PROVIDER_SHUTDOWN_EXIT_DRAIN_TIMEOUT),
+        // This is a process shutdown deadline, measured against the desktop
+        // watchdog's real time even when the application clock is controlled.
+        Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+        Effect.flatMap((outcome) =>
+          Option.isNone(outcome)
+            ? Effect.logWarning("provider session exit events did not finish during shutdown", {
+                remaining: exits.pending.size,
+              }).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => reportReliabilityIssue("recovery.shutdown_event_timeout")),
+                ),
+              )
+            : Effect.void,
+        ),
+      );
+    });
+
     const awaitRuntimeEventFanoutDrained: Effect.Effect<void> = Effect.suspend(() =>
       PubSub.isEmpty(runtimeEventPubSub).pipe(
         Effect.flatMap((empty) =>
@@ -5746,9 +5853,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ),
             ),
           ),
-          // Keep subscriptions alive until adapters have emitted terminal
-          // events. Closing waits for an in-flight canonical event because its
-          // persistence and publication section is uninterruptible.
+          // stopAll can enqueue an exit behind a journal write already in flight.
+          // Give active-session exits a bounded chance to reach the journal and
+          // subscribers before interrupting the adapter pumps.
+          Effect.andThen(awaitShutdownSessionExits),
           Effect.andThen(Scope.close(runtimeEventProducerScope, Exit.void)),
           // Downstream subscribers transfer every published event into their
           // own drainable workers before the publication owner is shut down.
@@ -5781,6 +5889,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       getRuntimeSessionStopTarget,
       withRuntimeSessionStopTarget,
       hasLiveRuntimeTasks,
+      getSessionAdditionalDirectories,
       clearSessionResumeCursor,
       listSessions,
       listRetainedSessions,

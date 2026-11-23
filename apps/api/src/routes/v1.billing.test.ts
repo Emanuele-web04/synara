@@ -11,10 +11,11 @@ import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostSecretStore } from "../identity/hostSecretStore";
 import { startFakeWorkos } from "../testing/fakeWorkos";
-import type { BillingProvider } from "../billing/polar";
+import { BillingCatalogUnavailableError, type BillingProvider } from "../billing/polar";
 import { createBillingService } from "../billing/service";
 
 const url = process.env.TEST_DATABASE_URL;
+const webOrigin = "https://www.trysynara.com";
 describe.skipIf(!url)("authenticated sandbox billing API", () => {
   let isolated: Awaited<ReturnType<typeof createIsolatedTestDatabase>>;
   let database: ReturnType<typeof createDb>;
@@ -82,9 +83,60 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
       verify: vi.fn(async () => null),
     };
     const billing = createBillingService({ pool: database.pool, provider });
-    const app = new Hono().route("/api/v1", createV1Routes({ ...deps, billing }));
+    const app = new Hono().route(
+      "/api/v1",
+      createV1Routes({ ...deps, billing, webCheckoutOrigin: webOrigin }),
+    );
     return { app, provider, billing };
   }
+
+  it("starts website checkout for the email-code account and never returns account tokens", async () => {
+    const { app, provider } = fixture();
+    const { user } = await login();
+    const codePath = "/api/v1/billing/web-checkout/code";
+    const startPath = "/api/v1/billing/web-checkout/start";
+    const headers = { origin: webOrigin, "content-type": "application/json" };
+    const send = (origin: string) =>
+      app.request(codePath, {
+        method: "POST",
+        headers: { ...headers, origin },
+        body: JSON.stringify({ email: user.email }),
+      });
+
+    expect((await send("https://attacker.invalid")).status).toBe(403);
+    expect(workos.currentMagicAuth(user.email)).toBeUndefined();
+    const preflight = await app.request(startPath, {
+      method: "OPTIONS",
+      headers: { origin: webOrigin, "access-control-request-method": "POST" },
+    });
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(webOrigin);
+    expect((await send(webOrigin)).status).toBe(202);
+    const { code } = workos.currentMagicAuth(user.email)!;
+    const body = {
+      email: user.email,
+      code,
+      interval: "month",
+      userId: "forged-user",
+      successUrl: "https://attacker.invalid",
+    };
+    const start = () =>
+      app.request(startPath, { method: "POST", headers, body: JSON.stringify(body) });
+    const response = await start();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      url: "https://sandbox.polar.sh/checkout/test",
+      environment: "sandbox",
+    });
+    expect((await start()).status).toBe(401);
+    expect(provider.checkout).toHaveBeenCalledExactlyOnceWith(
+      user.id,
+      user.email,
+      "month",
+      expect.any(String),
+      undefined,
+    );
+  });
   it("requires a verified session even when disabled, and labels disabled sandbox status", async () => {
     const app = new Hono().route("/api/v1", createV1Routes(deps));
     expect((await app.request("/api/v1/billing/status")).status).toBe(401);
@@ -108,6 +160,75 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
       ).status,
     ).toBe(503);
   });
+  it("preserves paid access and management while rejecting checkout on catalog failure", async () => {
+    const { app, provider } = fixture();
+    const subscriber = await login();
+    const buyer = await login();
+    vi.mocked(provider.plans).mockRejectedValue(
+      new BillingCatalogUnavailableError("Polar catalog is temporarily unavailable"),
+    );
+    vi.mocked(provider.state).mockImplementation(async (userId) =>
+      userId === subscriber.user.id
+        ? {
+            customerId: "paid-customer",
+            accessGranted: true,
+            subscriptionStatus: "active",
+            validUntil: new Date(Date.now() + 60_000).toISOString(),
+            cancelAtPeriodEnd: false,
+            hasSubscription: true,
+            productIds: ["test-product"],
+            settledCheckoutAttempts: [],
+          }
+        : null,
+    );
+
+    const paidStatus = await app.request("/api/v1/billing/status", { headers: subscriber.headers });
+    expect(paidStatus.status).toBe(200);
+    expect(await paidStatus.json()).toMatchObject({
+      available: true,
+      access: "granted",
+      subscriptionStatus: "active",
+      canManage: true,
+      canCheckout: false,
+      plans: [],
+    });
+    const portal = await app.request("/api/v1/billing/portal", {
+      method: "POST",
+      headers: subscriber.headers,
+    });
+    expect(portal.status).toBe(200);
+    expect(await portal.json()).toEqual({
+      url: "https://sandbox.polar.sh/test/portal",
+      environment: "sandbox",
+    });
+    expect(provider.portal).toHaveBeenCalledWith(subscriber.user.id);
+
+    const buyerStatus = await app.request("/api/v1/billing/status", { headers: buyer.headers });
+    expect(buyerStatus.status).toBe(200);
+    expect(await buyerStatus.json()).toMatchObject({
+      access: "none",
+      canManage: false,
+      canCheckout: false,
+      plans: [],
+    });
+    const checkout = await app.request("/api/v1/billing/checkout", {
+      method: "POST",
+      headers: buyer.headers,
+      body: JSON.stringify({ interval: "month" }),
+    });
+    expect(checkout.status).toBe(503);
+    expect(provider.checkout).not.toHaveBeenCalled();
+  });
+
+  it("does not recover from unexpected catalog errors", async () => {
+    const { billing, provider } = fixture();
+    const error = new TypeError("unexpected catalog error");
+    vi.mocked(provider.plans).mockRejectedValue(error);
+
+    await expect(billing.status(randomUUID())).rejects.toBe(error);
+    expect(provider.state).not.toHaveBeenCalled();
+  });
+
   it("ignores attacker-selected account/email/product/redirect fields and binds all calls to caller A", async () => {
     const { app, provider } = fixture();
     const a = await login(),

@@ -55,7 +55,8 @@ interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
-  subagentsRunning?: boolean;
+  /** Subagent rows with a child still at work, shown at the end of their answer. */
+  liveSubagentRunEntryIds?: ReadonlySet<string>;
   /** What the transcript's subagent cards read from the chat (child threads, controls). */
   subagentRun?: Omit<SubagentRunContextValue, "visibility"> | null;
   /** The newest card with subagents at work; drives the floating "N running" chip. */
@@ -118,7 +119,6 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
-  onStopBackgroundTask?: ComponentProps<typeof MessagesTimeline>["onStopBackgroundTask"];
   computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
   onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -167,7 +167,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
-  subagentsRunning,
+  liveSubagentRunEntryIds,
   subagentRun,
   runningSubagentRun,
   subagentThread,
@@ -223,7 +223,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
-  onStopBackgroundTask,
   computerControlEnabled,
   onEnableComputerControl,
   onRevertUserMessage,
@@ -402,7 +401,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             <MessagesTimeline
               key={activeThreadId}
               heightCacheScope={activeThreadId}
-              {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentThread={subagentThread ?? null}
               historyHeader={
                 importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
@@ -419,7 +417,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
-              subagentsRunning={subagentsRunning === true}
+              {...(liveSubagentRunEntryIds ? { liveSubagentRunEntryIds } : {})}
               collapseFinishedTurns={collapseFinishedTurns !== false}
               activeTurnStartedAt={activeTurnStartedAt}
               listRef={listRef}

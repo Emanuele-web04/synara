@@ -123,9 +123,6 @@ it("shows an exact stdio approval card and applies it only after the user approv
       })
       .toBe(true);
     await review.element().scrollIntoView();
-    await card.screenshot({
-      path: "__screenshots__/mcp-connectors-proposal.png",
-    });
     await review.click();
     await expect
       .element(screen.getByText("/Users/example/.paper/bin/paper", { exact: true }))
@@ -154,9 +151,6 @@ it("shows an exact stdio approval card and applies it only after the user approv
       .getByRole("button", { name: "Approve connector", exact: true })
       .element()
       .scrollIntoView();
-    await card.screenshot({
-      path: "__screenshots__/mcp-connectors-approval.png",
-    });
     await screen.getByRole("button", { name: "Approve connector", exact: true }).click();
     await expect
       .poll(() => api.resolveMcpConnectorProposal.mock.calls.at(-1)?.[0])
@@ -168,12 +162,6 @@ it("shows an exact stdio approval card and applies it only after the user approv
       .getByRole("button", { name: "Add local server", exact: true })
       .element()
       .scrollIntoView();
-    await page.screenshot({
-      path: "__screenshots__/mcp-connectors-local-saved.png",
-    });
-    await screen
-      .getByRole("region", { name: "Paper connector", exact: true })
-      .screenshot({ path: "__screenshots__/mcp-connectors-card.png" });
     await details.click();
     await expect.element(details).toHaveAttribute("aria-expanded", "true");
     await expect
@@ -194,9 +182,6 @@ it("shows an exact stdio approval card and applies it only after the user approv
     );
     document.documentElement.classList.add("dark");
     await page.viewport(390, 844);
-    await page.screenshot({
-      path: "__screenshots__/mcp-connectors-local-dark-mobile.png",
-    });
     const savedCard = screen
       .getByRole("region", { name: "Paper connector", exact: true })
       .element();
@@ -232,7 +217,6 @@ it("adds a local command through the explicit run action", async () => {
     await expect
       .poll(() => getComputedStyle(document.querySelector('[data-slot="dialog-popup"]')!).opacity)
       .toBe("1");
-    await page.screenshot({ path: "__screenshots__/mcp-connectors-add-local.png" });
     await screen.getByRole("button", { name: "Add and run server" }).click();
     await expect
       .poll(() => api.connectMcpConnector.mock.calls.at(-1)?.[0])

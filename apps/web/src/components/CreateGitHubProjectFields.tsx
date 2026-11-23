@@ -7,6 +7,7 @@ import { Button } from "./ui/button";
 import { dialogFieldLabelClassName } from "./ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { useTranslation } from "~/i18n";
+import { Translation } from "~/i18n/Translation";
 
 export const PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-foreground/12";
 
@@ -38,8 +39,11 @@ export function CreateGitHubProjectFields(props: {
         <p className="text-ui font-medium text-foreground">{t("git:whatYouNeed")}</p>
         <ol className="mt-2.5 space-y-2">
           <GitHubRequirement index={1} title={t("git:general_repository")}>
-            {t("git:pasteARepositoryNameOrItsGitHubURLName")}{" "}
-            <span className="font-medium text-foreground">owner/repository</span>
+            <Translation
+              message="git:pasteARepositoryNameOrItsGitHubURLName"
+              values={{ repository: "owner/repository" }}
+              components={{ repository: <span className="font-medium text-foreground" /> }}
+            />
           </GitHubRequirement>
           <GitHubRequirement index={2} title={t("git:destination")}>
             {t("git:chooseTheParentFolderWhereSynaraShouldCreateThe")}

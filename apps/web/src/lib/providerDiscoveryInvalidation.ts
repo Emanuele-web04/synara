@@ -14,6 +14,8 @@ type ProviderModelDiscoveryFingerprintEntry = readonly [
   authStatus: ServerProviderStatus["authStatus"],
   authType: string | null,
   authLabel: string | null,
+  accountEmail: string | null,
+  accountOrganization: string | null,
   version: string | null,
 ];
 
@@ -31,6 +33,8 @@ export function providerModelDiscoveryInvalidationFingerprint(
         provider.authStatus,
         provider.authType ?? null,
         provider.authLabel ?? null,
+        provider.accountEmail ?? null,
+        provider.accountOrganization ?? null,
         provider.version ?? null,
       ],
     )

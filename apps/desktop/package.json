@@ -1,6 +1,6 @@
 {
   "name": "@synara/desktop",
-  "version": "1.1.0",
+  "version": "1.6.5",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -22,7 +22,7 @@
   "dependencies": {
     "betterwright": "2.7.3",
     "effect": "catalog:",
-    "electron": "43.8.7",
+    "electron": "43.8.12",
     "electron-updater": "^6.6.2",
     "i18next": "26.4.4",
     "undici": "8.10.2",

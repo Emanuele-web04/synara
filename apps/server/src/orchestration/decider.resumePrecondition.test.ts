@@ -10,7 +10,6 @@ import {
   type OrchestrationReadModel,
   type OrchestrationSession,
 } from "@synara/contracts";
-import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -121,7 +120,7 @@ const expectRejected = async (
 };
 
 describe("decider thread.turn.start resumePrecondition", () => {
-  it("does not count an automatic startup continuation as a human send", async () => {
+  it("plans the startup continuation as a resume that adds no chat message", async () => {
     const readModel = makeReadModel({ latestTurn: makeLatestTurn("interrupted") });
     const plan = planQuitResumeTurns({
       record: {
@@ -140,17 +139,16 @@ describe("decider thread.turn.start resumePrecondition", () => {
       decideOrchestrationCommand({ command: plan.commands[0]!, readModel }),
     );
     const events = Array.isArray(decided) ? decided : [decided];
-    const message = events.find((event) => event.type === "thread.message-sent");
-    expect(message?.type).toBe("thread.message-sent");
-    if (message?.type !== "thread.message-sent") return;
-    expect(
-      deriveThreadSummaryMetadata({
-        messages: [{ role: "user", createdAt: BEFORE_RECORD }, message.payload],
-        activities: [],
-        proposedPlans: [],
-        latestTurn: null,
-      }).latestHumanMessageAt,
-    ).toBe(BEFORE_RECORD);
+    expect(events.map((event) => event.type)).toEqual(["thread.goal-continuation-requested"]);
+    expect(events[0]).toMatchObject({
+      payload: {
+        threadId: THREAD_ID,
+        goalStartedAt: null,
+        trigger: "manual-resume",
+        sourceTurnId: RECORDED_TURN_ID,
+        resumePrompt: "Continue where you left off.",
+      },
+    });
   });
 
   it("accepts a chat that was still connecting when recorded", async () => {
@@ -174,6 +172,47 @@ describe("decider thread.turn.start resumePrecondition", () => {
       null,
     );
   });
+
+  it.each([
+    { state: "interrupted", requestedAt: NOW },
+    { state: "error", requestedAt: NOW },
+    { state: "interrupted", requestedAt: BEFORE_RECORD },
+  ] as const)(
+    "rejects a planned continuation for a replacement ($state, requested $requestedAt)",
+    async ({ state, requestedAt }) => {
+      const plannedReadModel = makeReadModel({ latestTurn: makeLatestTurn("interrupted") });
+      const plan = planQuitResumeTurns({
+        record: {
+          version: 1,
+          recordId: "before-replacement",
+          recordedAt: RECORDED_AT,
+          continuationPrompt: "Continue where you left off.",
+          threads: [{ threadId: THREAD_ID, turnId: RECORDED_TURN_ID }],
+        },
+        threads: plannedReadModel.threads,
+        projects: [{ id: plannedReadModel.threads[0]!.projectId, deletedAt: null }],
+        now: NOW,
+      });
+      expect(plan.commands).toHaveLength(1);
+      const readModel = makeReadModel({
+        latestTurn: {
+          ...makeLatestTurn(state, TurnId.makeUnsafe("turn-replacement")),
+          requestedAt,
+        },
+      });
+      const result = await Effect.runPromise(
+        Effect.result(decideOrchestrationCommand({ command: plan.commands[0]!, readModel })),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "OrchestrationCommandInvariantError",
+          commandType: "thread.turn.resume",
+          detail: "Thread 'thread-resume' started another turn after it was remembered for resume.",
+        },
+      });
+    },
+  );
 
   it("rejects when the recorded turn completed on its own", async () => {
     await expectRejected(
@@ -215,6 +254,103 @@ describe("decider thread.turn.start resumePrecondition", () => {
         runtimeMode: "approval-required",
         interactionMode: "plan",
       },
+    });
+  });
+});
+
+const withThread = (
+  readModel: OrchestrationReadModel,
+  patch: Partial<OrchestrationReadModel["threads"][number]>,
+): OrchestrationReadModel => ({
+  ...readModel,
+  threads: [{ ...readModel.threads[0]!, ...patch }],
+});
+
+describe("decider thread.turn.resume", () => {
+  const resume = (readModel: OrchestrationReadModel) =>
+    decideOrchestrationCommand({
+      command: {
+        type: "thread.turn.resume",
+        commandId: CommandId.makeUnsafe("cmd-turn-resume"),
+        threadId: THREAD_ID,
+        createdAt: NOW,
+      },
+      readModel,
+    });
+
+  it("asks the provider reactor to continue without a chat message", async () => {
+    const decided = await Effect.runPromise(
+      resume(makeReadModel({ latestTurn: makeLatestTurn("interrupted") })),
+    );
+    const events = Array.isArray(decided) ? decided : [decided];
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "thread.goal-continuation-requested",
+      payload: {
+        threadId: THREAD_ID,
+        goalStartedAt: null,
+        trigger: "manual-resume",
+        sourceTurnId: RECORDED_TURN_ID,
+        createdAt: NOW,
+      },
+    });
+    expect(events[0]?.payload).not.toHaveProperty("resumePrompt");
+  });
+
+  it("leaves a request that never started a turn for the reactor to resend", async () => {
+    const decided = await Effect.runPromise(resume(makeReadModel({ latestTurn: null })));
+    const events = Array.isArray(decided) ? decided : [decided];
+    expect(events[0]).toMatchObject({ type: "thread.goal-continuation-requested" });
+    expect(events[0]?.payload).not.toHaveProperty("sourceTurnId");
+  });
+
+  it.each([
+    [
+      "a turn is in flight",
+      makeReadModel({ latestTurn: makeLatestTurn("running") }),
+      "Thread 'thread-resume' already has a turn in flight.",
+    ],
+    [
+      "an approval is pending",
+      withThread(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }), {
+        hasPendingApprovals: true,
+      }),
+      "Thread 'thread-resume' is waiting for an answer.",
+    ],
+    [
+      "a usage-limit wait owns the resume",
+      withThread(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }), {
+        usageLimitRecovery: {} as NonNullable<
+          OrchestrationReadModel["threads"][number]["usageLimitRecovery"]
+        >,
+      }),
+      "Thread 'thread-resume' resumes on its own after the usage limit.",
+    ],
+    [
+      "the thread is a native subagent",
+      withThread(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }), {
+        creationSource: "provider_native",
+      }),
+      "Subagent 'thread-resume' cannot be resumed.",
+    ],
+  ])("refuses when %s", async (_case, readModel, detail) => {
+    const error = await Effect.runPromise(Effect.flip(resume(readModel)));
+    expect(error).toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.turn.resume",
+      detail,
+    });
+  });
+
+  it("refuses an archived thread", async () => {
+    const error = await Effect.runPromise(
+      Effect.flip(
+        resume(makeReadModel({ latestTurn: makeLatestTurn("interrupted"), archivedAt: NOW })),
+      ),
+    );
+    expect(error).toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.turn.resume",
     });
   });
 });

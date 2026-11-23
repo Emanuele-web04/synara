@@ -8,6 +8,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { CODEX_STDERR_NATIVE_EVENT_TYPE } from "@synara/shared/codexStderr";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 import { providerRuntimeCommandProgressKey } from "./providerRuntimeProgressCoalescing.ts";
@@ -853,6 +854,8 @@ export function projectProviderRuntimeActivities(
       const isCodexThreadWarning =
         event.provider === "codex" &&
         (nativeMethod === "guardianWarning" || nativeMethod === "warning");
+      // Marks Codex stderr rows so replay can apply the stderr policy to them alone.
+      const isCodexStderr = event.provider === "codex" && nativeMethod === "process/stderr";
       // Claude backgrounding notices arrive as warnings whose detail is the
       // SDK background_tasks_changed message; they present as a plain info
       // line ("Moved to background: <work>"), not as a runtime warning.
@@ -901,11 +904,13 @@ export function projectProviderRuntimeActivities(
             ...(willRetry ? { willRetry: true } : {}),
             ...(isCodexThreadWarning
               ? { nativeEventType: `codex.${nativeMethod}` }
-              : isBackgroundMove || isClaudeRetry || isMonitorEvent
-                ? { nativeEventType: detailSubtype }
-                : nativeType
-                  ? { nativeEventType: nativeType }
-                  : {}),
+              : isCodexStderr
+                ? { nativeEventType: CODEX_STDERR_NATIVE_EVENT_TYPE }
+                : isBackgroundMove || isClaudeRetry || isMonitorEvent
+                  ? { nativeEventType: detailSubtype }
+                  : nativeType
+                    ? { nativeEventType: nativeType }
+                    : {}),
             ...activityDataField(event.payload.detail),
           }),
           turnId: toTurnId(event.turnId) ?? null,
@@ -1413,6 +1418,9 @@ export function projectProviderRuntimeActivities(
               ? { errorMessage: sanitizeUserFacingErrorMessage(errorMessage, "Turn failed") }
               : {}),
             ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
+            ...(event.payload.httpStatus !== undefined
+              ? { httpStatus: event.payload.httpStatus }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1532,8 +1540,9 @@ export function projectProviderRuntimeActivities(
           return limit;
         });
       const normalizedPayload = {
-        provider: event.provider,
         ...rl,
+        provider: event.provider,
+        ...(event.providerInstanceId ? { providerInstanceId: event.providerInstanceId } : {}),
         ...(resetsAt ? { resetsAt } : {}),
         ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
         ...(limits && limits.length > 0 ? { limits } : {}),
@@ -1550,7 +1559,7 @@ export function projectProviderRuntimeActivities(
           ...maybeSequence,
         },
       ];
-      if (status !== "rejected" && status !== "allowed_warning") {
+      if (status !== "rejected") {
         return activities;
       }
       return [
@@ -1558,9 +1567,9 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: (status === "rejected" ? "error" : "info") as "error" | "info",
+          tone: "error",
           kind: "account.rate-limited",
-          summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
+          summary: "Rate limited",
           payload: toActivityPayload({
             ...normalizedPayload,
             status,

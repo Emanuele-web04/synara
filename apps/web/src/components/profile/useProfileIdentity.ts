@@ -145,6 +145,7 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
     ssoImage,
     /** Non-null exactly when the identity is account-backed. */
     accountProfile,
+    publicProfileAvailable: me?.publicProfileAvailable,
     canEdit,
     save,
     uploadAvatarPhoto,

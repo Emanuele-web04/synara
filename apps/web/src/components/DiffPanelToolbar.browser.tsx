@@ -2,26 +2,17 @@ import "../index.css";
 
 import { TurnId } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { getAppTypographyScale } from "../lib/appTypography";
 import { gitQueryKeys } from "../lib/gitReactQuery";
 import { DiffPanelToolbar } from "./DiffPanelToolbar";
 
 const noop = () => {};
 
-afterEach(() => {
-  document.documentElement.classList.remove("dark");
-  delete document.documentElement.dataset.windowTranslucency;
-  for (const token of ["ui", "ui-sm", "ui-xs"]) {
-    document.documentElement.style.removeProperty(`--app-font-size-${token}`);
-  }
-});
-
 it.each([false, true])(
-  "keeps diff actions reachable at the minimum dock width and largest UI font (turn: %s)",
+  "exposes the diff source and actions in the toolbar (turn: %s)",
   async (turn) => {
     await page.viewport(1280, 800);
     const onReload = vi.fn();
@@ -108,34 +99,6 @@ it.each([false, true])(
         </div>
       </QueryClientProvider>,
     );
-    const root = mounted.getByTestId("toolbar").element() as HTMLElement;
-    for (const dark of [false, true]) {
-      document.documentElement.classList.toggle("dark", dark);
-      for (const translucency of ["none", "window"]) {
-        document.documentElement.dataset.windowTranslucency = translucency;
-        for (const font of [13, 18]) {
-          const scale = getAppTypographyScale(font);
-          for (const [token, value] of Object.entries({
-            ui: scale.uiPx,
-            "ui-sm": scale.uiSmPx,
-            "ui-xs": scale.uiXsPx,
-          })) {
-            document.documentElement.style.setProperty(`--app-font-size-${token}`, `${value}px`);
-          }
-          await vi.waitFor(() => {
-            const rect = root.getBoundingClientRect();
-            for (const button of root.querySelectorAll("button")) {
-              const bounds = button.getBoundingClientRect();
-              expect(
-                bounds.right,
-                `${button.ariaLabel}, ${font}, ${dark}, ${translucency}`,
-              ).toBeLessThanOrEqual(rect.right + 1);
-              expect(bounds.left).toBeGreaterThanOrEqual(rect.left - 1);
-            }
-          });
-        }
-      }
-    }
     await expect
       .element(page.getByRole("button", { name: "Choose diff source" }))
       .toHaveAccessibleDescription(

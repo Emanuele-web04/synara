@@ -35,6 +35,9 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "dist-electron/**"]
     },
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

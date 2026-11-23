@@ -153,6 +153,13 @@ const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+// Copying a checkout's changes into a new worktree walks every file in it, so it
+// scales with checkout size and disk speed (an external drive can take minutes).
+// Bound the captured patch, not the time; caller interruption still kills Git.
+const WORKTREE_TRANSFER_READ_OPTIONS = {
+  timeoutMs: null,
+  maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES,
+} as const;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -3470,6 +3477,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           : ["worktree", "add", worktreePath, input.branch];
 
         yield* executeGit("GitCore.createWorktree", input.cwd, args, {
+          ...GIT_MUTATION_OPTIONS,
           fallbackErrorMessage: "git worktree add failed",
         });
 
@@ -3502,13 +3510,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       }
     };
 
-    const listWorktreeTransferPaths = (cwd: string) =>
+    const listWorktreeTransferPaths = (
+      cwd: string,
+      readOptions: ExecuteGitOptions = { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+    ) =>
       Effect.gen(function* () {
         const untracked = yield* executeGit(
           "GitCore.listWorktreeTransferPaths.untracked",
           cwd,
           ["ls-files", "--others", "--exclude-standard", "-z"],
-          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+          readOptions,
         ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
         const includeFile = nodePath.join(cwd, ".worktreeinclude");
         const hasIncludeFile = yield* Effect.tryPromise({
@@ -3534,7 +3545,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "GitCore.listWorktreeTransferPaths.included",
               cwd,
               ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
-              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+              readOptions,
             ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
           : [];
         return [...new Set([...untracked, ...included])].sort();
@@ -3619,13 +3630,17 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 "HEAD",
                 "--",
               ],
-              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+              WORKTREE_TRANSFER_READ_OPTIONS,
             ).pipe(Effect.map((result) => result.stdout)),
-            listWorktreeTransferPaths(sourceCwd),
+            listWorktreeTransferPaths(sourceCwd, WORKTREE_TRANSFER_READ_OPTIONS),
           ],
           { concurrency: "unbounded" },
         );
         const transferPaths = listedTransferPaths.filter((relativePath) => {
+          // Without --directory, Git lists ordinary untracked files individually.
+          // A trailing slash marks an opaque nested repository or linked worktree.
+          if (relativePath.endsWith("/")) return false;
+
           const relativeToTarget = nodePath.relative(
             worktreePath,
             nodePath.join(sourceCwd, relativePath),
@@ -3668,7 +3683,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   "GitCore.copyCheckoutChanges.apply",
                   worktreePath,
                   ["apply", "--whitespace=nowarn", patchPath],
-                  { timeoutMs: 30_000 },
+                  GIT_MUTATION_OPTIONS,
                 );
               }),
             (temporaryDirectory) =>
@@ -3681,16 +3696,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         yield* Effect.forEach(
           transferPaths,
           (relativePath) =>
+            // A started filesystem copy cannot be canceled. Wait for it before
+            // rollback so it cannot recreate paths after Git removes the checkout.
             Effect.tryPromise({
               try: async () => {
                 const sourcePath = nodePath.join(sourceCwd, relativePath);
                 const targetPath = nodePath.join(worktreePath, relativePath);
                 await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
                 await nodeFs.cp(sourcePath, targetPath, {
-                  recursive: true,
                   force: false,
                   errorOnExist: true,
                   preserveTimestamps: true,
+                  verbatimSymlinks: true,
                 });
               },
               catch: (cause) =>
@@ -3701,7 +3718,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   `could not copy ${relativePath} into the detached worktree.`,
                   cause,
                 ),
-            }),
+            }).pipe(Effect.uninterruptible),
           { discard: true, concurrency: 4 },
         );
       });
@@ -3948,10 +3965,24 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const onPhase = options?.onPhase ?? (() => Effect.void);
         const newBranch = input.newBranch ?? null;
-        const refResult = yield* executeGit(
-          "GitCore.createDetachedWorktree.resolveRef",
-          input.cwd,
-          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        // Parallel checkout (one worker per core) cuts `worktree add` time on large
+        // repositories, but a user who configured `checkout.workers` keeps their
+        // value. The lookup runs alongside ref resolution so it adds no wall time;
+        // an unreadable config keeps git's default rather than overriding it.
+        const [refResult, useParallelCheckout] = yield* Effect.all(
+          [
+            executeGit("GitCore.createDetachedWorktree.resolveRef", input.cwd, [
+              "rev-parse",
+              "--verify",
+              "--end-of-options",
+              `${input.ref}^{commit}`,
+            ]),
+            readConfigValue(input.cwd, "checkout.workers").pipe(
+              Effect.map((configured) => configured === null),
+              Effect.catch(() => Effect.succeed(false)),
+            ),
+          ],
+          { concurrency: "unbounded" },
         );
         const resolvedRef = refResult.stdout.trim();
         if (input.copyChangesFrom) {
@@ -3996,12 +4027,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ]);
         }
         yield* onPhase("worktree");
+        // Checkout time scales with repository size and disk speed, so the
+        // 30s default would fail slow (e.g. external) drives mid-checkout.
         const addWorktree = executeGit(
           "GitCore.createDetachedWorktree",
           input.cwd,
-          newBranch
-            ? ["worktree", "add", worktreePath, newBranch]
-            : ["worktree", "add", "--detach", worktreePath, resolvedRef],
+          [
+            ...(useParallelCheckout ? ["-c", "checkout.workers=0"] : []),
+            ...(newBranch
+              ? ["worktree", "add", worktreePath, newBranch]
+              : ["worktree", "add", "--detach", worktreePath, resolvedRef]),
+          ],
+          GIT_MUTATION_OPTIONS,
         );
         yield* newBranch
           ? addWorktree.pipe(
@@ -4626,12 +4663,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
+        // Match each path literally so a name like `[id].tsx` is not a glob.
+        const pathspecs = paths.map((path) => `:(literal)${path}`);
         yield* runGit(
           "GitCore.unstageFiles",
           cwd,
           headExists
-            ? ["reset", "-q", "HEAD", "--", ...paths]
-            : ["rm", "--cached", "-q", "--", ...paths],
+            ? ["reset", "-q", "HEAD", "--", ...pathspecs]
+            : ["rm", "--cached", "-q", "--", ...pathspecs],
         );
       });
 

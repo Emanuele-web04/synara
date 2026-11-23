@@ -1,4 +1,6 @@
 # Independent feedback lanes; the quality job only aggregates results.
+# No lane waits on another: each detects docs-only changes itself.
+# Each execution lane checks its budget when its work succeeds (.github/CI.md).
 # Install scope/cache decisions and measured tradeoffs: .github/CI.md.
 # Stable browser coverage blocks PRs; geometry quarantine stays nightly.
 name: CI
@@ -9,8 +11,10 @@ on:
     branches:
       - main
 
+# Lanes list the pull request's files to detect docs-only changes.
 permissions:
   contents: read
+  pull-requests: read
 
 # Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
 concurrency:
@@ -21,59 +25,25 @@ concurrency:
 # instead of per job so a future bump cannot miss a lane.
 env:
   NODE_OPTIONS: --max-old-space-size=4096
+  # Runner images can ship different Node patches. Use one compiler cache namespace.
+  SYNARA_CI_NODE_VERSION: "24.22.3"
 
 jobs:
-  # Docs-only filter: PRs touching only prose, doc images, or marketing content
-  # run static-fast + gate only. outputs.code is 'true' when any code file changed.
-  changes:
-    name: Detect code changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    # dorny/paths-filter lists PR files via the API: it needs pull-requests
-    # scope on top of the checkout's contents scope (repo default is tighter).
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Filter docs-only changes
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          # Default quantifier is 'some': any matching pattern includes the file,
-          # so '!**/*.md' style exclusions never exclude anything and every PR
-          # classifies as code. 'every' requires all patterns to match, which is
-          # what makes the include-all + exclude-docs combination work.
-          predicate-quantifier: "every"
-          filters: |
-            code:
-              # Directory exclusions stay scoped to code-free trees: marketing
-              # src ships .tsx under docs/ dirs and web ships a .ts module
-              # under assets/, so '**/docs/**' / '**/assets/**' would let real
-              # code skip the gate. Every image under .github/ is code-free
-              # (PR evidence screenshots, docs assets). Runtime images stay on
-              # the code path: browser tests validate app icon transparency
-              # and layout.
-              - '**'
-              - '!**/*.md'
-              - '!docs/**'
-              - '!**/*.mdx'
-              - '!apps/marketing/content/**'
-              - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
-
   # Root + scripts dependencies suffice for every static check and release smoke.
   # Never wait for the changes job to report formatting or lint failures.
   static-fast:
     name: Static Checks (fast)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 4
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # The budget clock starts after checkout: a clone that stalls on GitHub's
+      # side is not the lane being slow. The job timeout still bounds it.
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -81,7 +51,7 @@ jobs:
           scope: "static"
 
       - name: Verify CI contracts
-        run: node --test .github/scripts/ci-contracts.test.mjs
+        run: node --test .github/scripts/ci-contracts.test.mjs .github/scripts/ci-audit.test.mjs
 
       # Independent checks share the installed workspace; parallel waits for all
       # of them and fails the lane if any check fails, with separate step logs.
@@ -93,7 +63,7 @@ jobs:
             run: bun run windows-runtime:check
 
           - name: Verify localization catalogs and report UI coverage
-            run: bun run i18n:check && bun run i18n:extract
+            run: bun run i18n:coverage
 
           - name: Format
             run: bun run fmt:check
@@ -104,32 +74,75 @@ jobs:
           - name: Exercise release-only workflow steps
             run: node scripts/release-smoke.ts
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "75"
+        run: node .github/scripts/job-budget.mjs
+
   static-typecheck:
     name: Static Checks (typecheck)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        # The lineage check needs release tags and their migration manifests.
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Docs-only changes skip the rest of this lane. The lane decides for itself,
+      # so it starts with the run instead of after a separate filter job.
+      - name: Detect code changes
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/detect-code-changes.mjs
+
+      # The single saver for the shared full Linux node_modules key: every other
+      # full lane restores only, so a miss is archived once instead of per lane.
       - name: Setup workspace
+        if: steps.changes.outputs.code == 'true'
         uses: ./.github/actions/setup-workspace
+        with:
+          save-modules: "true"
 
-      - name: Typecheck
-        run: bun run typecheck
+      - parallel:
+          # The two compilers compete for cores, so run their checks in order.
+          - name: Typecheck and Effect diagnostics
+            if: steps.changes.outputs.code == 'true'
+            shell: bash
+            run: |
+              node scripts/typecheck.ts --only=types
+              node scripts/typecheck.ts --only=effect
 
-  # Keep each server shard serial internally, but use three independent runners.
+          - name: Verify released migration lineage
+            if: steps.changes.outputs.code == 'true'
+            run: |
+              test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+              node scripts/check-migration-lineage.ts
+
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "135"
+        run: node .github/scripts/job-budget.mjs
+
+  # Use three independent server runners, each with one Vitest worker per CPU.
   # The measured native 3-way split lowers the slowest shard without changing
   # collected tests. Tests import @synara/contracts from source (its ESM export),
   # so no package build precedes them; every lane starts at the test files.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 6
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     strategy:
       # Deliberate non-default: one shard's failure must not cancel the other
       # shards, so every lane reports complete signal for the gate.
@@ -139,189 +152,394 @@ jobs:
           - pkg: core
             filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics"
             test-args: ""
+            # Replays the hot-path compiler guard's events for unchanged modules
+            # (apps/web/src/test/compilerEventCache.ts); edited ones compile.
+            web-transform-cache: "unit-core-compiler"
+            budget: 240
           - pkg: web
             filters: "--filter=@synara/web"
-            test-args: ""
+            test-args: "--config=vitest.unit.ci.config.ts --project=web --project=web-local-time"
+            scope: "web"
+            save-modules: "true"
+            budget: 240
           # Server lane tests the CLI package (package name @synara/cli).
           - pkg: server 1/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=1/3"
+            scope: "server"
+            save-modules: "true"
+            budget: 210
           - pkg: server 2/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=2/3"
+            scope: "server"
+            budget: 210
           - pkg: server 3/3
             filters: "--filter=@synara/cli"
             test-args: "--shard=3/3"
+            scope: "server"
+            budget: 210
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Detect code changes
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/detect-code-changes.mjs
+
       - name: Setup workspace
+        if: steps.changes.outputs.code == 'true'
         uses: ./.github/actions/setup-workspace
+        with:
+          scope: ${{ matrix.scope || 'full' }}
+          save-modules: ${{ matrix.save-modules || 'false' }}
+          web-transform-cache: ${{ matrix.web-transform-cache || '' }}
 
       - name: Verify Linux terminal PTY native dependency
-        if: matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
+        if: steps.changes.outputs.code == 'true' && matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
         run: node scripts/node-pty-smoke.mjs
 
-      - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+      # Core already installs the Web dependencies and can run the long
+      # compiler check alongside its own tests on the same runner. ChatView
+      # and the other hot-path modules are two files, one worker each.
+      - parallel:
+          - name: Test (${{ matrix.pkg }})
+            if: steps.changes.outputs.code == 'true'
+            run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
-  # ChatView is one large file, so split it by complementary test-name groups.
-  # Other browser files use native 3-way file sharding. Every runner keeps serial
-  # execution and the stable geometry quarantine; only distribution changes.
+          - name: Verify chat hot-path compiler
+            if: steps.changes.outputs.code == 'true' && matrix.pkg == 'core'
+            run: >-
+              bun run --cwd apps/web test --
+              --config=vitest.unit.ci.config.ts --project=web-compiler
+              --no-passWithNoTests --maxWorkers=2
+
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: ${{ matrix.budget }}
+        run: node .github/scripts/job-budget.mjs
+
+  # ChatView is one large file. Its three projects split it by complementary
+  # test-name groups, and each project runs as two or three processes that take
+  # the cases by name length (apps/web/vitest.browser.ci.config.ts). The other
+  # browser files run as ten Vitest file shards. Every job runs two processes;
+  # each browser process still executes its files serially.
   browser:
-    name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
+    name: Browser Tests (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 9
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     strategy:
       # Deliberate non-default: one shard's failure must not cancel the other
       # shards, so every lane reports complete signal for the gate.
       fail-fast: false
       matrix:
         include:
-          - project: chat-follow
-            shard: 1/1
-          - project: chat-projects
-            shard: 1/1
-          - project: chat-workflows
-            shard: 1/1
-          - project: components
-            shard: 1/3
-          - project: components
-            shard: 2/3
-          - project: components
-            shard: 3/3
+          - name: chat-follow
+            cache: chat-follow
+            projectA: chat-follow
+            sliceA: "1/2"
+            shardA: 1/1
+            projectB: chat-follow
+            sliceB: "2/2"
+            shardB: 1/1
+            budget: 285
+          - name: chat-projects
+            cache: chat-projects
+            projectA: chat-projects
+            sliceA: "1/3"
+            shardA: 1/1
+            projectB: chat-projects
+            sliceB: "2/3"
+            shardB: 1/1
+            budget: 315
+          - name: chat-workflows
+            cache: chat-workflows
+            projectA: chat-workflows
+            sliceA: "1/3"
+            shardA: 1/1
+            projectB: chat-workflows
+            sliceB: "2/3"
+            shardB: 1/1
+            budget: 405
+          - name: chat-mixed
+            cache: chat-mixed
+            projectA: chat-projects
+            sliceA: "3/3"
+            shardA: 1/1
+            projectB: chat-workflows
+            sliceB: "3/3"
+            shardB: 1/1
+            budget: 405
+          - name: components 1/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 1/10
+            projectB: components
+            sliceB: ""
+            shardB: 2/10
+            budget: 330
+          - name: components 2/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 3/10
+            projectB: components
+            sliceB: ""
+            shardB: 4/10
+            budget: 330
+          - name: components 3/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 5/10
+            projectB: components
+            sliceB: ""
+            shardB: 6/10
+            budget: 330
+          - name: components 4/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 7/10
+            projectB: components
+            sliceB: ""
+            shardB: 8/10
+            budget: 330
+          - name: components 5/5
+            cache: components
+            projectA: components
+            sliceA: ""
+            shardA: 9/10
+            projectB: components
+            sliceB: ""
+            shardB: 10/10
+            budget: 330
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup workspace
-        uses: ./.github/actions/setup-workspace
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
+      - name: Detect code changes
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/detect-code-changes.mjs
+
+      # Chromium restores to its own directory while the workspace installs.
+      - name: Restore Chromium headless shell
+        if: steps.changes.outputs.code == 'true'
+        id: chromium-cache
+        uses: actions/cache/restore@v5
+        background: true
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-shell-${{ hashFiles('bun.lock') }}
+
+      # React Compiler only compiles the browser (client) environment, so the
+      # node unit lanes have nothing to reuse. Each browser lane loads a
+      # different module set, so each owns its own archive.
+      - name: Setup workspace
+        if: steps.changes.outputs.code == 'true'
+        uses: ./.github/actions/setup-workspace
+        with:
+          scope: "web"
+          web-transform-cache: browser-${{ matrix.cache }}-${{ strategy.job-index }}
+          web-transform-fallback: ${{ github.event_name == 'pull_request' && strategy.job-index != 5 && 'browser-components-5' || '' }}
+
+      - name: Wait for Chromium cache
+        wait: chromium-cache
 
       # GitHub's pinned Ubuntu image already provides the Chromium shared-library
       # dependencies used by this stable suite. Avoid a redundant apt/font pass on
       # every shard; nightly geometry still uses --with-deps for rendering coverage.
       - name: Install browser test runtime
+        if: steps.changes.outputs.code == 'true'
         timeout-minutes: 15
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-headless"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           cd apps/web
-          ./node_modules/.bin/playwright install chromium
+          ./node_modules/.bin/playwright install chromium --only-shell
 
-      - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
-        timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
+      # One lane saves the shared key after Playwright has installed the shell.
+      - name: Save Chromium headless shell
+        if: >-
+          steps.changes.outputs.code == 'true' &&
+          matrix.name == 'chat-follow' &&
+          steps.chromium-cache.outputs.cache-hit != 'true' &&
+          steps.chromium-cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/playwright-headless
+          key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
+
+      # Share cold compiler work by cache key. Vite's optimizer cache and the
+      # browser API listener still need a separate directory and port.
+      - parallel:
+          - name: Browser test (${{ matrix.projectA }} ${{ matrix.sliceA || matrix.shardA }})
+            if: steps.changes.outputs.code == 'true'
+            timeout-minutes: 20
+            env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
+              VITEST_BROWSER_API_PORT: "51101"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-a
+              VITEST_BROWSER_CHAT_SLICE: ${{ matrix.sliceA }}
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.projectA }} --shard=${{ matrix.shardA }}
+
+          - name: Browser test (${{ matrix.projectB }} ${{ matrix.sliceB || matrix.shardB }})
+            if: steps.changes.outputs.code == 'true'
+            timeout-minutes: 20
+            env:
+              SYNARA_WEB_TRANSFORM_CACHE_SHARED: "true"
+              VITEST_BROWSER_API_PORT: "51102"
+              VITEST_BROWSER_CACHE_DIR: node_modules/.vite-ci-b
+              VITEST_BROWSER_CHAT_SLICE: ${{ matrix.sliceB }}
+            run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.projectB }} --shard=${{ matrix.shardB }}
+
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: ${{ matrix.budget }}
+        run: node .github/scripts/job-budget.mjs
 
   build:
     name: Desktop Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 7
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Detect code changes
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/detect-code-changes.mjs
+
       - name: Setup workspace
+        if: steps.changes.outputs.code == 'true'
         uses: ./.github/actions/setup-workspace
         with:
+          scope: "server"
           electron: "true"
           turbo: "true"
-
-      - name: Build desktop pipeline
-        run: bun run build:desktop
-
-      - name: Build analytics dashboard and bundle Worker
-        run: |
-          bun run --cwd apps/analytics build
-          cd apps/analytics
-          bunx wrangler deploy --dry-run
+          web-transform-cache: desktop-production
 
       - name: Configure Electron sandbox helper
+        if: steps.changes.outputs.code == 'true'
         run: |
           sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
           sudo chown root:root "$sandbox_helper"
           sudo chmod 4755 "$sandbox_helper"
 
+      - name: Build desktop pipeline
+        if: steps.changes.outputs.code == 'true'
+        id: desktop-build
+        env:
+          SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR: ${{ runner.temp }}/web-transform-cache
+        run: bun run build:desktop
+        background: true
+
+      # The lifecycle smoke bundles its own fixture and can run during the build.
       - name: Verify live Electron browser lifecycle
+        if: steps.changes.outputs.code == 'true'
         run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
 
+      - name: Wait for the desktop build
+        wait: desktop-build
+
+      - name: Build analytics dashboard and bundle Worker
+        if: steps.changes.outputs.code == 'true'
+        run: |
+          bun run --cwd apps/analytics build
+          cd apps/analytics
+          bunx wrangler deploy --dry-run
+
       - name: Verify browser navigation preserves composer focus
+        if: steps.changes.outputs.code == 'true'
         run: xvfb-run -a bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'preserves composer keyboard ownership'
 
       - name: Verify preload bundle output
+        if: steps.changes.outputs.code == 'true'
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "285"
+        run: node .github/scripts/job-budget.mjs
+
   # Aggregate only: no checkout, install, build or test execution.
   # Preserve the branch-protection display name and always() failure handling.
   # Needs every required lane. Matrix jobs report one result covering
-  # all shards, so ANY failed shard fails the gate. Docs-only runs pass with
-  # heavy lanes skipped (static-fast must still succeed).
+  # all shards, so ANY failed shard fails the gate. Every lane runs on every
+  # change and must succeed; on a docs-only change its steps after detection
+  # are skipped, and the lanes must agree on that decision.
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
     permissions: {}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs:
-      - changes
       - static-fast
       - static-typecheck
       - unit
       - browser
       - build
       - windows_process
-      - migration_lineage
     if: always()
     steps:
       - name: Aggregate lane results
         env:
-          CHANGES: ${{ needs.changes.result }}
-          CODE: ${{ needs.changes.outputs.code }}
           STATIC_FAST: ${{ needs.static-fast.result }}
           TYPECHECK: ${{ needs.static-typecheck.result }}
           UNIT: ${{ needs.unit.result }}
           BROWSER: ${{ needs.browser.result }}
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
-          MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
+          CODE_TYPECHECK: ${{ needs.static-typecheck.outputs.code }}
+          CODE_UNIT: ${{ needs.unit.outputs.code }}
+          CODE_BROWSER: ${{ needs.browser.outputs.code }}
+          CODE_BUILD: ${{ needs.build.outputs.code }}
+          CODE_WINDOWS_PROCESS: ${{ needs.windows_process.outputs.code }}
         run: |
           fail=0
-          # The docs-only filter itself must have run: without it a skip proves nothing.
-          if [ "$CHANGES" != "success" ]; then
-            echo "changes=$CHANGES (filter must succeed)"
-            fail=1
-          fi
-          if [ "$CODE" != "true" ] && [ "$CODE" != "false" ]; then
-            echo "code=$CODE (filter must return true or false)"
-            fail=1
-          fi
-          # Fast static always runs, docs-only or not.
-          if [ "$STATIC_FAST" != "success" ]; then
-            echo "static-fast=$STATIC_FAST"
-            fail=1
-          fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
+          for lane in "static-fast=$STATIC_FAST" "typecheck-and-lineage=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS"; do
             name="${lane%%=*}"
             result="${lane#*=}"
-            if [ "$CODE" != "true" ]; then
-              # Docs-only run: heavy lanes must be skipped, never failed.
-              if [ "$result" != "skipped" ]; then
-                echo "$name=$result (docs-only run: expected skipped)"
-                fail=1
-              fi
-            elif [ "$result" != "success" ]; then
+            if [ "$result" != "success" ]; then
               echo "$name=$result"
+              fail=1
+            fi
+          done
+          # A lane that skipped its work must have decided so itself, and every
+          # lane must have reached the same decision from the same change.
+          for lane in "typecheck-and-lineage=$CODE_TYPECHECK" "unit=$CODE_UNIT" "browser=$CODE_BROWSER" "build=$CODE_BUILD" "windows-process=$CODE_WINDOWS_PROCESS"; do
+            name="${lane%%=*}"
+            code="${lane#*=}"
+            if [ "$code" != "true" ] && [ "$code" != "false" ]; then
+              echo "$name: code=$code (detection must return true or false)"
+              fail=1
+            elif [ "$code" != "$CODE_TYPECHECK" ]; then
+              echo "$name: code=$code disagrees with typecheck-and-lineage=$CODE_TYPECHECK"
               fail=1
             fi
           done
@@ -333,26 +551,40 @@ jobs:
   windows_process:
     name: Windows Process Regression
     runs-on: windows-2022
-    timeout-minutes: 15
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 6
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Start job clock
+        shell: bash
+        run: echo "CI_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Detect code changes
+        id: changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/detect-code-changes.mjs
+
       - name: Setup workspace
+        if: steps.changes.outputs.code == 'true'
         uses: ./.github/actions/setup-workspace
         with:
           scope: "runtime"
 
       - name: Test Defender qualification guard contracts
+        if: steps.changes.outputs.code == 'true'
         shell: pwsh
         run: pwsh -NoProfile -NonInteractive -File scripts/verify-windows-defender.test.ps1
 
       - name: Verify Windows terminal PTY native dependency under Bun
+        if: steps.changes.outputs.code == 'true'
         run: bun scripts/node-pty-smoke.mjs
 
       - name: Test Windows shared runtime and migration recovery
+        if: steps.changes.outputs.code == 'true'
         run: >-
           bun run --cwd packages/shared test
           src/windowsProcess.test.ts
@@ -363,6 +595,7 @@ jobs:
           src/migrationRecovery.test.ts
 
       - name: Test Windows server lifecycle and migration recovery
+        if: steps.changes.outputs.code == 'true'
         run: >-
           bun run --cwd apps/server test
           src/platform/processTreeController.test.ts
@@ -377,6 +610,7 @@ jobs:
           src/persistence/Migrations/MigrationReplay.test.ts
 
       - name: Verify Windows credential reader compilation without credentials
+        if: steps.changes.outputs.code == 'true'
         run: >-
           bun run --cwd apps/server test
           src/providerUsage/providers/droidSecureStorage.test.ts
@@ -387,33 +621,13 @@ jobs:
       # stranded partials, and renaming a database file that may still be held
       # open. Linux-only coverage cannot speak for any of that.
       - name: Test Windows desktop shutdown and migration recovery
+        if: steps.changes.outputs.code == 'true'
         run: >-
           bun run --cwd apps/desktop test
           src/backendShutdown.windows.integration.test.ts
           src/desktopMigrationRecovery.test.ts
 
-  # Released (id, name) migration pairs are recorded in every user's
-  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
-  # installs. This job needs the release tags, hence the unshallow checkout; the
-  # dependency-free guard needs a real tag history, never a missing-history skip.
-  migration_lineage:
-    name: Migration Lineage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Verify released migration lineage
-        run: |
-          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
-          node scripts/check-migration-lineage.ts
+      - name: Enforce job budget
+        env:
+          CI_JOB_BUDGET_SECONDS: "195"
+        run: node .github/scripts/job-budget.mjs

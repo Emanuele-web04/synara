@@ -21,12 +21,14 @@ interface ChatWorkLogInput {
   activeThread: Thread | undefined;
   latestTurnSettled: boolean;
   latestTurnLive: boolean;
+  keepMissingCheckpointNotices: boolean;
 }
 
 export function useChatWorkLog({
   activeThread,
   latestTurnSettled,
   latestTurnLive,
+  keepMissingCheckpointNotices,
 }: ChatWorkLogInput) {
   const { t } = useTranslation();
 
@@ -69,6 +71,7 @@ export function useChatWorkLog({
         latestTurnState: activeLatestTurnState,
         latestTurnCompletedAt: activeLatestTurnCompletedAt,
         translate: t,
+        keepMissingCheckpointNotices,
       }),
     [
       activeLatestTurnCompletedAt,
@@ -76,6 +79,7 @@ export function useChatWorkLog({
       activeLatestTurnStartedAt,
       activeLatestTurnState,
       latestTurnLive,
+      keepMissingCheckpointNotices,
       threadActivities,
       workLogVisibleTurnIds,
       t,

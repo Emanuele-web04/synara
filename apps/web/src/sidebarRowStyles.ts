@@ -3,6 +3,8 @@
 // Layer: Sidebar UI styling
 // Exports: row dimension, radius, hover/active, header + thread row class names
 
+import { hoverRevealHideClassName, type HoverRevealGroup } from "./rowHoverReveal";
+
 /** Compact sidebar row height shared by projects, threads, chats, and settings nav. */
 export const SIDEBAR_ROW_HEIGHT_CLASS_NAME =
   "min-h-[var(--app-density-row-height,1.75rem)] h-[var(--app-density-row-height,1.75rem)]";
@@ -16,7 +18,7 @@ export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-ui font-normal";
 
 export const SIDEBAR_ROW_FOCUS_CLASS_NAME =
-  "outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  "outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--color-border-focus)]";
 
 export const SIDEBAR_ROW_HOVER_CLASS_NAME =
   "hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)]";
@@ -55,11 +57,14 @@ export const SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME =
 export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
   "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:project-header-focus:pointer-events-auto md:project-header-focus:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
 
-/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-/** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
+/** Soft grey of the rail's resting glyphs. Glyphs only: as text it reads near 3:1. */
 export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
 
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
+/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"), on the full muted token. */
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground";
+
+/** Empty-state line under a sidebar section ("No projects yet"). */
+export const SIDEBAR_EMPTY_STATE_CLASS_NAME = "px-2 pt-4 text-center text-ui text-muted-foreground";
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
@@ -81,43 +86,45 @@ export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
 ].join(" ");
 
+/** Left padding of a thread row (`pl-8` above), where its provider glyph starts. */
+export const SIDEBAR_THREAD_ROW_PADDING_PX = 32;
+
+/** Centres an absolutely placed control on a thread row's first line, at any row height. */
+export const SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME =
+  "top-[calc(var(--app-density-row-height,1.75rem)/2)]";
+
+/** A parent's stem: one hairline hung from the glyph centre, never covering row content. */
+export const SIDEBAR_CHILD_STEM_CLASS_NAME =
+  "pointer-events-none absolute z-10 border-foreground/14";
+
+/** Width of the child-count chip (`SidebarChildThreadsChip`) at one digit. */
+export const SIDEBAR_CHILD_CHIP_WIDTH_PX = 18;
+
+/** Gap between the child-count chip and the provider glyph it precedes. */
+export const SIDEBAR_CHILD_CHIP_GAP_PX = 4;
+
+/** Indent per level for agent-created child threads, under the parent's title. */
+export const SIDEBAR_CHILD_INDENT_PX = 24;
+
+/** Centre of a thread row's leading glyph from the row's content edge; stems hang from here. */
+export const SIDEBAR_THREAD_GLYPH_CENTER_PX = 6;
+
 /** Spacing between a header row and its nested thread list, and between thread rows. */
 export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 
 export const SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME = "pt-0.5";
 
 /** Sidebar row groups whose resting status fades to yield its slot to a hover toolbar. */
-export type SidebarHoverRevealGroup = "activity-row" | "project-header" | "thread-row";
+export type SidebarHoverRevealGroup = Exclude<HoverRevealGroup, "picker-row">;
 
 /**
- * The single rule for "fade a resting glyph out the moment its row reveals the hover
- * action toolbar, so the actions replace it instead of stacking on top." A project
+ * Fade a resting glyph out the moment its row reveals the hover action toolbar. A project
  * header (folder icon + run-status dot) and a thread row (meta chips, timestamp/status
- * slot, jump hint) both follow it — the faded element also drops pointer events so it
- * never intercepts clicks meant for the revealed toolbar.
- *
- * Tailwind only emits utilities it can read as complete literals, so each group's classes
- * are spelled out in full rather than interpolating the `group/<row>` token. The variants
- * differ only by that token and by which focus signal the row's toolbar reveals on
- * (project headers reveal on keyboard `focus-visible`; thread rows reveal on any
- * `focus-within`) — keep each in lockstep with its row's toolbar. Requires an ancestor
- * carrying the matching `group/<row>` marker.
- *
- * Apply this to a *static* element. If the element you want to hide animates its own
- * `opacity` (e.g. `animate-pulse`), the running animation overrides this `opacity-0`;
- * put the class on a wrapper instead so the parent's collapsed opacity hides the subtree.
+ * slot, jump hint) both follow the shared rule in `rowHoverReveal.ts`; project headers
+ * reveal on keyboard `focus-visible`, thread rows on any `focus-within`.
  */
-const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, string> = {
-  "activity-row":
-    "transition-opacity group-hover/activity-row:pointer-events-none group-hover/activity-row:opacity-0 group-focus-within/activity-row:pointer-events-none group-focus-within/activity-row:opacity-0",
-  "project-header":
-    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 project-header-focus:pointer-events-none project-header-focus:opacity-0",
-  "thread-row":
-    "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
-};
-
 export function sidebarHoverRevealHideClassName(group: SidebarHoverRevealGroup): string {
-  return SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME[group];
+  return hoverRevealHideClassName(group);
 }
 
 export const SIDEBAR_HEADER_LABEL_CLASS_NAME = "truncate";

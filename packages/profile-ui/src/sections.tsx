@@ -8,9 +8,18 @@
 import type { ReactNode } from "react";
 import { Skeleton } from "./skeleton";
 
-export function StatTile({ label, value }: { label: string; value: string | null }) {
+export function StatTile({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | null;
+  /** Optional muted context under the label, e.g. "42.2m per active day". */
+  detail?: string;
+}) {
   return (
-    <div className="flex flex-col items-center gap-0.5 px-3 py-3">
+    <div className="flex min-w-0 flex-col items-center gap-0.5 px-3 py-3">
       {value === null ? (
         <Skeleton className="h-4 w-12" />
       ) : (
@@ -19,22 +28,48 @@ export function StatTile({ label, value }: { label: string; value: string | null
         </span>
       )}
       <span className="text-ui leading-snug font-normal text-muted-foreground">{label}</span>
+      {detail ? (
+        <span className="max-w-full truncate text-ui-sm leading-snug text-muted-foreground/80">
+          {detail}
+        </span>
+      ) : null}
     </div>
   );
 }
 
+const STAT_TILE_GRID_BASE =
+  "grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60";
+
 export function StatTileGrid({
   tiles,
+  fitContainer = false,
 }: {
-  tiles: readonly { label: string; value: string | null }[];
+  tiles: readonly { label: string; value: string | null; detail?: string }[];
+  /**
+   * Pick the column count from the grid's own width instead of the window's, for
+   * grids in columns narrower than the window (settings). Off by default.
+   */
+  fitContainer?: boolean;
 }) {
-  return (
-    <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
+  const grid = (
+    <div
+      className={`${STAT_TILE_GRID_BASE} ${
+        fitContainer
+          ? "@lg:grid-cols-3 @2xl:grid-cols-5 @2xl:divide-y-0"
+          : "sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0"
+      }`}
+    >
       {tiles.map((tile) => (
-        <StatTile key={tile.label} label={tile.label} value={tile.value} />
+        <StatTile
+          key={tile.label}
+          label={tile.label}
+          value={tile.value}
+          {...(tile.detail ? { detail: tile.detail } : {})}
+        />
       ))}
     </div>
   );
+  return fitContainer ? <div className="@container">{grid}</div> : grid;
 }
 
 export function InsightRow({ label, value }: { label: string; value: string }) {
@@ -54,6 +89,7 @@ export function ModelUsageRow({
   percent,
   detail,
   stat,
+  barColor,
 }: {
   /** Leading provider/model icon, e.g. the web app's `<ProviderIcon />`. */
   icon: ReactNode;
@@ -63,6 +99,8 @@ export function ModelUsageRow({
   detail?: string;
   /** Right-hand stat label; defaults to "{percent}%" (public page passes "17bn · 42%"). */
   stat?: string;
+  /** Bar color; defaults to the owner's accent (`--info`). */
+  barColor?: string;
 }) {
   return (
     <li className="flex flex-col gap-1.5">
@@ -79,7 +117,10 @@ export function ModelUsageRow({
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full bg-[var(--info)]"
-          style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
+          style={{
+            width: `${Math.min(100, Math.max(2, percent))}%`,
+            ...(barColor ? { background: barColor } : {}),
+          }}
         />
       </div>
     </li>

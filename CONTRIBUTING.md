@@ -46,7 +46,7 @@ Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
 
-For interface copy, follow [the localization guide](docs/internationalization.md). Add stable semantic keys and translations in every shipped locale, preserve user/provider data, and run the catalog and extraction checks.
+For interface copy, follow [the interface text guide](docs/internationalization.md). Add stable semantic keys to the English catalogs, preserve user/provider data, and run the catalog and extraction checks.
 
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
@@ -57,6 +57,44 @@ If we have to guess what changed, we are much less likely to review it.
 If you are thinking about a non-trivial change, open an issue first.
 
 That gives you a chance to check whether the direction fits before spending time on a larger patch.
+
+## Pre-push Check
+
+`bun install` adds a pre-push launcher in Git's default hooks directory. It runs
+`.githooks/pre-push` from the current worktree when that file exists. The hook
+(`scripts/pre-push-check.ts`) checks only the files the push changes, compared
+with what the remote already has (or the default branch, for a new branch):
+
+- formatting with `oxfmt --check`
+- lint errors with `oxlint --quiet`
+- types with `tsrs`, for the projects that own those files and the scripts that
+  import server or desktop sources. Changes to shared code (`packages/`,
+  `scripts/lib/`), root TypeScript config or the lockfile check every project.
+  Deleted files count for project selection.
+
+`tsrs` keeps incremental build info under each workspace's
+`node_modules/.cache`, so a repeat check usually takes about a second; a first
+check of every project took about 7 seconds. It checks the working tree, so
+uncommitted edits to those files count too. Very large pushes format-check and
+lint the full tree to stay within platform argument limits. Run `bun run fmt`
+to fix formatting.
+CI still checks the whole tree and also runs the Effect language-service
+diagnostics, which are too slow for a hook. To skip the check once, push with
+`git push --no-verify`. Pushes that only delete branches skip it.
+
+The setup preserves existing hooks and skips installation when `core.hooksPath`
+is already configured, in CI, during `--ignore-scripts` installs, and in copies
+outside a repository root. To opt out across installs, configure the clone to
+use its existing hooks directory:
+
+```bash
+git config --local core.hooksPath "$(git rev-parse --path-format=absolute --git-path hooks)"
+```
+
+If Synara already installed a launcher, remove that file from the configured
+directory. It contains the comment `Installed by Synara`.
+
+The hook is a POSIX `sh` script and also runs under Git for Windows (Git Bash).
 
 ## Testing
 
@@ -114,6 +152,14 @@ Packaged desktop API requests must reach the HTTP backend; the static protocol
 serves only GET/HEAD navigation and assets. An attachment upload needs a valid
 JSON receipt even when HTTP reports success. Preserve drafts on upload failure
 and observe pending upload rejections while workspace preparation is awaiting RPCs.
+
+The pinned BetterWright patch exposes its existing guard proxy for the dedicated
+browser session. Keep this transport alive across call-scoped CDP workers; switching
+or draining proxies after each `browser_run` aborts the page's pending requests.
+Only a trusted worker settlement receipt permits graceful cleanup of a failed
+snippet; cancellation, timeout, and transport loss still revoke execution. After
+updating BetterWright, run `bun run --cwd apps/desktop smoke:browser-lifecycle`
+with an isolated Electron profile; the fixture creates one automatically.
 
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments

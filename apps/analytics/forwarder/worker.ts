@@ -10,6 +10,9 @@ export interface ForwarderEnv {
 export default {
   async fetch(request: Request, env: ForwarderEnv): Promise<Response> {
     const url = new URL(request.url);
+    // Retire old upload URLs before reading or forwarding crash memory.
+    if (/^\/v1\/crash(?:\/|$)/.test(url.pathname) || /^\/api\/dumps(?:\/|$)/.test(url.pathname))
+      return new Response("raw crash uploads retired", { status: 410 });
     if (!env.TARGET) {
       return new Response("migrating, retry later", {
         status: 503,

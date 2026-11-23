@@ -1,25 +1,26 @@
 import "./httpRuntime";
-import { attachDesktopUpdateControl, DESKTOP_UPDATE_IPC_ENV } from "./desktopUpdateControl";
+import {
+  attachDesktopUpdateControl,
+  DESKTOP_UPDATE_IPC_ENV,
+  supportsDesktopUpdateControl,
+} from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
-import {
-  initializeDesktopI18n,
-  setDesktopLanguagePreference,
-  t,
-  translateNativeMenuRoles,
-} from "./i18n";
-import {
-  applyDesktopLanguagePreference,
-  readDesktopLanguagePreference,
-} from "./desktopPreferences";
+import { t } from "./i18n";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
-import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
+import { CuaDriverHost, sweepOrphanedCuaDriversInBackground } from "./cuaDriverHost";
+import {
+  backendCompileCacheEnv,
+  pruneBackendCompileCaches,
+  resolveBackendCompileCacheDir,
+} from "./backendCompileCache";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { ProductAnalytics } from "./productAnalytics";
+import { attachBackendReliability } from "./backendReliability";
 import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
@@ -46,7 +47,6 @@ import {
   autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
-  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -64,6 +64,7 @@ import {
   systemPreferences,
 } from "electron";
 import { configureElectronNetwork } from "betterwright/electron";
+import { getBetterwrightNetworkGuard } from "./browserAutomation/betterwrightNetworkGuard";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -133,12 +134,7 @@ import {
 } from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import type { ExpectedTeamId } from "./betaInstaller";
-import {
-  BetaDiagnostics,
-  readLogTail,
-  resolveBetaDiagnosticsEndpoint,
-  type BetaDiagnosticsEventName,
-} from "./betaDiagnostics";
+import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -249,6 +245,7 @@ import {
   isUpdateVersionAllowedForFlavor,
   isUpdateVersionNewer,
   shouldBroadcastDownloadProgress,
+  shouldAcceptAvailableUpdate,
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
@@ -482,26 +479,18 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
-// Match the renderer storage profile, including isolated source-build profiles.
-const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(userDataPath, "desktop-language.json");
-initializeDesktopI18n(
-  readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH),
-  () =>
-    app.isReady()
-      ? app.getPreferredSystemLanguages()
-      : [new Intl.DateTimeFormat().resolvedOptions().locale],
-  desktopFlavor,
-);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-// Remote shares usage and diagnostics by default; Settings turns both off.
-// Stable stays opt-in for product events and never runs diagnostics.
+// Stable and Remote share product events by default. Saved choices take precedence.
+// Stable never runs the release diagnostics sender.
 const productAnalytics = new ProductAnalytics({
   homeDir: BASE_DIR,
   channel: desktopFlavor === "beta" ? "beta" : desktopFlavor === "remote" ? "remote" : "stable",
   appVersion: app.getVersion(),
   platform: process.platform,
-  defaultEnabled: desktopFlavor === "remote",
+  defaultEnabled: desktopFlavor === "production" || desktopFlavor === "remote",
 });
+if (hasSingleInstanceLock) productAnalytics.initialize();
 
 // Diagnostics are constructed only for the Beta and Remote build flavors, so
 // production binaries never run a collection path. The payload schema is an
@@ -545,20 +534,7 @@ productAnalytics.onChange((enabled) => {
   if (enabled) betaDiagnostics?.resumeSharing();
   else betaDiagnostics?.discardQueue();
 });
-if (betaDiagnostics && desktopFlavor === "beta") {
-  crashReporter.start({
-    productName: APP_DISPLAY_NAME,
-    companyName: "Synara",
-    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
-    uploadToServer: true,
-    compress: true,
-    globalExtra: {
-      installId: betaDiagnostics.installId,
-      flavor: "beta",
-      appVersion: app.getVersion(),
-    },
-  });
-}
+// Raw process dumps can contain work content; no flavor starts an upload-capable reporter.
 
 const trackBetaDiagnostics = (
   event: BetaDiagnosticsEventName,
@@ -576,10 +552,13 @@ process.stderr.on("error", handleDesktopStdioError);
 // Node's exit behavior — the POSIX EPIPE filter and the default crash path
 // stay exactly as before.
 process.on("uncaughtExceptionMonitor", (error: unknown) => {
+  if (!isBrokenPipeError(error)) {
+    productAnalytics.track({ event: "app.crash", outcome: "failed" });
+    productAnalytics.trackReliability({ code: "app.main_unhandled" });
+  }
   betaDiagnostics?.trackError("main", error);
 });
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
@@ -648,6 +627,7 @@ let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
 let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
+let updaterWindowToRestore: BrowserWindow | null = null;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
@@ -760,7 +740,7 @@ function startBrowserPerformanceLogging(): void {
   browserPerfInterval.unref();
 }
 
-async function ensureBrowserHostPipeServer(): Promise<void> {
+async function ensureBrowserHostPipeServer(browserSessionReady?: Promise<void>): Promise<void> {
   if (browserHostPipeServer || !SYNARA_BROWSER_HOST_PIPE_PATH) {
     return;
   }
@@ -768,6 +748,7 @@ async function ensureBrowserHostPipeServer(): Promise<void> {
     vault: browserVault,
     vaultCapture: browserVaultCapture,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    ...(browserSessionReady ? { browserSessionReady } : {}),
     requestOpenPanel: (threadId) => {
       if (!threadId) return;
       mainWindow?.webContents.send(IPC.browser.requestOpenPanel, { threadId });
@@ -1136,11 +1117,11 @@ let downloadedUpdateIdentityTask: Promise<void> | null = null;
 let activeUpdateInstallHandoff: UpdateInstallHandoffExpectation | null = null;
 const pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
 const macUpdateInstallHandoff =
-  process.platform === "darwin"
-    ? new MacUpdateInstallHandoff(nativeAutoUpdater, (error) =>
-        autoUpdater.emit("error", error instanceof Error ? error : new Error(String(error))),
-      )
-    : null;
+  process.platform === "darwin" ? new MacUpdateInstallHandoff(nativeAutoUpdater) : null;
+
+function isMacUpdateShuttingDown(): boolean {
+  return macUpdateInstallHandoff !== null && isQuitting && isUpdaterInstallPreparing;
+}
 
 function getUpdaterInstallBlockedReason(): string | null {
   return macUpdateInstallHandoff?.blockedReason ?? null;
@@ -1155,8 +1136,9 @@ function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
 
 function clearUpdaterInstallInFlightAfterError(input?: {
   readonly preservePendingPreparation?: boolean;
+  readonly error?: Error;
 }): boolean {
-  macUpdateInstallHandoff?.cancel();
+  macUpdateInstallHandoff?.cancel(input?.error);
   const preparationCancelled = updateInstallPreparation.cancel();
   if (preparationCancelled && input?.preservePendingPreparation) {
     return true;
@@ -1194,6 +1176,8 @@ function replayDeferredDesktopQuitAfterUpdaterSettles(): boolean {
 }
 
 function recoverDesktopAfterUpdaterInstallFailure(): void {
+  const windowToRestore = updaterWindowToRestore;
+  updaterWindowToRestore = null;
   if (replayDeferredDesktopQuitAfterUpdaterSettles()) return;
 
   // A second updater failure signal can race the replay above (for example,
@@ -1204,9 +1188,13 @@ function recoverDesktopAfterUpdaterInstallFailure(): void {
     return;
   }
 
-  // The backend was already stopped for install preparation. When no quit was
-  // requested in the meantime, restore the live app and its update polling.
+  // If shutdown started, restart the backend and restore the old window.
   startBackend();
+  if (windowToRestore?.isDestroyed()) {
+    ensureInitialBackendWindowOpen(backendHttpUrl);
+  } else {
+    windowToRestore?.showInactive();
+  }
   scheduleUpdatePoll();
 }
 
@@ -1466,6 +1454,7 @@ async function requireCurrentDesktopMigrationBundle(): Promise<boolean> {
 }
 
 async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   const message = formatErrorMessage(error);
   writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
   await dialog.showMessageBox({
@@ -1484,6 +1473,7 @@ async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise
 async function rejectDesktopMigrationBundleMismatch(
   mismatch: MigrationRuntimeIdentityMismatch,
 ): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   writeDesktopLogHeader(
     `migration bundle source mismatch expected=${mismatch.expectedDigest} actual=${mismatch.actualDigest}`,
   );
@@ -1544,6 +1534,9 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
     requiresRecovery: () => requiresDesktopMigrationRecovery(paths),
     markerRemains: () => hasPendingDesktopMigrationRecovery(paths),
     choose: async ({ previousFailure }) => {
+      productAnalytics.trackReliability({
+        code: previousFailure === null ? "migration.startup_blocked" : "migration.recovery_failed",
+      });
       // The user is here because Synara cannot open its database, so the
       // in-app update button is unreachable by definition. A newer build is
       // often the actual fix, and this dialog is the only surface left to
@@ -1829,6 +1822,7 @@ function registerDesktopProtocol(): void {
 }
 
 function dispatchMenuAction(action: string): void {
+  if (isMacUpdateShuttingDown()) return;
   const existingWindow =
     BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0];
   const targetWindow = existingWindow ?? createWindow();
@@ -1837,7 +1831,7 @@ function dispatchMenuAction(action: string): void {
   }
 
   const send = () => {
-    if (targetWindow.isDestroyed()) return;
+    if (targetWindow.isDestroyed() || isMacUpdateShuttingDown()) return;
     targetWindow.webContents.send(IPC.menuAction, action);
     if (!targetWindow.isVisible()) {
       targetWindow.show();
@@ -2128,9 +2122,7 @@ function configureApplicationMenu(): void {
     },
   );
 
-  const applicationMenu = Menu.buildFromTemplate(template);
-  translateNativeMenuRoles(applicationMenu, APP_DISPLAY_NAME);
-  Menu.setApplicationMenu(applicationMenu);
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -2350,6 +2342,7 @@ function clearUnreadNotificationBadge(): void {
 // Reuse the existing desktop window when the app is launched again so users
 // don't end up with multiple packaged instances racing the same local state.
 function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
+  if (isMacUpdateShuttingDown()) return;
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null;
     return;
@@ -3717,8 +3710,24 @@ async function waitForMigrationRecoveryInstallHandoff(): Promise<void> {
   });
 }
 
+async function stopBackendForUpdateInstall(
+  attempt: UpdateInstallPreparationAttempt,
+): Promise<void> {
+  isQuitting = true;
+  clearUpdatePollTimer();
+  if (isMacUpdateShuttingDown() && mainWindow?.isVisible()) {
+    updaterWindowToRestore = mainWindow;
+    hideDesktopWindowForImmediateQuit();
+  }
+  await stopBackendAndWaitForExit();
+  updateInstallPreparation.requireActive(attempt);
+}
+
+type UpdateInstallSource = "desktop" | "backend";
+
 async function runDownloadedUpdateInstall(
   preparationAttempt: UpdateInstallPreparationAttempt,
+  source: UpdateInstallSource,
 ): Promise<{
   accepted: boolean;
   completed: boolean;
@@ -3769,11 +3778,12 @@ async function runDownloadedUpdateInstall(
   };
   let markerWritten = false;
   let artifactInvalidated = false;
+  // Keep the backend stop close to the remote install's active-work check.
+  const prepareBeforeShutdown = macUpdateInstallHandoff !== null && source === "desktop";
   try {
-    isQuitting = true;
-    clearUpdatePollTimer();
-    await stopBackendAndWaitForExit();
-    updateInstallPreparation.requireActive(preparationAttempt);
+    if (!prepareBeforeShutdown) {
+      await stopBackendForUpdateInstall(preparationAttempt);
+    }
     await logMacUpdateDiagnostics("before install handoff");
     updateInstallPreparation.requireActive(preparationAttempt);
     if (!(await verifyUpdateArtifactIdentity(artifact))) {
@@ -3791,9 +3801,18 @@ async function runDownloadedUpdateInstall(
       throw new Error("Durable update install marker changed before install handoff.");
     }
     activeUpdateInstallHandoff = handoffExpectation;
+    if (macUpdateInstallHandoff !== null) {
+      // Squirrel can apply a staged update on exit, so validate and record the
+      // exact artifact before giving it to the native updater.
+      await macUpdateInstallHandoff.prepare(AUTO_UPDATE_INSTALL_WATCHDOG_MS);
+      updateInstallPreparation.requireActive(preparationAttempt);
+      if (prepareBeforeShutdown) {
+        await stopBackendForUpdateInstall(preparationAttempt);
+      }
+    }
     isUpdaterQuitAndInstallInFlight = true;
     if (macUpdateInstallHandoff !== null) {
-      macUpdateInstallHandoff.start();
+      macUpdateInstallHandoff.quitAndInstall();
     } else {
       autoUpdater.quitAndInstall();
     }
@@ -3818,7 +3837,7 @@ async function runDownloadedUpdateInstall(
   }
 }
 
-async function installDownloadedUpdate(): Promise<{
+async function installDownloadedUpdate(source: UpdateInstallSource = "desktop"): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
@@ -3845,7 +3864,7 @@ async function installDownloadedUpdate(): Promise<{
   try {
     // A retry must not retain the last failure while the new handoff is pending.
     setUpdateState(reduceDesktopUpdateStateOnInstallStart(updateState));
-    return await runDownloadedUpdateInstall(preparationAttempt);
+    return await runDownloadedUpdateInstall(preparationAttempt, source);
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
       clearUpdaterInstallInFlightAfterError();
@@ -3981,19 +4000,27 @@ function configureAutoUpdater(): void {
   autoUpdater.on("update-available", (info) => {
     if (isQuitting || isUpdaterInstallPreparing || updateDownloadInFlight) return;
     clearUpdateCheckTimeoutTimer();
-    if (!isAcceptableUpdateVersion(info.version)) {
+    const accepted = shouldAcceptAvailableUpdate({
+      currentVersion: app.getVersion(),
+      version: info.version,
+      flavor: desktopFlavor,
+      info,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    if (!accepted) {
+      const versionAccepted = isAcceptableUpdateVersion(info.version);
+      const reason = versionAccepted
+        ? `artifact for ${info.version} does not match ${process.platform}/${process.arch}`
+        : describeRejectedUpdateVersion(info.version);
       const nextState = reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString());
       if (nextState.downloadedVersion === null) {
         downloadedUpdateArtifact = null;
-        void clearPendingUpdateCache(
-          `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
-        );
+        void clearPendingUpdateCache(`available update rejected: ${reason}`);
       }
       setUpdateState(nextState);
       lastLoggedDownloadMilestone = -1;
-      console.info(
-        `[desktop-updater] Ignoring available update: ${describeRejectedUpdateVersion(info.version)}.`,
-      );
+      console.info(`[desktop-updater] Ignoring available update: ${reason}.`);
       return;
     }
     setUpdateState(
@@ -4042,6 +4069,7 @@ function configureAutoUpdater(): void {
     const failedHandoff = activeUpdateInstallHandoff;
     const installPreparationPending = clearUpdaterInstallInFlightAfterError({
       preservePendingPreparation: true,
+      error,
     });
     if (errorContext === "download") {
       downloadedUpdateArtifact = null;
@@ -4114,6 +4142,11 @@ function configureAutoUpdater(): void {
 
   scheduleUpdatePoll();
 }
+
+function backendCompileCacheDir(): string {
+  return resolveBackendCompileCacheDir(STATE_DIR, app.getVersion());
+}
+
 // Builds process-local Node args so provider/tool children do not inherit Synara's heap guard.
 function backendNodeArgs(): string[] {
   const configuredMaxOldSpaceMb =
@@ -4168,7 +4201,6 @@ async function attachCuaHost(host: CuaDriverHost): Promise<void> {
 
 async function startCuaHost(): Promise<void> {
   if ((process.platform !== "darwin" && process.platform !== "linux") || cuaDriverHost) return;
-  sweepOrphanedCuaDrivers();
   if (process.platform === "linux") {
     linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
       shortcutRegistry: globalShortcut,
@@ -4533,6 +4565,8 @@ async function handleDesktopSchemaTooNewRecovery(
       !hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
     choose: async ({ previousFailure }) => {
       const restoreFailed = previousFailure?.attempt === "restore";
+      if (previousFailure !== null)
+        productAnalytics.trackReliability({ code: "migration.recovery_failed" });
       const canInstallUpdate = canInstallUpdateFromRecovery();
       const releaseUrl = updateState.releaseUrl;
       const choices: Array<{
@@ -4623,6 +4657,8 @@ async function handleDesktopSchemaTooNewRecovery(
 
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
+  if (block.kind.startsWith("migration-"))
+    productAnalytics.trackReliability({ code: "migration.startup_blocked" });
 
   const diagnosticId =
     betaDiagnostics?.trackIssue("main", {
@@ -4899,14 +4935,17 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     env: {
       ...backendEnv(),
+      // Most of a backend boot is compiling its modules; Node keeps the result on disk.
+      ...backendCompileCacheEnv(process.env, backendCompileCacheDir()),
       // A file read stuck behind a macOS privacy prompt holds a libuv worker. More
       // workers keep DNS and crypto, and so remote authorization, moving meanwhile.
       UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || "16",
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
-      [DESKTOP_UPDATE_IPC_ENV]:
-        app.isPackaged && desktopFlavor === "remote" && process.platform === "darwin" ? "1" : "0",
+      [DESKTOP_UPDATE_IPC_ENV]: supportsDesktopUpdateControl(app.isPackaged, process.platform)
+        ? "1"
+        : "0",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
@@ -4932,18 +4971,20 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  let backendReachedReadiness = false;
+  attachBackendReliability(child, {
+    report: (issue) => productAnalytics.trackReliability(issue),
+  });
   attachDesktopUpdateControl(child, {
+    isPackaged: app.isPackaged,
+    platform: process.platform,
     isCurrentChild: () => backendProcess === child && !isQuitting,
-    supported: () =>
-      app.isPackaged &&
-      desktopFlavor === "remote" &&
-      process.platform === "darwin" &&
-      updaterConfigured,
+    supported: () => updaterConfigured,
     getState: () => updateState,
     getInstallBlockedReason: getUpdaterInstallBlockedReason,
     check: () => checkForUpdates("remote"),
     download: downloadAvailableUpdate,
-    install: installDownloadedUpdate,
+    install: () => installDownloadedUpdate("backend"),
   });
   cuaDriverHost?.resume();
   const backendBaseUrl = backendHttpUrl;
@@ -4994,6 +5035,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }),
     isCurrent: () => backendProcess === child,
     onReady: () => {
+      backendReachedReadiness = true;
       backendSupervision.recordReadiness();
       // Startup blocks are classified only before readiness; stop scanning
       // every later output chunk for the rest of this backend's life.
@@ -5003,6 +5045,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("error", (error) => {
+    if (!isQuitting) productAnalytics.trackReliability({ code: "backend.spawn_failed" });
     startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
@@ -5043,17 +5086,17 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
-      if (!expectedExit)
+      if (!expectedExit) {
+        productAnalytics.track({ event: "app.crash", outcome: "failed" });
+        productAnalytics.trackReliability({
+          code: backendReachedReadiness ? "backend.exit_after_ready" : "backend.exit_before_ready",
+        });
         trackBetaDiagnostics("app.child-process-crash", {
           kind: "crash",
           processType: "backend",
           reason,
-          // Guarded explicitly: on stable builds betaDiagnostics is null and the
-          // log file must not be touched at all.
-          logTail: betaDiagnostics
-            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-            : undefined,
         });
+      }
       scheduleBackendRestart(reason);
     });
   });
@@ -5171,12 +5214,18 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await shutdownBrowserServices({
-        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
-        closePages: () => browserManager.dispose(),
-        stopCapture: () => browserVaultCapture.dispose(),
-        clearKeys: () => browserVault.dispose(),
-      });
+      try {
+        await shutdownBrowserServices({
+          revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+          closePages: () => browserManager.dispose(),
+          stopCapture: () => browserVaultCapture.dispose(),
+          clearKeys: () => browserVault.dispose(),
+        });
+      } finally {
+        await getBetterwrightNetworkGuard(
+          session.fromPartition(BROWSER_SESSION_PARTITION),
+        ).dispose();
+      }
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
@@ -5360,6 +5409,11 @@ function registerIpcHandlers(): void {
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
   });
 
+  ipcMain.removeHandler(IPC.backendReady);
+  ipcMain.handle(IPC.backendReady, async () => {
+    await backendInitialWindowOpenInFlight;
+  });
+
   ipcMain.removeAllListeners(IPC.zoomFactor);
   ipcMain.on(IPC.zoomFactor, (event: IpcMainEvent) => {
     event.returnValue = event.sender.getZoomFactor();
@@ -5431,26 +5485,6 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.setTheme);
-  ipcMain.removeAllListeners(IPC.getSystemLanguages);
-  ipcMain.on(IPC.getSystemLanguages, (event: IpcMainEvent) => {
-    event.returnValue =
-      event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame
-        ? app.getPreferredSystemLanguages()
-        : [];
-  });
-  ipcMain.removeHandler(IPC.setLanguagePreference);
-  ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
-    applyDesktopLanguagePreference(rawPreference, {
-      flavor: desktopFlavor,
-      isTrustedSender:
-        event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
-      preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,
-      onPreference: (language) => {
-        setDesktopLanguagePreference(language);
-        if (app.isReady()) configureApplicationMenu();
-      },
-    });
-  });
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
@@ -6138,9 +6172,7 @@ function createWindow(): BrowserWindow {
       { role: "selectAll", enabled: params.editFlags.canSelectAll },
     );
 
-    const menu = Menu.buildFromTemplate(menuTemplate);
-    translateNativeMenuRoles(menu, APP_DISPLAY_NAME);
-    menu.popup({ window });
+    Menu.buildFromTemplate(menuTemplate).popup({ window });
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -6161,6 +6193,10 @@ function createWindow(): BrowserWindow {
     emitUpdateState();
   });
   window.once("ready-to-show", () => {
+    if (isMacUpdateShuttingDown()) {
+      updaterWindowToRestore = window;
+      return;
+    }
     // Preserve the original first-launch behavior, then respect the state saved
     // by subsequent closes. Normal bounds are restored before maximizing so the
     // native restore control returns to the user's last windowed size.
@@ -6273,6 +6309,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
+    if (!isQuitting && ["crashed", "oom", "abnormal-exit"].includes(details.reason)) {
+      productAnalytics.track({ event: "app.crash", outcome: "failed" });
+      productAnalytics.trackReliability({ code: "app.renderer_crashed" });
+    }
     // A pending quit ask has not started shutdown: an unexpected crash while
     // that ask is open still belongs in diagnostics, even though recovery quits.
     if (!isQuitting && details.reason !== "clean-exit")
@@ -6280,11 +6320,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
         kind: "crash",
         processType: "renderer",
         reason: details.reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
-          : undefined,
       });
 
     const response = rendererCrashPolicy.respondToCrash({
@@ -6485,7 +6520,32 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-async function bootstrap(): Promise<void> {
+// Restores the imported browser session's cookies. Never rejects: a failure or timeout
+// leaves the browser without saved cookies, as before.
+async function restoreBrowserSession(restore: BrowserSessionRestore): Promise<void> {
+  try {
+    let restoreTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        restore.initialize().finally(() => clearTimeout(restoreTimer)),
+        new Promise<never>((_, reject) => {
+          restoreTimer = setTimeout(
+            () => reject(new Error("Browser session restoration timed out.")),
+            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(restoreTimer);
+    }
+  } catch {
+    console.warn(
+      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
+    );
+  }
+}
+
+async function bootstrap(browserNetworkGuardReady: Promise<void>): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   if (!(await requireCurrentDesktopMigrationBundle())) {
     return;
@@ -6510,26 +6570,10 @@ async function bootstrap(): Promise<void> {
     createCookieSessionBackend(BROWSER_SESSION_PARTITION),
     browserOsKeyStore,
   );
-  try {
-    let restoreTimer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        browserSessionRestore.initialize().finally(() => clearTimeout(restoreTimer)),
-        new Promise<never>((_, reject) => {
-          restoreTimer = setTimeout(
-            () => reject(new Error("Browser session restoration timed out.")),
-            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      clearTimeout(restoreTimer);
-    }
-  } catch {
-    console.warn(
-      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
-    );
-  }
+  // Saved cookies feed neither the backend nor the window, so they are restored while the
+  // backend starts. Browser tools and the first window wait for them below, so no page in
+  // the browser partition loads before they are back.
+  const browserSessionRestored = restoreBrowserSession(browserSessionRestore);
 
   registerIpcHandlers();
   // Apply the saved keep-awake preference at launch, before any window reports.
@@ -6548,14 +6592,37 @@ async function bootstrap(): Promise<void> {
   });
   app.once("will-quit", disposeRemoteResources);
   writeDesktopLogHeader("bootstrap ipc handlers registered");
+  // Browser tools from the backend must not navigate before the network guard's proxy is
+  // installed or before saved cookies are back. If the guard fails, startup is fatal and
+  // the app quits, so tools stay held rather than run unguarded.
+  const browserToolsReady = browserNetworkGuardReady.then(
+    () => browserSessionRestored,
+    () => new Promise<void>(() => undefined),
+  );
   try {
-    await ensureBrowserHostPipeServer();
+    await ensureBrowserHostPipeServer(browserToolsReady);
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
   await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
+  void pruneBackendCompileCaches(backendCompileCacheDir());
+  if (process.platform === "darwin" || process.platform === "linux") {
+    // Reaps drivers left by a host that died. It feeds nothing above, so it no longer
+    // holds the backend's start behind a synchronous process listing.
+    void sweepOrphanedCuaDriversInBackground();
+  }
+
+  // The window's webviews are browser-partition pages: they must not load before the
+  // network guard is up and saved cookies are restored. A failed guard is reported by
+  // the whenReady handler, which quits.
+  try {
+    await browserNetworkGuardReady;
+  } catch {
+    return;
+  }
+  await browserSessionRestored;
 
   if (isDevelopment) {
     void waitForBackendWindowReady(backendHttpUrl)
@@ -6645,18 +6712,17 @@ app.on("before-quit", (event) => {
 if (hasSingleInstanceLock) {
   app
     .whenReady()
-    .then(() => {
-      writeDesktopLogHeader("app ready");
+    .then(async () => {
+      // Install the session-owned proxy before anything can create or navigate browser
+      // pages. It does not feed the backend, so bootstrap starts the backend meanwhile
+      // and holds the first window until the guard is up; a failure is awaited below.
+      const browserNetworkGuardReady = getBetterwrightNetworkGuard(
+        session.fromPartition(BROWSER_SESSION_PARTITION),
+      ).initialize();
+      // Observed below and in bootstrap; this keeps an early return from leaving it unobserved.
+      browserNetworkGuardReady.catch(() => undefined);
       productAnalytics.start();
       productAnalytics.track({ event: "app.open", outcome: "succeeded" });
-      productAnalytics.track({
-        event: "performance.startup",
-        outcome: "succeeded",
-        durationMs: Math.min(
-          86_400_000,
-          Math.round(performance.now() - PRODUCT_ANALYTICS_STARTUP_AT),
-        ),
-      });
       if (betaDiagnostics) {
         betaDiagnostics.start();
         const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
@@ -6700,8 +6766,18 @@ if (hasSingleInstanceLock) {
         throw error;
       }
       startBundleSwapWatcher();
-      void bootstrap().catch((error) => {
+      void bootstrap(browserNetworkGuardReady).catch((error) => {
         handleFatalStartupError("bootstrap", error);
+      });
+      await browserNetworkGuardReady;
+      writeDesktopLogHeader("app ready");
+      productAnalytics.track({
+        event: "performance.startup",
+        outcome: "succeeded",
+        durationMs: Math.min(
+          86_400_000,
+          Math.round(performance.now() - PRODUCT_ANALYTICS_STARTUP_AT),
+        ),
       });
 
       app.on("browser-window-blur", () => {
@@ -6716,7 +6792,6 @@ if (hasSingleInstanceLock) {
             kind: "crash",
             processType: details.type,
             reason: details.reason,
-            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
           });
         });
       }

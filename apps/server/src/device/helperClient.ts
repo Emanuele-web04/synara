@@ -185,11 +185,13 @@ export class HelperClient {
   private stderrTail = "";
   private exited = false;
   private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   private attachment: DeviceHelperAttachment | null = null;
   private frameServer: Server | null = null;
   private frameSocket: Socket | null = null;
   private frameSocketDirectory: string | null = null;
+  private frameSocketClosing: Promise<void> | null = null;
 
   constructor(private readonly options: HelperClientOptions) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -308,6 +310,7 @@ export class HelperClient {
     // believing the previous, now-dead attachment is still good.
     this.attachment = null;
     const result = asRecord(await this.request(HELPER_METHODS.attach, { udid }));
+    if (this.disposed) throw disposedError();
     const capabilities = asRecord(result.capabilities);
     const pixelWidth = readNumber(result, "pixelWidth", 0);
     const pixelHeight = readNumber(result, "pixelHeight", 0);
@@ -330,19 +333,6 @@ export class HelperClient {
     }
     this.attachment = attachment;
     return attachment;
-  }
-
-  /**
-   * Forget the cached attachment for a device.
-   *
-   * The helper's attachment holds a display descriptor tied to one boot of the
-   * simulator. Shutting the device down invalidates that descriptor, but the
-   * helper process outlives the simulator, so without this the next `attach`
-   * would short-circuit on the matching udid and every call would fail against
-   * a dead framebuffer.
-   */
-  invalidateAttachment(udid: string): void {
-    if (this.attachment?.udid === udid) this.attachment = null;
   }
 
   /**
@@ -380,12 +370,20 @@ export class HelperClient {
     await this.attach(udid);
 
     const directory = await mkdtemp(path.join(tmpdir(), "synara-device-frames-"));
+    if (this.disposed) {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      throw disposedError();
+    }
     const socketPath = path.join(directory, "frames.sock");
     this.frameSocketDirectory = directory;
 
     const server = createServer();
     this.frameServer = server;
     server.on("connection", (socket) => {
+      if (this.frameServer !== server) {
+        socket.destroy();
+        return;
+      }
       this.frameSocket = socket;
       const parser = new DeviceFramePrefixParser();
       socket.on("data", (chunk: Buffer) => {
@@ -421,15 +419,24 @@ export class HelperClient {
       });
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-
     try {
+      await new Promise<void>((resolve, reject) => {
+        const onClose = () => {
+          server.off("error", onError);
+          reject(disposedError());
+        };
+        const onError = (error: Error) => {
+          server.off("close", onClose);
+          reject(error);
+        };
+        server.once("close", onClose);
+        server.once("error", onError);
+        server.listen(socketPath, () => {
+          server.off("close", onClose);
+          server.off("error", onError);
+          resolve();
+        });
+      });
       await this.request(HELPER_METHODS.streamStart, { socketPath });
     } catch (error) {
       await this.closeFrameSocket();
@@ -444,9 +451,11 @@ export class HelperClient {
     await this.closeFrameSocket();
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposal !== null) return this.disposal;
     this.disposed = true;
-    await this.stopStream().catch(() => undefined);
+    // Terminal cleanup cannot wait for a control reply from the helper it is
+    // retiring. The helper tears down its native stream on SIGTERM.
     this.fail(disposedError());
     const child = this.process;
     this.process = null;
@@ -454,21 +463,28 @@ export class HelperClient {
     this.exited = true;
     child?.stdin.end();
     child?.kill("SIGTERM");
+    this.disposal = this.closeFrameSocket();
+    return this.disposal;
   }
 
   // ── Internals ──────────────────────────────────────────────────────
 
-  private async closeFrameSocket(): Promise<void> {
+  private closeFrameSocket(): Promise<void> {
+    if (this.frameSocketClosing !== null) return this.frameSocketClosing;
     this.frameSocket?.destroy();
     this.frameSocket = null;
     const server = this.frameServer;
     this.frameServer = null;
-    if (server) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
     const directory = this.frameSocketDirectory;
     this.frameSocketDirectory = null;
-    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    const closing = async () => {
+      if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    };
+    this.frameSocketClosing = closing().finally(() => {
+      this.frameSocketClosing = null;
+    });
+    return this.frameSocketClosing;
   }
 
   private consumeStdout(chunk: Buffer): void {

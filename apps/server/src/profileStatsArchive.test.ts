@@ -5,7 +5,11 @@
 // Exports: Vitest coverage for ProfileStatsArchive.
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { MessageId, ThreadId, TurnId } from "@synara/contracts";
+import { MessageId, ThreadId, TurnId, type AutomationRunStatus } from "@synara/contracts";
+import {
+  AUTOMATION_RUN_TRANSITIONS,
+  isTerminalAutomationRunStatus,
+} from "@synara/shared/automationRunLifecycle";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -20,7 +24,15 @@ import {
 } from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
-import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
+import {
+  ORCHESTRATION_EVENT_DELIVERY_TRANSITIONS,
+  PROVIDER_COMMAND_REACTOR_CONSUMER,
+  type OrchestrationEventDeliveryState,
+} from "./persistence/Services/OrchestrationEventDeliveries";
+import {
+  QUEUED_TURN_PROMOTION_TRANSITIONS,
+  type QueuedTurnPromotionState,
+} from "./persistence/Services/QueuedTurnPromotions";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import {
   aggregateThreadTurnSnapshotRows,
@@ -28,6 +40,8 @@ import {
   ProfileStatsArchive,
   ProfileStatsArchiveLive,
 } from "./profileStatsArchive";
+
+import { makeUsageAnalyticsQuery } from "./usageAnalyticsStats";
 
 interface DeletedCheckpointRefCall {
   readonly cwd: string;
@@ -674,7 +688,7 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
-  it("leaves Claude results of automation dispatches out of the archive", async () => {
+  it("retains automated Claude tokens for Analytics while keeping Profile user-only", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -706,15 +720,29 @@ describe("ProfileStatsArchive", () => {
             100, '2026-06-13T18:45:00Z')
         `;
 
+        const analytics = yield* makeUsageAnalyticsQuery();
+        const window = { from: "2026-06-13T00:00:00.000Z", to: "2026-06-14T00:00:00.000Z" };
         const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        const automatedTokens = (yield* analytics.getUsageAnalytics(window)).tokens.filter(
+          (row) => row.origin === "automation",
+        );
+        expect(automatedTokens).toEqual([
+          expect.objectContaining({
+            provider: "claudeAgent",
+            tokens: 7_000,
+            projectId: "project-archive",
+          }),
+        ]);
         yield* archive.purgeThreadWithStatsSnapshot({
           threadId: ThreadId.makeUnsafe("thread-purge"),
         });
 
         expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
         expect(
-          yield* sql`SELECT tokens FROM profile_stats_deleted_tokens WHERE tokens = 7000`,
-        ).toEqual([]);
+          (yield* analytics.getUsageAnalytics(window)).tokens.filter(
+            (row) => row.origin === "automation",
+          ),
+        ).toEqual(automatedTokens);
       }),
     );
   });
@@ -1083,6 +1111,21 @@ describe("ProfileStatsArchive", () => {
         `;
         expect(retained[0]).toEqual({ threads: 1, deliveries: 1 });
 
+        // The fence's literal state sets must match the lifecycles: any delivery that can
+        // still change is recovery evidence and keeps the thread.
+        for (const state of Object.keys(
+          ORCHESTRATION_EVENT_DELIVERY_TRANSITIONS,
+        ) as OrchestrationEventDeliveryState[]) {
+          yield* sql`
+            UPDATE orchestration_event_deliveries SET state = ${state}
+            WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+              AND event_sequence = ${sourceSequence}
+          `;
+          expect(yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }), state).toBe(
+            ORCHESTRATION_EVENT_DELIVERY_TRANSITIONS[state].length > 0,
+          );
+        }
+
         yield* sql`
           UPDATE orchestration_event_deliveries
           SET state = 'succeeded', completed_at = '2026-07-14T00:00:01.000Z',
@@ -1101,6 +1144,22 @@ describe("ProfileStatsArchive", () => {
             '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:01.000Z',
             '2026-07-14T00:00:01.000Z'
           )
+        `;
+
+        for (const state of Object.keys(
+          QUEUED_TURN_PROMOTION_TRANSITIONS,
+        ) as QueuedTurnPromotionState[]) {
+          yield* sql`
+            UPDATE queued_turn_promotions SET state = ${state}
+            WHERE queued_event_sequence = ${sourceSequence}
+          `;
+          expect(yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }), state).toBe(
+            QUEUED_TURN_PROMOTION_TRANSITIONS[state].length > 0,
+          );
+        }
+        yield* sql`
+          UPDATE queued_turn_promotions SET state = 'promoted'
+          WHERE queued_event_sequence = ${sourceSequence}
         `;
 
         expect(yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" })).toBe(false);
@@ -1624,6 +1683,23 @@ describe("ProfileStatsArchive", () => {
             '2026-06-13T09:00:10.000Z'
           )
         `;
+        // One extra run per status pins the purge's literal terminal set to the shared
+        // automation run lifecycle: active runs are interrupted, settled runs are left alone.
+        const sweptStatuses = Object.keys(AUTOMATION_RUN_TRANSITIONS) as AutomationRunStatus[];
+        for (const status of sweptStatuses) {
+          yield* sql`
+            INSERT INTO automation_runs (
+              run_id, automation_id, project_id, thread_id, turn_id, trigger_type, status,
+              scheduled_for, permission_snapshot_json, created_at, updated_at
+            )
+            VALUES (
+              ${`run-automation-purge-${status}`}, 'automation-purge', 'project-automation-purge',
+              'thread-automation-purge', NULL, 'manual', ${status},
+              '2026-06-13T09:00:00.000Z', '{}',
+              '2026-06-13T09:00:00.000Z', '2026-06-13T09:00:10.000Z'
+            )
+          `;
+        }
 
         const purged = yield* archive.purgeThreadWithStatsSnapshot({
           threadId: "thread-automation-purge",
@@ -1672,6 +1748,14 @@ describe("ProfileStatsArchive", () => {
           severity: "warning",
           summary: "Automation run was interrupted because its thread was deleted.",
         });
+        for (const status of sweptStatuses) {
+          const swept = yield* sql<{ readonly status: string }>`
+            SELECT status FROM automation_runs WHERE run_id = ${`run-automation-purge-${status}`}
+          `;
+          expect(swept[0]?.status, status).toBe(
+            isTerminalAutomationRunStatus(status) ? status : "interrupted",
+          );
+        }
       }),
     );
   });

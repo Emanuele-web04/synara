@@ -62,6 +62,7 @@ describe("OrchestrationReactor", () => {
               () => Effect.sync(() => stopped.push("provider-command-reactor")),
             ),
             drain: Effect.void,
+            withRestartOrphanedThread: () => Effect.die("startup cleanup is not used in this test"),
             listBlockingDeliveries: () => Effect.succeed([]),
             reconcileDelivery: () => Effect.succeed(null),
             regenerateThreadTitle: () => Effect.succeed({ status: "no-context", title: null }),

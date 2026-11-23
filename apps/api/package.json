@@ -34,6 +34,6 @@
     "drizzle-kit": "^0.31.10",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "^4.122.0"
+    "wrangler": "4.159.0"
   }
 }

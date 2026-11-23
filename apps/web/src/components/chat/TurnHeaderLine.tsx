@@ -51,7 +51,8 @@ export function TurnHeaderLine(
             {props.nowLabel ?? <LiveElapsedTimer startedAt={props.startedAt} />}
           </span>
         </div>
-        <div aria-hidden className="h-px w-full bg-border" />
+        {/* Only "Working for" closes with a hairline; a resumed turn's line stands alone. */}
+        {resumedBy ? null : <div aria-hidden className="h-px w-full bg-border" />}
       </div>
     );
   }

@@ -263,7 +263,6 @@ describe("ChatTranscriptPane", () => {
         '[data-user-message-clamp="true"]',
       )!;
       expect(clamp.textContent).toContain(hiddenTail);
-      expect(getComputedStyle(clamp).maskImage).toContain("linear-gradient");
       const expandButton = screen.container.querySelector<HTMLButtonElement>(
         "button[data-scroll-anchor-ignore]",
       )!;

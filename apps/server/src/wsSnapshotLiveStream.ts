@@ -177,11 +177,10 @@ export function makeResnapshotEscalationTracker(): {
  * Attach live delivery first, capture a snapshot and durable high-water fence,
  * replay the exact gap, then continue with strictly newer live events.
  *
- * When `resumeFromSequence` is provided and the gap to the durable head is
- * non-negative and fits 128 events and one MiB, the snapshot is skipped entirely
- * and only the gap is replayed. A negative gap (client cursor ahead of the
- * server head — restored backup or reset database) or an overflowing gap is
- * never trusted: both fall back to the full snapshot path. With `batchReplay`
+ * When `resumeFromSequence` is provided and the replay fits 128 events and one
+ * MiB, the snapshot is skipped. A scoped stream can check its own event count
+ * when the global gap exceeds the event limit. A cursor ahead of the server
+ * head or an overflowing replay falls back to the full snapshot. With `batchReplay`
  * the resume gap arrives as a single `replay` item (omitted when empty) so the
  * client can apply the whole catch-up at once; the snapshot path is unchanged.
  */
@@ -200,6 +199,12 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   ) => Stream.Stream<OrchestrationEvent, E>;
   readonly resumeFromSequence?: number | undefined;
   readonly batchReplay?: boolean | undefined;
+  /** Check a scoped replay's event budget when the global distance exceeds it. */
+  readonly resumeReplayFits?: (
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<boolean, E>;
   /**
    * Guards the resume shortcut against a subject that no longer exists. A hard
    * purge removes a thread's rows while unrelated events keep the journal head
@@ -279,11 +284,20 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         // full snapshot instead. Sequences themselves are never reused
         // (`sequence INTEGER PRIMARY KEY AUTOINCREMENT`), so a non-negative
         // gap cannot silently alias deleted history onto new events.
-        const subjectExists =
-          input.resumeSubjectExists === undefined
-            ? true
-            : yield* duringLive(input.resumeSubjectExists);
-        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_RESUME_REPLAY_LIMIT) {
+        const canAttemptResume =
+          resumeGap >= 0 &&
+          (input.resumeSubjectExists === undefined ||
+            (yield* duringLive(input.resumeSubjectExists))) &&
+          (resumeGap <= ORCHESTRATION_RESUME_REPLAY_LIMIT ||
+            (input.resumeReplayFits !== undefined &&
+              (yield* duringLive(
+                input.resumeReplayFits(
+                  resumeFromSequence,
+                  highWaterSequence,
+                  ORCHESTRATION_RESUME_REPLAY_LIMIT,
+                ),
+              ))));
+        if (canAttemptResume) {
           yield* bufferedLive.retainAfter((event) => event.sequence > highWaterSequence, false);
           const resumeRows: Array<OrchestrationEvent> = [];
           const releaseResumeRows = () => {

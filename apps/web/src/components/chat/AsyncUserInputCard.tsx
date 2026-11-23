@@ -110,8 +110,10 @@ export function AsyncUserInputCard({
             <dl className="space-y-3 rounded-xl border border-border p-3.5 text-ui leading-snug">
               {questions.map((question, index) => (
                 <div key={question.id}>
-                  <dt className="font-medium">{question.question}</dt>
-                  <dd className="whitespace-pre-wrap text-muted-foreground">
+                  <dt className="font-medium" dir="auto">
+                    {question.question}
+                  </dt>
+                  <dd className="whitespace-pre-wrap text-muted-foreground" dir="auto">
                     {acceptedAnswers[index]}
                   </dd>
                 </div>
@@ -148,6 +150,7 @@ export function AsyncUserInputCard({
                 <div className="mt-3 space-y-2">
                   <Textarea
                     aria-label={t("chat:answer2", { value0: activeQuestion.question })}
+                    dir="auto"
                     value={progress.customAnswer}
                     disabled={disabled}
                     rows={2}

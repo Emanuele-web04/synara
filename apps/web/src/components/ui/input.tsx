@@ -39,6 +39,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const nativeInput = nativeInputProp ?? false;
   const inputClassName = cn(
     "font-system-ui h-full w-full min-w-0 rounded-[inherit] border-0 bg-transparent px-3 py-1.5 text-ui leading-normal outline-none placeholder:text-muted-foreground/72 [transition:background-color_5000000s_ease-in-out_0s] sm:text-ui",
+    // The ring sits on the field itself: the wrapper's border tint alone reads under 3:1.
+    !unstyled &&
+      "focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)] focus-visible:ring-inset",
     size === "sm" && "px-2.5 py-1 text-ui-sm sm:text-ui-sm",
     size === "lg" && "px-3.5 py-2",
     shape === "capsule" && "px-4",

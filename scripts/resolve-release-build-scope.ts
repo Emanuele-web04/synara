@@ -6,12 +6,15 @@ import { resolveReleaseBuildScope } from "./lib/release-build-scope.ts";
 const flavor = process.env.DESKTOP_FLAVOR || "production";
 if (flavor !== "production" && flavor !== "beta" && flavor !== "remote")
   throw new Error(`Unsupported release flavor: ${flavor}`);
+const lane = process.env.RELEASE_LANE || "clean";
+if (lane !== "clean" && lane !== "bridge") throw new Error(`Unsupported release lane: ${lane}`);
 const scope = resolveReleaseBuildScope(
   process.env.BUILD_PLATFORM || "all",
   process.env.BUILD_STAGE || "artifact",
   process.env.PUBLISH_RELEASE === "true",
   process.env.CUA_BENCHMARK_BASELINE || "",
   flavor,
+  lane,
 );
 if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT is required.");
 for (const [key, value] of Object.entries(scope))

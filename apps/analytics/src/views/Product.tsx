@@ -1,9 +1,10 @@
 // FILE: Product.tsx
-// Purpose: Aggregate the explicitly enabled product event stream without exposing event-level rows.
+// Purpose: Aggregate permitted product activity and mature cohorts without event-level drilldowns.
 
 import { useMemo, useState } from "react";
 
 import { api, type ProductFilters } from "../api";
+import { TurnBreakdownTable } from "../TurnBreakdownTable";
 import { PRODUCT_SECTIONS, type ProductSection } from "../filters";
 import codexLogo from "../assets/providers/codex.svg?no-inline";
 import claudeLogo from "../assets/providers/claude.svg?no-inline";
@@ -16,6 +17,7 @@ import {
   EmptyLine,
   ErrorState,
   Loading,
+  RelTime,
   Stat,
   TableWrap,
   useApiData,
@@ -23,6 +25,7 @@ import {
 } from "../components";
 
 const DAY_MS = 86_400_000;
+const observationLabel = (value: string) => `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
 const today = () => new Date().toISOString().slice(0, 10);
 const compact = (value: number) =>
   new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -65,6 +68,22 @@ const reasonLabels: Record<string, string> = {
   timeout: "Timed out",
   invalid_code: "Invalid pairing code",
   rejected: "Rejected",
+  other: "Other",
+};
+const turnFailureLabels: Record<string, string> = {
+  edge_blocked: "Network edge blocked (Cloudflare)",
+  auth: "Not signed in",
+  account: "Account issue",
+  billing: "Billing",
+  rate_limit: "Rate limited",
+  usage_limit: "Usage limit",
+  overloaded: "Provider overloaded",
+  server_error: "Provider server error",
+  network: "Connection lost",
+  invalid_request: "Request rejected",
+  model_unavailable: "Model unavailable",
+  context_limit: "Context full",
+  output_limit: "Output limit",
   other: "Other",
 };
 const eventLabels: Record<string, string> = {
@@ -291,40 +310,185 @@ export function Product({
               {data.activeUsers && (
                 <section className="section" aria-labelledby="product-active">
                   <h3 id="product-active" className="heading-20 section-head">
-                    Active users
+                    Active installations
                   </h3>
                   <p className="chart-caption">
-                    People seen in the last 24 hours, 7 days and 30 days, ending now; the date range
-                    does not apply. A signed-in person counts once across their devices; without an
-                    account each installation counts. Engaged installations sent at least one chat
-                    request.
+                    Installations seen in the last 24 hours, 7 days and 30 days, ending now; the
+                    date range does not apply. Engaged installations attempted at least one chat
+                    request, including failed requests. This does not measure successful uses.
                   </p>
                   <div className="stat-strip stat-strip--four">
                     <Stat
-                      label="Daily active"
-                      value={compact(data.activeUsers.peopleDay ?? data.activeUsers.day)}
-                      detail={`${compact(data.activeUsers.day)} installations`}
+                      label="Daily active installations"
+                      value={compact(data.activeUsers.day)}
+                      detail="Last 24 hours"
                     />
                     <Stat
-                      label="Weekly active"
-                      value={compact(data.activeUsers.peopleWeek ?? data.activeUsers.week)}
-                      detail={`${compact(data.activeUsers.week)} installations`}
+                      label="Weekly active installations"
+                      value={compact(data.activeUsers.week)}
+                      detail="Last 7 days"
                     />
                     <Stat
-                      label="Monthly active"
-                      value={compact(data.activeUsers.peopleMonth ?? data.activeUsers.month)}
-                      detail={`${compact(data.activeUsers.month)} installations · ${compact(
-                        data.activeUsers.signedInMonth ?? 0,
-                      )} signed in`}
+                      label="Monthly active installations"
+                      value={compact(data.activeUsers.month)}
+                      detail="Last 30 days"
                     />
                     <Stat
-                      label="Engaged this week"
+                      label="Engaged installations this week"
                       value={compact(data.activeUsers.engagedWeek)}
                       detail={`${compact(data.activeUsers.engagedDay)} today · ${compact(
                         data.activeUsers.engagedMonth,
                       )} this month`}
                     />
                   </div>
+                </section>
+              )}
+              {data.cohorts && (
+                <section className="section" aria-labelledby="product-cohorts">
+                  <h3 id="product-cohorts" className="heading-20 section-head">
+                    Reporting installation cohorts
+                  </h3>
+                  <p className="chart-caption">
+                    Last 90 complete UTC cohort days, independent of the date range above; channel
+                    and surface filters apply. New reporting installations include measurement
+                    adoption, resets and reinstalls. They are not downloads or people. Return
+                    windows are days 7–13 and 30–36 after entry. Rates include only cohorts past the
+                    full window plus seven days for delayed uploads. Non-return means no observed
+                    report in that window, not an uninstall or subscription cancellation. Opt-outs
+                    and offline devices can look inactive.
+                  </p>
+                  <div className="stat-strip">
+                    <Stat
+                      label="New reporting installations"
+                      value={compact(data.cohorts.newReportingInstallations)}
+                      detail="First cohort report · last 90 complete UTC days"
+                    />
+                    <Stat
+                      label="Week 1 return"
+                      value={
+                        data.cohorts.week1.ratePct === null
+                          ? "Not mature"
+                          : `${data.cohorts.week1.ratePct}%`
+                      }
+                      detail={`${compact(data.cohorts.week1.returned)} returns / ${compact(data.cohorts.week1.entries)} mature entries`}
+                    />
+                    <Stat
+                      label="Month 1 return"
+                      value={
+                        data.cohorts.month1.ratePct === null
+                          ? "Not mature"
+                          : `${data.cohorts.month1.ratePct}%`
+                      }
+                      detail={`${compact(data.cohorts.month1.returned)} returns / ${compact(data.cohorts.month1.entries)} mature entries`}
+                    />
+                  </div>
+                  {data.cohorts.rows.length === 0 ? (
+                    <EmptyLine text="No reporting cohorts yet. Existing activity is not backfilled into retention." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Cohort entry · UTC</th>
+                            <th scope="col">New reporting installations</th>
+                            <th scope="col">Week 1 returns</th>
+                            <th scope="col">Month 1 returns</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.cohorts.rows.map((row) => (
+                            <tr key={row.day}>
+                              <td>{dayLabel(row.day)}</td>
+                              <td>{row.entries.toLocaleString()}</td>
+                              <td>
+                                {row.week1Mature
+                                  ? `${row.week1Returns.toLocaleString()} / ${row.entries.toLocaleString()}`
+                                  : "Pending maturity"}
+                              </td>
+                              <td>
+                                {row.month1Mature
+                                  ? `${row.month1Returns.toLocaleString()} / ${row.entries.toLocaleString()}`
+                                  : "Pending maturity"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
+              {data.installerDownloads && (
+                <section className="section" aria-labelledby="product-downloads">
+                  <h3 id="product-downloads" className="heading-20 section-head">
+                    Installer downloads
+                  </h3>
+                  {data.installerDownloads.status === "unsupported_store" ? (
+                    <EmptyLine text="App Store download counts are unavailable here. They require the app owner's store analytics; app opens do not measure downloads." />
+                  ) : (
+                    <>
+                      <p className="chart-caption">
+                        Public GitHub counters for desktop .dmg, .exe and .AppImage assets,
+                        including repeat downloads, updaters and bots. These are not unique people
+                        or installations. App Store downloads are not included.
+                      </p>
+                      <div className="stat-strip">
+                        <Stat
+                          label="Latest GitHub installer counter"
+                          value={data.installerDownloads.total?.toLocaleString() ?? "—"}
+                          detail={
+                            data.installerDownloads.observedAt
+                              ? `Observed ${observationLabel(data.installerDownloads.observedAt)}; date range does not apply`
+                              : "Awaiting the first successful source snapshot"
+                          }
+                        />
+                      </div>
+                      <p className="chart-caption">
+                        History shows increases observed between successful source snapshots, with
+                        the ending snapshot in this date range. These are not exact daily downloads.
+                        The first snapshot is a baseline. Deleted, reset, reclassified or newly
+                        discovered older assets leave coverage unknown; the counter can fall when
+                        assets disappear. History is normally kept for 90 days; source outages can
+                        delay cleanup.
+                      </p>
+                      {data.installerDownloads.history.length === 0 ? (
+                        <EmptyLine text="No successful source snapshots end in this range." />
+                      ) : (
+                        <TableWrap>
+                          <table className="data">
+                            <thead>
+                              <tr>
+                                <th scope="col">Previous observation</th>
+                                <th scope="col">Observation</th>
+                                <th scope="col" className="num">
+                                  Source counter
+                                </th>
+                                <th scope="col" className="num">
+                                  Observed increase
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {data.installerDownloads.history.map((row) => (
+                                <tr key={row.to}>
+                                  <td>{row.from ? observationLabel(row.from) : "Baseline"}</td>
+                                  <td>{observationLabel(row.to)}</td>
+                                  <td className="num">{row.total.toLocaleString()}</td>
+                                  <td className="num">
+                                    {row.downloads === null
+                                      ? row.from
+                                        ? "Unknown coverage"
+                                        : "Baseline"
+                                      : row.downloads.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </TableWrap>
+                      )}
+                    </>
+                  )}
                 </section>
               )}
               <div className="stat-strip">
@@ -354,7 +518,7 @@ export function Product({
                 ) : (
                   <EChart
                     height={250}
-                    ariaLabel="Daily opt-in product events"
+                    ariaLabel="Daily product events"
                     option={{
                       ...chartChrome(theme),
                       xAxis: {
@@ -506,7 +670,44 @@ export function Product({
           )}
           {section === "providers" && (
             <>
-              <section className="product-hero" aria-label="Provider comparison">
+              {data.hostExecutions && (
+                <section className="section" aria-labelledby="host-executions">
+                  <h2 id="host-executions" className="heading-20 section-head">
+                    Host executions by model and effort
+                  </h2>
+                  <p className="chart-caption">
+                    Product-consented snapshots of completed UTC days from execution hosts,
+                    including connected-phone, automation and agent work. The surface filter does
+                    not identify where work began. These are separate from renderer observations
+                    below and billing totals. Offline gaps, late projection updates and capped
+                    windows can omit work.
+                  </p>
+                  <div className="stat-strip stat-strip--four">
+                    <Stat
+                      label="Daily host reports"
+                      value={compact(data.hostExecutions.coverage.reportWindows)}
+                      detail={`${compact(data.hostExecutions.coverage.partialWindows)} start after a sharing-resume cutoff`}
+                    />
+                    <Stat
+                      label="Captured eligible turns"
+                      value={compact(data.hostExecutions.coverage.includedTurns)}
+                      detail={`${compact(data.hostExecutions.coverage.eligibleTurns)} present at capture · ${compact(data.hostExecutions.coverage.eligibleTurns - data.hostExecutions.coverage.includedTurns)} omitted by limits`}
+                    />
+                    <Stat
+                      label="Missing completion times"
+                      value={compact(data.hostExecutions.coverage.missingCompletionTimes)}
+                      detail="Excluded terminal records, grouped by request day"
+                    />
+                    <Stat
+                      label="Limited token measurements"
+                      value={compact(data.hostExecutions.coverage.tokenTruncatedTurns)}
+                      detail={`${compact(data.hostExecutions.coverage.cappedMeasurements)} field aggregates exceeded limits`}
+                    />
+                  </div>
+                  <TurnBreakdownTable rows={data.hostExecutions.rows} />
+                </section>
+              )}
+              <section className="product-hero" aria-label="Renderer observation comparison">
                 <div className="product-headlines">
                   {["claude", "codex"].map((provider) => {
                     const count =
@@ -762,6 +963,59 @@ export function Product({
                               <td>{surfaceLabel(row.surface)}</td>
                               <td className="num">{row.events.toLocaleString()}</td>
                               <td className="num">{row.installations.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
+              {data.turnFailures && (
+                <section className="section" aria-labelledby="product-turn-failures">
+                  <h2 id="product-turn-failures" className="heading-20 section-head">
+                    Why turns failed
+                  </h2>
+                  {data.turnFailures.length === 0 ? (
+                    <EmptyLine text="No failed or error-interrupted turns in this range." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Provider</th>
+                            <th scope="col">Cause</th>
+                            <th scope="col" className="num">
+                              HTTP
+                            </th>
+                            <th scope="col">Ended as</th>
+                            <th scope="col">Channel</th>
+                            <th scope="col" className="num">
+                              Turns
+                            </th>
+                            <th scope="col" className="num">
+                              Installations
+                            </th>
+                            <th scope="col">Last seen</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.turnFailures.map((row) => (
+                            <tr
+                              key={`${row.provider}:${row.failure}:${row.httpStatus}:${row.outcome}:${row.channel}`}
+                            >
+                              <td>
+                                <ProviderLabel provider={row.provider ?? "unknown"} />
+                              </td>
+                              <td>{turnFailureLabels[row.failure] ?? row.failure}</td>
+                              <td className="num">{row.httpStatus ?? "—"}</td>
+                              <td>{row.outcome === "cancelled" ? "Interrupted" : "Failed"}</td>
+                              <td>{row.channel}</td>
+                              <td className="num">{row.turns.toLocaleString()}</td>
+                              <td className="num">{row.installations.toLocaleString()}</td>
+                              <td>
+                                <RelTime ts={row.lastSeen} />
+                              </td>
                             </tr>
                           ))}
                         </tbody>

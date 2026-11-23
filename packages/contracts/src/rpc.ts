@@ -371,6 +371,8 @@ import {
   ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
+  ServerGenerateComposerPredictionInput,
+  ServerGenerateComposerPredictionResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -420,6 +422,8 @@ import {
   StatsGetProfileTokenStatsResult,
   StatsGetRecapInput,
   StatsGetRecapResult,
+  StatsGetUsageAnalyticsInput,
+  StatsGetUsageAnalyticsResult,
 } from "./stats";
 import {
   HostsEnrollmentResult,
@@ -1622,6 +1626,12 @@ export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
   error: WsRpcError,
 });
 
+export const WsStatsGetUsageAnalyticsRpc = Rpc.make(WS_METHODS.statsGetUsageAnalytics, {
+  payload: StatsGetUsageAnalyticsInput,
+  success: StatsGetUsageAnalyticsResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
@@ -1651,6 +1661,15 @@ export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerate
   success: ServerGenerateThreadRecapResult,
   error: WsRpcError,
 });
+
+export const WsServerGenerateComposerPredictionRpc = Rpc.make(
+  WS_METHODS.serverGenerateComposerPrediction,
+  {
+    payload: ServerGenerateComposerPredictionInput,
+    success: ServerGenerateComposerPredictionResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsServerGenerateAutomationIntentRpc = Rpc.make(
   WS_METHODS.serverGenerateAutomationIntent,
@@ -2446,11 +2465,13 @@ export type WsFeatureRpc =
   | typeof WsStatsGetProfileStatsRpc
   | typeof WsStatsGetProfileTokenStatsRpc
   | typeof WsStatsGetRecapRpc
+  | typeof WsStatsGetUsageAnalyticsRpc
   | typeof WsServerGetDiagnosticsRpc
   | typeof WsServerReadThreadDiagnosticsRpc
   | typeof WsServerPrewarmVoiceRpc
   | typeof WsServerTranscribeVoiceRpc
   | typeof WsServerGenerateThreadRecapRpc
+  | typeof WsServerGenerateComposerPredictionRpc
   | typeof WsServerGenerateAutomationIntentRpc
   | typeof WsServerUpsertKeybindingRpc
   | typeof WsServerEditKeybindingsRpc
@@ -2651,11 +2672,13 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsStatsGetRecapRpc,
+  WsStatsGetUsageAnalyticsRpc,
   WsServerGetDiagnosticsRpc,
   WsServerReadThreadDiagnosticsRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
+  WsServerGenerateComposerPredictionRpc,
   WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
   WsServerEditKeybindingsRpc,

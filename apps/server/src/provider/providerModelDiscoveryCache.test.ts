@@ -251,6 +251,32 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(calls).toBe(2);
   });
 
+  it("does not reuse a catalog after the provider config file changes", async () => {
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
+    const renamed = { ...CATALOG, models: [{ slug: "renamed-model", name: "Renamed model" }] };
+    let calls = 0;
+    const discover = Effect.sync(() => {
+      calls += 1;
+      return calls === 1 ? CATALOG : renamed;
+    });
+
+    // Same key, same fingerprint: the fresh window still serves the cache.
+    await Effect.runPromise(cache.lookup({ ...KEY, configFingerprint: "config-v1" }, discover));
+    const cachedRead = await Effect.runPromise(
+      cache.lookup({ ...KEY, configFingerprint: "config-v1" }, discover),
+    );
+    expect(cachedRead.cached).toBe(true);
+    expect(calls).toBe(1);
+
+    // The config file changed, so a new fingerprint must miss and rediscover.
+    const refreshed = await Effect.runPromise(
+      cache.lookup({ ...KEY, configFingerprint: "config-v2" }, discover),
+    );
+    expect(refreshed.models).toEqual(renamed.models);
+    expect(refreshed.cached).toBe(false);
+    expect(calls).toBe(2);
+  });
+
   it("replays a failure briefly instead of re-spawning discovery", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({

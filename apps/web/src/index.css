@@ -411,6 +411,299 @@
   }
 }
 
+/* Decorative scene motion: dialog hero bands, the first-run agent ring, and the app
+   tour previews. Slow transform/opacity loops that read as alive, never as loading.
+   Every class rests on the element's own style under reduced motion, so one-shot
+   entrances fill `backwards` and loops that reveal something keep it visible at rest;
+   travelling packets and halos rest hidden. */
+@keyframes scene-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.scene-float {
+  animation: scene-float 6s ease-in-out infinite;
+}
+
+/* A dot travelling along a link: set --scene-travel-x / --scene-travel-y on the element. */
+@keyframes scene-packet {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+
+  15% {
+    opacity: 1;
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+
+  82%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+}
+
+.scene-packet {
+  opacity: 0;
+  animation: scene-packet 2.8s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+/* A soft ring that swells and fades around something live. */
+@keyframes scene-halo {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.94);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+}
+
+.scene-halo {
+  opacity: 0;
+  animation: scene-halo 2.8s ease-out infinite;
+}
+
+/* One-shot rise into place; stagger with animation-delay. */
+@keyframes scene-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+}
+
+.scene-rise {
+  animation: scene-rise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.scene-fade-in {
+  animation: scene-fade-in 700ms ease-out backwards;
+}
+
+/* Strokes drawn from their start: give the path or line pathLength="1". */
+@keyframes scene-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+.scene-draw {
+  stroke-dasharray: 1;
+  animation: scene-draw 800ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scene-spin-slow {
+  animation: scene-spin 90s linear infinite;
+}
+
+/* Three items stacked in one slot take turns; delay each by a third of the cycle. */
+@keyframes scene-cycle {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  6%,
+  30% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  36%,
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.scene-cycle {
+  opacity: 0;
+  animation: scene-cycle 4.8s ease-in-out infinite;
+}
+
+/* A toggle switching on once: the knob slides in, the track takes its colour. */
+@keyframes scene-switch-knob {
+  from {
+    transform: translateX(calc(-1 * var(--scene-switch-travel, 9px)));
+  }
+}
+
+@keyframes scene-switch-track {
+  from {
+    background-color: color-mix(in srgb, var(--foreground) 18%, transparent);
+  }
+}
+
+.scene-switch-knob {
+  animation: scene-switch-knob 360ms cubic-bezier(0.2, 0.8, 0.2, 1) 900ms backwards;
+}
+
+.scene-switch-track {
+  animation: scene-switch-track 360ms ease-out 900ms backwards;
+}
+
+/* A key pressed at the start of each AppSnap loop. */
+@keyframes scene-keypress {
+  0%,
+  14%,
+  100% {
+    transform: translateY(0);
+  }
+
+  4%,
+  10% {
+    transform: translateY(2px);
+  }
+}
+
+.scene-keypress {
+  animation: scene-keypress 4.2s ease-in-out infinite;
+}
+
+/* The snap frame, then its "added" chip: appear, hold, fade, on the keypress loop. */
+@keyframes scene-snap-frame {
+  0%,
+  12% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+
+  22%,
+  74% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@keyframes scene-snap-chip {
+  0%,
+  32% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+
+  42%,
+  74% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.scene-snap-frame {
+  animation: scene-snap-frame 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.scene-snap-chip {
+  animation: scene-snap-chip 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+/* A status that settles: something running flips to done on a slow loop. */
+@keyframes scene-settle-out {
+  0%,
+  46% {
+    opacity: 1;
+  }
+
+  54%,
+  92% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes scene-settle-in {
+  0%,
+  46% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  54%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.scene-settle-out {
+  animation: scene-settle-out 5s ease-in-out infinite;
+}
+
+.scene-settle-in {
+  opacity: 0;
+  animation: scene-settle-in 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-float,
+  .scene-packet,
+  .scene-halo,
+  .scene-rise,
+  .scene-fade-in,
+  .scene-draw,
+  .scene-spin-slow,
+  .scene-cycle,
+  .scene-switch-knob,
+  .scene-switch-track,
+  .scene-keypress,
+  .scene-snap-frame,
+  .scene-snap-chip,
+  .scene-settle-out,
+  .scene-settle-in {
+    animation: none;
+  }
+
+  /* Reduced motion keeps the first of a cycling slot. */
+  .scene-cycle:first-child {
+    opacity: 1;
+  }
+}
+
 /* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
    so the transcript can stay lightweight while the row appears less abruptly. */
 @keyframes chat-message-send-enter {
@@ -869,7 +1162,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown ol,
 .chat-markdown blockquote,
 .chat-markdown pre,
-.chat-markdown table {
+.chat-markdown .chat-markdown-table {
   margin: 0.65rem 0;
 }
 
@@ -921,9 +1214,9 @@ label:has(> select#reasoning-effort) select {
   cursor: pointer;
 }
 
-/* Transcript markdown opts into native bidi ownership per prose block. Keep
-   list gutters on both inline edges so mixed-direction items cannot push a
-   checkbox or marker outside the message bubble. */
+/* Transcript markdown takes one base direction for the whole message, so lists,
+   blockquotes, and tables inherit it. Keep list gutters on both inline edges so
+   a checkbox or marker cannot be pushed outside the message bubble. */
 .chat-markdown[data-direction-mode="auto-blocks"] ul,
 .chat-markdown[data-direction-mode="auto-blocks"] ol {
   padding-inline: 1.25rem;
@@ -1115,7 +1408,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown--user ol,
 .chat-markdown--user blockquote,
 .chat-markdown--user pre,
-.chat-markdown--user table {
+.chat-markdown--user .chat-markdown-table {
   margin: 0.45rem 0;
 }
 
@@ -1643,7 +1936,7 @@ label:has(> select#reasoning-effort) select {
 .editor-markdown-preview .chat-markdown ol,
 .editor-markdown-preview .chat-markdown blockquote,
 .editor-markdown-preview .chat-markdown pre,
-.editor-markdown-preview .chat-markdown table {
+.editor-markdown-preview .chat-markdown .chat-markdown-table {
   margin: 0.85rem 0;
 }
 
@@ -2009,6 +2302,35 @@ label:has(> select#reasoning-effort) select {
   background-size: 200% 100%;
   animation: chat-generated-image-shimmer 1.6s ease-in-out infinite;
   color: var(--muted-foreground);
+}
+
+/* Local video played inline from markdown ![alt](clip.mp4). Width and the 16:9
+   box are fixed before metadata loads so the transcript row never changes
+   height when the video arrives (end-follow); the video letterboxes inside. */
+.chat-generated-image.chat-generated-video {
+  width: min(420px, 100%);
+  max-width: 100%;
+}
+
+.chat-generated-video__frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.chat-generated-video__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.chat-generated-video[data-status="loading"] .chat-generated-video__video {
+  opacity: 0;
 }
 
 @keyframes chat-generated-image-shimmer {
@@ -2788,6 +3110,41 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
+/* Markdown tables: hairline rows, no grid. lib/markdownTableLayout.ts marks each column:
+   numbers and short values keep their natural width, text columns wrap in what is left, and
+   the table scrolls sideways only when the short columns alone are wider than the chat. */
+.chat-markdown .chat-markdown-table__actions {
+  display: flex;
+  justify-content: flex-end;
+  height: 1.5rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-markdown .chat-markdown-table:hover .chat-markdown-table__actions,
+.chat-markdown .chat-markdown-table:focus-within .chat-markdown-table__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-markdown .chat-markdown-table__actions {
+    opacity: 1;
+  }
+}
+
+.chat-markdown .chat-markdown-table__action {
+  color: var(--muted-foreground);
+}
+
+.chat-markdown .chat-markdown-table__action:hover {
+  color: var(--foreground);
+}
+
+.chat-markdown .chat-markdown-table__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;
@@ -2795,9 +3152,54 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown th,
 .chat-markdown td {
-  border: 1px solid var(--border);
-  padding: 0.35rem 0.45rem;
-  text-align: left;
+  padding: 0.45rem 0;
+  padding-inline-start: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  text-align: start;
+  vertical-align: top;
+  /* Break between words; only a text column may also break inside one (below). */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.chat-markdown :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+
+.chat-markdown th {
+  padding-top: 0;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 20%, transparent);
+  color: var(--muted-foreground);
+  font-size: var(--text-chat-sm);
+  font-weight: 500;
+  vertical-align: bottom;
+}
+
+.chat-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Text columns give up width first; the floor stops them collapsing to a letter per line. */
+.chat-markdown td[data-table-column="text"] {
+  min-width: 6em;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown td:is([data-table-column="numeric"], [data-table-column="short"]),
+.chat-markdown
+  th:is([data-table-column="numeric"], [data-table-column="short"]):not(
+    [data-table-header="wrap"]
+  ) {
+  white-space: nowrap;
+}
+
+.chat-markdown :is(th, td)[data-table-column="numeric"] {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-markdown td[data-table-cell="empty"] {
+  color: var(--muted-foreground);
 }
 
 /* A visual placed in a reply sits inside that reply's markdown. Its components style
@@ -2849,7 +3251,8 @@ diffs-container {
    dropdown/control token derived from the active chrome theme. */
 :root {
   --composer-surface: color-mix(in oklab, var(--color-background-control) 90%, transparent);
-  --runtime-full-access-accent: #e25505;
+  /* Same hue as before, darkened until it reads 4.5:1 on the light composer surface. */
+  --runtime-full-access-accent: #c24904;
 }
 
 .dark {
@@ -3198,6 +3601,10 @@ diffs-container {
 }
 .chat-markdown img[data-expandable-image] {
   cursor: zoom-in;
+}
+/* Images sharing a paragraph with prose get their own line (remarkImageRows). */
+.chat-markdown .chat-markdown-image-row {
+  display: block;
 }
 .pull-request-prose p,
 .pull-request-prose ul,

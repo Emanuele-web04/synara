@@ -14,7 +14,10 @@ Download the latest stable build from the [Synara download page](/install). If t
 | macOS on Apple Silicon | Arm64 `.dmg`         |
 | macOS on Intel         | x64 `.dmg`           |
 | Windows                | x64 `.exe` installer |
-| Linux                  | x86_64 `.AppImage`   |
+| Linux on x86_64        | `x86_64` `.AppImage` |
+| Linux on ARM64         | `arm64` `.AppImage`  |
+
+The download page offers both Linux builds; pick `ARM64` if `uname -m` prints `aarch64`.
 
 <Callout type="info" title="Synara does not include a model subscription">
   Synara uses provider runtimes installed on your machine. Install and authenticate at least one
@@ -42,6 +45,15 @@ On Linux, your desktop environment may require making the AppImage executable be
 
 ```bash
 chmod +x Synara*.AppImage
+```
+
+AppImages also need FUSE 2. If the AppImage does not start, install your distribution's FUSE 2
+package (`fuse2` on Arch, `libfuse2t64` on Ubuntu 24.04+ and Debian trixie+, `libfuse2` on older
+Debian and Ubuntu releases) or extract it once:
+
+```bash
+./Synara*.AppImage --appimage-extract
+./squashfs-root/synara
 ```
 
 </Step>

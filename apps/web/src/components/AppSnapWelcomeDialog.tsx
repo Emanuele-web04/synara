@@ -11,9 +11,10 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
-import { CentralIcon } from "../lib/central-icons";
+import { cn } from "~/lib/utils";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { AnnouncementSheet } from "./AnnouncementSheet";
+import { DIALOG_HERO_ITEM_SHADOW_CLASS_NAME } from "./DialogHeroBand";
 import { useTranslation } from "~/i18n";
 
 const APP_SNAP_WELCOME_STORAGE_KEY = "synara:appsnap-welcome:v1";
@@ -93,19 +94,61 @@ export function AppSnapWelcomeDialog({ children }: { children?: ReactNode }) {
         : null}
       <AnnouncementSheet
         open={dialogOpen}
-        hero={
-          // Same glyph as the AppSnap settings panel this dialog links to.
-          <span className="flex size-16 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--color-border)] bg-muted/30 text-foreground">
-            <CentralIcon name="screen-capture" className="size-8" />
-          </span>
-        }
+        hero={<AppSnapScene />}
         title={t("common:synaraAppSnapsAreLive")}
-        description={<>{t("common:pressBothOptionKeysToSnapAnyAppS")}</>}
-        dismissLabel="Not now"
+        description={t("common:pressBothOptionKeysToSnapAnyAppS")}
+        dismissLabel={t("common:notNow")}
         confirmLabel={t("common:setUpAppSnap")}
         onDismiss={acknowledge}
         onConfirm={openSettings}
       />
     </>
+  );
+}
+
+/** Both Option keys pressed, a window framed, and the snap landing in the chat. */
+function AppSnapScene() {
+  const { t } = useTranslation();
+  return (
+    <div className="relative h-full w-[340px]">
+      <div className="absolute top-12 start-2 flex gap-1.5">
+        {[0, 1].map((key) => (
+          <span
+            key={key}
+            className="scene-keypress flex size-11 items-end justify-end rounded-[10px] border border-b-[3px] border-border bg-popover px-2 py-1.5 text-ui-lg leading-none text-foreground"
+            style={{ animationDelay: `${key * 60}ms` }}
+          >
+            ⌥
+          </span>
+        ))}
+      </div>
+      <div
+        className={cn(
+          "absolute top-6 start-[118px] flex h-[118px] w-[188px] flex-col overflow-hidden rounded-xl border border-border bg-popover",
+          DIALOG_HERO_ITEM_SHADOW_CLASS_NAME,
+        )}
+      >
+        <span className="flex h-5 shrink-0 items-center gap-1.25 px-2.25">
+          {[0, 1, 2].map((dot) => (
+            <span key={dot} className="size-1.75 rounded-full bg-foreground/15" />
+          ))}
+        </span>
+        <span className="flex flex-col gap-1.5 px-3 pt-1">
+          <span className="h-1.5 w-[70%] rounded-full bg-secondary" />
+          <span className="h-1.5 w-[48%] rounded-full bg-secondary" />
+          <span className="mt-1 h-9 rounded-md bg-secondary/70" />
+        </span>
+      </div>
+      <span className="scene-snap-frame absolute top-4 start-[110px] h-[134px] w-[204px] rounded-[15px] border-[1.5px] border-sky-500 bg-sky-500/6 dark:border-sky-400 dark:bg-sky-400/8" />
+      <span
+        className={cn(
+          "scene-snap-chip absolute end-0 bottom-3 flex items-center gap-1.5 rounded-full border border-border bg-popover py-1 ps-1.5 pe-2.5 text-ui-timestamp font-medium text-foreground",
+          DIALOG_HERO_ITEM_SHADOW_CLASS_NAME,
+        )}
+      >
+        <span className="h-3.5 w-4.5 rounded-[3px] bg-linear-to-br from-sky-100 to-sky-300 dark:from-sky-400/40 dark:to-sky-600/60" />
+        {t("common:appSnapHeroAddedToChat")}
+      </span>
+    </div>
   );
 }

@@ -23,6 +23,8 @@ import {
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
 } from "@synara/shared/projectContainers";
+import { isPendingInteractionAwaitingResponse } from "@synara/shared/pendingInteractions";
+import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
 
@@ -321,6 +323,28 @@ export function requireProjectAbsent(input: {
   );
 }
 
+/**
+ * A project's folder set (primary plus extra folders) must stay distinct and un-nested, and
+ * only ordinary projects may span several folders. A single-folder set always passes.
+ */
+export function requireValidProjectFolders(input: {
+  readonly command: OrchestrationCommand;
+  readonly kind: ProjectKind;
+  readonly workspaceRoot: string;
+  readonly additionalFolders: ReadonlyArray<string>;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (input.additionalFolders.length === 0) return Effect.void;
+  if (input.kind !== "project") {
+    return Effect.fail(
+      invariantError(input.command.type, "Only ordinary projects can have additional folders."),
+    );
+  }
+  const problem = findProjectFolderProblem([input.workspaceRoot, ...input.additionalFolders], {
+    platform: process.platform,
+  });
+  return problem === null ? Effect.void : Effect.fail(invariantError(input.command.type, problem));
+}
+
 export function requireProjectWorkspaceRootAvailable(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
@@ -399,11 +423,7 @@ export function requireApprovalNotResponded(input: {
       (input.lifecycleGeneration === undefined ||
         entry.lifecycleGeneration === input.lifecycleGeneration),
   );
-  if (
-    interaction === undefined ||
-    interaction.status === "pending" ||
-    interaction.status === "retryable"
-  ) {
+  if (interaction === undefined || isPendingInteractionAwaitingResponse(interaction.status)) {
     return Effect.void;
   }
   return Effect.fail(
@@ -471,7 +491,8 @@ export function requireThreadNotArchived(input: {
 export type ThreadResumePreconditionViolation =
   | "thread-archived"
   | "turn-completed"
-  | "turn-in-flight";
+  | "turn-in-flight"
+  | "turn-replaced";
 
 export interface ThreadResumePrecondition {
   /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
@@ -484,15 +505,19 @@ export interface ThreadResumePrecondition {
  * at quit is continued only while the thread is not archived, has nothing in
  * flight, and no turn finished on its own since the record was taken — neither
  * the recorded turn (it was running then, so it can only have completed later)
- * nor any newer one. A turn that completed before the record is the previous
- * turn of a chat that was still connecting and does not count; an interrupted or
- * errored turn is exactly what a continuation is for.
+ * nor any newer one. A different turn requested after the record, or started
+ * after it while replacing a known turn, supersedes the recorded continuation
+ * even if the replacement ends in error or is interrupted. A chat recorded
+ * while connecting can still belong to its earlier request.
  */
 export function threadResumePreconditionViolation(
   thread: {
     readonly archivedAt?: string | null | undefined;
     readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
-    readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state" | "completedAt"> | null;
+    readonly latestTurn: Pick<
+      OrchestrationLatestTurn,
+      "turnId" | "state" | "requestedAt" | "startedAt" | "completedAt"
+    > | null;
   },
   precondition: ThreadResumePrecondition,
 ): ThreadResumePreconditionViolation | null {
@@ -514,6 +539,17 @@ export function threadResumePreconditionViolation(
   ) {
     return "turn-completed";
   }
+  if (
+    latestTurn !== null &&
+    latestTurn.state !== "completed" &&
+    latestTurn.turnId !== precondition.recordedTurnId &&
+    (latestTurn.requestedAt >= precondition.recordedAt ||
+      (precondition.recordedTurnId !== null &&
+        latestTurn.startedAt !== null &&
+        latestTurn.startedAt >= precondition.recordedAt))
+  ) {
+    return "turn-replaced";
+  }
   return null;
 }
 
@@ -528,5 +564,7 @@ export function threadResumePreconditionDetail(
       return `Thread '${threadId}' finished on its own; there is nothing to resume.`;
     case "turn-in-flight":
       return `Thread '${threadId}' already has a turn in flight.`;
+    case "turn-replaced":
+      return `Thread '${threadId}' started another turn after it was remembered for resume.`;
   }
 }

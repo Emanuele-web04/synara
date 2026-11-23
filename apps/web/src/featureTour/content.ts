@@ -1,64 +1,60 @@
-import type { LucideIcon } from "~/lib/icons";
-import { Columns2Icon, GitPullRequestIcon, UsersIcon, WorkflowIcon } from "~/lib/icons";
+// FILE: content.ts
+// Purpose: The app tour's steps: which control each step points at and what it says.
+// Layer: Web UI constants (no React)
+// Exports: APP_TOUR_STEPS, APP_TOUR_ANCHOR_ATTRIBUTE, AppTourStep, AppTourStepId
 
-export interface FeatureTourSlide {
-  id: "workspace" | "accounts" | "review" | "hubs";
-  title: string;
-  description: string;
-  highlights: readonly string[];
-  icon: LucideIcon;
-  feature?: string;
+/** Put on the control a step points at: `data-app-tour="<anchor>"`. */
+export const APP_TOUR_ANCHOR_ATTRIBUTE = "data-app-tour";
+
+export type AppTourStepId = "newThread" | "activity" | "tasks" | "inbox" | "pullRequests";
+
+export interface AppTourStep {
+  readonly id: AppTourStepId;
+  /** Matches the control's `data-app-tour` value; the rail and the panel share item ids. */
+  readonly anchor: string;
+  /** Names the place in the app, shown above the title ("2 of 5 · Activity"). */
+  readonly placeKey: string;
+  readonly titleKey: string;
+  readonly descriptionKey: string;
 }
 
-// Curated from v0.9.2..HEAD. Keep this tour about changes, not the full feature inventory.
-export const FEATURE_TOUR_SLIDES: readonly FeatureTourSlide[] = [
+// A walk around the workspace, in the order the eye finds things: start a chat, watch it
+// in Activity, then the rail's Tasks, Inbox and Code review. Keep it about where things
+// live, not a feature inventory.
+export const APP_TOUR_STEPS: readonly AppTourStep[] = [
   {
-    id: "workspace",
-    title: "A new home for your work",
-    description:
-      "A slimmer rail, open-chat tabs, and refreshed icons put your workspace within reach.",
-    highlights: [
-      "Customize the rail and keep your favorite tools close.",
-      "Move between open chats or work in split panes.",
-      "Make it yours with project icons, colors, and window appearance.",
-    ],
-    icon: Columns2Icon,
+    id: "newThread",
+    anchor: "newThread",
+    placeKey: "chat:sections_newThread",
+    titleKey: "onboarding:appTourNewChatTitle",
+    descriptionKey: "onboarding:appTourNewChatDescription",
   },
   {
-    id: "accounts",
-    title: "Your agents, together",
-    description:
-      "Use multiple accounts from the same provider and choose the right one for each chat.",
-    highlights: [
-      "Add and sign in to accounts from provider settings.",
-      "See account names in the model picker and track their usage.",
-      "Hand work to another provider from the picker, in the same thread.",
-    ],
-    icon: UsersIcon,
+    id: "activity",
+    anchor: "activity",
+    placeKey: "workspace:profile_activity",
+    titleKey: "onboarding:appTourActivityTitle",
+    descriptionKey: "workspace:seeRunningTasksCompletedWorkAndAnythingThatNeeds",
   },
   {
-    id: "review",
-    title: "From review to the next change",
-    description:
-      "The redesigned Code review page brings pull requests, issues, and agent actions into one place.",
-    highlights: [
-      "Browse and sort the list, then inspect a pull request or issue.",
-      "Discuss changes in a side chat beside the details.",
-      "Ask an agent to review or continue the work.",
-    ],
-    icon: GitPullRequestIcon,
+    id: "tasks",
+    anchor: "tasks",
+    placeKey: "chat:tasks",
+    titleKey: "onboarding:appTourTasksTitle",
+    descriptionKey: "common:keepYourToDosInOnePlaceAndHand",
   },
   {
-    id: "hubs",
-    title: "Give bigger work a team",
-    description:
-      "Hubs bring a coordinator and worker agents together around a shared project in Synara.",
-    highlights: [
-      "Keep shared context in the Hub Library and track delegated work.",
-      "Plan Tasks in a list or Kanban board and hand them to agents.",
-      "Open Inbox for today's tasks, review requests, and activity recap.",
-    ],
-    icon: WorkflowIcon,
-    feature: "groups",
+    id: "inbox",
+    anchor: "inbox",
+    placeKey: "workspace:inbox",
+    titleKey: "onboarding:appTourInboxTitle",
+    descriptionKey: "onboarding:appTourInboxDescription",
+  },
+  {
+    id: "pullRequests",
+    anchor: "pullRequests",
+    placeKey: "workspace:codeReview",
+    titleKey: "onboarding:appTourReviewTitle",
+    descriptionKey: "onboarding:appTourReviewDescription",
   },
 ];

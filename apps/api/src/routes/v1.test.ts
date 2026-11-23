@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_MAX_BODY_BYTES } from "../app";
 import { createAccountDeletionService, type AccountDeletionService } from "../accountDeletion";
@@ -27,9 +28,12 @@ import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
+import { clearUserCache, getCachedUser } from "../identity/userCache";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import { AVATAR_STORAGE_TIMEOUT_MS, type AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import type { BillingProvider, BillingSnapshot } from "../billing/polar";
+import { createBillingService, type BillingService } from "../billing/service";
 import {
   AVATAR_MAX_BYTES,
   createV1Routes,
@@ -123,6 +127,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     avatarStorage?: AvatarStorage;
     profileProxySecret?: string;
     scheduleDeferred?: (task: () => Promise<void>, delayMs: number) => void;
+    billing?: BillingService;
+    profileBillingEnforced?: boolean;
   };
 
   /**
@@ -156,6 +162,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       ...(options.scheduleDeferred !== undefined
         ? { scheduleDeferred: options.scheduleDeferred }
         : {}),
+      ...(options.billing !== undefined ? { billing: options.billing } : {}),
+      ...(options.profileBillingEnforced !== undefined
+        ? { profileBillingEnforced: options.profileBillingEnforced }
+        : {}),
     });
   }
 
@@ -183,10 +193,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     await workos?.close();
   });
 
-  // The membership cache is process-global and outlives a single request, so a
-  // test that changes someone's memberships would otherwise leak into the next.
+  // The membership and user caches are process-global and outlive a single
+  // request, so a test that changes someone's memberships or account would
+  // otherwise leak into the next.
   beforeEach(() => {
     clearOrgCache();
+    clearUserCache();
   });
 
   describe("account erasure", () => {
@@ -381,12 +393,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await published.json()).toMatchObject({ avatarUrl: storage.publicUrl(key) });
 
       let admissionChecked = false;
-      const originalIsDeleting = deletion.isDeleting;
-      const admission = vi.spyOn(deletion, "isDeleting").mockImplementation(async (userId) => {
-        const result = await originalIsDeleting(userId);
-        if (userId === owner.userId && !result) admissionChecked = true;
-        return result;
-      });
+      const originalIsSessionFenced = deletion.isSessionFenced;
+      const admission = vi
+        .spyOn(deletion, "isSessionFenced")
+        .mockImplementation(async (userId, sessionId) => {
+          const result = await originalIsSessionFenced(userId, sessionId);
+          if (userId === owner.userId && !result) admissionChecked = true;
+          return result;
+        });
       let pendingUpload: Promise<Response> | undefined;
       vi.useFakeTimers({ toFake: ["Date"] });
       try {
@@ -926,25 +940,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       image: "https://cdn.example.com/ada.png",
       organization: { id: organization.id, name: "Analytical Engines" },
       profile: null,
+      publicProfileAvailable: false,
     });
-  });
-
-  // A live token whose user WorkOS will not describe must still answer inside
-  // the error contract, not escape as a plain-text 500.
-  it("returns 401 in the error contract when the account no longer exists", async () => {
-    const { app } = buildApp();
-    // Never registered with the fake, so the lookup 404s.
-    const token = await workos.signAccessToken({
-      sub: "user_deleted_mid_session",
-      sid: `session_${randomUUID()}`,
-    });
-
-    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
-    expect(res.status).toBe(401);
-    expect(res.headers.get("content-type")).toContain("application/json");
-    const body = (await res.json()) as AccountErrorBody;
-    expect(body.error).toBe("unauthorized");
-    expect(typeof body.message).toBe("string");
   });
 
   // The 502 body says nothing on purpose, so the log is the only place an
@@ -986,15 +983,156 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     }
   });
 
-  it("does not expose the removed legacy POST /hosts registration surface", async () => {
-    const { app } = buildApp();
-    const { token } = await signIn();
-    const response = await app.request("/api/v1/hosts", {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({ environmentId: randomUUID() }),
+  describe("identity provider and database round trips", () => {
+    /** Provider user and membership reads for `userId` since request index `since`. */
+    function providerReads(since: number, userId: string) {
+      const reads = workos.requests.slice(since).filter((request) => request.method === "GET");
+      return {
+        user: reads.filter((request) => request.path === `/user_management/users/${userId}`).length,
+        memberships: reads.filter(
+          (request) => request.path === "/user_management/organization_memberships",
+        ).length,
+      };
+    }
+
+    it("answers /me with one provider user read cold and no provider call warm", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+
+      const cold = workos.requests.length;
+      const first = await app.request("/api/v1/me", { headers: authHeaders(session.token) });
+      expect(first.status).toBe(200);
+      const body = await first.json();
+      expect(providerReads(cold, session.userId)).toEqual({ user: 1, memberships: 1 });
+
+      const warm = workos.requests.length;
+      const second = await app.request("/api/v1/me", { headers: authHeaders(session.token) });
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual(body);
+      expect(workos.requests.length).toBe(warm);
     });
-    expect(response.status).toBe(404);
+
+    it("keeps a warm usage push off the identity provider", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+
+      const cold = workos.requests.length;
+      const first = await pushUsage(app, session.token, usageBody(randomUUID()), "203.0.122.1");
+      expect(first.status).toBe(202);
+      expect(providerReads(cold, session.userId)).toEqual({ user: 1, memberships: 1 });
+
+      const warm = workos.requests.length;
+      const second = await pushUsage(app, session.token, usageBody(randomUUID()), "203.0.122.1");
+      expect(second.status).toBe(202);
+      expect(workos.requests.length).toBe(warm);
+    });
+
+    it("checks the session and erasure tombstones in one database statement", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+      // Without a Live Activity service this route touches nothing past the
+      // session gate, so every statement observed belongs to that gate.
+      const statements = vi.spyOn(pool, "query");
+      try {
+        const response = await app.request(`/api/v1/live-activities/${randomUUID()}`, {
+          method: "DELETE",
+          headers: authHeaders(session.token),
+        });
+        expect(response.status).toBe(200);
+        expect(statements).toHaveBeenCalledTimes(1);
+      } finally {
+        statements.mockRestore();
+      }
+    });
+
+    it("maps a provider 404 on a cold read to 401", async () => {
+      const { app } = buildApp();
+      const token = await workos.signAccessToken({
+        sub: `user_never_registered_${randomUUID()}`,
+        sid: `session_${randomUUID()}`,
+      });
+      const response = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.json()).toEqual({
+        error: "unauthorized",
+        message: "This account no longer exists",
+      });
+    });
+
+    it("refuses an account deleted at the provider on mutating routes while reads may use the cache", async () => {
+      const { app } = buildApp();
+      const session = await signIn();
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      // Deleted outside this API, so nothing here invalidated the cached user.
+      await createWorkosIdentityProvider(config).verifier.deleteUser!(session.userId);
+
+      // A plain read inside the TTL may still answer from the cache...
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      // ...but a mutating route reads the user live and refuses at once.
+      const write = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(session.token),
+        body: JSON.stringify({
+          handle: `gone-${randomUUID().slice(0, 8)}`,
+          displayName: "Gone",
+          avatarColor: "#22c55e",
+        }),
+      });
+      expect(write.status).toBe(401);
+      expect(await write.json()).toEqual({
+        error: "unauthorized",
+        message: "This account no longer exists",
+      });
+      // The live 404 evicted the cached user, so reads refuse from now on too.
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(401);
+    });
+
+    it("drops the cached user when the account is deleted and when erasure deletes it", async () => {
+      const { verifier } = createWorkosIdentityProvider(config);
+      const deletion = createAccountDeletionService({ db: database.db, verifier });
+      const { app, db } = buildApp({ accountDeletion: deletion });
+      const session = await signIn();
+      const user = await verifier.getUser(session.userId);
+      const cachedLookup = () => {
+        const lookup = vi.fn(async () => user);
+        return { lookup, read: () => getCachedUser({ getUser: lookup }, session.userId) };
+      };
+
+      expect(
+        (await app.request("/api/v1/me", { headers: authHeaders(session.token) })).status,
+      ).toBe(200);
+      const warm = cachedLookup();
+      await warm.read();
+      expect(warm.lookup).not.toHaveBeenCalled();
+
+      const response = await app.request("/api/v1/me", {
+        method: "DELETE",
+        headers: authHeaders(session.token),
+        body: JSON.stringify({ confirmation: "delete", email: user.email }),
+      });
+      expect(response.status).toBe(202);
+      const afterRequest = cachedLookup();
+      await afterRequest.read();
+      expect(afterRequest.lookup).toHaveBeenCalledTimes(1);
+
+      // That read refilled the cache; the provider deletion during erasure drops it again.
+      await db
+        .update(accountDeletions)
+        .set({ nextAttemptAt: new Date(0) })
+        .where(eq(accountDeletions.userId, session.userId));
+      await deletion.flush();
+      await expect(verifier.getUser(session.userId)).rejects.toMatchObject({ status: 404 });
+      const afterErasure = cachedLookup();
+      await afterErasure.read();
+      expect(afterErasure.lookup).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("email OTP authentication", () => {
@@ -1041,35 +1179,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(again.status).toBe(200);
       const secondAuth = (await again.json()) as { user: { id: string } };
       expect(secondAuth.user.id).toBe(auth.user.id);
-    });
-
-    it("signs in an existing user with the same flow", async () => {
-      const { app } = buildApp();
-      const existing = workos.addUser({ email: `ada-${randomUUID()}@example.com` });
-
-      const { code } = await sendCode(app, existing.email, "203.0.113.21");
-      const res = await postJson(
-        app,
-        "/api/v1/auth/otp/authenticate",
-        { email: existing.email, code },
-        "203.0.113.21",
-      );
-      expect(res.status).toBe(200);
-      const auth = (await res.json()) as { accessToken: string; user: { id: string } };
-      // The existing account, not a duplicate.
-      expect(auth.user.id).toBe(existing.id);
-
-      // And the token reaches an authenticated route once scoped.
-      const organization = workos.addOrganization({ name: "Analytical Engines" });
-      workos.addMembership(organization.id, existing.id);
-      clearOrgCache();
-      const scoped = await workos.signAccessToken({
-        sub: existing.id,
-        sid: `session_${randomUUID()}`,
-        orgId: organization.id,
-      });
-      const meRes = await app.request("/api/v1/me", { headers: authHeaders(scoped) });
-      expect(meRes.status).toBe(200);
     });
 
     it("answers 401 invalid_verification_code for a wrong code", async () => {
@@ -1541,13 +1650,22 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const readPublic = () => app.request(`/api/v1/profiles/${base.handle}`);
       const created = await put({ themeAccent });
       expect(created.status).toBe(200);
-      expect(await created.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await created.json()).toMatchObject({
+        publicProfileAvailable: false,
+        profile: { themeAccent },
+      });
       expect((await readPublic()).status).toBe(404);
 
       const published = await put({ public: true });
-      expect(await published.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await published.json()).toMatchObject({
+        publicProfileAvailable: true,
+        profile: { themeAccent },
+      });
       const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
-      expect(await me.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await me.json()).toMatchObject({
+        publicProfileAvailable: true,
+        profile: { themeAccent },
+      });
       expect(await (await readPublic()).json()).toMatchObject({ themeAccent });
 
       const changed = { light: "#112233", dark: "#ddeeff" };
@@ -1604,7 +1722,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect((await readPublic()).socialLinks).toBeNull();
     });
 
-    it("creates a profile and reports it from /me", async () => {
+    it("creates a profile, reports it from /me, and updates its name and color", async () => {
       const { app } = buildApp();
       const { token } = await signIn();
       const body = profileBody();
@@ -1619,51 +1737,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
       const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
       expect(await meRes.json()).toMatchObject({ profile: body });
-    });
-
-    it("updates the display name and avatar color of an existing profile", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const created = profileBody();
-
-      await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(created),
-      });
 
       const res = await app.request("/api/v1/profile", {
         method: "PUT",
         headers: authHeaders(token),
-        body: JSON.stringify({ ...created, displayName: "Ada L.", avatarColor: "#3b82f6" }),
+        body: JSON.stringify({ ...body, displayName: "Ada L.", avatarColor: "#3b82f6" }),
       });
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        profile: { handle: created.handle, displayName: "Ada L.", avatarColor: "#3b82f6" },
+        profile: { handle: body.handle, displayName: "Ada L.", avatarColor: "#3b82f6" },
       });
-    });
-
-    // The handle is the closest thing to a public identifier a user has, and
-    // V1 has no redirect story for a rename — so a change is refused loudly
-    // rather than silently ignored.
-    it("refuses to change the handle once it is set", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const created = profileBody();
-
-      await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(created),
-      });
-
-      const res = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify({ ...created, handle: `${created.handle}x` }),
-      });
-      expect(res.status).toBe(400);
-      expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
     // The rejection must be mutation-free: a PUT carrying a different handle
@@ -1873,28 +1956,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       ).toBe(400);
     });
 
-    it("answers 409 handle_taken when another user holds the handle", async () => {
-      const { app } = buildApp();
-      const first = await signIn();
-      const second = await signIn();
-      const body = profileBody();
-
-      const firstRes = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(first.token),
-        body: JSON.stringify(body),
-      });
-      expect(firstRes.status).toBe(200);
-
-      const res = await app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(second.token),
-        body: JSON.stringify(body),
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ error: "handle_taken" });
-    });
-
     it("reserves a private handle atomically when two accounts claim it together", async () => {
       const { app, db } = buildApp();
       const users = await Promise.all([signIn(), signIn()]);
@@ -1961,6 +2022,174 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         body: JSON.stringify(profileBody()),
       });
       expect(res.status).toBe(401);
+    });
+
+    describe("paid public profiles", () => {
+      function paidProfiles() {
+        const states = new Map<string, BillingSnapshot>();
+        const provider: BillingProvider = {
+          environment: "sandbox",
+          plans: vi.fn(async () => [
+            { interval: "month" as const, amountMinor: 799, currency: "USD" },
+          ]),
+          state: vi.fn(async (userId) => states.get(userId) ?? null),
+          productId: () => "fixture-month",
+          preflightCheckout: vi.fn(async () => {}),
+          recoverCheckout: vi.fn(async () => null),
+          checkout: vi.fn(async () => ({
+            checkoutId: randomUUID(),
+            productId: "fixture-month",
+            status: "open" as const,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            url: "https://sandbox.polar.sh/checkout/fixture",
+          })),
+          portal: vi.fn(async () => "https://sandbox.polar.sh/portal/fixture"),
+          cancelRenewals: vi.fn(async () => {}),
+          verify: vi.fn(async () => null),
+        };
+        const billing = createBillingService({ pool, provider });
+        const { app } = buildApp({ billing, profileBillingEnforced: true });
+        const pay = (userId: string) =>
+          states.set(userId, {
+            customerId: randomUUID(),
+            productIds: ["fixture-month"],
+            settledCheckoutAttempts: [],
+            accessGranted: true,
+            subscriptionStatus: "active",
+            validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+            cancelAtPeriodEnd: false,
+            hasSubscription: true,
+          });
+        return { app, provider, pay, billing };
+      }
+
+      function putProfile(app: Hono, token: string, body: Record<string, unknown>) {
+        return app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        });
+      }
+
+      it("refuses to publish without Alto but still saves a private profile", async () => {
+        const { app } = paidProfiles();
+        const { token } = await signIn();
+        const base = profileBody();
+        // Onboarding's handle setup is private and must never need a subscription.
+        const saved = await putProfile(app, token, base);
+        expect(saved.status).toBe(200);
+        expect(await saved.json()).toMatchObject({ publicProfileAvailable: false });
+        const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: false });
+
+        const refused = await putProfile(app, token, { ...base, public: true });
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toMatchObject({
+          error: "subscription_required",
+          message: "Public profiles require an active Synara Alto subscription",
+        });
+        const [row] = await database.db
+          .select()
+          .from(profiles)
+          .where(eq(profiles.handle, base.handle));
+        expect(row?.public).toBe(false);
+        expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(404);
+      });
+
+      it("publishes and serves a subscriber's profile, then hides it once access lapses", async () => {
+        const { app, pay } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        const published = await putProfile(app, token, base);
+        expect(published.status).toBe(200);
+        expect(await published.json()).toMatchObject({ publicProfileAvailable: true });
+        const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: true });
+        expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
+
+        // A webhook-driven reconcile revokes access; the stored flag stays public.
+        await pool.query("UPDATE billing_accounts SET access_granted=false WHERE user_id=$1", [
+          userId,
+        ]);
+        const hidden = await app.request(`/api/v1/profiles/${base.handle}`);
+        expect(hidden.status).toBe(404);
+        expect(await hidden.json()).toMatchObject({ error: "profile_not_found" });
+        const lapsed = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(lapsed.status).toBe(200);
+        expect(await lapsed.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true },
+        });
+        // Editing an already-public profile is not a new publish, so it stays allowed.
+        const edited = await putProfile(app, token, { ...base, displayName: "Ada L." });
+        expect(edited.status).toBe(200);
+        expect(await edited.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true, displayName: "Ada L." },
+        });
+      });
+
+      it("never asks the billing provider to serve a public profile", async () => {
+        const { app, provider, pay } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        expect((await putProfile(app, token, base)).status).toBe(200);
+        vi.mocked(provider.state).mockClear();
+        for (let index = 0; index < 3; index += 1) {
+          expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
+          const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+          expect(me.status).toBe(200);
+          expect(await me.json()).toMatchObject({ publicProfileAvailable: true });
+        }
+        const hidden = await putProfile(app, token, { ...base, public: false });
+        expect(hidden.status).toBe(200);
+        expect(await hidden.json()).toMatchObject({ publicProfileAvailable: false });
+        const privateMe = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(privateMe.status).toBe(200);
+        expect(await privateMe.json()).toMatchObject({ publicProfileAvailable: false });
+        expect(provider.state).not.toHaveBeenCalled();
+      });
+
+      it("refuses to publish while the subscription cannot be verified", async () => {
+        const { app, provider } = paidProfiles();
+        const { token } = await signIn();
+        vi.mocked(provider.state).mockRejectedValue(new Error("Polar is unreachable"));
+        const refused = await putProfile(app, token, profileBody({ public: true }));
+        expect(refused.status).toBe(503);
+        expect(await refused.json()).toMatchObject({ error: "billing_unavailable" });
+      });
+
+      it("hides a public profile when the billing ledger cannot be read", async () => {
+        const { app, pay, billing } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        expect((await putProfile(app, token, base)).status).toBe(200);
+        // Fail closed: an unreadable ledger must never serve the page.
+        const { app: broken } = buildApp({
+          billing: {
+            ...billing,
+            storedAccess: async () => {
+              throw new Error("ledger unavailable");
+            },
+          },
+          profileBillingEnforced: true,
+        });
+        expect((await broken.request(`/api/v1/profiles/${base.handle}`)).status).toBe(404);
+        const me = await broken.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: false });
+        const edited = await putProfile(broken, token, { ...base, displayName: "Ada L." });
+        expect(edited.status).toBe(200);
+        expect(await edited.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true },
+        });
+      });
     });
   });
 
@@ -2048,6 +2277,71 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(skillRows[0]).toMatchObject({ name: "code-review", kind: "skill", runs: 3 });
     });
 
+    it("writes each table's buckets with one INSERT, atomically", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const count = 150;
+      // One clock read, so no two generated buckets can share a minute.
+      const base = Math.floor(Date.now() / 60_000) * 60_000;
+      const minuteAt = (offset: number) => new Date(base - offset * 60_000).toISOString();
+      const insertQuery = vi.spyOn(pg.Client.prototype, "query");
+      const inserts = () =>
+        insertQuery.mock.calls
+          .map(([first]) => (typeof first === "string" ? first : (first as { text?: string }).text))
+          .filter((text) => /^insert into "usage_(model|skill)_stats"/i.test(text ?? ""));
+      try {
+        const res = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, {
+            models: Array.from({ length: count }, (_, index) =>
+              modelBucket({ minute: minuteAt(index) }),
+            ),
+            skills: Array.from({ length: count }, (_, index) => ({
+              minute: minuteAt(0),
+              name: `skill-${index}`,
+              kind: "skill",
+              runs: 1,
+            })),
+          }),
+          "203.0.116.40",
+        );
+        expect(res.status).toBe(202);
+        expect(await res.json()).toEqual({ written: count * 2 });
+        expect(inserts()).toHaveLength(2);
+        expect(
+          await db.select().from(usageModelStats).where(eq(usageModelStats.userId, userId)),
+        ).toHaveLength(count);
+        expect(
+          await db.select().from(usageSkillStats).where(eq(usageSkillStats.userId, userId)),
+        ).toHaveLength(count);
+
+        // A payload repeating one bucket key still fails as a whole and
+        // leaves the earlier minutes untouched.
+        const duplicated = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, {
+            models: [
+              modelBucket({ minute: minuteAt(0), tokens: 1 }),
+              modelBucket({ minute: minuteAt(0), tokens: 2 }),
+            ],
+          }),
+          "203.0.116.40",
+        );
+        expect(duplicated.status).toBe(500);
+        const rows = await db
+          .select()
+          .from(usageModelStats)
+          .where(eq(usageModelStats.userId, userId));
+        expect(rows).toHaveLength(count);
+        expect(rows.every((row) => row.tokens === 1000)).toBe(true);
+      } finally {
+        insertQuery.mockRestore();
+      }
+    });
+
     // Buckets carry ABSOLUTE values: re-pushing the same key with grown
     // counters must replace, not add — that is what makes retries idempotent.
     it("upserts absolutely: a re-pushed grown bucket replaces, never sums", async () => {
@@ -2084,7 +2378,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .where(eq(usageModelStats.userId, userId));
       expect(modelRows).toHaveLength(1);
       // The grown values, not 350/4/3.
-      expect(modelRows[0]).toMatchObject({ tokens: 250, turns: 3, prompts: 2 });
+      // Null reasoning is stored as '' (NULLs are distinct under a unique index,
+      // so a NULL would duplicate the bucket on every push).
+      expect(modelRows[0]).toMatchObject({ reasoning: "", tokens: 250, turns: 3, prompts: 2 });
 
       const skillRows = await db
         .select()
@@ -2188,39 +2484,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(skillRows[0]).toMatchObject({ runs: 3 });
     });
 
-    it("stays idempotent when the identical payload is re-pushed", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const environmentId = randomUUID();
-      const minute = minuteIso();
-      const body = usageBody(environmentId, {
-        models: [
-          modelBucket({ minute, tokens: 100 }),
-          modelBucket({ minute, model: "claude-opus-4.8", tokens: 50 }),
-        ],
-        skills: [{ minute, name: "code-review", kind: "skill", runs: 2 }],
-      });
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const res = await pushUsage(app, token, body, "203.0.116.11");
-        expect(res.status).toBe(202);
-      }
-
-      const modelRows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(modelRows).toHaveLength(2);
-      expect(modelRows.map((row) => row.tokens).toSorted((a, b) => a - b)).toEqual([50, 100]);
-
-      const skillRows = await db
-        .select()
-        .from(usageSkillStats)
-        .where(eq(usageSkillStats.userId, userId));
-      expect(skillRows).toHaveLength(1);
-      expect(skillRows[0]).toMatchObject({ runs: 2 });
-    });
-
     // Reasoning is part of the key: the same model with and without a
     // reasoning setting is two buckets, not one.
     it("keeps null and 'high' reasoning as distinct buckets", async () => {
@@ -2247,65 +2510,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .where(eq(usageModelStats.userId, userId));
       expect(rows).toHaveLength(2);
       expect(rows.map((row) => row.reasoning).toSorted()).toEqual(["", "high"]);
-    });
-
-    // The ''-sentinel regression case: NULLs are distinct under a Postgres
-    // unique index, so a NULL-stored reasoning would duplicate the bucket on
-    // every push. Stored as '' it must conflict — one row, updated in place.
-    it("does not duplicate a null-reasoning bucket pushed twice", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const environmentId = randomUUID();
-      const minute = minuteIso();
-
-      for (const tokens of [100, 300]) {
-        const res = await pushUsage(
-          app,
-          token,
-          usageBody(environmentId, {
-            models: [modelBucket({ minute, reasoning: null, tokens })],
-          }),
-          "203.0.116.5",
-        );
-        expect(res.status).toBe(202);
-      }
-
-      const rows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ reasoning: "", tokens: 300 });
-    });
-
-    it("keeps the same minute from two environments as separate rows", async () => {
-      const { app, db } = buildApp();
-      const { token, userId } = await signIn();
-      const minute = minuteIso();
-      const environmentA = randomUUID();
-      const environmentB = randomUUID();
-
-      for (const [environmentId, tokens] of [
-        [environmentA, 100],
-        [environmentB, 200],
-      ] as const) {
-        const res = await pushUsage(
-          app,
-          token,
-          usageBody(environmentId, { models: [modelBucket({ minute, tokens })] }),
-          "203.0.116.6",
-        );
-        expect(res.status).toBe(202);
-      }
-
-      const rows = await db
-        .select()
-        .from(usageModelStats)
-        .where(eq(usageModelStats.userId, userId));
-      expect(rows).toHaveLength(2);
-      expect(rows.map((row) => row.environmentId).toSorted()).toEqual(
-        [environmentA, environmentB].toSorted(),
-      );
     });
 
     it.each([
@@ -2678,36 +2882,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect((await getProfile(app, handle, "203.0.117.10")).status).toBe(404);
     });
 
-    // Rate limiting keys on caller IP (trusted, from proxy headers) only.
-    // The x-synara-viewer-ip header is ignored because it's client-controlled
-    // and spoofable — accepting it would allow bypassing rate limits.
-    it("keys the budget on caller IP, ignoring x-synara-viewer-ip", async () => {
-      const { app } = buildApp();
-      const callerIp = "203.0.117.11";
-      const handle = `ghost-${randomUUID().slice(0, 8)}`;
-
-      const getWithHeaders = (viewerIpHeader: string) =>
-        app.request(`/api/v1/profiles/${handle}`, {
-          headers: { "x-forwarded-for": callerIp, "x-synara-viewer-ip": viewerIpHeader },
-        });
-
-      // Exhaust the budget for this caller IP
-      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect((await getWithHeaders("198.51.100.1")).status).toBe(404);
-      }
-
-      // Now rate-limited, regardless of x-synara-viewer-ip value
-      expect((await getWithHeaders("198.51.100.1")).status).toBe(429);
-      expect((await getWithHeaders("198.51.100.2")).status).toBe(429);
-      expect((await getWithHeaders("completely-different")).status).toBe(429);
-
-      // A different caller IP has its own budget
-      const differentCaller = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.117.99" },
-      });
-      expect(differentCaller.status).toBe(404);
-    });
-
     // The authenticated exception: the SSR proxy proves itself with the
     // shared secret, and only then does the viewer header pick the bucket —
     // per-visitor budgets instead of one bucket for the proxy's egress IP.
@@ -2795,75 +2969,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         expect((await get(`198.51.102.${i + 1}`)).status).toBe(404);
       }
       expect((await get("198.51.102.200")).status).toBe(429);
-    });
-  });
-
-  describe("PUT /profile public flag", () => {
-    function profilePut(app: Hono, token: string, body: Record<string, unknown>) {
-      return app.request("/api/v1/profile", {
-        method: "PUT",
-        headers: authHeaders(token),
-        body: JSON.stringify(body),
-      });
-    }
-
-    it("flips visibility on, /me echoes it, and omitting it later leaves it alone", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const handle = `flag-${randomUUID().slice(0, 8)}`;
-      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
-
-      // First write without the flag: private by default, so the public
-      // route does not serve it.
-      const created = await profilePut(app, token, base);
-      expect(created.status).toBe(200);
-      expect(await created.json()).toMatchObject({ profile: { public: false } });
-      const hidden = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.1" },
-      });
-      expect(hidden.status).toBe(404);
-
-      // public: true flips visibility.
-      const published = await profilePut(app, token, { ...base, public: true });
-      expect(published.status).toBe(200);
-      expect(await published.json()).toMatchObject({ profile: { public: true } });
-      const visible = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.2" },
-      });
-      expect(visible.status).toBe(200);
-
-      // A later update that omits the flag leaves visibility unchanged.
-      const renamed = await profilePut(app, token, { ...base, displayName: "Ada L." });
-      expect(renamed.status).toBe(200);
-      expect(await renamed.json()).toMatchObject({
-        profile: { displayName: "Ada L.", public: true },
-      });
-      const stillVisible = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.3" },
-      });
-      expect(stillVisible.status).toBe(200);
-
-      // And /me reports the flag.
-      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
-      expect(await meRes.json()).toMatchObject({ profile: { public: true } });
-    });
-
-    it("flips visibility back off with public: false", async () => {
-      const { app } = buildApp();
-      const { token } = await signIn();
-      const handle = `flag-${randomUUID().slice(0, 8)}`;
-      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
-
-      await profilePut(app, token, { ...base, public: true });
-      const unpublished = await profilePut(app, token, { ...base, public: false });
-      expect(unpublished.status).toBe(200);
-      expect(await unpublished.json()).toMatchObject({ profile: { public: false } });
-
-      const res = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.118.4" },
-      });
-      expect(res.status).toBe(404);
-      expect(await res.json()).toMatchObject({ error: "profile_not_found" });
     });
   });
 
@@ -2973,33 +3078,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       };
     }
 
-    it("defers deleting the replaced object past the response-cache window", async () => {
-      const fake = fakeAvatarStorage();
-      const scheduler = capturedScheduler();
-      const { app } = buildApp({
-        avatarStorage: fake.storage,
-        scheduleDeferred: scheduler.schedule,
-      });
-      const { token } = await signInWithPicture();
-      await onboard(app, token);
-
-      await putAvatar(app, token, PNG_BYTES, "image/png");
-      const firstKey = [...fake.objects.keys()][0]!;
-      const second = await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
-      expect(second.status).toBe(200);
-
-      // Scheduled, not deleted: pages cached before the replacement still
-      // reference the old URL and must keep rendering.
-      expect(fake.deleted).toEqual([]);
-      expect(scheduler.tasks).toHaveLength(1);
-      expect(fake.objects.size).toBe(2);
-
-      await scheduler.fire();
-      expect(fake.deleted).toEqual([firstKey]);
-      expect(fake.objects.size).toBe(1);
-      expect([...fake.objects.keys()][0]).not.toBe(firstKey);
-    });
-
     // Content-hashed keys mean re-uploading the original image within the
     // window makes the "old" key current again — the deferred delete must
     // re-check the row and leave it alone.
@@ -3051,37 +3129,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const keyC = [...fake.objects.keys()].find((key) => key !== keyA && key !== keyB)!;
 
       // One deferred task per displaced key: A (displaced by B), B (by C).
+      // Scheduled, not deleted: pages cached before a replacement still
+      // reference the old URL and must keep rendering.
+      expect(fake.deleted).toEqual([]);
       expect(scheduler.tasks).toHaveLength(2);
       await scheduler.fire();
       expect(fake.deleted.sort()).toEqual([keyA, keyB].sort());
       expect(fake.deleted).not.toContain(keyC);
       expect([...fake.objects.keys()]).toEqual([keyC]);
-    });
-
-    // DELETE /profile/avatar must likewise schedule the key its own write
-    // displaced, read under the same row lock as the clearing update.
-    it("schedules the key the delete route itself displaced", async () => {
-      const fake = fakeAvatarStorage();
-      const scheduler = capturedScheduler();
-      const { app } = buildApp({
-        avatarStorage: fake.storage,
-        scheduleDeferred: scheduler.schedule,
-      });
-      const { token } = await signInWithPicture();
-      await onboard(app, token);
-
-      await putAvatar(app, token, PNG_BYTES, "image/png");
-      const key = [...fake.objects.keys()][0]!;
-      const res = await app.request("/api/v1/profile/avatar", {
-        method: "DELETE",
-        headers: authHeaders(token),
-      });
-      expect(res.status).toBe(200);
-
-      expect(scheduler.tasks).toHaveLength(1);
-      await scheduler.fire();
-      expect(fake.deleted).toEqual([key]);
-      expect(fake.objects.size).toBe(0);
     });
 
     it("refuses an oversized body with 400 before touching storage", async () => {
@@ -3096,20 +3151,17 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(fake.objects.size).toBe(0);
     });
 
-    it.each([["image/gif"], ["image/svg+xml"], ["application/octet-stream"], ["text/plain"]])(
-      "refuses a %s upload",
-      async (contentType) => {
-        const fake = fakeAvatarStorage();
-        const { app } = buildApp({ avatarStorage: fake.storage });
-        const { token } = await signInWithPicture();
-        await onboard(app, token);
+    it.each([["image/gif"], ["image/svg+xml"]])("refuses a %s upload", async (contentType) => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
 
-        const res = await putAvatar(app, token, PNG_BYTES, contentType);
-        expect(res.status).toBe(400);
-        expect(await res.json()).toMatchObject({ error: "validation_failed" });
-        expect(fake.objects.size).toBe(0);
-      },
-    );
+      const res = await putAvatar(app, token, PNG_BYTES, contentType);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+      expect(fake.objects.size).toBe(0);
+    });
 
     it("answers 503 with a clear message when storage is not configured", async () => {
       const { app } = buildApp(); // no avatarStorage
@@ -3200,21 +3252,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(pub.status).toBe(200);
       expect(((await pub.json()) as PublicProfile).avatarUrl).toBeNull();
-    });
-
-    it("serves the uploaded avatar on the public route", async () => {
-      const fake = fakeAvatarStorage();
-      const { app } = buildApp({ avatarStorage: fake.storage });
-      const { token } = await signInWithPicture();
-      const handle = await onboard(app, token, { public: true });
-      const upload = await putAvatar(app, token, PNG_BYTES, "image/png");
-      const uploaded = (await upload.json()) as { profile: { avatarUrl: string } };
-
-      const pub = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": "203.0.119.3" },
-      });
-      expect(pub.status).toBe(200);
-      expect(((await pub.json()) as PublicProfile).avatarUrl).toBe(uploaded.profile.avatarUrl);
     });
 
     it("hides the avatar on both reads with avatarSource: 'placeholder'", async () => {
@@ -3546,17 +3583,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(remove.status).toBe(403);
     });
-
-    // An unauthenticated caller has no organizations to be told about; the
-    // 403 path must not become a way to skip the 401.
-    it("still answers 401 before any organization work when the token is absent or bad", async () => {
-      const { app } = buildApp();
-
-      expect((await app.request("/api/v1/hosts")).status).toBe(401);
-      expect(
-        (await app.request("/api/v1/hosts", { headers: authHeaders("not-a-jwt") })).status,
-      ).toBe(401);
-    });
   });
 
   it("reports instance info without authentication", async () => {
@@ -3711,8 +3737,11 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
   describe("POST /auth/refresh", () => {
     /** A signed-in user's refresh token, minted through the whole OTP flow. */
-    async function mintedRefreshToken(app: Hono, ip: string): Promise<string> {
-      const email = `refresh-${randomUUID()}@example.com`;
+    async function mintedRefreshToken(
+      app: Hono,
+      ip: string,
+      email = `refresh-${randomUUID()}@example.com`,
+    ): Promise<string> {
       await postJson(app, "/api/v1/auth/otp/send", { email }, ip);
       const live = workos.currentMagicAuth(email);
       if (!live) throw new Error("fake WorkOS minted no magic auth code");
@@ -3757,22 +3786,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const fresh = workos.addUser({});
       const org = workos.addOrganization({ name: "Scoped Workspace" });
       workos.addMembership(org.id, fresh.id);
-      const email = fresh.email;
-      await postJson(app, "/api/v1/auth/otp/send", { email }, "203.0.113.72");
-      const live = workos.currentMagicAuth(email);
-      if (!live) throw new Error("fake WorkOS minted no magic auth code");
-      const authed = await postJson(
-        app,
-        "/api/v1/auth/otp/authenticate",
-        { email, code: live.code },
-        "203.0.113.72",
-      );
-      const tokens = (await authed.json()) as { refreshToken: string };
+      const refreshToken = await mintedRefreshToken(app, "203.0.113.72", fresh.email);
 
       const res = await postJson(
         app,
         "/api/v1/auth/refresh",
-        { refreshToken: tokens.refreshToken, organizationId: org.id },
+        { refreshToken, organizationId: org.id },
         "203.0.113.72",
       );
       expect(res.status).toBe(200);

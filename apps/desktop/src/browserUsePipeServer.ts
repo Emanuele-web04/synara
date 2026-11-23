@@ -67,6 +67,11 @@ export interface BrowserHostPipeServerOptions {
   readonly automationHost?: Pick<DesktopBrowserAutomationHost, "executeTool">;
   readonly maxInFlightRequests?: number;
   readonly maxQueuedOutputBytes?: number;
+  /**
+   * Browser tools wait for this before they run, so the server can accept the backend
+   * while the browser session is still being prepared. It must not reject.
+   */
+  readonly browserSessionReady?: Promise<void>;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -242,6 +247,7 @@ export class BrowserHostPipeServer {
   private readonly maxInFlightRequests: number;
   private readonly maxQueuedOutputBytes: number;
   private readonly capability: string;
+  private readonly browserSessionReady: Promise<void> | undefined;
   private started = false;
 
   constructor(
@@ -258,6 +264,7 @@ export class BrowserHostPipeServer {
     this.capability = capability;
     this.maxInFlightRequests = normalized.maxInFlightRequests ?? MAX_IN_FLIGHT_REQUESTS;
     this.maxQueuedOutputBytes = normalized.maxQueuedOutputBytes ?? MAX_QUEUED_OUTPUT_BYTES;
+    this.browserSessionReady = normalized.browserSessionReady;
     const hostOptions = {
       ...(normalized.requestOpenPanel ? { requestOpenPanel: normalized.requestOpenPanel } : {}),
       ...(normalized.vault ? { vault: normalized.vault } : {}),
@@ -505,7 +512,7 @@ export class BrowserHostPipeServer {
       });
     }
     client.threadId = threadId as ThreadId;
-    return this.automationHost.executeTool({
+    const toolRequest = {
       sessionId,
       provider,
       threadId: threadId as ThreadId,
@@ -513,7 +520,9 @@ export class BrowserHostPipeServer {
       arguments: request?.arguments ?? {},
       ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
       signal,
-    } satisfies BrowserAutomationToolRequest);
+    } satisfies BrowserAutomationToolRequest;
+    if (!this.browserSessionReady) return this.automationHost.executeTool(toolRequest);
+    return this.browserSessionReady.then(() => this.automationHost.executeTool(toolRequest));
   }
 
   private write(client: PipeClient, message: unknown): WriteResult {

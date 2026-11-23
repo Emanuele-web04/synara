@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveConfiguredAccountUrl } from "@synara/shared/account";
-import { desktopFlavorFromBundleId, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
+import { desktopFlavorFromBundleId } from "@synara/shared/betaFeatures";
 
 export const REMOTE_IMPORT_SUSPENSION_FILE = "remote-suspended-after-import.json";
 
@@ -46,13 +46,12 @@ export function requireRemoteConnections(stateDir?: string): void {
 
 export function accountProfileSyncUnavailableReason(): string | undefined {
   const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
-  if (!isBetaFeatureEnabled("accountProfileSync", flavor))
-    return "Account profile sync is unavailable in Stable.";
-  // The dedicated Remote app promises account sync on sign-in; generic builds
-  // still require operator opt-in, and an explicit Remote opt-out is honored.
+  // Stable and Remote offer account profiles on sign-in. Other hosts retain
+  // operator opt-in, and an explicit opt-out is honored in every flavor.
   const enabled =
     process.env.SYNARA_ACCOUNT_PROFILE_SYNC === "1" ||
-    (flavor === "remote" && process.env.SYNARA_ACCOUNT_PROFILE_SYNC === undefined);
+    ((flavor === "production" || flavor === "remote") &&
+      process.env.SYNARA_ACCOUNT_PROFILE_SYNC === undefined);
   if (!enabled)
     return "Account profile sync is unavailable until SYNARA_ACCOUNT_PROFILE_SYNC=1 is set.";
   return undefined;

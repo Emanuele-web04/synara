@@ -300,6 +300,21 @@ async function flushActionResponses() {
   await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
 }
 
+function deferAcceptance(action: "archive" | "done") {
+  let accept!: () => void;
+  if (action === "archive") {
+    harness.archiveThread.mockImplementationOnce(
+      () => new Promise<number>((resolve) => (accept = () => resolve(1))),
+    );
+  } else {
+    harness.dispatchCommand.mockImplementationOnce(
+      () =>
+        new Promise<{ sequence: number }>((resolve) => (accept = () => resolve({ sequence: 1 }))),
+    );
+  }
+  return { accept: () => accept() };
+}
+
 beforeEach(() => {
   reactHarness.reset();
   sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID)];
@@ -1014,19 +1029,7 @@ describe("useSidebarThreadActions", () => {
     "preserves a newer route while the focused thread's %s request is pending",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -1034,7 +1037,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: FALLBACK_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -1047,19 +1050,7 @@ describe("useSidebarThreadActions", () => {
     "keeps focus when a background %s target is opened before acceptance",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: FALLBACK_ID });
       const pending =
         action === "archive"
@@ -1067,7 +1058,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: THREAD_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -1080,19 +1071,7 @@ describe("useSidebarThreadActions", () => {
     "keeps focus after leaving and returning to a pending %s target",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -1101,7 +1080,7 @@ describe("useSidebarThreadActions", () => {
       render({ routeThreadId: FALLBACK_ID });
       render({ routeThreadId: THREAD_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -1114,19 +1093,7 @@ describe("useSidebarThreadActions", () => {
     "keeps a newer split route while the focused thread's %s request is pending",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -1134,7 +1101,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: THREAD_ID, routeSplitViewId: "split-newer" });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 

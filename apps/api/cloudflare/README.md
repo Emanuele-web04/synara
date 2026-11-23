@@ -160,7 +160,14 @@ it runs API tests, builds the Linux image and boots it against disposable
 PostgreSQL. The smoke check reads a missing profile through the real API. Its
 placeholder WorkOS configuration does not verify real login.
 
-For publication, configure these repository secrets and run with `deploy` checked:
+Restrict the GitHub environment `account-api-production` to `main` and store
+`CLOUDFLARE_API_TOKEN` in that environment. Run the workflow from `main` with
+`deploy` checked. Wrangler retains runtime variables configured in the
+dashboard and absent from `wrangler.jsonc`, including Polar settings. Check
+that the account and API origins declared in that file match the live Worker.
+The workflow leaves existing credentials in place by default. For initial
+provisioning or a planned update to the base credentials, also check
+`bootstrap_secrets` and supply the matching values in the GitHub environment.
 
 | GitHub secret                 | Destination                          |
 | ----------------------------- | ------------------------------------ |
@@ -177,10 +184,14 @@ revision that was verified. After provisioning, confirm API readiness and
 complete real login, private-profile, public-profile and revocation checks.
 Then run **Deploy Profiles** with the verified API origin above.
 
-The two workflows install the same `PROFILE_PROXY_SECRET` for per-visitor
-public-profile rate limits. Direct/manual deployments may omit it, but then
-profile reads share upstream per-IP rate limits. Neither workflow invents a
-public user profile. Follow the [operator checklist](../../../docs/implementation/cloudflare-profiles/SETUP-IT.md)
+During provisioning, install the same `PROFILE_PROXY_SECRET` for both Workers'
+per-visitor public-profile rate limits. The separate **Deploy Profiles** workflow
+reads its own `CLOUDFLARE_API_TOKEN` and `SYNARA_PROFILE_PROXY_SECRET` from
+repository or organization secrets. Use a deployment token scoped to Profiles
+there and keep the Account API token in `account-api-production`.
+Direct/manual deployments may omit the proxy secret, in which case profile
+reads share upstream per-IP rate limits. Follow the
+[operator checklist](../../../docs/implementation/cloudflare-profiles/SETUP-IT.md)
 to configure, deploy and test the whole trial.
 
 ## Verification limits

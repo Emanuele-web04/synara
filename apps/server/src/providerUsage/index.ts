@@ -575,9 +575,19 @@ export const providerUsageRecoveryBindingKey = Effect.fn(function* (input: {
       candidate.instanceId === input.instanceId,
   );
   const fetcher = instance ? PROVIDER_USAGE_FETCHERS[instance.driver] : undefined;
-  if (!instance || !fetcher?.recoveryIdentity) return null;
-  return yield* Effect.tryPromise({
-    try: async () => {
+  // Each refusal is logged with its reason: an unproven identity keeps every limited
+  // turn manual, and a silent null made that indistinguishable from "not limited".
+  const refuse = (reason: string, cause?: unknown) =>
+    Effect.logWarning("usage-limit recovery unavailable: provider account binding refused", {
+      provider: input.provider,
+      instanceId: input.instanceId,
+      reason,
+      ...(cause !== undefined ? { cause: String(cause) } : {}),
+    }).pipe(Effect.as(null));
+  if (!instance) return yield* refuse("provider-instance-disabled-or-missing");
+  if (!fetcher?.recoveryIdentity) return yield* refuse("provider-has-no-identity-proof");
+  const result = yield* Effect.tryPromise({
+    try: async (): Promise<{ readonly key: string } | { readonly refused: string }> => {
       const context = instanceUsageContext(
         instance,
         {
@@ -597,7 +607,7 @@ export const providerUsageRecoveryBindingKey = Effect.fn(function* (input: {
         ...(input.projectRoot !== undefined ? { projectRoot: input.projectRoot } : {}),
       });
       const identity = await fetcher.recoveryIdentity!(providerContext);
-      if (!identity) return null;
+      if (!identity) return { refused: "account-identity-unproven" };
       const binary =
         instance.driver === "codex"
           ? (providerContext.codexBinaryPath ?? "codex")
@@ -607,32 +617,36 @@ export const providerUsageRecoveryBindingKey = Effect.fn(function* (input: {
         platform: providerContext.platform,
         cwd: providerContext.workingDirectory ?? providerContext.homeDir,
       });
-      if (resolvedBinary === null) return null;
+      if (resolvedBinary === null) return { refused: "provider-binary-unresolved" };
       // Explicit environment/configuration can contain secrets; retain only the final hash.
       // File-backed OAuth token rotation is deliberately absent from this launch fence.
-      return credentialFingerprint(
-        JSON.stringify({
-          identity,
-          resolvedBinary,
-          driver: instance.driver,
-          instanceId: instance.instanceId,
-          config: instance.config,
-          environment: instance.environment,
-          homeDir: providerContext.homeDir,
-          workingDirectory: providerContext.workingDirectory,
-          projectRoot: providerContext.projectRoot,
-          codexBinaryPath: providerContext.codexBinaryPath,
-          claudeBinaryPath: providerContext.claudeBinaryPath,
-          isolateCredentials: providerContext.isolateCredentials,
-          environmentScope: Object.fromEntries(
-            (RECOVERY_ENVIRONMENT_KEYS[instance.driver] ?? []).map((name) => [
-              name,
-              providerContext.env[name] ?? null,
-            ]),
-          ),
-        }),
-      );
+      return {
+        key: credentialFingerprint(
+          JSON.stringify({
+            identity,
+            resolvedBinary,
+            driver: instance.driver,
+            instanceId: instance.instanceId,
+            config: instance.config,
+            environment: instance.environment,
+            homeDir: providerContext.homeDir,
+            workingDirectory: providerContext.workingDirectory,
+            projectRoot: providerContext.projectRoot,
+            codexBinaryPath: providerContext.codexBinaryPath,
+            claudeBinaryPath: providerContext.claudeBinaryPath,
+            isolateCredentials: providerContext.isolateCredentials,
+            environmentScope: Object.fromEntries(
+              (RECOVERY_ENVIRONMENT_KEYS[instance.driver] ?? []).map((name) => [
+                name,
+                providerContext.env[name] ?? null,
+              ]),
+            ),
+          }),
+        ),
+      };
     },
-    catch: () => new Error("Provider account identity is unavailable."),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+    catch: (cause) => cause,
+  }).pipe(Effect.catch((cause) => refuse("account-identity-check-failed", cause)));
+  if (result === null) return null;
+  return "key" in result ? result.key : yield* refuse(result.refused);
 });

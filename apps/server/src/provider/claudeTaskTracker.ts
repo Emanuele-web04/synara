@@ -1,5 +1,6 @@
 import type { RuntimeTaskListItem } from "@synara/contracts";
 
+import { parseTurnPlanSteps } from "../agentGateway/turnPlanTools.ts";
 import {
   makeRuntimeTaskListItem,
   nonEmptyRuntimeTaskListPayload,
@@ -182,6 +183,22 @@ export function normalizeClaudeTodoTasks(input: Record<string, unknown>): {
   });
 
   return nonEmptyRuntimeTaskListPayload(tasks);
+}
+
+/** The task list a `synara_update_plan` call shows; null when the gateway refused it. */
+export function normalizeSynaraPlanTasks(input: Record<string, unknown>): {
+  readonly tasks: ReadonlyArray<RuntimeTaskListItem>;
+} | null {
+  const parsed = parseTurnPlanSteps(input);
+  if ("error" in parsed) {
+    return null;
+  }
+  return nonEmptyRuntimeTaskListPayload(
+    parsed.steps.flatMap((step) => {
+      const item = makeRuntimeTaskListItem(step.content, step.status);
+      return item ? [item] : [];
+    }),
+  );
 }
 
 export function applyClaudeTaskToolResult(
