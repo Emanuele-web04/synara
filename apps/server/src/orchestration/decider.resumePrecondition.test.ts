@@ -28,6 +28,7 @@ function makeReadModel(input: {
   readonly archivedAt?: string;
   readonly runtimeMode?: OrchestrationReadModel["threads"][number]["runtimeMode"];
   readonly interactionMode?: OrchestrationReadModel["threads"][number]["interactionMode"];
+  readonly latestUserMessageAt?: string;
 }): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
@@ -47,6 +48,7 @@ function makeReadModel(input: {
         createdAt: NOW,
         updatedAt: NOW,
         latestTurn: input.latestTurn ?? null,
+        latestUserMessageAt: input.latestUserMessageAt ?? null,
         handoff: null,
         messages: [],
         session: input.session ?? null,
@@ -93,6 +95,38 @@ function resumeTurnStart(recordedTurnId: TurnId | null = RECORDED_TURN_ID): Orch
     createdAt: NOW,
   };
 }
+
+it("admits a delegated continuation only from the original completed turn and mode", async () => {
+  const base = resumeTurnStart();
+  if (base.type !== "thread.turn.start") throw new Error("Expected a turn start");
+  const { resumePrecondition: _resumePrecondition, ...command } = base;
+  const wake = {
+    ...command,
+    dispatchOrigin: "agent",
+    gatewayCompletionPrecondition: {
+      sourceTurnId: RECORDED_TURN_ID,
+      provider: "codex",
+      runtimeMode: "full-access",
+      latestUserMessageAt: null,
+    },
+  } as const;
+  const decideWake = (readModel: OrchestrationReadModel) =>
+    Effect.runPromise(Effect.result(decideOrchestrationCommand({ command: wake, readModel })));
+  const latestTurn = makeLatestTurn("completed");
+  expect(await decideWake(makeReadModel({ latestTurn }))).toMatchObject({ _tag: "Success" });
+  for (const changed of [
+    { latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("later-turn")) },
+    { latestTurn: makeLatestTurn("running") },
+    { latestTurn, runtimeMode: "approval-required" as const },
+    { latestTurn, archivedAt: NOW },
+    { latestTurn, latestUserMessageAt: NOW },
+  ]) {
+    expect(await decideWake(makeReadModel(changed))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "OrchestrationCommandInvariantError" },
+    });
+  }
+});
 
 const decide = (readModel: OrchestrationReadModel, recordedTurnId?: TurnId | null) =>
   decideOrchestrationCommand({ command: resumeTurnStart(recordedTurnId), readModel });

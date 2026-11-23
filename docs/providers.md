@@ -889,9 +889,21 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 
 ## Passive results from delegated tasks
 
+Use `synara_capabilities` with `instanceId` for a specific provider account's catalog. The
+response lists `runtimeModes` and `compatibleRuntimeModes` for the caller. Antigravity requires
+Full access, so an Approval required or Approve for me caller cannot delegate to it. The
+gateway rejects that combination before creating a thread or worktree. An external OpenCode
+server configured by URL does not receive the thread-scoped Synara MCP credential.
+
+Ordinary Synara threads may submit successive creation batches in the same active turn, up
+to 20 tasks across all batches on that destination. Use a new `requestId` for each phase and
+repeat the exact ID and arguments for a retry. Hub work continues to use its existing durable
+task keys and worker queue.
+
 When an orchestrator needs delegated results to finish the user's request, it must keep calling
 `synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
-synthesize the results. A timeout reports progress; it is not completion. Native provider
+synthesize the results, or use the explicitly requested asynchronous continuation described
+below. A timeout reports progress; it is not completion. Native provider
 subagents use their provider's own completion mechanism. Neither launching work nor opting
 into passive receipts is a substitute for collecting required results before ending the turn.
 
@@ -918,6 +930,16 @@ set during the initial run, Synara reports that limitation rather than claiming
 the goal finished at an intermediate turn. Later conversational turns do not
 produce further notifications. External MCP integrations cannot opt in because
 they have no authenticated creating task.
+
+For asynchronous continuation on a local, ordinary thread, use `resumeCreatorOnComplete: true`
+when the user asks the creator to continue automatically. Synara durably collects a receipt
+for each initial run in the batch. It starts one agent-originated follow-up only if the
+original creator turn completed and still owns an idle, eligible thread. A newer message,
+changed account or approval mode, interruption, Stop, snooze, or archive can supersede the
+follow-up. Synara passes child thread IDs to the creator so it can read the results as untrusted
+reference data. Remote creation and Hub work use their existing result delivery.
+Only a human-started turn can arm a follow-up. A resumed agent can delegate and wait
+within its own turn.
 
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as

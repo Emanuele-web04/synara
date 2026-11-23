@@ -214,7 +214,7 @@ layer("reconcileMigrationLineage", (it) => {
       const executed = yield* runMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [136, 137, 138, 139, 140, 141, 142, 143, 144, 145],
+        [136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146],
       );
       assert.deepStrictEqual(yield* read(), before);
       assert.deepStrictEqual(
@@ -793,6 +793,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [143, "UsageAnalyticsDeletedTokens"],
         [144, "ProjectionThreadsPullRequestLinks"],
         [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -890,6 +891,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 143, name: "UsageAnalyticsDeletedTokens" },
           { migration_id: 144, name: "ProjectionThreadsPullRequestLinks" },
           { migration_id: 145, name: "ProjectionThreadSessionSteering" },
+          { migration_id: 146, name: "AgentGatewayOperationWaves" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -1067,6 +1069,7 @@ agentGatewayRetentionLegacyLayer(
           [143, "UsageAnalyticsDeletedTokens"],
           [144, "ProjectionThreadsPullRequestLinks"],
           [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1207,6 +1210,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [143, "UsageAnalyticsDeletedTokens"],
         [144, "ProjectionThreadsPullRequestLinks"],
         [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1288,6 +1292,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [143, "UsageAnalyticsDeletedTokens"],
           [144, "ProjectionThreadsPullRequestLinks"],
           [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ],
       );
 
@@ -1423,6 +1428,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [143, "UsageAnalyticsDeletedTokens"],
         [144, "ProjectionThreadsPullRequestLinks"],
         [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1500,6 +1506,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [143, "UsageAnalyticsDeletedTokens"],
           [144, "ProjectionThreadsPullRequestLinks"],
           [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

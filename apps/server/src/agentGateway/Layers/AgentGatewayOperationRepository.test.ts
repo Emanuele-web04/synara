@@ -176,6 +176,39 @@ layer("AgentGatewayOperationRepository", (it) => {
     }),
   );
 
+  it.effect("counts all distinct waves against the turn budget and replays exact requests", () =>
+    Effect.gen(function* () {
+      const repository = yield* AgentGatewayOperationRepository;
+      const first = {
+        ...base,
+        operationId: "wave-1",
+        callerTurnId: "turn-waves",
+        requestedCount: 19,
+        allowAdditionalPlans: true,
+      };
+      const second = { ...first, operationId: "wave-2", requestId: "wave-2", requestedCount: 1 };
+      const competing = { ...second, operationId: "wave-3", requestId: "wave-3" };
+      assert.equal((yield* repository.reserve(first)).kind, "reserved");
+      const reservations = yield* Effect.all(
+        [repository.reserve(second), repository.reserve(competing)],
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(reservations.map(({ kind }) => kind).toSorted(), [
+        "reserved",
+        "turn_creation_limit",
+      ]);
+      assert.equal((yield* repository.reserve(first)).kind, "replay");
+      assert.equal(
+        (yield* repository.reserve({ ...first, fingerprint: "changed" })).kind,
+        "idempotency_conflict",
+      );
+      assert.equal(
+        (yield* repository.getByScope({ ...first, requestId: first.requestId }))?.operationId,
+        first.operationId,
+      );
+    }),
+  );
+
   it.effect("persists completion results for restart-safe replay", () =>
     Effect.gen(function* () {
       const repository = yield* AgentGatewayOperationRepository;

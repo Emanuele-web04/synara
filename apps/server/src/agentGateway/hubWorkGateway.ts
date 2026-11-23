@@ -216,6 +216,11 @@ export function makeHubWorkGateway(dependencies: {
       if (!isServerGroupsEnabled()) return null;
       const principal = yield* principalFor(context);
       if (principal.kind !== "coordinator") return null;
+      if (input.resumeCreatorOnComplete) {
+        return yield* Effect.fail(
+          new ToolInputError("Hub coordinators receive results through Hub work reports."),
+        );
+      }
       yield* context.assertCallerTurnActive();
       const sourcesByTask = yield* Effect.forEach(input.threads, (spec) =>
         resolveHubWorkSource({

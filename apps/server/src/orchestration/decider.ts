@@ -2334,6 +2334,28 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      const gatewayCompletion = command.gatewayCompletionPrecondition;
+      if (
+        gatewayCompletion !== undefined &&
+        (targetThread.archivedAt != null ||
+          targetThread.snoozedUntil != null ||
+          targetThread.session?.status === "stopped" ||
+          targetThread.claudeCacheReview != null ||
+          targetThread.hasPendingApprovals ||
+          targetThread.hasPendingUserInput ||
+          threadHasInFlightTurn(targetThread) ||
+          targetThread.latestTurn?.state !== "completed" ||
+          targetThread.latestTurn.turnId !== gatewayCompletion.sourceTurnId ||
+          targetThread.modelSelection.provider !== gatewayCompletion.provider ||
+          targetThread.modelSelection.instanceId !== gatewayCompletion.instanceId ||
+          targetThread.runtimeMode !== gatewayCompletion.runtimeMode ||
+          (targetThread.latestUserMessageAt ?? null) !== gatewayCompletion.latestUserMessageAt)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The delegated wave no longer owns an idle creator thread.",
+        });
+      }
       // Native reviews accept only their review target, never prompt attachments.
       // Reject before message acceptance so callers can preserve and resend the draft.
       if (command.reviewTarget !== undefined && command.message.attachments.length > 0) {
@@ -2417,11 +2439,15 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        gatewayCompletion === undefined &&
+        !questionResponse
           ? command.runtimeMode
           : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        gatewayCompletion === undefined &&
+        !questionResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
