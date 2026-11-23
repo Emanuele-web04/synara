@@ -1039,6 +1039,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozeReminderAt: null,
           deletedAt: null,
           handoff: null,
+          fusion: null,
           messages: [
             {
               id: asMessageId("message-0"),
@@ -2361,6 +2362,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozeReminderAt: null,
           handoff: null,
+          fusion: null,
           pendingBackgroundTaskCount: 0,
           session: {
             threadId: ThreadId.makeUnsafe("thread-shell"),

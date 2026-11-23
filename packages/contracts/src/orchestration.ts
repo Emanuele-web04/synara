@@ -545,6 +545,8 @@ export const ThreadCreationSource = Schema.Literals([
   "external_mcp",
   "provider_native",
   "automation_run",
+  /** Server-created Fusion sidekick; never settable by providers. */
+  "fusion_sidekick",
 ]);
 export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([
@@ -1140,11 +1142,28 @@ export const PendingClaudeCacheReview = Schema.Struct({
 });
 export type PendingClaudeCacheReview = typeof PendingClaudeCacheReview.Type;
 
+/**
+ * FusionPairing — the two-model contract of a Fusion thread (#1301).
+ * `lead` owns the conversation and judgement; `sidekick` executes delegated
+ * work in the same checkout. Optional knobs tune the per-pair harness policy.
+ */
+export const FusionPairing = Schema.Struct({
+  lead: ModelSelection,
+  sidekick: ModelSelection,
+  briefStyle: Schema.optional(Schema.Literals(["prescriptive", "goal-level"])),
+  sidekickMayPushBack: Schema.optional(Schema.Boolean),
+  delegateExploration: Schema.optional(Schema.Boolean),
+});
+export type FusionPairing = typeof FusionPairing.Type;
+
 export const OrchestrationThread = Schema.Struct({
   ...UsageLimitRecoveryFields,
   /** Durable project-import provenance; ordinary chats never request imported history. */
   isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
+  fusion: Schema.optional(Schema.NullOr(FusionPairing)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1260,6 +1279,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   /** Durable project-import provenance; ordinary chats never request imported history. */
   isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
+  fusion: Schema.optional(Schema.NullOr(FusionPairing)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1578,6 +1600,9 @@ const ThreadCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  fusion: Schema.optional(Schema.NullOr(FusionPairing)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   /** Makes the thread a standalone sidechat (no source thread). */
@@ -2560,6 +2585,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  fusion: Schema.optional(Schema.NullOr(FusionPairing)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   /** Absent on events written before PR links; replay derives them from `lastKnownPr`. */

@@ -14,6 +14,7 @@ import {
   OrchestrationThreadPullRequest,
   OrchestrationThreadPullRequestLink,
   PendingClaudeCacheReview,
+  FusionPairing,
   ThreadNotes,
   ThreadGoal,
   ThreadGoalAchievements,
@@ -90,6 +91,8 @@ export const ProjectionThread = Schema.Struct({
   // Omission preserves an existing review during legacy whole-row upserts;
   // null explicitly clears it.
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
+  /** Omission preserves an existing pairing; null clears it. */
+  fusion: Schema.optional(Schema.NullOr(FusionPairing)),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
   notes: Schema.NullOr(ThreadNotes),
   goal: Schema.NullOr(ThreadGoal),

@@ -18,6 +18,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
   PendingClaudeCacheReview,
+  FusionPairing,
   ThreadPinnedMessages,
   ThreadSidechatContext,
   ThreadGoalAchievements,
@@ -148,6 +149,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
+    fusion: Schema.optional(Schema.NullOr(Schema.fromJsonString(FusionPairing))),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
@@ -177,6 +179,7 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
+    fusion: Schema.optional(Schema.NullOr(Schema.fromJsonString(FusionPairing))),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
@@ -922,6 +925,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     ...(threadRow.claudeCacheReview != null
       ? { claudeCacheReview: threadRow.claudeCacheReview }
       : {}),
+    fusion: threadRow.fusion ?? null,
     goal: threadRow.goal ?? "",
     goalStartedAt: threadRow.goalStartedAt ?? null,
     goalPausedAt: threadRow.goalPausedAt ?? null,
@@ -998,6 +1002,7 @@ function toProjectedThread(input: {
     ...(threadRow.claudeCacheReview != null
       ? { claudeCacheReview: threadRow.claudeCacheReview }
       : {}),
+    fusion: threadRow.fusion ?? null,
     latestUserMessageAt: summary.latestUserMessageAt,
     // The retained message window may contain only agent output.
     latestHumanMessageAt: threadRow.latestHumanMessageAt ?? null,
@@ -1223,6 +1228,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",
@@ -1287,6 +1293,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           goal,
           goal_started_at AS "goalStartedAt",
           goal_paused_at AS "goalPausedAt",
@@ -2060,6 +2067,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",
@@ -2132,6 +2140,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",
@@ -2661,6 +2670,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           handoff_json AS "handoff",
           ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",

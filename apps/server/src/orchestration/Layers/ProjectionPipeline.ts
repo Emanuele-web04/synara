@@ -630,6 +630,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               pullRequestLinksFromEventPayload(event.payload, event.payload.createdAt) ?? [],
             latestTurnId: null,
             handoff: event.payload.handoff,
+            fusion: event.payload.fusion ?? null,
             pinnedMessages: null,
             notes: null,
             goal: null,

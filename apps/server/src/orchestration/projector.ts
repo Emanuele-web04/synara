@@ -634,6 +634,7 @@ export function projectEvent(
             snoozeReminderAt: null,
             deletedAt: null,
             handoff: payload.handoff,
+            fusion: payload.fusion ?? null,
             messages: [],
             activities: [],
             checkpoints: [],

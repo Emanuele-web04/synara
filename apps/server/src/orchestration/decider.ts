@@ -1514,6 +1514,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           subagentAgentId: command.subagentAgentId,
           subagentNickname: command.subagentNickname,
           subagentRole: command.subagentRole,
+          fusion: command.fusion ?? null,
           forkSourceThreadId: null,
           // A standalone sidechat starts its inactivity clock at creation, like a forked one.
           ...(sidechatContext !== null

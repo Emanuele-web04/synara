@@ -17,6 +17,7 @@ import {
   ModelSelection,
   OrchestrationThreadPullRequest,
   PendingClaudeCacheReview,
+  FusionPairing,
   ThreadPinnedMessages,
   ThreadHandoff,
   ThreadGoalAchievements,
@@ -44,6 +45,7 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
+    fusion: Schema.optional(Schema.NullOr(Schema.fromJsonString(FusionPairing))),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
@@ -99,6 +101,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_turn_id,
           handoff_json,
           claude_cache_review_json,
+          fusion_json,
           pinned_messages_json,
           notes,
           goal,
@@ -159,6 +162,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
           ${row.claudeCacheReview == null ? null : JSON.stringify(row.claudeCacheReview)},
+          ${row.fusion == null ? null : JSON.stringify(row.fusion)},
           ${row.pinnedMessages === null ? null : JSON.stringify(row.pinnedMessages)},
           ${row.notes},
           ${row.goal},
@@ -226,6 +230,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
             WHEN ${row.claudeCacheReview === undefined ? 1 : 0} = 1
               THEN projection_threads.claude_cache_review_json
             ELSE excluded.claude_cache_review_json
+          END,
+          fusion_json = CASE
+            WHEN ${row.fusion === undefined ? 1 : 0} = 1
+              THEN projection_threads.fusion_json
+            ELSE excluded.fusion_json
           END,
           pinned_messages_json = excluded.pinned_messages_json,
           notes = excluded.notes,
@@ -317,6 +326,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -386,6 +396,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           claude_cache_review_json AS "claudeCacheReview",
+          fusion_json AS "fusion",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
