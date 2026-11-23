@@ -1052,5 +1052,22 @@
   "childThreadsDoneCount_other": "+{{count}} done",
   "introducingSynaraForIphone": "Introducing Synara for iPhone",
   "iosBetaAnnouncementDescription": "Follow and steer your agents from your phone whenever your computer is awake. Now in beta.",
-  "joinTheBeta": "Join the beta"
+  "joinTheBeta": "Join the beta",
+  "devinImport_title": "Import Devin history",
+  "devinImport_description": "Bring conversations from the Devin CLI, Desktop, or Cloud into a Synara thread.",
+  "devinImport_sourceDevinLocal": "Devin on this computer",
+  "devinImport_sourceDevinCloud": "Devin Cloud",
+  "devinImport_sourceDevinAtif": "ATIF export",
+  "devinImport_sourceUnknown": "External source",
+  "devinImport_sourcesLoadError": "Devin history sources could not be listed.",
+  "devinImport_sessionsLoadError": "Sessions could not be loaded from this source.",
+  "devinImport_noSources": "No Devin history source was found on this computer.",
+  "devinImport_noSessions": "This source has no importable sessions.",
+  "devinImport_targetProject": "Import into",
+  "devinImport_loading": "Loading sessions…",
+  "devinImport_unknownDate": "Unknown date",
+  "devinImport_import": "Import",
+  "devinImport_importing": "Importing…",
+  "searchPalette_importDevinHistory": "Import Devin history…",
+  "searchPalette_importDevinHistoryDescription": "Bring a Devin CLI, Desktop, or Cloud session into this project."
 }

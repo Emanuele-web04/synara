@@ -177,6 +177,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "add-project": FolderAddIcon,
   "import-thread": ImportThreadIcon,
   "import-projects": DownloadIcon,
+  "import-devin-history": DownloadIcon,
   feedback: BugReportIcon,
   settings: SettingsIcon,
   "usage-settings": UsageGaugeIcon,

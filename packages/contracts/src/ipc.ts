@@ -24,6 +24,14 @@ import type {
   ListProjectImportsInput,
   ListProjectImportsResult,
 } from "./projectImport";
+import type {
+  ExternalHistoryListSessionsInput,
+  ExternalHistoryListSessionsResult,
+  ExternalHistoryListSourcesResult,
+  ExternalHistoryReadHistoryInput,
+  ExternalHistoryReadHistoryResult,
+  ExternalHistoryImportResult,
+} from "./providerHistory";
 
 import type {
   AccountDeleteInput,
@@ -386,6 +394,7 @@ import type {
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
   OrchestrationGetThreadDetailSnapshotResult,
+  ExternalHistoryImportInput,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
   OrchestrationRegenerateThreadTitleInput,
@@ -1523,6 +1532,16 @@ export interface NativeApi {
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
     listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
+    listExternalHistorySources: () => Promise<ExternalHistoryListSourcesResult>;
+    listExternalHistorySessions: (
+      input: ExternalHistoryListSessionsInput,
+    ) => Promise<ExternalHistoryListSessionsResult>;
+    readExternalHistory: (
+      input: ExternalHistoryReadHistoryInput,
+    ) => Promise<ExternalHistoryReadHistoryResult>;
+    importExternalHistory: (
+      input: ExternalHistoryImportInput,
+    ) => Promise<ExternalHistoryImportResult>;
     importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
     loadProjectImportHistory: (
       input: LoadProjectImportHistoryInput,

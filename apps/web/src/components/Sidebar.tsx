@@ -33,6 +33,7 @@ import { APP_RAIL_LABEL_KEYS } from "./AppRail";
 import { PR_STATE_LABEL_KEYS } from "./pullRequest/pullRequestStatePresentation";
 import { THREAD_STATUS_LABEL_KEYS } from "./Sidebar.logic";
 import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
+import { useDevinImportDialogStore } from "~/devinImport/devinImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
 // Exports: Sidebar
@@ -7616,6 +7617,13 @@ export default function Sidebar() {
         label: t("workspace:importProjectsFrom"),
         description: t("workspace:bringCodexAndClaudeCodeProjectsAndConversationsInto"),
         keywords: ["import", "projects", "codex", "claude", "conversations", "folders"],
+      },
+      {
+        id: "import-devin-history",
+        label: t("workspace:searchPalette_importDevinHistory"),
+        description: t("workspace:searchPalette_importDevinHistoryDescription"),
+        keywords: ["import", "devin", "history", "session", "conversations"],
+        run: () => useDevinImportDialogStore.getState().openDialog(),
       },
       {
         id: "import-thread",
