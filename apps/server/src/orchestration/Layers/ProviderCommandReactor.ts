@@ -4706,7 +4706,7 @@ const make = Effect.gen(function* () {
                       summary: "Antigravity could not deliver the steering message.",
                       detail,
                       turnId: null,
-                      messageId: input.messageId,
+                      messageId: MessageId.makeUnsafe(input.messageId),
                       createdAt: new Date().toISOString(),
                     }).pipe(
                       Effect.catch((cause) =>
