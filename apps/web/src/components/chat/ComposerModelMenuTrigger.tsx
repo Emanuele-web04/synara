@@ -115,30 +115,33 @@ export function ComposerModelMenuTrigger(props: {
             showsPlaceholder ? "invisible" : hasShownPlaceholder && "composer-trigger-label-enter",
           )}
         >
-          <ProviderIcon
-            aria-hidden="true"
-            className={cn(
-              // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-              "size-3.5 shrink-0 opacity-100",
-              getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
-            )}
-          />
+          <span className={cn("relative shrink-0", SidekickProviderIcon && "pe-0.5 pb-0.5")}>
+            <ProviderIcon
+              aria-hidden="true"
+              className={cn(
+                // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+                "size-3.5 shrink-0 opacity-100",
+                getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
+              )}
+            />
+            {SidekickProviderIcon ? (
+              // Corner badge: the sidekick provider reads as a paired model, not a smudge.
+              <SidekickProviderIcon
+                aria-hidden="true"
+                className={cn(
+                  "absolute -bottom-0.5 -right-0.5 size-2 opacity-100",
+                  getProviderIconClassName(
+                    fusionSidekickProvider ?? props.provider,
+                    "text-muted-foreground",
+                  ),
+                )}
+              />
+            ) : null}
+          </span>
           <ProviderAccountDot
             accentColor={props.accountAccentColor}
             className="-ms-1 size-1.5 shrink-0 self-start ring-0"
           />
-          {SidekickProviderIcon ? (
-            <SidekickProviderIcon
-              aria-hidden="true"
-              className={cn(
-                "-ms-1 size-3 shrink-0 opacity-100",
-                getProviderIconClassName(
-                  fusionSidekickProvider ?? props.provider,
-                  "text-muted-foreground",
-                ),
-              )}
-            />
-          ) : null}
           {props.accountName ? (
             props.hideModelLabel ? (
               <span className="sr-only">{props.accountLabel}</span>
