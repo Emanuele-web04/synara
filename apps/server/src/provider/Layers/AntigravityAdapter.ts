@@ -54,6 +54,7 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { AutoGate } from "../autoGate/AutoGate.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -280,6 +281,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
+    const autoGate = Option.getOrUndefined(yield* Effect.serviceOption(AutoGate));
     const makeRuntime = dependencies.makeRuntime ?? makeAntigravityAcpRuntime;
     const runHelper = dependencies.runHelper ?? runAntigravityHelperProcess;
     const backgroundQuietMs = dependencies.backgroundQuietMs ?? ANTIGRAVITY_BACKGROUND_QUIET_MS;
@@ -670,6 +672,23 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                       },
                     }
                   : { outcome: { outcome: "cancelled" as const } };
+              }
+              if (autoGate !== undefined) {
+                const gateOutcome = yield* autoGate.decide({
+                  provider: PROVIDER,
+                  runtimeMode: input.runtimeMode,
+                  toolCall: {
+                    title:
+                      typeof params.toolCall.title === "string" ? params.toolCall.title : undefined,
+                    rawInput: params.toolCall.rawInput,
+                  },
+                  options: params.options,
+                  logVerdict: (entry) =>
+                    logNative(input.threadId, "synara/auto_gate_verdict", entry),
+                });
+                if (gateOutcome !== undefined) {
+                  return { outcome: gateOutcome };
+                }
               }
               const permissionRequest = parsePermissionRequest(params);
               const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());

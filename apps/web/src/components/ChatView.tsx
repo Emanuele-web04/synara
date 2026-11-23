@@ -50,6 +50,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useAutoEngine } from "~/hooks/useAutoEngine";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -678,6 +679,7 @@ export default function ChatView({
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings, updateSettings } = useAppSettings();
+  const autoEngine = useAutoEngine();
   const newChatDefault = useNewChatDefault(settings);
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -4130,9 +4132,9 @@ export default function ChatView({
       const providerStatus = findProviderStatus(providerStatuses, provider, resolvedInstanceId);
       const nextRuntimeMode =
         runtimeMode === "auto" &&
-        !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
+        !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus, autoEngine)
           ? "approval-required"
-          : normalizeRuntimeModeForProvider(runtimeMode, provider);
+          : normalizeRuntimeModeForProvider(runtimeMode, provider, autoEngine);
       // Commit the canonical downgrade before storing an incompatible model.
       // On failure the Auto draft remains visible so compatibility checks can retry.
       const didCommitSelection = await commitAfterRuntimeModePersistence({
@@ -4168,6 +4170,7 @@ export default function ChatView({
     },
     [
       activeThread,
+      autoEngine,
       customModelsByProvider,
       lockedProvider,
       modelOptionsByProvider,

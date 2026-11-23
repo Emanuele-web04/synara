@@ -774,6 +774,8 @@ export function createWsNativeApi(): NativeApi {
       getConfig: () => executionRequest(WS_METHODS.serverGetConfig),
       getEnvironment: () => executionRequest(WS_METHODS.serverGetEnvironment),
       getSettings: () => executionRequest(WS_METHODS.serverGetSettings),
+      getAutoGateStatus: () => executionRequest(WS_METHODS.serverGetAutoGateStatus),
+      downloadAutoGateModel: () => executionRequest(WS_METHODS.serverDownloadAutoGateModel),
       updateSettings: (input) => executionRequest(WS_METHODS.serverUpdateSettings, input),
       getAuthSession: () => requestAuthJson<AuthSessionState>("/api/auth/session"),
       bootstrapAuth: (input: AuthBootstrapInput) =>

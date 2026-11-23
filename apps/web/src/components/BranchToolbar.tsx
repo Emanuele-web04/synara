@@ -20,6 +20,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { runtimeModePresentation, providerModelSupportsAutoRuntimeMode } from "../lib/runtimeMode";
+import { useAutoEngine } from "../hooks/useAutoEngine";
 import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
@@ -163,9 +164,10 @@ export function RuntimeUsageControls({
 }: RuntimeUsageControlsProps) {
   const { t } = useTranslation();
 
+  const autoEngine = useAutoEngine();
   const autoModeAvailable =
     provider !== undefined &&
-    providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
+    providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus, autoEngine);
   const runtimePresentation = runtimeModePresentation(
     runtimeMode ?? "approval-required",
     provider,

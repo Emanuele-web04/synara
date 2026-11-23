@@ -1,5 +1,6 @@
 import { t } from "~/i18n";
 import type {
+  AutoEngine,
   ProviderKind,
   ProviderModelDescriptor,
   RuntimeMode,
@@ -8,15 +9,24 @@ import type {
 import {
   normalizeRuntimeModeForProvider,
   providerSupportsAutoRuntimeMode,
+  providerSupportsLocalAutoGate,
 } from "@synara/shared/runtimeMode";
 
-export { normalizeRuntimeModeForProvider, providerSupportsAutoRuntimeMode };
+export {
+  normalizeRuntimeModeForProvider,
+  providerSupportsAutoRuntimeMode,
+  providerSupportsLocalAutoGate,
+};
 
 export function providerModelSupportsAutoRuntimeMode(
   provider: ProviderKind,
   runtimeModel?: ProviderModelDescriptor,
   providerStatus?: ServerProviderStatus | null,
+  autoEngine?: AutoEngine,
 ): boolean {
+  if (autoEngine === "local" && providerSupportsLocalAutoGate(provider)) {
+    return true;
+  }
   if (!providerSupportsAutoRuntimeMode(provider)) {
     return false;
   }

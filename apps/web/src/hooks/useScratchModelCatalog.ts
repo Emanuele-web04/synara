@@ -22,6 +22,7 @@ import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
 } from "~/lib/runtimeMode";
+import { useAutoEngine } from "~/hooks/useAutoEngine";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { buildModelSelection, type ProviderOptions } from "../providerModelOptions";
 import { DEFAULT_RUNTIME_MODE } from "../types";
@@ -42,6 +43,7 @@ export function useScratchModelCatalog(input: {
     // The scratch draft's own model setter, which also saves the sticky choice.
     handleProviderModelChange: setScratchProviderModel,
   } = input.draft;
+  const autoEngine = useAutoEngine();
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
@@ -92,10 +94,10 @@ export function useScratchModelCatalog(input: {
         model,
         runtimeModels: runtimeModelsByProvider[provider],
       });
-      setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider));
+      setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider, autoEngine));
       setScratchProviderModel(provider, model, instanceId, runtimeModel?.supportsAutoMode, options);
     },
-    [runtimeModelsByProvider, setScratchProviderModel],
+    [autoEngine, runtimeModelsByProvider, setScratchProviderModel],
   );
 
   useEffect(() => {
@@ -105,11 +107,18 @@ export function useScratchModelCatalog(input: {
         selectedProvider,
         runtimeModelForCapabilities,
         selectedProviderStatus,
+        autoEngine,
       )
     ) {
       setRuntimeMode("approval-required");
     }
-  }, [runtimeMode, runtimeModelForCapabilities, selectedProvider, selectedProviderStatus]);
+  }, [
+    autoEngine,
+    runtimeMode,
+    runtimeModelForCapabilities,
+    selectedProvider,
+    selectedProviderStatus,
+  ]);
 
   // Providers without a static default (e.g. Pi) resolve their model once discovery
   // delivers the catalog. This is not a user choice, so it skips the sticky selection.

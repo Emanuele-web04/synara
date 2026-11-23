@@ -4,6 +4,7 @@
 // Exports: ChatsSettingsView
 
 import { type SidechatExpiry } from "@synara/contracts";
+import { AutoEngineSettingsSection } from "~/components/settings/AutoEngineSettingsSection";
 import {
   type AppSettingsBinding,
   type FollowUpBehavior,
@@ -326,6 +327,8 @@ export function ChatsSettingsView(binding: AppSettingsBinding) {
           ariaLabel="settings:confirmTerminalTabClose"
         />
       </SettingsSection>
+
+      <AutoEngineSettingsSection />
     </div>
   );
 }

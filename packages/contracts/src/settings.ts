@@ -141,6 +141,41 @@ export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
 export type KeepAwakeMode = typeof KeepAwakeMode.Type;
 export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
 
+// Which engine resolves "auto" runtime mode approvals. "native" uses the
+// provider's own auto path when it has one; "local" runs Synara's on-device
+// classifier (ProCreations/auto-0.4b ONNX) over every escalated action.
+export const AutoEngine = Schema.Literals(["native", "local"]);
+export type AutoEngine = typeof AutoEngine.Type;
+
+// Confidence bands for the local auto-approval gate. Below the allow band the
+// action runs without a prompt; inside the band it escalates to a card; above
+// the deny band it is refused without a prompt.
+export const AutoGateThresholdPreset = Schema.Literals(["strict", "balanced", "permissive"]);
+export type AutoGateThresholdPreset = typeof AutoGateThresholdPreset.Type;
+
+// Status of the on-device Auto-approval classifier, served over WS for the
+// Settings surface (download state plus this session's verdict counts).
+export const AutoGateModelState = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("not-downloaded") }),
+  Schema.Struct({ state: Schema.Literal("downloading"), bytesDone: Schema.Int }),
+  Schema.Struct({ state: Schema.Literal("ready") }),
+  Schema.Struct({ state: Schema.Literal("error"), detail: Schema.String }),
+]);
+export type AutoGateModelState = typeof AutoGateModelState.Type;
+
+export const AutoGateStatusView = Schema.Struct({
+  // False when the server build cannot run the local gate (missing backend).
+  available: Schema.Boolean,
+  model: AutoGateModelState,
+  modelDir: Schema.String,
+  counts: Schema.Struct({
+    allowed: Schema.Int,
+    denied: Schema.Int,
+    escalated: Schema.Int,
+  }),
+});
+export type AutoGateStatusView = typeof AutoGateStatusView.Type;
+
 // What a new chat's composer starts from on every client of this server. Clients
 // write it when the user changes a new chat's model, effort, speed or access mode,
 // and follow other clients' changes live through settings updates.
@@ -162,6 +197,10 @@ export const ServerSettings = Schema.Struct({
   // Server-owned epoch: disabling invalidates pending waits across a rapid re-enable/restart.
   usageLimitRecoveryEpoch: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 0)),
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  autoEngine: AutoEngine.pipe(Schema.withDecodingDefault(() => "native" as const)),
+  autoGateThresholdPreset: AutoGateThresholdPreset.pipe(
+    Schema.withDecodingDefault(() => "balanced" as const),
+  ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -232,6 +271,8 @@ const ProviderSettingsBasePatch = {
 
 export const ServerSettingsPatch = Schema.Struct({
   autoResumeAfterUsageLimits: Schema.optionalKey(Schema.Boolean),
+  autoEngine: Schema.optionalKey(AutoEngine),
+  autoGateThresholdPreset: Schema.optionalKey(AutoGateThresholdPreset),
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),

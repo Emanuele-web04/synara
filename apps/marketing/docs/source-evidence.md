@@ -88,7 +88,11 @@ executable; `devin auth login`, `devin auth status`, `devin models list --format
 `devin update`, and the `devin acp` stdio server; ACP authentication through
 `WINDSURF_API_KEY` or credentials stored by `devin auth login`. Devin's Smart
 permission mode auto-approves routine actions and asks on risky or uncertain ones,
-with Accept Edits as the approval fallback and `bypass` as the unrestricted mode.
+with Accept Edits as the approval fallback, Ask as the prompt-everything mode, and
+`bypass` as the unrestricted mode. Synara's optional local Auto gate classifies the
+same actions on-device with `ProCreations/auto-0.4b` (Hugging Face), which is the
+primary source for the model's files and labels; the always-prompt list and
+threshold presets are local Synara policy, not upstream documentation.
 
 **Primary source:** [Devin CLI quickstart](https://docs.devin.ai/cli),
 [commands and flags](https://docs.devin.ai/cli/reference/commands),
