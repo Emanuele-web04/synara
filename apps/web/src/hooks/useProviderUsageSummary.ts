@@ -30,7 +30,7 @@ import {
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
 import {
-  useProviderUsageQuery,
+  serverAllProviderUsageQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
 } from "~/lib/serverReactQuery";
 
@@ -112,10 +112,12 @@ export function useProviderUsageSummary(input: {
   const provider = input.provider ?? null;
   const instanceId = input.instanceId ?? input.providerSnapshot?.instanceId;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
-  const allProviderUsageQuery = useProviderUsageQuery({
-    enabled: shouldFetchLiveProviderUsage,
-    providers: provider ? [provider] : [],
-  });
+  const allProviderUsageQuery = useQuery(
+    serverAllProviderUsageQueryOptions({
+      enabled: shouldFetchLiveProviderUsage,
+      scope: provider === "antigravity" ? "antigravity" : "other",
+    }),
+  );
   const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
     (snapshot) =>
       snapshot.provider === provider &&

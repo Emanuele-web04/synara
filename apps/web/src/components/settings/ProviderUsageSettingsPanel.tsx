@@ -39,9 +39,10 @@ import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
-  refreshProviderUsageQueries,
+  fetchAllProviderUsage,
+  serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
-  useProviderUsageQuery,
+  setProviderUsageQueryData,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { t, useTranslation } from "~/i18n";
@@ -220,9 +221,14 @@ export function ProviderUsageSettingsPanel() {
     railUsageAccounts,
   ).map((account) => account.instance.instanceId);
   const railUsageFull = railUsageInstanceIds.length >= MAX_RAIL_USAGE_ACCOUNTS;
-  const usageQuery = useProviderUsageQuery();
+  const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
-    mutationFn: () => refreshProviderUsageQueries(queryClient),
+    mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
+    onSuccess: (data) => {
+      // The batch owns account membership. Keeping omitted previous snapshots
+      // would restore accounts that were removed or disabled since the last fetch.
+      setProviderUsageQueryData(queryClient, data);
+    },
   });
 
   // Use the live payload only. Inventing error placeholders for omitted providers
@@ -239,7 +245,7 @@ export function ProviderUsageSettingsPanel() {
     activeSnapshots.filter((snapshot) => !settings.disabledProviders.includes(snapshot.provider)),
   );
 
-  const showInitialLoading = usageQuery.isPending && cards.length === 0;
+  const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 

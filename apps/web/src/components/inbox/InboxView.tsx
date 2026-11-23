@@ -35,7 +35,10 @@ import {
   providerUsageProgressTrackProps,
 } from "~/lib/providerUsageDisplay";
 import { deriveAccountRateLimits, rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
-import { useProviderUsageQuery, serverRecapQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverAllProviderUsageQueryOptions,
+  serverRecapQueryOptions,
+} from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { automationAttentionCount, automationQueryKey } from "~/routes/-automations.shared";
@@ -649,7 +652,7 @@ export default function InboxView() {
     queryFn: () => ensureNativeApi().automation.list({}),
     enabled: inboxAvailable,
   });
-  const usageQuery = useProviderUsageQuery({ enabled: inboxAvailable });
+  const usageQuery = useQuery(serverAllProviderUsageQueryOptions(inboxAvailable));
   const quotaSnapshots = useMemo(
     () =>
       selectVisibleProviderUsageSnapshots(usageQuery.data ?? []).filter(

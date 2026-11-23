@@ -3,14 +3,15 @@ import type {
   ProviderKind,
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
+  ServerListProviderUsageInput,
+  ServerProviderUsageSnapshot,
   ServerProviderStatus,
   ServerStopLocalServerInput,
   StatsGetRecapInput,
   StatsGetUsageAnalyticsInput,
   ThreadId,
 } from "@synara/contracts";
-import { mutationOptions, queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 import {
   EXPENSIVE_READ_RETRY_OPTIONS,
@@ -21,6 +22,8 @@ import { withWorkspaceKeybindings } from "./hosts/workspaceKeybindings";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
+
+type ProviderUsageScope = "antigravity" | "other";
 
 export const serverQueryKeys = {
   all: ["server"] as const,
@@ -34,7 +37,8 @@ export const serverQueryKeys = {
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
-  antigravityProviderUsage: () => ["server", "allProviderUsage", "antigravity"] as const,
+  scopedProviderUsage: (scope: ProviderUsageScope) =>
+    ["server", "allProviderUsage", scope] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -441,24 +445,34 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
   });
 }
 
-async function fetchProviderUsageBatch(antigravity: boolean, forceRefresh = false) {
-  const snapshots = await ensureNativeApi().server.listProviderUsage({
-    ...(antigravity ? { provider: "antigravity" } : { excludeProvider: "antigravity" }),
-    ...(forceRefresh ? { forceRefresh } : {}),
-  });
-  // Older remote hosts may ignore the exclusion, so keep cache membership disjoint.
-  return snapshots.filter((snapshot) => (snapshot.provider === "antigravity") === antigravity);
+export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
+  const api = ensureNativeApi();
+  return api.server.listProviderUsage(input);
 }
 
-export async function refreshProviderUsageQueries(queryClient: QueryClient) {
-  await Promise.all([
-    fetchProviderUsageBatch(false, true).then((data) =>
-      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), data),
-    ),
-    fetchProviderUsageBatch(true, true).then((data) =>
-      queryClient.setQueryData(serverQueryKeys.antigravityProviderUsage(), data),
-    ),
-  ]);
+function filterProviderUsageScope(
+  data: readonly ServerProviderUsageSnapshot[],
+  scope: ProviderUsageScope,
+) {
+  return data.filter(
+    (snapshot) => (snapshot.provider === "antigravity") === (scope === "antigravity"),
+  );
+}
+
+// Keep both rail queries current after an explicit Settings refresh of the full batch.
+export function setProviderUsageQueryData(
+  queryClient: QueryClient,
+  data: readonly ServerProviderUsageSnapshot[],
+) {
+  queryClient.setQueryData(serverQueryKeys.allProviderUsage(), data);
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("antigravity"),
+    filterProviderUsageScope(data, "antigravity"),
+  );
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("other"),
+    filterProviderUsageScope(data, "other"),
+  );
 }
 
 export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
@@ -569,50 +583,34 @@ export function serverUsageAnalyticsQueryOptions(
   });
 }
 
-function providerUsageBatchQueryOptions(antigravity: boolean, enabled: boolean) {
+// Single-provider surfaces use scoped batches so Antigravity's CLI can't delay unrelated quota.
+// Other surfaces keep the shared full-batch cache.
+export function serverAllProviderUsageQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+        scope?: ProviderUsageScope;
+      } = true,
+) {
+  const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const scope = typeof input === "boolean" ? undefined : input.scope;
   return queryOptions({
-    queryKey: antigravity
-      ? serverQueryKeys.antigravityProviderUsage()
+    queryKey: scope
+      ? serverQueryKeys.scopedProviderUsage(scope)
       : serverQueryKeys.allProviderUsage(),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: () => fetchProviderUsageBatch(antigravity),
+    queryFn: async () => {
+      if (!scope) return fetchAllProviderUsage();
+      const data = await fetchAllProviderUsage(
+        scope === "antigravity" ? { provider: "antigravity" } : { excludeProvider: "antigravity" },
+      );
+      // Older remote hosts can ignore excludeProvider. Keep each rail cache scoped.
+      return filterProviderUsageScope(data, scope);
+    },
   });
-}
-
-// Antigravity launches a CLI read. Its cache and polling must not delay other providers.
-export function useProviderUsageQuery({
-  enabled = true,
-  providers,
-}: { enabled?: boolean; providers?: readonly ProviderKind[] } = {}) {
-  const wantsAntigravity = providers === undefined || providers.includes("antigravity");
-  const wantsOtherProviders =
-    providers === undefined || providers.some((provider) => provider !== "antigravity");
-  const otherUsage = useQuery(
-    providerUsageBatchQueryOptions(false, enabled && wantsOtherProviders),
-  );
-  const antigravityUsage = useQuery(
-    providerUsageBatchQueryOptions(true, enabled && wantsAntigravity),
-  );
-  const otherData = wantsOtherProviders ? otherUsage.data : undefined;
-  const antigravityData = wantsAntigravity ? antigravityUsage.data : undefined;
-  const data = useMemo(
-    () =>
-      otherData && antigravityData
-        ? [...otherData, ...antigravityData]
-        : (otherData ?? antigravityData),
-    [otherData, antigravityData],
-  );
-  return {
-    data,
-    isPending:
-      (wantsOtherProviders && otherUsage.isPending) ||
-      (wantsAntigravity && antigravityUsage.isPending),
-    isFetching:
-      (wantsOtherProviders && otherUsage.isFetching) ||
-      (wantsAntigravity && antigravityUsage.isFetching),
-  };
 }

@@ -11,7 +11,10 @@ import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 
 import { useAppSettings, type RailUsageWindow } from "~/appSettings";
-import { useProviderUsageQuery, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverAllProviderUsageQueryOptions,
+  serverSettingsQueryOptions,
+} from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 
 import { appRailButtonClassName } from "./AppRail";
@@ -220,9 +223,18 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
       t,
     ),
   );
-  const usageQuery = useProviderUsageQuery({
-    providers: accounts.map((account) => account.instance.driver),
-  });
+  const otherUsage = useQuery(
+    serverAllProviderUsageQueryOptions({
+      enabled: accounts.some(({ instance }) => instance.driver !== "antigravity"),
+      scope: "other",
+    }),
+  );
+  const antigravityUsage = useQuery(
+    serverAllProviderUsageQueryOptions({
+      enabled: accounts.some(({ instance }) => instance.driver === "antigravity"),
+      scope: "antigravity",
+    }),
+  );
 
   if (accounts.length === 0) {
     return null;
@@ -234,7 +246,10 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
         <AppRailUsageRing
           key={account.instance.instanceId}
           account={account}
-          snapshot={(usageQuery.data ?? []).find(
+          snapshot={(account.instance.driver === "antigravity"
+            ? antigravityUsage.data
+            : otherUsage.data
+          )?.find(
             (entry) =>
               entry.provider === account.instance.driver &&
               (entry.instanceId ?? entry.provider) === account.instance.instanceId,

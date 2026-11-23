@@ -778,7 +778,6 @@ available to managed sessions and the selected login process, and are never writ
 
 Antigravity account limits appear in **Settings → Usage**. Synara runs the official CLI quota
 report in the background with the selected account, using the sign-in already managed by Antigravity.
-The quota report requires Antigravity CLI 1.1.11 or newer.
 
 On macOS, managed Claude accounts keep the system home and username for Keychain access.
 Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;

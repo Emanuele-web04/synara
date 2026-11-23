@@ -118,7 +118,7 @@ describe("useProviderUsageSummary", () => {
 
   it("scopes the default live account without mixing newer provider-wide telemetry", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
       snapshot({
         instanceId: "claudeAgent",
         limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
@@ -140,7 +140,7 @@ describe("useProviderUsageSummary", () => {
 
   it("uses the selected account snapshot rather than another account in the batch", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
       snapshot({ instanceId: "claudeAgent", ...fallbackSnapshot() }),
       snapshot({
         instanceId: "claude_work",
@@ -156,7 +156,7 @@ describe("useProviderUsageSummary", () => {
 
   it("keeps an explicit account snapshot authoritative over the shared batch", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [fallbackSnapshot()]);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [fallbackSnapshot()]);
 
     const summary = readProviderUsageSummary({
       queryClient,
@@ -172,7 +172,7 @@ describe("useProviderUsageSummary", () => {
     "does not mix provider-wide fallback data into the %s account",
     (instanceId) => {
       const queryClient = createQueryClient();
-      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+      queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
       queryClient.setQueryData(
         serverQueryKeys.providerUsage("claudeAgent", null),
         fallbackSnapshot(),
@@ -204,13 +204,13 @@ describe("useProviderUsageSummary", () => {
       enabled: false,
     });
     expect(
-      queryClient.getQueryCache().find({ queryKey: serverQueryKeys.allProviderUsage() }),
+      queryClient.getQueryCache().find({ queryKey: serverQueryKeys.scopedProviderUsage("other") }),
     ).toBeDefined();
   });
 
   it("does not show local fallback rows when the live batch reports a non-ok status", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
     queryClient.setQueryData(
@@ -226,7 +226,7 @@ describe("useProviderUsageSummary", () => {
 
   it("still uses local fallback rows when no live snapshot exists", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
     queryClient.setQueryData(
       serverQueryKeys.providerUsage("claudeAgent", null),
       fallbackSnapshot(),
@@ -243,7 +243,7 @@ describe("useProviderUsageSummary", () => {
 
   it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
 
     const summary = readProviderUsageSummary({
       queryClient,
@@ -275,7 +275,7 @@ describe("useProviderUsageSummary", () => {
     "merges Fable telemetry at %s without replacing the weekly allowance",
     (updatedAt, remaining) => {
       const queryClient = createQueryClient();
-      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
         snapshot({
           updatedAt: "2099-04-08T18:00:00.000Z",
           limits: [
@@ -312,7 +312,7 @@ describe("useProviderUsageSummary", () => {
 
   it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
       snapshot({
         status: "ok",
         detail: "Anthropic is rate-limiting usage checks — showing your last values.",
@@ -335,7 +335,7 @@ describe("useProviderUsageSummary", () => {
 
   it("has no notice when the live snapshot is non-ok", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), [
       snapshot({ status: "error", detail: "Usage is currently unavailable." }),
     ]);
 
@@ -346,7 +346,7 @@ describe("useProviderUsageSummary", () => {
 
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
     queryClient.setQueryData(
       serverQueryKeys.providerUsage("claudeAgent", null),
       fallbackSnapshot(),

@@ -22,7 +22,7 @@ const updateSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings, updateSettings }) }));
 
-import { serverQueryKeys } from "~/lib/serverReactQuery";
+import { serverQueryKeys, setProviderUsageQueryData } from "~/lib/serverReactQuery";
 
 import { AppRailUsage } from "./AppRailUsage";
 import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
@@ -35,7 +35,7 @@ async function renderAccounts(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, enabled: false } },
   });
-  if (snapshots) client.setQueryData(serverQueryKeys.allProviderUsage(), snapshots);
+  if (snapshots) setProviderUsageQueryData(client, snapshots);
   client.setQueryData(serverQueryKeys.settings(), serverSettings);
   const onOpenUsageSettings = vi.fn();
   const content = () => (

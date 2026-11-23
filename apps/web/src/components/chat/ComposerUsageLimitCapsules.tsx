@@ -12,6 +12,7 @@ import {
   type OrchestrationThread,
   type ProviderKind,
 } from "@synara/contracts";
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { type TimestampFormat, useAppSettings } from "~/appSettings";
@@ -31,7 +32,7 @@ import {
 } from "~/lib/icons";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { formatRateLimitResetCountdown } from "~/lib/rateLimits";
-import { useProviderUsageQuery } from "~/lib/serverReactQuery";
+import { serverAllProviderUsageQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { formatShortTimestamp } from "~/timestampFormat";
 import { useProviderUsageMenuModel } from "../ProviderUsageMenuControl";
@@ -481,7 +482,7 @@ function UsageLimitWindows({
   provider: ProviderKind;
   instanceId: string | undefined;
 }): ReactNode {
-  const usageQuery = useProviderUsageQuery({ providers: [provider] });
+  const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   // The thread can outlive its settings entry. Keep its quota scoped to the
   // original account while settings load or after an account is removed.
   const usageInstanceId = instanceId ?? provider;
