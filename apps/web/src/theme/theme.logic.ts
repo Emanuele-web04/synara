@@ -661,6 +661,20 @@ export function setThemeCodeThemeId(
   };
 }
 
+/**
+ * Apply one preset across every appearance variant it defines. Presets that only
+ * define one variant leave the other variant unchanged.
+ */
+export function setThemeFamily(state: ThemeState, codeThemeId: string): ThemeState {
+  const option = CODE_THEME_OPTIONS.find((candidate) => candidate.id === codeThemeId);
+  if (!option) return state;
+
+  return option.variants.reduce(
+    (currentState, variant) => setThemeCodeThemeId(currentState, variant, codeThemeId),
+    state,
+  );
+}
+
 export function getCodeThemeSeed(codeThemeId: string, variant: ThemeVariant): ChromeTheme {
   const fallback = DEFAULT_CHROME_THEME_BY_VARIANT[variant];
   const themeSeed = THEME_SEED_CATALOG[codeThemeId]?.[variant];

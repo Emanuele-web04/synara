@@ -34,6 +34,7 @@ import {
   SettingsSectionShell,
 } from "~/components/settings/SettingsPanelPrimitives";
 import { ThemeModePicker } from "~/components/settings/ThemeModePicker";
+import { ThemeGallery } from "~/components/settings/ThemeGallery";
 import {
   Autocomplete,
   AutocompleteEmpty,
@@ -236,6 +237,16 @@ export function AppearanceSettingsView(binding: AppSettingsBinding) {
             onValueChange={setTheme}
             ariaLabel={t("onboarding:themePreference")}
           />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-ui-lg font-medium text-foreground">Theme presets</h3>
+            <span className="text-ui-sm text-muted-foreground">
+              Choose a starting point, then customize it below.
+            </span>
+          </div>
+          <ThemeGallery variant={resolvedTheme} />
         </div>
 
         <div className="space-y-3">

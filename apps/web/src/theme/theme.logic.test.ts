@@ -18,6 +18,7 @@ import {
   resolveThemePack,
   resolveProfileThemeAccent,
   updateChromeTheme,
+  setThemeFamily,
   resetThemeVariant,
   setThemeCodeThemeId,
   setWindowTranslucency,
@@ -240,6 +241,21 @@ describe("theme share strings", () => {
 });
 
 describe("code theme seeds", () => {
+  it("applies a preset family to both available variants", () => {
+    const nextState = setThemeFamily(DEFAULT_THEME_STATE, "linear");
+
+    expect(nextState.codeThemeIds).toEqual({ dark: "linear", light: "linear" });
+    expect(nextState.chromeThemes.dark).toEqual(getCodeThemeSeed("linear", "dark"));
+    expect(nextState.chromeThemes.light).toEqual(getCodeThemeSeed("linear", "light"));
+  });
+
+  it("leaves an unavailable variant unchanged for a single-variant preset", () => {
+    const nextState = setThemeFamily(DEFAULT_THEME_STATE, "dracula");
+
+    expect(nextState.codeThemeIds.dark).toBe("dracula");
+    expect(nextState.codeThemeIds.light).toBe("synara");
+    expect(nextState.chromeThemes.light).toEqual(DEFAULT_THEME_STATE.chromeThemes.light);
+  });
   it("merges the selected theme seed into the current pack instead of hard-resetting", () => {
     const nextState = setThemeCodeThemeId(
       {
