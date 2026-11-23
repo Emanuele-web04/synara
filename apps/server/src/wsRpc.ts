@@ -67,6 +67,7 @@ import {
   type OrchestrationShellStreamItem,
   type ProjectId,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationGetThreadHistoryPageResult,
   type OrchestrationThreadPullRequest,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
@@ -1702,7 +1703,9 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(externalHistory.importHistory(input), "Failed to import external history"),
         [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
           rpcEffect(
-            projectionReadModelQuery.listThreadHistoryPage(input),
+            projectionReadModelQuery
+              .listThreadHistoryPage(input)
+              .pipe(Effect.map((page): OrchestrationGetThreadHistoryPageResult => page)),
             "Failed to load thread history page",
           ),
         [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>

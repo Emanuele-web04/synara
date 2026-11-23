@@ -500,6 +500,7 @@ export const WsOrchestrationSettleTurnDispatchRpc = Rpc.make(
 export const WsGetThreadHistoryPageRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getThreadHistoryPage, {
   payload: OrchestrationRpcSchemas.getThreadHistoryPage.input,
   success: OrchestrationRpcSchemas.getThreadHistoryPage.output,
+  error: WsRpcError,
 });
 
 export const WsListProjectImportsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.listProjectImports, {
