@@ -20,7 +20,8 @@ protocollo e il ciclo di vita del provider.
    agenti esistenti. Il filtro tiene limitato il contesto per installazioni con molti account.
 2. Esporre stato disponibile, autenticazione e modalità compatibili con il chiamante.
    Applicare le regole di Synara sul server sia durante la discovery sia prima di creare
-   risorse. Antigravity richiede Full access. L’autorità di un padre resta il tetto per i figli.
+   risorse. La delega ad Antigravity via Agent Gateway richiede Full access. Le sessioni
+   interattive possono usare Approval required. L’autorità di un padre resta il tetto per i figli.
 3. Usare il catalogo dell’account OpenCode indicato per i modelli serviti da quel runtime.
    Claude Code come provider di un figlio è un target separato da Claude come modello di
    OpenCode. Un server OpenCode esterno configurato via URL resta sul percorso senza

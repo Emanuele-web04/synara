@@ -24,7 +24,7 @@ import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   autoRuntimeModeSelectionIssue,
-  providerSupportsRuntimeMode,
+  providerSupportsDelegatedRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
@@ -663,7 +663,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          if (!providerSupportsRuntimeMode(target.provider, runtimeMode)) {
+          if (!providerSupportsDelegatedRuntimeMode(target.provider, runtimeMode)) {
             return yield* Effect.fail(
               new GatewayToolError(
                 "runtime_mode_unavailable",

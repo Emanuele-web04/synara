@@ -17,7 +17,7 @@ import {
 import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
 import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import {
-  providerSupportsRuntimeMode,
+  providerSupportsDelegatedRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "@synara/shared/runtimeMode";
 import { Effect } from "effect";
@@ -294,7 +294,7 @@ function providerDefaultModel(provider: ProviderKind): string | null {
 function gatewayRuntimeModes(provider: ProviderKind, callerMode?: RuntimeMode) {
   return (["approval-required", "full-access"] as const).filter(
     (mode) =>
-      providerSupportsRuntimeMode(provider, mode) &&
+      providerSupportsDelegatedRuntimeMode(provider, mode) &&
       (callerMode === undefined || !runtimeModeEscalatesPrivilege(callerMode, mode)),
   );
 }
