@@ -3728,25 +3728,31 @@ const make = Effect.gen(function* () {
         ? thread.worktreePath
         : null;
     const projectCwd = threadWorktreePath ?? threadProject?.workspaceRoot;
-    const guestFolderPaths =
+    const guestWorkspace =
       (threadProject?.additionalFolders?.length ?? 0) > 0 &&
       (input.modelSelection?.provider ?? thread.modelSelection.provider) === "antigravity" &&
-      projectCwd !== undefined &&
-      resolveWslWorkspace(projectCwd) !== null;
+      projectCwd !== undefined
+        ? resolveWslWorkspace(projectCwd)
+        : null;
+    const worktreeSource = threadWorktreePath ? (threadProject?.workspaceRoot ?? null) : null;
+    const guestSource =
+      guestWorkspace && worktreeSource ? resolveWslWorkspace(worktreeSource) : null;
     // The adapter validates distro membership before sending this context to the process.
     const projectFoldersPreamble =
       threadProject && projectCwd
         ? buildProjectFoldersPreamble({
-            primaryFolder: guestFolderPaths
-              ? resolveExecutionWorkingDirectory(projectCwd)
-              : projectCwd,
-            additionalFolders: guestFolderPaths
+            primaryFolder: guestWorkspace?.linuxPath ?? projectCwd,
+            additionalFolders: guestWorkspace
               ? (threadProject.additionalFolders ?? []).map((path) =>
                   resolveExecutionWorkingDirectory(path),
                 )
               : (threadProject.additionalFolders ?? []),
-            // The original checkout is provenance, not a granted workspace root.
-            worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
+            // Keep provenance outside the grants and only translate paths in the launch distro.
+            worktreeOf:
+              guestSource &&
+              guestSource.distribution.toLowerCase() === guestWorkspace?.distribution.toLowerCase()
+                ? guestSource.linuxPath
+                : worktreeSource,
           })
         : null;
     const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
