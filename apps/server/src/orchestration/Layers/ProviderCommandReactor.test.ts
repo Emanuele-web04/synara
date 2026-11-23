@@ -1550,6 +1550,57 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
+    it.each([
+      { sourceDistro: "ubuntu", expectedSource: "/repos/checkout" },
+      { sourceDistro: "Debian", expectedSource: "\\\\wsl$\\Debian\\repos\\checkout" },
+    ])(
+      "describes a WSL worktree's original checkout in $sourceDistro without granting it",
+      async ({ sourceDistro, expectedSource }) => {
+        const originalCheckout = `\\\\wsl$\\${sourceDistro}\\repos\\checkout`;
+        const worktree = "\\\\wsl.localhost\\Ubuntu\\repos\\worktree";
+        const extraFolder = "\\\\wsl$\\Ubuntu\\repos\\api";
+        const harness = await createHarness({
+          threadModelSelection: { provider: "antigravity", model: "gemini-3.1-pro-low" },
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("multi-folder-wsl-project"),
+            projectId: asProjectId("project-1"),
+            workspaceRoot: originalCheckout,
+            additionalFolders: [extraFolder],
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("multi-folder-wsl-worktree"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            envMode: "worktree",
+            branch: "synara/multi-folder-wsl",
+            worktreePath: worktree,
+          }),
+        );
+        vi.stubGlobal("process", Object.create(process, { platform: { value: "win32" } }));
+        try {
+          await dispatchTurn(harness, "wsl-worktree");
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+
+        expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+          cwd: worktree,
+          additionalDirectories: [extraFolder],
+        });
+        const sentInput = (harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string })
+          .input;
+        expect(sentInput).toContain(
+          `- worktree: /repos/worktree (primary, worktree of ${expectedSource})\n- api: /repos/api`,
+        );
+      },
+    );
+
     it("restarts the live session with the edited folders on the next turn", async () => {
       const harness = await createHarness({ projectAdditionalFolders: ["/tmp/provider-api"] });
       await dispatchTurn(harness, "before-edit");

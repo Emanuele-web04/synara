@@ -12,6 +12,7 @@ import { Effect, Layer, Scope, ServiceMap } from "effect";
 import type { UserInputQuestion } from "@synara/contracts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { resolveExecutionWorkspacePath } from "@synara/shared/wslBridge";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import * as AcpErrors from "./AcpErrors.ts";
@@ -40,6 +41,7 @@ export interface AntigravityAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly antigravitySettings: AntigravityAcpRuntimeSettings | null | undefined;
+  readonly additionalDirectories?: ReadonlyArray<string>;
 }
 
 /** One entry of the model list `agy acp` returns from session setup. */
@@ -82,11 +84,19 @@ export function antigravitySupportsTurnSteering(initialize: Acp.InitializeRespon
 export function buildAntigravityAcpSpawnInput(
   settings: AntigravityAcpRuntimeSettings | null | undefined,
   cwd: string,
+  additionalDirectories: ReadonlyArray<string> = [],
 ): AcpSpawnInput {
   const baseEnv = { ...process.env, ...settings?.environment };
   return {
     command: settings?.binaryPath?.trim() || "agy",
-    args: ["acp"],
+    args: [
+      "acp",
+      // ACP workspace roots are process-scoped; the adapter supplies only project grants.
+      ...additionalDirectories.flatMap((directory) => [
+        "--add-dir",
+        resolveExecutionWorkspacePath(directory, cwd),
+      ]),
+    ],
     cwd,
     env: buildProviderChildEnvironment({ provider: "antigravity", baseEnv }),
   };
@@ -244,6 +254,20 @@ export const makeAntigravityAcpRuntime = (
   input: AntigravityAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const spawn = yield* Effect.try({
+      try: () =>
+        buildAntigravityAcpSpawnInput(
+          input.antigravitySettings,
+          input.cwd,
+          input.additionalDirectories,
+        ),
+      catch: (cause) =>
+        new AcpErrors.AcpRequestError({
+          code: -32602,
+          errorMessage:
+            cause instanceof Error ? cause.message : "Invalid Antigravity folder access.",
+        }),
+    });
     // The normalizer needs this session's MCP server names to split
     // `mcp_<server>_<tool>`; they are known once session setup builds them.
     const serverNames: string[] = [];
@@ -260,7 +284,7 @@ export const makeAntigravityAcpRuntime = (
               },
             }
           : {}),
-        spawn: buildAntigravityAcpSpawnInput(input.antigravitySettings, input.cwd),
+        spawn,
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
           resolveAntigravityAcpAuthMethodId(initializeResult, {

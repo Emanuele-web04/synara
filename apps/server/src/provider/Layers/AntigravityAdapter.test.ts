@@ -7,7 +7,19 @@ import {
   ThreadId,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  PlatformError,
+  Queue,
+  Scope,
+  Stream,
+} from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +30,10 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials";
 import * as AcpErrors from "../acp/AcpErrors";
 import type { AcpParsedSessionEvent, AcpToolCallState } from "../acp/AcpRuntimeModel";
-import type { AntigravityAcpRuntimeInput } from "../acp/AntigravityAcpSupport";
+import {
+  type AntigravityAcpRuntimeInput,
+  makeAntigravityAcpRuntime,
+} from "../acp/AntigravityAcpSupport";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime";
 import { makeFakeAcpSessionRuntime } from "../acp/testing/fakeAcpSessionRuntime";
 import {
@@ -1035,6 +1050,57 @@ describe("Antigravity ACP adapter", () => {
       );
     },
   );
+
+  it.each([
+    { name: "single-folder", extra: {}, folderArgs: [] },
+    { name: "empty folders", extra: { additionalDirectories: [] }, folderArgs: [] },
+    {
+      name: "resumed multi-folder",
+      extra: {
+        additionalDirectories: ["/repos/api", "/repos/shared package"],
+        resumeCursor: "existing-conversation",
+      },
+      folderArgs: ["--add-dir", "/repos/api", "--add-dir", "/repos/shared package"],
+    },
+  ])("passes $name project access to the agy process", async ({ extra, folderArgs }) => {
+    const commands: unknown[] = [];
+    const spawner = ChildProcessSpawner.make((command) => {
+      commands.push(command);
+      // Stop at the real spawn boundary: this test verifies argv without launching agy.
+      return Effect.fail(
+        PlatformError.badArgument({
+          module: "ChildProcess",
+          method: "spawn",
+          description: "Captured Antigravity process arguments",
+        }),
+      );
+    });
+    const result = await runWithAdapter(
+      {
+        makeRuntime: (input) =>
+          makeAntigravityAcpRuntime({ ...input, childProcessSpawner: spawner }),
+      },
+      (adapter) =>
+        adapter
+          .startSession(
+            startInput(ThreadId.makeUnsafe("thread-agy-folders"), {
+              ...extra,
+              cwd: "/repos/primary folder",
+              providerOptions: { antigravity: { binaryPath: "/opt/agy-fixture" } },
+            }),
+          )
+          .pipe(Effect.exit),
+    );
+    expect(Exit.isFailure(result)).toBe(true);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        command: "/opt/agy-fixture",
+        args: ["acp", ...folderArgs],
+        options: expect.objectContaining({ cwd: "/repos/primary folder", shell: false }),
+      }),
+    ]);
+  });
+
   it("attaches the Synara gateway and every granted connector as session MCP servers", async () => {
     const fake = makeControllableRuntime({ sessionSetupMethod: "resume" });
     await runWithAdapter(

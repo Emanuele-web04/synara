@@ -84,6 +84,7 @@ import { claudeSelectionRequiresRestart, resolveApiModelId } from "@synara/share
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { claudeCacheForModel } from "../../provider/claudeCacheObservation.ts";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import { resolveExecutionWorkingDirectory, resolveWslWorkspace } from "@synara/shared/wslBridge";
 import {
   formatProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
@@ -3726,13 +3727,34 @@ const make = Effect.gen(function* () {
       }) === "worktree-ready"
         ? thread.worktreePath
         : null;
-    const projectFoldersPreamble = threadProject
-      ? buildProjectFoldersPreamble({
-          primaryFolder: threadWorktreePath ?? threadProject.workspaceRoot,
-          additionalFolders: threadProject.additionalFolders ?? [],
-          worktreeOf: threadWorktreePath ? threadProject.workspaceRoot : null,
-        })
-      : null;
+    const projectCwd = threadWorktreePath ?? threadProject?.workspaceRoot;
+    const guestWorkspace =
+      (threadProject?.additionalFolders?.length ?? 0) > 0 &&
+      (input.modelSelection?.provider ?? thread.modelSelection.provider) === "antigravity" &&
+      projectCwd !== undefined
+        ? resolveWslWorkspace(projectCwd)
+        : null;
+    const worktreeSource = threadWorktreePath ? (threadProject?.workspaceRoot ?? null) : null;
+    const guestSource =
+      guestWorkspace && worktreeSource ? resolveWslWorkspace(worktreeSource) : null;
+    // The adapter validates distro membership before sending this context to the process.
+    const projectFoldersPreamble =
+      threadProject && projectCwd
+        ? buildProjectFoldersPreamble({
+            primaryFolder: guestWorkspace?.linuxPath ?? projectCwd,
+            additionalFolders: guestWorkspace
+              ? (threadProject.additionalFolders ?? []).map((path) =>
+                  resolveExecutionWorkingDirectory(path),
+                )
+              : (threadProject.additionalFolders ?? []),
+            // Keep provenance outside the grants and only translate paths in the launch distro.
+            worktreeOf:
+              guestSource &&
+              guestSource.distribution.toLowerCase() === guestWorkspace?.distribution.toLowerCase()
+                ? guestSource.linuxPath
+                : worktreeSource,
+          })
+        : null;
     const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
       .filter((block) => block.trim().length > 0)
       .join("\n\n");

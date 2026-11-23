@@ -1,6 +1,6 @@
 import type * as Acp from "@agentclientprotocol/sdk";
 import { Effect, Exit } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildAntigravityAcpSpawnInput,
@@ -27,6 +27,27 @@ describe("Antigravity ACP support", () => {
     expect(spawn.command).toBe("/opt/agy");
     expect(spawn.args).toEqual(["acp"]);
     expect(spawn.cwd).toBe("/repo");
+  });
+
+  it("passes guest paths to agy while retaining the WSL cwd for process launch", () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    try {
+      const cwd = "\\\\wsl.localhost\\Ubuntu\\repos\\primary";
+      const spawn = buildAntigravityAcpSpawnInput(undefined, cwd, [
+        "\\\\wsl$\\Ubuntu\\repos\\api",
+        "\\\\wsl.localhost\\Ubuntu\\repos\\shared package",
+      ]);
+      expect(spawn.args).toEqual([
+        "acp",
+        "--add-dir",
+        "/repos/api",
+        "--add-dir",
+        "/repos/shared package",
+      ]);
+      expect(spawn.cwd).toBe(cwd);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("names MCP calls server__tool using the session's server names", () => {
