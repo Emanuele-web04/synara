@@ -49,6 +49,7 @@ import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
+import { useDevinImportDialogStore } from "../devinImport/devinImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { NewThreadDefaultsSyncCoordinator } from "../components/NewThreadDefaultsSyncCoordinator";
@@ -413,6 +414,7 @@ function RootRouteView() {
             </>
           )}
           <GlobalProjectImportDialog />
+          <GlobalDevinImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -982,6 +984,26 @@ const ProjectImportDialog = lazy(() =>
     default: module.ProjectImportDialog,
   })),
 );
+
+const DevinImportDialog = lazy(() =>
+  import("../devinImport/DevinImportDialog").then((module) => ({
+    default: module.DevinImportDialog,
+  })),
+);
+
+function GlobalDevinImportDialog() {
+  const isOpen = useDevinImportDialogStore((store) => store.isOpen);
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+  if (!isOpen && !hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <DevinImportDialog />
+    </Suspense>
+  );
+}
 
 function GlobalProjectImportDialog() {
   const isOpen = useProjectImportDialogStore((store) => store.isOpen);
