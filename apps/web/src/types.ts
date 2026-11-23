@@ -416,6 +416,7 @@ export interface ThreadSession {
   provider: ProviderKind;
   runtimeMode?: RuntimeMode;
   providerInstanceId?: ProviderInstanceId;
+  supportsNativeTurnSteering?: boolean;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

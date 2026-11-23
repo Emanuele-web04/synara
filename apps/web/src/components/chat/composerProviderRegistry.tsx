@@ -99,12 +99,12 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "antigravity": {
       const providerOptions = modelOptions?.antigravity;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      // Antigravity effort ladders come only from discovery, so a missing
-      // ladder is "unknown", not "unsupported": keep an explicit pick for
-      // dispatch instead of silently running the session default, matching
-      // how Codex treats a stored effort before discovery resolves.
+      // Discovery owns the effort ladder. A saved Orchestrator option can name
+      // a planner and must reach the session even after the catalog changes.
       normalizedOptions =
-        rawEffort && runtimeModel?.supportedReasoningEfforts === undefined
+        rawEffort &&
+        (runtimeModel?.supportedReasoningEfforts === undefined ||
+          model?.trim().toLowerCase() === "orchestrator")
           ? { reasoningEffort: rawEffort }
           : normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;

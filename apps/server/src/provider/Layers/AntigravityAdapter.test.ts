@@ -1,7 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { ThreadId, type ProviderRuntimeEvent } from "@synara/contracts";
-import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import {
+  ApprovalRequestId,
+  CommandId,
+  MessageId,
+  ThreadId,
+  type ProviderRuntimeEvent,
+} from "@synara/contracts";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -9,9 +16,10 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials";
-import type * as AcpErrors from "../acp/AcpErrors";
+import * as AcpErrors from "../acp/AcpErrors";
 import type { AcpParsedSessionEvent, AcpToolCallState } from "../acp/AcpRuntimeModel";
 import type { AntigravityAcpRuntimeInput } from "../acp/AntigravityAcpSupport";
+import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime";
 import { makeFakeAcpSessionRuntime } from "../acp/testing/fakeAcpSessionRuntime";
 import {
   createBoundedProcessOutput,
@@ -24,6 +32,10 @@ import {
   type AntigravityAdapterDependencies,
   makeAntigravityAdapterLive,
 } from "./AntigravityAdapter";
+import {
+  useProviderCommandReactorHarness,
+  waitFor,
+} from "../../orchestration/testing/providerCommandReactorHarness";
 
 const SESSION_ID = "agy-session-1";
 const MODELS = {
@@ -40,48 +52,94 @@ function makeControllableRuntime(
   options: {
     readonly sessionSetupMethod?: "new" | "load" | "resume";
     readonly models?: typeof MODELS;
+    readonly omitLegacyModels?: boolean;
+    readonly agentVersion?: string;
+    readonly sessionId?: string;
+    readonly configOptions?: Acp.SessionConfigOption[];
+    readonly modelChanged?: (value: string) => Acp.SessionConfigOption | undefined;
   } = {},
 ) {
   const events = Effect.runSync(Queue.unbounded<AcpParsedSessionEvent>());
   const requests: Array<{ readonly method: string; readonly payload: unknown }> = [];
   const prompts: Array<ReadonlyArray<Acp.ContentBlock>> = [];
   const runtimeInputs: AntigravityAcpRuntimeInput[] = [];
+  const exited = Effect.runSync(Deferred.make<void>());
+  const sessionId = options.sessionId ?? SESSION_ID;
+  const pendingPrompts: Array<Deferred.Deferred<Acp.PromptResponse, AcpErrors.AcpError>> = [];
+  let configOptions = options.configOptions ?? [];
   let enqueued = 0;
   let cancels = 0;
-  let pendingPrompt: Deferred.Deferred<Acp.PromptResponse, AcpErrors.AcpError> | undefined;
+  let permissionHandler: Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
 
   const emit = (event: AcpParsedSessionEvent) => {
     enqueued += 1;
     Effect.runSync(Queue.offer(events, event));
   };
-  const finishPrompt = (stopReason: Acp.StopReason) =>
-    Effect.runSync(Deferred.succeed(pendingPrompt!, { stopReason }));
+  const finishPrompt = (stopReason: Acp.StopReason, index = pendingPrompts.length - 1) =>
+    Effect.runSync(Deferred.succeed(pendingPrompts[index]!, { stopReason }));
+  const rejectPrompt = (index: number) =>
+    Effect.runSync(
+      Deferred.fail(
+        pendingPrompts[index]!,
+        new AcpErrors.AcpRequestError({ code: -32602, errorMessage: "Steering was rejected" }),
+      ),
+    );
 
   const runtime = {
-    ...makeFakeAcpSessionRuntime({ sessionId: SESSION_ID }),
+    ...makeFakeAcpSessionRuntime({ sessionId }),
     start: () =>
       Effect.succeed({
-        sessionId: SESSION_ID,
-        initializeResult: { protocolVersion: 1 } as Acp.InitializeResponse,
+        sessionId,
+        initializeResult: {
+          protocolVersion: 1,
+          ...(options.agentVersion
+            ? { agentInfo: { name: "agy", version: options.agentVersion } }
+            : {}),
+        } as Acp.InitializeResponse,
         sessionSetupResult: {
-          sessionId: SESSION_ID,
-          models: options.models ?? MODELS,
+          sessionId,
+          ...(options.omitLegacyModels ? {} : { models: options.models ?? MODELS }),
+          configOptions,
         } as Acp.NewSessionResponse,
         modelConfigId: "model",
         sessionSetupMethod: options.sessionSetupMethod ?? "new",
       }),
     getEvents: () => Stream.fromQueue(events),
+    awaitExit: Deferred.await(exited),
     sessionUpdatesEnqueuedCount: Effect.sync(() => enqueued),
+    handleRequestPermission: (handler: typeof permissionHandler) =>
+      Effect.sync(() => {
+        permissionHandler = handler;
+      }),
+    getConfigOptions: Effect.sync(() => configOptions),
+    setConfigOption: (id: string, value: string) =>
+      Effect.sync(() => {
+        requests.push({ method: "session/set_config_option", payload: { id, value } });
+        configOptions = configOptions.map((option) =>
+          option.id === id && option.type === "select"
+            ? { ...option, currentValue: value }
+            : option,
+        );
+        if (id === "model" && options.modelChanged) {
+          const thoughtLevel = options.modelChanged(value);
+          configOptions = [
+            ...configOptions.filter((option) => option.id !== "thought_level"),
+            ...(thoughtLevel ? [thoughtLevel] : []),
+          ];
+        }
+        return { configOptions };
+      }),
     prompt: (payload: { readonly prompt: ReadonlyArray<Acp.ContentBlock> }) =>
       Effect.gen(function* () {
         prompts.push(payload.prompt);
-        pendingPrompt = yield* Deferred.make<Acp.PromptResponse, AcpErrors.AcpError>();
+        const pendingPrompt = yield* Deferred.make<Acp.PromptResponse, AcpErrors.AcpError>();
+        pendingPrompts.push(pendingPrompt);
         return yield* Deferred.await(pendingPrompt);
       }),
     cancel: Effect.sync(() => {
       cancels += 1;
-      if (pendingPrompt)
-        Effect.runSync(Deferred.succeed(pendingPrompt, { stopReason: "cancelled" }));
+      for (const prompt of pendingPrompts)
+        Effect.runSync(Deferred.succeed(prompt, { stopReason: "cancelled" }));
     }),
     request: (method: string, payload: unknown) =>
       Effect.sync(() => {
@@ -99,6 +157,10 @@ function makeControllableRuntime(
     makeRuntime,
     emit,
     finishPrompt,
+    rejectPrompt,
+    exit: Deferred.succeed(exited, undefined),
+    requestPermission: (request: Acp.RequestPermissionRequest) =>
+      Effect.suspend(() => permissionHandler(request)),
     requests,
     prompts,
     runtimeInputs,
@@ -110,15 +172,16 @@ const toolCall = (
   toolCallId: string,
   status: NonNullable<AcpToolCallState["status"]>,
   rawInput: Record<string, unknown> = { CommandLine: "sleep 8; echo bgdone" },
-): AcpParsedSessionEvent => ({
+  kind = "execute",
+): Extract<AcpParsedSessionEvent, { _tag: "ToolCallUpdated" }> => ({
   _tag: "ToolCallUpdated",
   toolCall: {
     toolCallId,
-    kind: "execute",
+    kind,
     title: "Ran command",
     status,
     command: String(rawInput.CommandLine ?? ""),
-    data: { toolCallId, kind: "execute", rawInput },
+    data: { toolCallId, kind, rawInput },
   },
   rawPayload: {},
 });
@@ -159,7 +222,9 @@ const makeCredentials = (): AgentGatewayCredentialsShape =>
 
 const runWithAdapter = <A>(
   dependencies: AntigravityAdapterDependencies,
-  body: (adapter: AntigravityAdapter["Service"]) => Effect.Effect<A, unknown>,
+  body: (
+    adapter: AntigravityAdapter["Service"],
+  ) => Effect.Effect<A, unknown, FileSystem.FileSystem | Scope.Scope>,
   credentials?: AgentGatewayCredentialsShape,
 ) => {
   const adapterLayer = makeAntigravityAdapterLive({ backgroundQuietMs: 50, ...dependencies });
@@ -195,7 +260,552 @@ const collectTurn = (adapter: AntigravityAdapter["Service"]) =>
     Effect.forkChild,
   );
 
+const interaction = (
+  sessionId: string,
+  toolCallId = "interaction_decision",
+): Acp.RequestPermissionRequest => ({
+  sessionId,
+  toolCall: { toolCallId, title: "Which plan?" },
+  options: [
+    { optionId: "planner-a", name: "Continue", kind: "allow_once" },
+    { optionId: " planner-b ", name: "Continue", kind: "allow_once" },
+  ],
+});
+
+const thoughtLevel = (selected: string): Acp.SessionConfigOption => ({
+  category: "thought_level",
+  id: "thought_level",
+  name: "Thinking",
+  type: "select",
+  currentValue: "low",
+  options:
+    selected === "neon"
+      ? [
+          { value: "low", name: "Low" },
+          { value: "deep", name: "Deep" },
+        ]
+      : [{ value: "low", name: "Low" }],
+});
+
+const { createHarness, readHarnessThread } = useProviderCommandReactorHarness();
+
 describe("Antigravity ACP adapter", () => {
+  it.each([true, false])(
+    "discovers and reapplies grouped ACP model IDs on resume without CLI substitution (configOnly=%s)",
+    async (omitLegacyModels) => {
+      const model = {
+        id: "model",
+        category: "model",
+        type: "select",
+        name: "Model",
+        currentValue: "carbon",
+        options: [
+          {
+            group: "planners",
+            name: "Planners",
+            options: [
+              { value: "neon", name: "Orchestrator" },
+              { value: "carbon", name: "Orchestrator" },
+            ],
+          },
+        ],
+      } satisfies Acp.SessionConfigOption;
+      const fake = makeControllableRuntime({
+        sessionSetupMethod: "resume",
+        omitLegacyModels,
+        configOptions: [model, thoughtLevel("carbon")],
+        modelChanged: thoughtLevel,
+      });
+      await runWithAdapter(
+        {
+          makeRuntime: fake.makeRuntime,
+          runHelper: async () => {
+            throw new Error("Legacy discovery ran");
+          },
+        },
+        (adapter) =>
+          Effect.gen(function* () {
+            const catalog = yield* adapter.listModels!({ provider: "antigravity" });
+            expect(
+              catalog.models.map((entry) => [
+                entry.slug,
+                entry.name,
+                entry.supportedReasoningEfforts?.map((level) => level.value),
+              ]),
+            ).toEqual([
+              ["neon", "Orchestrator", ["low", "deep"]],
+              ["carbon", "Orchestrator", ["low"]],
+            ]);
+            fake.requests.length = 0;
+            const threadId = ThreadId.makeUnsafe("thread-agy-acp-catalog");
+            yield* adapter.startSession(
+              startInput(threadId, {
+                resumeCursor: SESSION_ID,
+                modelSelection: {
+                  provider: "antigravity",
+                  model: "neon",
+                  options: { reasoningEffort: "deep" },
+                },
+              }),
+            );
+            expect(fake.requests.map((request) => request.payload)).toEqual([
+              { id: "model", value: "neon" },
+              { id: "thought_level", value: "deep" },
+            ]);
+            const unavailable = yield* adapter
+              .sendTurn({
+                threadId,
+                input: "should fail",
+                attachments: [],
+                modelSelection: {
+                  provider: "antigravity",
+                  model: "Orchestrator",
+                  options: { reasoningEffort: "unoffered-planner" },
+                },
+              })
+              .pipe(Effect.flip);
+            expect(unavailable.message).toContain("Unoffered Planner");
+            const invalidEffort = yield* adapter
+              .sendTurn({
+                threadId,
+                input: "should fail",
+                attachments: [],
+                modelSelection: {
+                  provider: "antigravity",
+                  model: "carbon",
+                  options: { reasoningEffort: "deep" },
+                },
+              })
+              .pipe(Effect.flip);
+            expect(invalidEffort.message).toContain("does not offer 'deep'");
+            expect(fake.requests.slice(-2).map((request) => request.payload)).toEqual([
+              { id: "model", value: "neon" },
+              { id: "thought_level", value: "deep" },
+            ]);
+            expect(fake.prompts).toHaveLength(0);
+          }),
+      );
+    },
+  );
+
+  it.each([undefined, "1.4.9"])(
+    "keeps the legacy dispatch path for an unsupported agent version (%s)",
+    async (agentVersion) => {
+      const fake = makeControllableRuntime(agentVersion ? { agentVersion } : {});
+      await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.makeUnsafe("thread-agy-legacy-steer");
+          const session = yield* adapter.startSession(startInput(threadId));
+          const turn = yield* adapter.sendTurn({ threadId, input: "First", attachments: [] });
+          yield* Effect.promise(() => waitFor(() => fake.prompts.length === 1));
+          const refused = yield* adapter.steerTurn!({
+            threadId,
+            input: "Follow up",
+            attachments: [],
+          }).pipe(Effect.flip);
+          expect(refused.message).toContain("no active turn that supports live steering");
+          expect(session.supportsNativeTurnSteering).toBe(false);
+          expect(fake.prompts).toHaveLength(1);
+          yield* adapter.interruptTurn(threadId, turn.turnId);
+        }),
+      );
+    },
+  );
+
+  it("fails closed on malformed interaction choices without changing normal full-access permissions", async () => {
+    const fake = makeControllableRuntime();
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-invalid-choice");
+        yield* adapter.startSession(startInput(threadId));
+        const requested =
+          yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "user-input.requested" }>>();
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            event.type === "user-input.requested"
+              ? Deferred.succeed(requested, event)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        const turn = yield* adapter.sendTurn({ threadId, input: "Ask", attachments: [] });
+        const request = interaction(SESSION_ID);
+        expect(
+          yield* fake.requestPermission({
+            ...request,
+            toolCall: { toolCallId: "normal-tool", title: "Run echo", kind: "execute" },
+          }),
+        ).toEqual({ outcome: { outcome: "cancelled" } });
+        expect(
+          yield* fake.requestPermission({
+            ...request,
+            options: [request.options[0]!, request.options[0]!],
+          }),
+        ).toEqual({ outcome: { outcome: "cancelled" } });
+        const native = yield* fake.requestPermission(request).pipe(Effect.forkChild);
+        const event = yield* Deferred.await(requested);
+        expect(event.turnId).toBe(turn.turnId);
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe(event.requestId!),
+          { interaction_decision: "Continue" },
+        );
+        expect(yield* Fiber.join(native)).toEqual({ outcome: { outcome: "cancelled" } });
+        yield* adapter.interruptTurn(threadId, turn.turnId);
+      }),
+    );
+  });
+
+  it.each(["rejected", "stopped"])(
+    "records an undelivered steer on its user message (reason=%s)",
+    async (reason) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const messageId = MessageId.makeUnsafe("undelivered-agy-steer");
+      const fake = makeControllableRuntime({ agentVersion: "1.5.1" });
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        threadModelSelection: { provider: "antigravity", model: "Gemini 4 Neon" },
+      });
+      await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+        Effect.gen(function* () {
+          const enteredSteer = yield* Deferred.make<void>();
+          const releaseSteer = yield* Deferred.make<void>();
+          harness.listSessions.mockImplementation(adapter.listSessions);
+          harness.steerTurn.mockImplementation((input, opts) =>
+            reason === "stopped"
+              ? Deferred.succeed(enteredSteer, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseSteer)),
+                  Effect.andThen(adapter.steerTurn!(input, opts)),
+                )
+              : adapter.steerTurn!(input, opts),
+          );
+          const events: ProviderRuntimeEvent[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.promise(async () => {
+                events.push(event);
+                await harness.emitRuntimeEvent(event);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* adapter.startSession(startInput(threadId));
+          const turn = yield* adapter.sendTurn({ threadId, input: "First", attachments: [] });
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.session?.activeTurnId === turn.turnId &&
+                fake.prompts.length === 1,
+            ),
+          );
+          yield* harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("agy-undelivered-steer"),
+            threadId,
+            message: { messageId, role: "user", text: "Steer", attachments: [] },
+            dispatchMode: "steer",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: new Date().toISOString(),
+          });
+          if (reason === "stopped") {
+            yield* Deferred.await(enteredSteer);
+            yield* adapter.interruptTurn(threadId, turn.turnId);
+            yield* Deferred.succeed(releaseSteer, undefined);
+            expect(fake.prompts).toHaveLength(1);
+          } else {
+            yield* Effect.promise(() => waitFor(() => fake.prompts.length === 2));
+            fake.rejectPrompt(1);
+          }
+          // Finish the original turn even if the steering input could not be sent.
+          if (reason === "rejected") fake.finishPrompt("end_turn", 0);
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.activities.some(
+                  (activity) =>
+                    activity.kind === "provider.turn.start.failed" &&
+                    typeof activity.payload === "object" &&
+                    activity.payload !== null &&
+                    "messageId" in activity.payload &&
+                    activity.payload.messageId === messageId,
+                ) === true,
+            ),
+          );
+          yield* Effect.promise(() =>
+            waitFor(() => events.some((event) => event.type === "turn.completed")),
+          );
+          expect(
+            events
+              .filter((event) => event.type === "turn.completed")
+              .map((event) => [event.turnId, event.payload.state]),
+          ).toEqual([[turn.turnId, reason === "stopped" ? "cancelled" : "completed"]]);
+        }),
+      );
+    },
+  );
+
+  it.each(["completed", "cancelled", "failed"])(
+    "steers the live ACP session through the reactor and owns a late question (outcome=%s)",
+    async (outcome) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const sessionId = "acc10000-0000-0000-0000-000000000000";
+      const fake = makeControllableRuntime({ sessionId, agentVersion: "1.5.1" });
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        threadModelSelection: { provider: "antigravity", model: "Gemini 4 Neon" },
+      });
+      await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const profileHome = yield* fs.makeTempDirectoryScoped({
+            prefix: "synara-antigravity-child-",
+          });
+          const childId = "acc10000-0000-0000-0000-000000000001";
+          const unrelatedChild = "acc10000-0000-0000-0000-000000000002";
+          const metadata = (id: string) =>
+            join(profileHome, ".gemini", "antigravity-cli", "brain", id, ".system_generated");
+          const writeRecord = (dir: string, name: string, value: unknown) =>
+            fs
+              .makeDirectory(dir, { recursive: true })
+              .pipe(Effect.andThen(fs.writeFileString(join(dir, name), JSON.stringify(value))));
+          for (const [id, callId] of [
+            [childId, "native-child-a"],
+            [unrelatedChild, "native-child-b"],
+          ] as const) {
+            yield* writeRecord(join(metadata(sessionId), "subagents"), `${id}.json`, {
+              conversationId: id,
+              subagentDescriptor: { role: `role-${callId}` },
+              state: "SUBAGENT_STATE_ALIVE",
+            });
+            yield* writeRecord(join(metadata(id), "messages"), "launch.json", {
+              sender: sessionId,
+              content: `prompt-${callId}`,
+              sourceMetadata: {
+                tool: {
+                  conversationId: sessionId,
+                  toolCall: { id: callId, name: "invoke_subagent" },
+                },
+              },
+            });
+          }
+          harness.listSessions.mockImplementation(adapter.listSessions);
+          harness.steerTurn.mockImplementation((input, opts) => adapter.steerTurn!(input, opts));
+          harness.respondToUserInput.mockImplementation(({ threadId, requestId, answers }) =>
+            adapter.respondToUserInput(threadId, requestId, answers),
+          );
+          harness.interruptTurn.mockImplementation(({ threadId, turnId }) =>
+            adapter.interruptTurn(threadId, turnId),
+          );
+          const events: ProviderRuntimeEvent[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.promise(async () => {
+                events.push(event);
+                await harness.emitRuntimeEvent(event);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* adapter.startSession(
+            startInput(threadId, {
+              providerOptions: {
+                antigravity: {
+                  environment: {
+                    HOME: profileHome,
+                    USERPROFILE: profileHome,
+                    GEMINI_HOME: join(profileHome, "unrelated-gemini-home"),
+                  },
+                },
+              },
+            }),
+          );
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "Launch two research tasks",
+            attachments: [],
+          });
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.session?.activeTurnId === turn.turnId &&
+                fake.prompts.length === 1,
+            ),
+          );
+          fake.emit(
+            toolCall(
+              "native-child-a",
+              "completed",
+              { _toolName: "invoke_subagent", Role: "Research", Prompt: "Read the guide" },
+              "other",
+            ),
+          );
+          fake.emit(
+            toolCall(
+              "native-child-b",
+              "completed",
+              {
+                _toolName: "start_subagent",
+                Subagents: [
+                  { Role: "Inspect", Prompt: "Read tests" },
+                  { Role: "Inspect again", Prompt: "Read config" },
+                ],
+              },
+              "other",
+            ),
+          );
+          fake.emit(
+            toolCall(
+              "mcp-lookalike",
+              "completed",
+              { _toolName: "mcp__search__invoke_subagent", Role: "MCP", Prompt: "Ignore" },
+              "other",
+            ),
+          );
+          fake.finishPrompt("end_turn", 0);
+          yield* Effect.promise(() =>
+            waitFor(
+              () =>
+                events.filter(
+                  (event) =>
+                    event.type === "item.completed" &&
+                    event.payload.itemType === "collab_agent_tool_call" &&
+                    JSON.stringify(event.payload.data).includes("receiverAgents"),
+                ).length === 2,
+            ),
+          );
+          const childPayloads = events.flatMap((event) =>
+            event.type === "item.completed" && event.payload.itemType === "collab_agent_tool_call"
+              ? [event.payload.data]
+              : [],
+          );
+          expect(childPayloads).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                providerToolCallId: "native-child-a",
+                prompt: "Read the guide",
+                receiverAgents: [expect.objectContaining({ threadId: childId })],
+              }),
+              expect.objectContaining({
+                providerToolCallId: "native-child-b",
+                prompt: "Inspect\nRead tests\n\nInspect again\nRead config",
+                receiverAgents: [expect.objectContaining({ threadId: unrelatedChild })],
+              }),
+            ]),
+          );
+          expect(childPayloads).not.toContainEqual(
+            expect.objectContaining({ providerToolCallId: "mcp-lookalike" }),
+          );
+          yield* harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("agy-native-steer"),
+            threadId,
+            message: {
+              messageId: MessageId.makeUnsafe("agy-steering-message"),
+              role: "user",
+              text: "Use read-only tools",
+              attachments: [],
+            },
+            dispatchMode: "steer",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: new Date().toISOString(),
+          });
+          yield* Effect.promise(() => waitFor(() => fake.prompts.length === 2));
+          expect(
+            fake.prompts[1]?.some(
+              (part) => part.type === "text" && part.text.includes("Use read-only tools"),
+            ),
+          ).toBe(true);
+          expect(harness.interruptTurn).not.toHaveBeenCalled();
+          expect(harness.startSession).not.toHaveBeenCalled();
+          expect(harness.steerTurn.mock.calls[0]?.[1]?.expectedTurnId).toBe(turn.turnId);
+          expect(fake.cancels()).toBe(0);
+          const response = yield* fake
+            .requestPermission(interaction(sessionId))
+            .pipe(Effect.forkChild);
+          yield* Effect.promise(() =>
+            waitFor(() => events.some((event) => event.type === "user-input.requested")),
+          );
+          const question = events.find((event) => event.type === "user-input.requested")!;
+          expect(question.turnId).toBe(turn.turnId);
+          const requestId = ApprovalRequestId.makeUnsafe(question.requestId!);
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.activities.some(
+                  (activity) => activity.kind === "user-input.requested",
+                ) === true,
+            ),
+          );
+          if (outcome === "cancelled") {
+            yield* harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("agy-stop"),
+              threadId,
+              turnId: turn.turnId,
+              createdAt: new Date().toISOString(),
+            });
+          } else if (outcome === "failed") {
+            yield* fake.exit;
+          } else {
+            yield* harness.engine.dispatch({
+              type: "thread.user-input.respond",
+              commandId: CommandId.makeUnsafe("agy-answer"),
+              threadId,
+              requestId,
+              answers: { interaction_decision: " planner-b " },
+              createdAt: new Date().toISOString(),
+            });
+            expect(yield* Fiber.join(response)).toEqual({
+              outcome: { outcome: "selected", optionId: " planner-b " },
+            });
+            for (const id of [childId, unrelatedChild])
+              yield* writeRecord(join(metadata(sessionId), "messages"), `${id}.json`, {
+                sender: id,
+                content: "Complete",
+              });
+            fake.emit(assistantText("Research finished"));
+            fake.finishPrompt("end_turn", 1);
+          }
+          expect(yield* Fiber.join(response)).toEqual({
+            outcome:
+              outcome === "completed"
+                ? { outcome: "selected", optionId: " planner-b " }
+                : { outcome: "cancelled" },
+          });
+          yield* Effect.promise(() =>
+            waitFor(() => events.some((event) => event.type === "turn.completed")),
+          );
+          expect(
+            events.filter((event) => event.type === "turn.started").map((event) => event.turnId),
+          ).toEqual([turn.turnId]);
+          expect(
+            events
+              .filter((event) => event.type === "turn.completed")
+              .map((event) => [event.turnId, event.payload.state]),
+          ).toEqual([[turn.turnId, outcome]]);
+          expect(
+            events
+              .filter((event) => event.type === "user-input.resolved")
+              .map((event) => [event.requestId, event.turnId]),
+          ).toEqual([[question.requestId, turn.turnId]]);
+          if (outcome === "completed") {
+            expect(
+              events.flatMap((event) =>
+                event.type === "item.completed" ? [event.payload.data] : [],
+              ),
+            ).toContainEqual(
+              expect.objectContaining({
+                providerToolCallId: "native-child-a",
+                agentStates: { [childId]: { status: "unreported", latestUpdate: "Complete" } },
+              }),
+            );
+          }
+        }),
+      );
+    },
+  );
   it("attaches the Synara gateway and every granted connector as session MCP servers", async () => {
     const fake = makeControllableRuntime({ sessionSetupMethod: "resume" });
     await runWithAdapter(
@@ -302,47 +912,70 @@ describe("Antigravity ACP adapter", () => {
     ]);
   });
 
-  it("keeps a turn open until its background command finishes and the agent replies", async () => {
-    const fake = makeControllableRuntime();
-    const events = await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
-      Effect.gen(function* () {
-        const threadId = ThreadId.makeUnsafe("thread-agy-background");
-        yield* adapter.startSession(startInput(threadId));
-        const collector = yield* collectTurn(adapter);
-        yield* adapter.sendTurn({ threadId, input: "start it in the background", attachments: [] });
-        fake.emit(toolCall("call-bg", "inProgress"));
-        fake.emit(assistantText("started"));
-        yield* Effect.sleep("30 millis");
-        fake.finishPrompt("end_turn");
-        // The prompt returned, but the background command is still running.
-        yield* Effect.sleep("200 millis");
-        fake.emit(toolCall("call-bg", "completed"));
-        fake.emit(assistantText(" The background command finished."));
-        return yield* Fiber.join(collector).pipe(Effect.timeout("3 seconds"));
-      }),
-    );
-    const turnEvents = events.filter(
-      (event): event is ProviderRuntimeEvent => event.type !== "session.started",
-    );
-    const types = turnEvents.map((event) => event.type);
-    expect(types.at(-1)).toBe("turn.completed");
-    const completion = turnEvents.at(-1) as Extract<
-      ProviderRuntimeEvent,
-      { type: "turn.completed" }
-    >;
-    expect(completion.payload.state).toBe("completed");
-    const turnId = completion.turnId;
-    const followUp = turnEvents.find(
-      (event) =>
-        event.type === "content.delta" &&
-        event.payload.delta === " The background command finished.",
-    );
-    expect(followUp?.turnId).toBe(turnId);
-    const toolCompletion = turnEvents.find(
-      (event) => event.type === "item.completed" && event.payload.itemType === "command_execution",
-    );
-    expect(toolCompletion?.turnId).toBe(turnId);
-  });
+  it.each([
+    { state: "completed", steer: false, toolError: undefined },
+    { state: "cancelled", steer: true, toolError: undefined },
+    { state: "failed", steer: true, toolError: "The background build failed." },
+  ])(
+    "settles the original turn after its background command (outcome=$state)",
+    async ({ state, steer, toolError }) => {
+      const fake = makeControllableRuntime({ agentVersion: "1.5.1" });
+      const { events, turnId } = await runWithAdapter(
+        { makeRuntime: fake.makeRuntime },
+        (adapter) =>
+          Effect.gen(function* () {
+            const threadId = ThreadId.makeUnsafe("thread-agy-background");
+            yield* adapter.startSession(startInput(threadId));
+            const collector = yield* collectTurn(adapter);
+            const turn = yield* adapter.sendTurn({
+              threadId,
+              input: "start it in the background",
+              attachments: [],
+            });
+            fake.emit(toolCall("call-bg", "inProgress"));
+            fake.emit(assistantText("started"));
+            yield* Effect.sleep("30 millis");
+            fake.finishPrompt("end_turn", 0);
+            // The prompt returned, but the background command is still running.
+            yield* Effect.sleep("200 millis");
+            if (steer) {
+              yield* adapter.steerTurn!(
+                { threadId, input: "Check the build", attachments: [] },
+                { expectedTurnId: turn.turnId },
+              );
+              yield* Effect.promise(() => waitFor(() => fake.prompts.length === 2));
+            }
+            const tool = toolCall("call-bg", toolError ? "failed" : "completed");
+            fake.emit({
+              ...tool,
+              toolCall: { ...tool.toolCall, ...(toolError ? { detail: toolError } : {}) },
+            });
+            fake.emit(assistantText(" The background command finished."));
+            if (steer) fake.finishPrompt("cancelled", 1);
+            const events = yield* Fiber.join(collector).pipe(Effect.timeout("3 seconds"));
+            return { events, turnId: turn.turnId };
+          }),
+      );
+      const completion = events.at(-1);
+      expect(completion).toMatchObject({
+        type: "turn.completed",
+        turnId,
+        payload: { state, stopReason: steer ? "cancelled" : "end_turn" },
+      });
+      if (toolError) expect(completion?.payload).toMatchObject({ errorMessage: toolError });
+      const followUp = events.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.delta === " The background command finished.",
+      );
+      expect(followUp?.turnId).toBe(turnId);
+      const toolCompletion = events.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "command_execution",
+      );
+      expect(toolCompletion?.turnId).toBe(turnId);
+    },
+  );
 
   it("settles without waiting for a daemon and keeps its updates on the originating turn", async () => {
     const fake = makeControllableRuntime();

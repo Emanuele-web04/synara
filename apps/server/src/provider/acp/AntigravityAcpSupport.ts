@@ -9,13 +9,18 @@
  * @module AntigravityAcpSupport
  */
 import { Effect, Layer, Scope, ServiceMap } from "effect";
+import type { UserInputQuestion } from "@synara/contracts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import { parseAntigravityCliModelLabel } from "../antigravityCli.ts";
-import { availableAuthMethodIds } from "./AcpConfigOptions.ts";
+import {
+  availableAuthMethodIds,
+  findSelectConfig,
+  flattenConfigOptions,
+} from "./AcpConfigOptions.ts";
 import type { AcpToolCallState } from "./AcpRuntimeModel.ts";
 import {
   AcpSessionRuntime,
@@ -43,8 +48,36 @@ export interface AntigravityAcpModel {
   readonly name: string;
 }
 
+export const antigravityModelConfig = (options: ReadonlyArray<Acp.SessionConfigOption>) =>
+  findSelectConfig(options, { id: "model", category: "model" });
+
+export const antigravityThoughtLevelConfig = (options: ReadonlyArray<Acp.SessionConfigOption>) =>
+  findSelectConfig(options, { id: "thought_level", category: "thought_level" });
+
+/** The config option is authoritative whenever the agent advertises it. */
+export function readAntigravityConfigModels(
+  config: NonNullable<ReturnType<typeof antigravityModelConfig>>,
+) {
+  return {
+    currentModelId: config.currentValue,
+    availableModels: flattenConfigOptions(config.options).map((option) => ({
+      modelId: option.value,
+      name: option.name,
+    })),
+  };
+}
+
 const ANTIGRAVITY_API_KEY_AUTH_METHOD_ID = "gemini-api-key";
 const ANTIGRAVITY_API_KEY_ENV_KEYS = ["GEMINI_API_KEY"] as const;
+
+/** 1.5.0 introduced live prompt injection. Unknown and prerelease versions use the fallback. */
+export function antigravitySupportsTurnSteering(initialize: Acp.InitializeResponse): boolean {
+  if (!/antigravity|\bagy\b/iu.test(initialize.agentInfo?.name ?? "")) return false;
+  const version = initialize.agentInfo?.version?.match(/^v?(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/u);
+  if (!version) return false;
+  const major = Number(version[1]);
+  return major > 1 || (major === 1 && Number(version[2]) >= 5);
+}
 
 export function buildAntigravityAcpSpawnInput(
   settings: AntigravityAcpRuntimeSettings | null | undefined,
@@ -89,6 +122,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Agy sends native questions through request_permission even in full-access mode. */
+export function antigravityInteractionQuestion(
+  request: Acp.RequestPermissionRequest,
+): UserInputQuestion | undefined {
+  const ids = new Set(request.options.map((option) => option.optionId));
+  if (ids.size !== request.options.length || ids.size === 0 || [...ids].some((id) => !id.trim())) {
+    return undefined;
+  }
+  return {
+    id: request.toolCall.toolCallId,
+    header: "Question",
+    question: request.toolCall.title?.trim().slice(0, 4_000) || "Choose an option.",
+    multiSelect: false,
+    allowCustomAnswer: false,
+    options: request.options.map((option) => {
+      const label = (option.name.trim() || option.optionId.trim()).slice(0, 512);
+      return { value: option.optionId, label, description: label };
+    }),
+  };
 }
 
 /**
@@ -255,9 +309,12 @@ export function resolveAntigravityAcpModelId(
   cliModelLabel: string,
 ): string | undefined {
   const wanted = cliModelLabel.trim().toLowerCase();
-  return availableModels.find(
+  const exactId = availableModels.find((model) => model.modelId === cliModelLabel);
+  if (exactId) return exactId.modelId;
+  const matching = availableModels.filter(
     (model) => model.name.trim().toLowerCase() === wanted || model.modelId.toLowerCase() === wanted,
-  )?.modelId;
+  );
+  return matching.length === 1 ? matching[0]?.modelId : undefined;
 }
 
 export type AntigravityAcpModelChoice =

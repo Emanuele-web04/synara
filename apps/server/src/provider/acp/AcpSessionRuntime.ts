@@ -561,6 +561,7 @@ export interface AcpSessionRuntimeShape {
   readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
+    options?: { readonly continueActiveTurn?: boolean },
   ) => Effect.Effect<Acp.PromptResponse, AcpErrors.AcpError>;
   readonly cancel: Effect.Effect<void, AcpErrors.AcpError>;
   readonly setMode: (
@@ -2201,7 +2202,7 @@ const makeAcpSessionRuntime = (
       getConfigOptions,
       getAvailableCommands,
       awaitLoadReplayReady,
-      prompt: (payload) =>
+      prompt: (payload, promptOptions) =>
         getStartedState.pipe(
           Effect.flatMap((started) =>
             awaitLoadReplayReady.pipe(
@@ -2212,13 +2213,17 @@ const makeAcpSessionRuntime = (
                   sessionId: started.sessionId,
                   ...payload,
                 } satisfies Acp.PromptRequest;
-                return closeActiveAssistantSegment({
+                // A live steer is another prompt request within the current assistant stream.
+                const closeSegment = closeActiveAssistantSegment({
                   getSessionEpoch,
                   offer,
                   sessionId: started.sessionId,
                   epoch,
                   assistantSegmentRef,
-                }).pipe(
+                });
+                return (
+                  promptOptions?.continueActiveTurn === true ? Effect.void : closeSegment
+                ).pipe(
                   Effect.andThen(
                     runLoggedRequest(
                       "session/prompt",
@@ -2226,15 +2231,7 @@ const makeAcpSessionRuntime = (
                       acp.agent.prompt(requestPayload),
                     ),
                   ),
-                  Effect.tap(() =>
-                    closeActiveAssistantSegment({
-                      getSessionEpoch,
-                      offer,
-                      sessionId: started.sessionId,
-                      epoch,
-                      assistantSegmentRef,
-                    }),
-                  ),
+                  Effect.tap(() => closeSegment),
                 );
               }),
             ),

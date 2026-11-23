@@ -106,7 +106,9 @@ Antigravity runs with full access in Synara. Computer Use actions use Synara’s
 
 When Antigravity sends a command to the background, the turn stays open until the command finishes and Antigravity reports on it. Dev servers and other long-running daemons do not hold the turn open. Stopping the turn also stops its background commands.
 
-Synara does not currently classify Antigravity as supporting native live-turn steering. Use interruption and follow-up controls according to the state shown in the active task.
+When the session reports Antigravity 1.5.0 or newer, use **Steer** to send a follow-up while the agent and its subagents continue working. Older or unidentified runtimes use the existing interrupt and queue controls. If Antigravity asks a question, choose an answer in the composer, including in Full access mode.
+
+Subagent activity shows the role and prompt for each launch. Synara shows child details when the active Antigravity profile identifies which launch owns the child.
 
 Antigravity keeps its own settings and conversation data. Changes to its permission mode, sandbox, model, hooks, or workspace trust can alter behavior even when the same task is opened through Synara.
 
