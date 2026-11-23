@@ -14,6 +14,7 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 import { planQuitResumeTurns } from "./quitResume.ts";
 
 const NOW = "2026-07-19T00:00:00.000Z";
@@ -28,6 +29,7 @@ function makeReadModel(input: {
   readonly archivedAt?: string;
   readonly runtimeMode?: OrchestrationReadModel["threads"][number]["runtimeMode"];
   readonly interactionMode?: OrchestrationReadModel["threads"][number]["interactionMode"];
+  readonly latestUserMessageAt?: string;
 }): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
@@ -47,6 +49,7 @@ function makeReadModel(input: {
         createdAt: NOW,
         updatedAt: NOW,
         latestTurn: input.latestTurn ?? null,
+        latestUserMessageAt: input.latestUserMessageAt ?? null,
         handoff: null,
         messages: [],
         session: input.session ?? null,
@@ -93,6 +96,72 @@ function resumeTurnStart(recordedTurnId: TurnId | null = RECORDED_TURN_ID): Orch
     createdAt: NOW,
   };
 }
+
+it("admits a delegated continuation only from the original completed turn and mode", async () => {
+  const base = resumeTurnStart();
+  if (base.type !== "thread.turn.start") throw new Error("Expected a turn start");
+  const { resumePrecondition: _resumePrecondition, ...command } = base;
+  const wake = {
+    ...command,
+    dispatchOrigin: "agent",
+    gatewayCompletionPrecondition: {
+      sourceTurnId: RECORDED_TURN_ID,
+      provider: "codex",
+      runtimeMode: "full-access",
+      latestUserMessageAt: null,
+    },
+  } as const;
+  const decideWake = (readModel: OrchestrationReadModel) =>
+    Effect.runPromise(Effect.result(decideOrchestrationCommand({ command: wake, readModel })));
+  const latestTurn = makeLatestTurn("completed");
+  const idle = makeReadModel({
+    latestTurn,
+    session: {
+      threadId: THREAD_ID,
+      status: "ready",
+      providerName: "codex",
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: NOW,
+    },
+  });
+  expect(await decideWake(idle)).toMatchObject({ _tag: "Success" });
+  const stop = await Effect.runPromise(
+    decideOrchestrationCommand({
+      readModel: idle,
+      command: {
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("stop-before-wake"),
+        threadId: THREAD_ID,
+        createdAt: NOW,
+      },
+    }),
+  );
+  let afterStop = idle;
+  for (const event of Array.isArray(stop) ? stop : [stop]) {
+    afterStop = await Effect.runPromise(
+      projectEvent(afterStop, { ...event, sequence: afterStop.snapshotSequence + 1 }),
+    );
+  }
+  expect(afterStop.threads[0]).toMatchObject({ latestTurn, session: { status: "ready" } });
+  expect(await decideWake(afterStop)).toMatchObject({
+    _tag: "Failure",
+    failure: { _tag: "OrchestrationCommandInvariantError" },
+  });
+  for (const changed of [
+    { latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("later-turn")) },
+    { latestTurn: makeLatestTurn("running") },
+    { latestTurn, runtimeMode: "approval-required" as const },
+    { latestTurn, archivedAt: NOW },
+    { latestTurn, latestUserMessageAt: NOW },
+  ]) {
+    expect(await decideWake(makeReadModel(changed))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "OrchestrationCommandInvariantError" },
+    });
+  }
+});
 
 const decide = (readModel: OrchestrationReadModel, recordedTurnId?: TurnId | null) =>
   decideOrchestrationCommand({ command: resumeTurnStart(recordedTurnId), readModel });

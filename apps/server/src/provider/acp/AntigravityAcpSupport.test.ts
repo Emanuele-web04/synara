@@ -22,10 +22,10 @@ const updateOf = (message: unknown) =>
   (message as { params: { update: Record<string, unknown> } }).params.update;
 
 describe("Antigravity ACP support", () => {
-  it("starts agy in ACP mode with full access", () => {
+  it("starts the official ACP runtime with native permissions enabled", () => {
     const spawn = buildAntigravityAcpSpawnInput({ binaryPath: "/opt/agy" }, "/repo");
     expect(spawn.command).toBe("/opt/agy");
-    expect(spawn.args).toEqual(["acp", "--dangerously-skip-permissions"]);
+    expect(spawn.args).toEqual(["acp"]);
     expect(spawn.cwd).toBe("/repo");
   });
 
@@ -39,7 +39,6 @@ describe("Antigravity ACP support", () => {
       ]);
       expect(spawn.args).toEqual([
         "acp",
-        "--dangerously-skip-permissions",
         "--add-dir",
         "/repos/api",
         "--add-dir",

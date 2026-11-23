@@ -862,6 +862,7 @@ export const OrchestrationSession = Schema.Struct({
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
@@ -1830,6 +1831,16 @@ export const ThreadTurnStartCommand = Schema.Struct({
   // taken (the recorded turn itself, or any later one). Clients cannot set it:
   // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
   resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  // Server-only conditional dispatch for a completed wave of delegated work.
+  gatewayCompletionPrecondition: Schema.optional(
+    Schema.Struct({
+      sourceTurnId: TurnId,
+      provider: ProviderKind,
+      instanceId: Schema.optional(ProviderInstanceId),
+      runtimeMode: RuntimeMode,
+      latestUserMessageAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
