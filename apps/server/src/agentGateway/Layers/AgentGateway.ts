@@ -90,6 +90,7 @@ import {
   readRecordArg,
   readStringArg,
 } from "../toolInput.ts";
+import { listProviderUsage } from "../../providerUsage/index.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
 import {
@@ -1797,6 +1798,12 @@ export const makeAgentGateway = Effect.gen(function* () {
       snapshotQuery,
       orchestrationEngine,
       completions: operationRepository.completions,
+      listUsage: () =>
+        listProviderUsage({}).pipe(
+          Effect.provideService(ServerConfig, serverConfig),
+          Effect.provideService(ServerSettingsService, serverSettings),
+          Effect.mapError((error) => new ToolInputError(errorText(error))),
+        ),
       requireThreadShell,
       assertCallerMayDriveThread,
       newId: randomUUID,

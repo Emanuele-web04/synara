@@ -13,6 +13,7 @@ import {
   assertNotFusionSidekick,
   FUSION_SIDEKICK_CREATION_SOURCE,
   makeFusionTools,
+  pickFusionSidekick,
 } from "./fusionCoordinator.ts";
 import type { ToolContext } from "./toolRuntime.ts";
 
@@ -62,6 +63,7 @@ const makeDeps = (overrides: {
   /** Shells returned by requireThreadShell, keyed by thread id. */
   readonly shells?: Readonly<Record<string, OrchestrationThreadShell>>;
   readonly detail?: OrchestrationThread;
+  readonly snapshots?: ReadonlyArray<Record<string, unknown>>;
 }) => {
   const dispatched: Array<Record<string, unknown>> = [];
   const enqueue = vi.fn(() => Effect.void);
@@ -78,6 +80,7 @@ const makeDeps = (overrides: {
       },
     } as unknown as OrchestrationEngineShape,
     completions: { enqueue } as unknown as CompletionRepository,
+    listUsage: () => Effect.succeed((overrides.snapshots ?? []) as never),
     requireThreadShell: (threadId: string) =>
       Effect.succeed(overrides.shells?.[threadId] ?? leadShell({ id: threadId })),
     assertCallerMayDriveThread: () => Effect.void,
@@ -246,5 +249,120 @@ describe("assertNotFusionSidekick", () => {
     ).rejects.toThrow("cannot create threads or delegate");
     await Effect.runPromise(assertNotFusionSidekick({ creationSource: "synara_mcp" }));
     await Effect.runPromise(assertNotFusionSidekick({ creationSource: null }));
+  });
+});
+
+describe("pickFusionSidekick", () => {
+  const candidates = [
+    { provider: "codex", instanceId: "codex", model: "m1" },
+    { provider: "claudeAgent", instanceId: "claudeAgent", model: "m2" },
+    { provider: "grok", instanceId: "grok", model: "m3" },
+  ] as const;
+
+  const snapshot = (provider: string, usedPercent: number) => ({
+    provider,
+    updatedAt: "2026-01-01T00:00:00Z",
+    limits: [{ window: "weekly", usedPercent }],
+    usageLines: [],
+    source: "test",
+  });
+
+  it("prefers the candidate with the most quota headroom", () => {
+    const picked = pickFusionSidekick(
+      candidates as never,
+      [snapshot("codex", 80), snapshot("claudeAgent", 20), snapshot("grok", 50)] as never,
+    );
+    expect(picked?.provider).toBe("claudeAgent");
+  });
+
+  it("skips exhausted candidates and falls back to unknown-quota ones", () => {
+    const picked = pickFusionSidekick(
+      candidates as never,
+      [
+        snapshot("codex", 100),
+        snapshot("claudeAgent", 100),
+        // grok has no snapshot: unknown quota stays eligible.
+      ] as never,
+    );
+    expect(picked?.provider).toBe("grok");
+  });
+
+  it("returns null only when every candidate is provably exhausted", () => {
+    expect(
+      pickFusionSidekick(
+        candidates as never,
+        [snapshot("codex", 100), snapshot("claudeAgent", 100), snapshot("grok", 100)] as never,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("auto sidekick + retargeting", () => {
+  const autoPairing = {
+    lead: { provider: "claudeAgent", model: "opus" },
+    sidekick: { provider: "codex", model: "m1" },
+    autoSidekick: true,
+    sidekickCandidates: [
+      { provider: "codex", model: "m1" },
+      { provider: "grok", model: "m3" },
+    ],
+  } as const;
+
+  const quota = (provider: string, usedPercent: number) => ({
+    provider,
+    updatedAt: "2026-01-01T00:00:00Z",
+    limits: [{ window: "weekly", usedPercent }],
+    usageLines: [],
+    source: "test",
+  });
+
+  it("creates the sidekick on the candidate with headroom", async () => {
+    const { tools, dispatched } = makeDeps({
+      threads: [],
+      shells: { "lead-1": leadShell({ fusion: autoPairing }) },
+      snapshots: [quota("codex", 100), quota("grok", 10)],
+    });
+    const result = await callTool(
+      tools,
+      "synara_fusion_delegate",
+      { task: "t", brief: "b" },
+      context(),
+    );
+    expect(result.isError).toBeUndefined();
+    const create = dispatched.find((command) => command.type === "thread.create");
+    expect((create?.modelSelection as { provider: string }).provider).toBe("grok");
+  });
+
+  it("retargets an exhausted sidekick and posts synara.fusion.retargeted", async () => {
+    const existing = sidekickThread();
+    const shell = {
+      ...sidekickShell(),
+      modelSelection: { provider: "codex", model: "m1" },
+    } as unknown as OrchestrationThreadShell;
+    const { tools, dispatched } = makeDeps({
+      threads: [existing],
+      shells: {
+        "lead-1": leadShell({ fusion: autoPairing }),
+        "sidekick-1": shell,
+      },
+      snapshots: [quota("codex", 100), quota("grok", 10)],
+    });
+    const result = await callTool(
+      tools,
+      "synara_fusion_delegate",
+      { task: "t", brief: "b" },
+      context(),
+    );
+    expect(result.isError).toBeUndefined();
+    const meta = dispatched.find((command) => command.type === "thread.meta.update");
+    expect(meta).toMatchObject({ threadId: "sidekick-1" });
+    const activity = dispatched.find(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        (command.activity as { kind: string }).kind === "synara.fusion.retargeted",
+    );
+    expect(activity).toMatchObject({ threadId: "lead-1" });
+    const turn = dispatched.find((command) => command.type === "thread.turn.start");
+    expect((turn?.modelSelection as { provider: string }).provider).toBe("grok");
   });
 });

@@ -350,6 +350,10 @@ export function useHandleNewThread() {
                   ...(draftFusion.delegateExploration !== undefined
                     ? { delegateExploration: draftFusion.delegateExploration }
                     : {}),
+                  ...(draftFusion.autoSidekick === true ? { autoSidekick: true } : {}),
+                  ...(draftFusion.sidekickCandidates
+                    ? { sidekickCandidates: draftFusion.sidekickCandidates }
+                    : {}),
                 },
               }
             : {}),

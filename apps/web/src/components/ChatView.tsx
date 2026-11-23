@@ -5239,6 +5239,10 @@ export default function ChatView({
             ...(preset.pairing.delegateExploration !== undefined
               ? { delegateExploration: preset.pairing.delegateExploration }
               : {}),
+            ...(preset.pairing.autoSidekick === true ? { autoSidekick: true } : {}),
+            ...(preset.pairing.sidekickCandidates
+              ? { sidekickCandidates: preset.pairing.sidekickCandidates }
+              : {}),
           });
         },
       }}

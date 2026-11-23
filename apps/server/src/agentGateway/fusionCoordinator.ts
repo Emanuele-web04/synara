@@ -1,13 +1,15 @@
 import {
   CommandId,
+  EventId,
   MessageId,
   ThreadId,
   TurnId,
   type ModelSelection,
   type OrchestrationThread,
   type OrchestrationThreadShell,
-  type ProviderInteractionMode,
   type RuntimeMode,
+  type ProviderInteractionMode,
+  type ServerProviderUsageSnapshot,
 } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
@@ -71,6 +73,11 @@ interface FusionToolDeps {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly completions: CompletionRepository;
+  /** Per-instance provider quota reads; drives auto sidekick pick + retarget. */
+  readonly listUsage: () => Effect.Effect<
+    ReadonlyArray<ServerProviderUsageSnapshot>,
+    ToolInputError
+  >;
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, ToolInputError>;
@@ -89,6 +96,51 @@ interface FusionToolDeps {
   readonly newId: () => string;
 }
 
+/**
+ * Quota-aware candidate scoring (RFC #1301 P6). A candidate is *exhausted* when
+ * a healthy snapshot reports any window at 100% used. Candidates with no quota
+ * data (unsupported provider, missing credentials, failed fetch) rank after
+ * healthy ones but stay usable — the RFC degrades to explicit pairing rather
+ * than blocking delegation. Returns null only when every candidate provably hit
+ * its window.
+ */
+export const pickFusionSidekick = (
+  candidates: ReadonlyArray<ModelSelection>,
+  snapshots: ReadonlyArray<ServerProviderUsageSnapshot>,
+  exclude?: ReadonlySet<string>,
+): ModelSelection | null => {
+  const snapshotFor = (candidate: ModelSelection) =>
+    snapshots.find(
+      (snapshot) =>
+        snapshot.provider === candidate.provider &&
+        (candidate.instanceId === undefined ||
+          snapshot.instanceId === undefined ||
+          snapshot.instanceId === candidate.instanceId),
+    );
+  const exhausted = (candidate: ModelSelection) => {
+    const snapshot = snapshotFor(candidate);
+    if (!snapshot || (snapshot.status ?? "ok") !== "ok") return false;
+    return snapshot.limits.some((limit) => (limit.usedPercent ?? 0) >= 100);
+  };
+  const usedPercent = (candidate: ModelSelection) => {
+    const snapshot = snapshotFor(candidate);
+    if (!snapshot || (snapshot.status ?? "ok") !== "ok") return null;
+    const percents = snapshot.limits.map((limit) => limit.usedPercent ?? 0);
+    return percents.length === 0 ? null : Math.max(...percents);
+  };
+  const eligible = candidates.filter(
+    (candidate) => !(exclude?.has(candidate.provider) ?? false) && !exhausted(candidate),
+  );
+  const known = eligible
+    .map((candidate, index) => ({ candidate, index, percent: usedPercent(candidate) }))
+    .filter(
+      (entry): entry is { candidate: ModelSelection; index: number; percent: number } =>
+        entry.percent !== null,
+    )
+    .toSorted((a, b) => a.percent - b.percent || a.index - b.index);
+  return known[0]?.candidate ?? eligible[0] ?? null;
+};
+
 /** Poll cap for `wait: true` (~2 minutes at 2s cadence); completions still arrive after it. */
 const WAIT_POLL_MAX = 60;
 const WAIT_POLL_MS = 2000;
@@ -100,6 +152,7 @@ export const makeFusionTools = (deps: FusionToolDeps): ReadonlyArray<ToolEntry> 
     snapshotQuery,
     orchestrationEngine,
     completions,
+    listUsage,
     requireThreadShell,
     assertCallerMayDriveThread,
     newId,
@@ -151,44 +204,66 @@ export const makeFusionTools = (deps: FusionToolDeps): ReadonlyArray<ToolEntry> 
     }
     const suffix = newId();
     const sidekickThreadId = ThreadId.makeUnsafe(`fusion-sidekick:${suffix}`);
-    return orchestrationEngine
-      .dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe(`fusion:${suffix}:sidekick-create`),
-        threadId: sidekickThreadId,
-        projectId: lead.projectId,
-        title: `Fusion sidekick · ${lead.title ?? String(lead.id).slice(0, 8)}`,
-        modelSelection: pairing.sidekick,
-        // Sidekick privilege == lead privilege, never higher (RFC #1301).
-        runtimeMode: lead.runtimeMode,
-        interactionMode: lead.interactionMode,
-        envMode: lead.envMode,
-        branch: lead.branch,
-        worktreePath: lead.worktreePath,
-        associatedWorktreePath: lead.associatedWorktreePath,
-        associatedWorktreeBranch: lead.associatedWorktreeBranch,
-        associatedWorktreeRef: lead.associatedWorktreeRef,
-        parentThreadId: lead.id,
-        creationSource: FUSION_SIDEKICK_CREATION_SOURCE,
-        sourceThreadId: lead.id,
-        ...(callerTurnId !== null ? { sourceTurnId: TurnId.makeUnsafe(callerTurnId) } : {}),
-        subagentRole: FUSION_SIDEKICK_ROLE,
-        fusion: pairing,
-        createdAt: isoNow(),
-      })
-      .pipe(
-        // The projection may lag the committed command; the dispatch only needs
-        // the fields we already know from the lead.
-        Effect.map(
-          (): FusionDispatchTarget => ({
-            id: sidekickThreadId,
+    return Effect.gen(function* () {
+      // Auto sidekick (RFC #1301 P6): first delegation scores the candidate
+      // list against provider quotas and pins the winner on the new thread.
+      let sidekickSelection = pairing.sidekick;
+      if (pairing.autoSidekick === true && pairing.sidekickCandidates !== undefined) {
+        const snapshots = yield* listUsage();
+        const picked = pickFusionSidekick(pairing.sidekickCandidates, snapshots);
+        if (!picked) {
+          return yield* Effect.fail(
+            new ToolInputError(
+              "Every fusion sidekick candidate is at quota. Retry after a quota window resets.",
+            ),
+          );
+        }
+        sidekickSelection = picked;
+      }
+      return sidekickSelection;
+    }).pipe(
+      Effect.flatMap((sidekickSelection) =>
+        orchestrationEngine
+          .dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe(`fusion:${suffix}:sidekick-create`),
+            threadId: sidekickThreadId,
+            projectId: lead.projectId,
+            title: `Fusion sidekick · ${lead.title ?? String(lead.id).slice(0, 8)}`,
+            modelSelection: sidekickSelection,
+            // Sidekick privilege == lead privilege, never higher (RFC #1301).
             runtimeMode: lead.runtimeMode,
             interactionMode: lead.interactionMode,
-            modelSelection: pairing.sidekick,
-          }),
-        ),
-        Effect.mapError((error) => new ToolInputError(errorText(error))),
-      );
+            envMode: lead.envMode,
+            branch: lead.branch,
+            worktreePath: lead.worktreePath,
+            associatedWorktreePath: lead.associatedWorktreePath,
+            associatedWorktreeBranch: lead.associatedWorktreeBranch,
+            associatedWorktreeRef: lead.associatedWorktreeRef,
+            parentThreadId: lead.id,
+            creationSource: FUSION_SIDEKICK_CREATION_SOURCE,
+            sourceThreadId: lead.id,
+            ...(callerTurnId !== null ? { sourceTurnId: TurnId.makeUnsafe(callerTurnId) } : {}),
+            subagentRole: FUSION_SIDEKICK_ROLE,
+            fusion:
+              pairing.autoSidekick === true ? { ...pairing, sidekick: sidekickSelection } : pairing,
+            createdAt: isoNow(),
+          })
+          .pipe(
+            // The projection may lag the committed command; the dispatch only
+            // needs the fields we already know from the lead.
+            Effect.map(
+              (): FusionDispatchTarget => ({
+                id: sidekickThreadId,
+                runtimeMode: lead.runtimeMode,
+                interactionMode: lead.interactionMode,
+                modelSelection: sidekickSelection,
+              }),
+            ),
+          ),
+      ),
+      Effect.mapError((error) => new ToolInputError(errorText(error))),
+    );
   };
 
   const resolveSidekick = (
@@ -205,9 +280,69 @@ export const makeFusionTools = (deps: FusionToolDeps): ReadonlyArray<ToolEntry> 
       const existing = findSidekick(snapshot.threads, lead.id);
       if (existing) {
         const shell = yield* requireThreadShell(existing.id);
-        return { target: shell, created: false };
+        return { target: yield* maybeRetarget(lead, shell), created: false };
       }
       return { target: yield* createSidekick(lead, callerTurnId), created: true };
+    });
+
+  /**
+   * Retargeting (RFC #1301 P6): when the pinned sidekick's provider hits its
+   * quota window, re-score the pairing's candidate list and move the sidekick
+   * thread's modelSelection to the next candidate with headroom. The lead is
+   * told via a `synara.fusion.retargeted` activity; its context is untouched.
+   * Provider handoff is the fallback for adapters without model updates — out
+   * of scope here: meta.update is durable either way, and adapters that cannot
+   * apply it mid-session honor it on the next session start.
+   */
+  const maybeRetarget = (
+    lead: OrchestrationThreadShell,
+    sidekick: OrchestrationThreadShell,
+  ): Effect.Effect<FusionDispatchTarget, ToolInputError> =>
+    Effect.gen(function* () {
+      const pairing = lead.fusion;
+      const candidates = pairing?.sidekickCandidates;
+      const current = sidekick.modelSelection;
+      if (pairing?.autoSidekick !== true || !candidates || candidates.length === 0 || !current) {
+        return sidekick;
+      }
+      const snapshots = yield* listUsage();
+      // pick() returns null only for a provably exhausted candidate, so a null
+      // here is exactly "the pinned provider hit its window" — unknown quota
+      // data never triggers a retarget.
+      if (pickFusionSidekick([current], snapshots) !== null) return sidekick;
+      const next = pickFusionSidekick(candidates, snapshots, new Set([current.provider]));
+      if (!next || next.provider === current.provider) return sidekick;
+      const stamp = `${String(sidekick.id)}:${next.provider}:${next.model}`;
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(`fusion-retarget:${stamp}`),
+          threadId: sidekick.id,
+          modelSelection: next,
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`fusion-retarget-activity:${stamp}`),
+          threadId: lead.id,
+          activity: {
+            id: EventId.makeUnsafe(`fusion-retarget:${stamp}`),
+            kind: "synara.fusion.retargeted",
+            tone: "info",
+            summary: `Fusion sidekick retargeted: ${current.provider} → ${next.provider}`,
+            payload: {
+              reason: "quota window exhausted",
+              from: { provider: current.provider, model: current.model },
+              to: { provider: next.provider, model: next.model },
+            },
+            turnId: null,
+            createdAt: isoNow(),
+          },
+          createdAt: isoNow(),
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      return { ...sidekick, modelSelection: next };
     });
 
   const delegate: ToolEntry = {

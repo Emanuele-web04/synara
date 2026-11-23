@@ -327,6 +327,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
         briefStyle: Schema.optionalKey(Schema.Literals(["prescriptive", "goal-level"])),
         sidekickMayPushBack: Schema.optionalKey(Schema.Boolean),
         delegateExploration: Schema.optionalKey(Schema.Boolean),
+        autoSidekick: Schema.optionalKey(Schema.Boolean),
+        sidekickCandidates: Schema.optionalKey(Schema.Array(ModelSelection)),
       }),
     ),
   ),
@@ -1094,6 +1096,10 @@ function normalizePersistedDraftsByThreadId(
             : {}),
           ...(persistedFusion.delegateExploration !== undefined
             ? { delegateExploration: persistedFusion.delegateExploration }
+            : {}),
+          ...(persistedFusion.autoSidekick === true ? { autoSidekick: true } : {}),
+          ...(persistedFusion.sidekickCandidates
+            ? { sidekickCandidates: [...persistedFusion.sidekickCandidates] }
             : {}),
         }
       : null;

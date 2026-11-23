@@ -458,6 +458,12 @@ async function dispatchDraftThreadOnce(
                   ...(draftComposerState.fusion.delegateExploration !== undefined
                     ? { delegateExploration: draftComposerState.fusion.delegateExploration }
                     : {}),
+                  ...(draftComposerState.fusion.autoSidekick === true
+                    ? { autoSidekick: true }
+                    : {}),
+                  ...(draftComposerState.fusion.sidekickCandidates
+                    ? { sidekickCandidates: draftComposerState.fusion.sidekickCandidates }
+                    : {}),
                 },
               }
             : {}),

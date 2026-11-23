@@ -228,6 +228,9 @@ export interface ComposerThreadDraftState {
     readonly briefStyle?: "prescriptive" | "goal-level";
     readonly sidekickMayPushBack?: boolean;
     readonly delegateExploration?: boolean;
+    // Auto sidekick (RFC #1301 P6): ordered quota-aware candidate list.
+    readonly autoSidekick?: boolean;
+    readonly sidekickCandidates?: ModelSelection[];
   } | null;
   // Per-thread provider start options staged for dispatch (e.g. a group's worker
   // routing defaults). Unset means the global settings-derived options apply.

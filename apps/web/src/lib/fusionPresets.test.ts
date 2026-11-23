@@ -28,6 +28,39 @@ describe("usableFusionPresets", () => {
     );
     expect(usable).toHaveLength(SHIPPED_FUSION_PRESETS.length);
   });
+
+  it("strips unusable candidates from an auto preset and keeps the rest", () => {
+    const auto = {
+      ...preset("auto", "claudeAgent", "codex"),
+      pairing: {
+        ...preset("auto", "claudeAgent", "codex").pairing,
+        autoSidekick: true,
+        sidekickCandidates: [
+          { provider: "codex", instanceId: "codex", model: "m" },
+          { provider: "grok", instanceId: "grok", model: "m" },
+        ],
+      },
+    } as FusionPairingPreset;
+    const usable = usableFusionPresets([auto], new Set(["claudeAgent", "grok"]));
+    expect(usable).toHaveLength(1);
+    expect(usable[0]?.pairing.sidekickCandidates?.map((c) => c.provider)).toEqual(["grok"]);
+    expect(usable[0]?.pairing.sidekick.provider).toBe("grok");
+  });
+
+  it("drops an auto preset when no candidate is usable", () => {
+    const auto = {
+      ...preset("auto", "claudeAgent", "codex"),
+      pairing: {
+        ...preset("auto", "claudeAgent", "codex").pairing,
+        autoSidekick: true,
+        sidekickCandidates: [
+          { provider: "codex", instanceId: "codex", model: "m" },
+          { provider: "grok", instanceId: "grok", model: "m" },
+        ],
+      },
+    } as FusionPairingPreset;
+    expect(usableFusionPresets([auto], new Set(["claudeAgent"]))).toHaveLength(0);
+  });
 });
 
 describe("fusionPresetSummary", () => {

@@ -1153,6 +1153,11 @@ export const FusionPairing = Schema.Struct({
   briefStyle: Schema.optional(Schema.Literals(["prescriptive", "goal-level"])),
   sidekickMayPushBack: Schema.optional(Schema.Boolean),
   delegateExploration: Schema.optional(Schema.Boolean),
+  // Auto sidekick (RFC #1301 P6): when true, `sidekick` is the currently pinned
+  // choice and `sidekickCandidates` is the ordered list the gateway re-scores
+  // against provider quotas at delegation and retarget time.
+  autoSidekick: Schema.optional(Schema.Boolean),
+  sidekickCandidates: Schema.optional(Schema.Array(ModelSelection)),
 });
 export type FusionPairing = typeof FusionPairing.Type;
 
