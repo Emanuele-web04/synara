@@ -406,6 +406,32 @@ export function useChatTurnExecution({
               associatedWorktreeBranch: nextAssociatedWorktreeBranch,
               associatedWorktreeRef: nextAssociatedWorktreeRef,
               lastKnownPr: activeThread.lastKnownPr ?? null,
+              // Fusion pairing staged on the draft (/fusion + picker): lead is
+              // the thread's own selection; the sidekick was picked as the
+              // second model. Same wiring as draftThreadDispatch.
+              ...(() => {
+                const stagedFusion =
+                  useComposerDraftStore.getState().draftsByThreadId[threadIdForSend]?.fusion;
+                return stagedFusion?.sidekick
+                  ? {
+                      fusion: {
+                        lead: threadCreateModelSelection,
+                        sidekick: stagedFusion.sidekick,
+                        ...(stagedFusion.briefStyle ? { briefStyle: stagedFusion.briefStyle } : {}),
+                        ...(stagedFusion.sidekickMayPushBack !== undefined
+                          ? { sidekickMayPushBack: stagedFusion.sidekickMayPushBack }
+                          : {}),
+                        ...(stagedFusion.delegateExploration !== undefined
+                          ? { delegateExploration: stagedFusion.delegateExploration }
+                          : {}),
+                        ...(stagedFusion.autoSidekick === true ? { autoSidekick: true } : {}),
+                        ...(stagedFusion.sidekickCandidates
+                          ? { sidekickCandidates: stagedFusion.sidekickCandidates }
+                          : {}),
+                      },
+                    }
+                  : {};
+              })(),
               // The draft timestamp records when the composer opened. The durable
               // thread is created by this first send, so order it at the message's
               // send time just like the turn itself.
