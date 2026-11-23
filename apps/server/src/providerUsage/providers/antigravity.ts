@@ -77,6 +77,8 @@ function readLimits(stdout: string): ServerProviderUsageLimit[] | undefined {
 
 export const antigravityUsageFetcher: ProviderUsageFetcher = {
   provider: PROVIDER,
+  // The native login can change without the profile launch context changing.
+  retainSnapshot: false,
   async fetch(ctx) {
     let cwd: string | undefined;
     try {

@@ -1,9 +1,11 @@
 // FILE: providerUsage/providers/antigravity.test.ts
 // Purpose: Protect the official `/usage` response boundary and honest signed-out/error states.
 
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runAntigravityHelperProcess } from "../../provider/antigravityCli";
+import { __resetProviderUsageCacheForTests, collectProviderUsageSnapshots } from "../index";
 import { antigravityUsageFetcher } from "./antigravity";
 
 vi.mock("../../provider/antigravityCli", () => ({ runAntigravityHelperProcess: vi.fn() }));
@@ -19,7 +21,10 @@ function nativeOutput(groups: unknown[], numTurns = 0) {
   });
 }
 
-afterEach(() => run.mockReset());
+afterEach(() => {
+  run.mockReset();
+  __resetProviderUsageCacheForTests();
+});
 
 describe("Antigravity live limits", () => {
   it("renders the CLI buckets for Gemini, third-party models, and plan-specific groups", async () => {
@@ -66,6 +71,44 @@ describe("Antigravity live limits", () => {
       { window: "Claude and GPT models Weekly", usedPercent: 0 },
       { window: "Gemini 4 Argon Weekly", usedPercent: 50 },
     ]);
+  });
+
+  it("coalesces pending requests then reads the next native login state in the same profile", async () => {
+    const initial =
+      Promise.withResolvers<Awaited<ReturnType<typeof runAntigravityHelperProcess>>>();
+    run.mockReturnValueOnce(initial.promise).mockResolvedValueOnce({
+      code: 1,
+      stderr: "Authentication required. Please visit the URL to log in",
+      stdout: "",
+    });
+    const selectedProfile = { ...ctx, instanceId: defaultInstanceIdForProvider("antigravity") };
+    const query = { provider: "antigravity" } as const;
+    const first = collectProviderUsageSnapshots(selectedProfile, query);
+    const concurrent = collectProviderUsageSnapshots(selectedProfile, query);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    initial.resolve({
+      code: 0,
+      stderr: "",
+      stdout: nativeOutput([
+        {
+          name: "Gemini Models",
+          buckets: [{ id: "gemini-5h", window: "5h", remaining_fraction: 0.5 }],
+        },
+      ]),
+    });
+    const snapshots = await first;
+    expect(await concurrent).toEqual(snapshots);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(snapshots).toMatchObject([
+      { status: "ok", limits: [{ window: "5h", usedPercent: 50 }] },
+    ]);
+
+    const signedOut = await collectProviderUsageSnapshots(
+      { ...selectedProfile, nowMs: 1_000 },
+      query,
+    );
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(signedOut).toMatchObject([{ status: "needs-auth", limits: [] }]);
   });
 
   it.each([

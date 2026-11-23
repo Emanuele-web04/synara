@@ -44,6 +44,8 @@ export interface ProviderUsageContext {
 
 export interface ProviderUsageFetcher {
   readonly provider: ProviderKind;
+  /** Share concurrent reads, but do not keep the snapshot when account changes are opaque. */
+  readonly retainSnapshot?: false;
   /**
    * Resolve a non-secret identity for the currently selected credentials. A changed identity
    * invalidates the orchestration cache before its TTL expires. Null disables caching for the
