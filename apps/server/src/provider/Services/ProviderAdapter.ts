@@ -77,6 +77,8 @@ export interface ProviderSteerSubagentPayload {
 /** Local preparation controls; never serialized into provider input or persisted history. */
 export interface ProviderTurnDispatchOptions {
   readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
+  readonly expectedTurnId?: TurnId;
+  readonly onSteerDeliveryFailure?: (detail: string) => Effect.Effect<void>;
 }
 
 export type ProviderConversationRollbackMode = "native" | "restart-session";

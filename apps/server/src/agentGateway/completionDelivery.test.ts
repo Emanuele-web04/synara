@@ -83,6 +83,86 @@ layer("gateway completion outbox", (it) => {
     }),
   );
 
+  it.effect("resumes an opted-in wave once all initial runs finish and its creator is idle", () =>
+    Effect.gen(function* () {
+      const operations = yield* AgentGatewayOperationRepository;
+      const operationId = "outbox-resume-wave";
+      const children = ["outbox-resume-first", "outbox-resume-second"];
+      const creator = ThreadId.makeUnsafe("outbox-resume-parent");
+      const sourceTurn = "outbox-resume-source";
+      yield* operations.reserve({
+        operationId,
+        callerThreadId: creator,
+        callerTurnId: sourceTurn,
+        operationKind: "create_threads",
+        requestId: operationId,
+        fingerprint: operationId,
+        requestedCount: children.length,
+        planJson: JSON.stringify(
+          children.map((id) => ({ ids: { threadId: id, messageId: `${id}:initial` } })),
+        ),
+        resumeContextJson: JSON.stringify({
+          provider: "codex",
+          runtimeMode: "approval-required",
+          latestUserMessageAt: now,
+        }),
+        now,
+      });
+      yield* operations.complete({ operationId, resultJson: "{}", now });
+      for (const [index, id] of children.entries()) {
+        expect(yield* operations.completions.pendingWakes()).toHaveLength(0);
+        yield* operations.completions.saveResult(
+          id,
+          JSON.stringify({ completedAt: now, summary: "untrusted output" }),
+        );
+        yield* operations.completions.delivered(id, true);
+        expect(yield* operations.completions.pendingWakes()).toHaveLength(index);
+      }
+      let running = true;
+      const commands: OrchestrationCommand[] = [];
+      const dependencies = {
+        repository: operations.completions,
+        snapshotQuery: {
+          getThreadShellById: () =>
+            Effect.sync(() =>
+              Option.some({
+                id: creator,
+                latestTurn: { turnId: sourceTurn, state: running ? "running" : "completed" },
+                session: null,
+                modelSelection: { provider: "codex", model: "test-model" },
+                runtimeMode: "approval-required",
+                latestUserMessageAt: now,
+              }),
+            ),
+        } as unknown as ProjectionSnapshotQueryShape,
+        projectionTurns: {} as ProjectionTurnRepositoryShape,
+        orchestrationEngine: {
+          dispatch: (command: OrchestrationCommand) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return { sequence: commands.length };
+            }),
+        } as unknown as OrchestrationEngineShape,
+      };
+      yield* deliverGatewayCompletions(dependencies);
+      expect(commands).toHaveLength(0);
+      running = false;
+      yield* deliverGatewayCompletions(dependencies);
+      yield* deliverGatewayCompletions(dependencies);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        type: "thread.turn.start",
+        dispatchOrigin: "agent",
+        gatewayCompletionPrecondition: {
+          sourceTurnId: sourceTurn,
+          runtimeMode: "approval-required",
+        },
+        message: { text: expect.stringContaining(children.join(", ")) },
+      });
+      expect(JSON.stringify(commands[0])).not.toContain("untrusted output");
+    }),
+  );
+
   // Delivery reads only the child's pinned-run state and whether the creator
   // still exists unarchived (completionDelivery.ts:42,109); parent session status
   // is never consulted and completed/interrupted share the summary path. One row

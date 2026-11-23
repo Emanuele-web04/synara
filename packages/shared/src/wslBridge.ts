@@ -24,3 +24,20 @@ export function resolveExecutionWorkingDirectory(
 ): string {
   return resolveWslWorkspace(cwd, platform)?.linuxPath ?? cwd;
 }
+
+/** Extra workspace roots must name folders in the same WSL distro as the launched process. */
+export function resolveExecutionWorkspacePath(
+  path: string,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const workspace = resolveWslWorkspace(cwd, platform);
+  if (!workspace) return path;
+  const folder = resolveWslWorkspace(path, platform);
+  if (folder?.distribution.toLowerCase() !== workspace.distribution.toLowerCase()) {
+    throw new Error(
+      `The additional folder '${path}' must be in the same WSL distribution as '${cwd}'.`,
+    );
+  }
+  return folder.linuxPath;
+}

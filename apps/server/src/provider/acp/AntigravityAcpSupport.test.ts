@@ -1,6 +1,6 @@
 import type * as Acp from "@agentclientprotocol/sdk";
 import { Effect, Exit } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildAntigravityAcpSpawnInput,
@@ -22,11 +22,32 @@ const updateOf = (message: unknown) =>
   (message as { params: { update: Record<string, unknown> } }).params.update;
 
 describe("Antigravity ACP support", () => {
-  it("starts agy in ACP mode with full access", () => {
+  it("starts the official ACP runtime with native permissions enabled", () => {
     const spawn = buildAntigravityAcpSpawnInput({ binaryPath: "/opt/agy" }, "/repo");
     expect(spawn.command).toBe("/opt/agy");
-    expect(spawn.args).toEqual(["acp", "--dangerously-skip-permissions"]);
+    expect(spawn.args).toEqual(["acp"]);
     expect(spawn.cwd).toBe("/repo");
+  });
+
+  it("passes guest paths to agy while retaining the WSL cwd for process launch", () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    try {
+      const cwd = "\\\\wsl.localhost\\Ubuntu\\repos\\primary";
+      const spawn = buildAntigravityAcpSpawnInput(undefined, cwd, [
+        "\\\\wsl$\\Ubuntu\\repos\\api",
+        "\\\\wsl.localhost\\Ubuntu\\repos\\shared package",
+      ]);
+      expect(spawn.args).toEqual([
+        "acp",
+        "--add-dir",
+        "/repos/api",
+        "--add-dir",
+        "/repos/shared package",
+      ]);
+      expect(spawn.cwd).toBe(cwd);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("names MCP calls server__tool using the session's server names", () => {
