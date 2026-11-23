@@ -865,96 +865,86 @@ function FusionSection(props: {
     ? composerModelDisplayName(fusion.sidekick.provider, fusion.sidekick.model)
     : t("chat:fusionPickSidekick");
   return (
-    <div className="flex shrink-0 flex-col border-b border-border">
-      <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
-          {t("chat:fusion")}
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={fusion.enabled}
-          onClick={() => {
-            const nextEnabled = !fusion.enabled;
-            fusion.onToggle(nextEnabled);
-            if (!nextEnabled) props.onRoleChange("lead");
-          }}
+    <div className="flex shrink-0 flex-col gap-px border-b border-border px-1 py-1">
+      {/* Compact entry: Fusion reads like a selectable model row; a check marks it on. */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={fusion.enabled}
+        onClick={() => {
+          const nextEnabled = !fusion.enabled;
+          fusion.onToggle(nextEnabled);
+          if (!nextEnabled) props.onRoleChange("lead");
+        }}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
+        aria-label={t("chat:fusionPairing")}
+      >
+        <span className="text-ui font-medium text-foreground">{t("chat:fusion")}</span>
+        <span
+          aria-hidden="true"
           className={cn(
-            "inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
-            fusion.enabled ? "bg-primary" : "bg-muted",
+            "ml-auto text-ui-xs",
+            fusion.enabled ? "text-primary" : "text-muted-foreground/50",
           )}
-          aria-label={t("chat:fusionPairing")}
         >
-          <span
-            className={cn(
-              "size-3 rounded-full bg-white shadow transition-transform",
-              fusion.enabled ? "translate-x-3.5" : "translate-x-0.5",
-            )}
-          />
-        </button>
-      </div>
+          {fusion.enabled ? "✓" : "○"}
+        </span>
+      </button>
       {fusion.enabled ? (
-        <div className="flex flex-col gap-1 px-2 pb-2">
-          <div className="grid grid-cols-2 gap-1">
-            {(
-              [
-                ["lead", t("chat:lead"), props.leadModelLabel],
-                ["sidekick", t("chat:sidekick"), sidekickLabel],
-              ] as const
-            ).map(([role, roleLabel, modelName]) => {
-              const active = props.role === role;
-              const unset = role === "sidekick" && fusion.sidekick === null;
-              return (
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => props.onRoleChange(role)}
-                  aria-pressed={active}
+        <>
+          {/* One compact row per role: pick a role, then pick its model below. */}
+          {(
+            [
+              ["lead", t("chat:lead"), props.leadModelLabel],
+              ["sidekick", t("chat:sidekick"), sidekickLabel],
+            ] as const
+          ).map(([role, roleLabel, modelName]) => {
+            const active = props.role === role;
+            const unset = role === "sidekick" && fusion.sidekick === null;
+            return (
+              <button
+                key={role}
+                type="button"
+                onClick={() => props.onRoleChange(role)}
+                aria-pressed={active}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                  active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
+                )}
+              >
+                <span
+                  aria-hidden="true"
                   className={cn(
-                    "flex min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1.5 text-left transition-colors",
-                    active
-                      ? "border-primary/50 bg-accent text-foreground"
-                      : "border-border/60 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    "size-1.5 shrink-0 rounded-full",
+                    active ? "bg-primary" : "bg-transparent",
+                  )}
+                />
+                <span className="shrink-0 text-ui-xs font-medium">{roleLabel}</span>
+                <span
+                  className={cn(
+                    "ml-auto min-w-0 truncate text-ui-xs",
+                    unset ? "text-muted-foreground/70 italic" : "text-muted-foreground",
                   )}
                 >
-                  <span className="text-ui-xs font-medium uppercase tracking-[0.06em]">
-                    {roleLabel}
-                  </span>
-                  <span
-                    className={cn(
-                      "w-full truncate text-ui-xs",
-                      unset ? "text-muted-foreground/70 italic" : "text-foreground",
-                    )}
-                  >
-                    {modelName}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {presets.length > 0 ? (
-            <div className="flex flex-col gap-px">
-              <span className="px-1 pt-1 pb-0.5 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
-                {t("chat:fusionPairings")}
+                  {modelName}
+                </span>
+              </button>
+            );
+          })}
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => props.onApplyPreset(preset)}
+              className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
+            >
+              <span className="truncate text-ui-xs font-medium text-foreground">{preset.name}</span>
+              <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
+                {fusionPresetSummary(preset, composerModelDisplayName)}
               </span>
-              {presets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => props.onApplyPreset(preset)}
-                  className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
-                >
-                  <span className="truncate text-ui-xs font-medium text-foreground">
-                    {preset.name}
-                  </span>
-                  <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
-                    {fusionPresetSummary(preset, composerModelDisplayName)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+            </button>
+          ))}
+        </>
       ) : null}
     </div>
   );
