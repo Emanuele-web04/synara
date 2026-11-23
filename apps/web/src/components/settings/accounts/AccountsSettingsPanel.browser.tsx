@@ -1,13 +1,16 @@
 import "../../../index.css";
 
 import {
+  DEFAULT_SERVER_SETTINGS,
   ThreadId,
   type ServerProviderStatus,
   type ServerProviderUsageSnapshot,
+  type ServerSettings,
   type TerminalEvent,
   type TerminalOpenInput,
 } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -16,6 +19,7 @@ import { StrictMode, useState } from "react";
 const harness = vi.hoisted(() => ({
   statuses: [] as ServerProviderStatus[],
   usage: [] as ServerProviderUsageSnapshot[],
+  settings: null as ServerSettings | null,
   refresh: vi.fn(),
   invalidate: vi.fn(async () => {}),
   terminalListener: null as ((event: TerminalEvent) => void) | null,
@@ -41,7 +45,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
       data:
         options.queryKey?.[1] === "allProviderUsage"
           ? harness.usage
-          : { providers: harness.statuses, cwd: "/tmp" },
+          : options.queryKey?.[1] === "settings"
+            ? harness.settings
+            : { providers: harness.statuses, cwd: "/tmp" },
       isPending: false,
     }),
   };
@@ -80,6 +86,7 @@ vi.mock("~/nativeApi", () => ({
 import { AppSettingsSchema, type AppSettings } from "~/appSettings";
 import TerminalViewport from "../../terminal/TerminalViewport";
 import { terminalRuntimeRegistry } from "../../terminal/terminalRuntimeRegistry";
+import { ProviderUsageSettingsPanel } from "../ProviderUsageSettingsPanel";
 import { AccountsSettingsPanel } from "./AccountsSettingsPanel";
 
 // The terminal runtime subscribes once for the whole file and the sign-in window once per
@@ -118,6 +125,7 @@ function AccountsHarness(harnessProps: {
 
 beforeEach(() => {
   harness.usage = [];
+  harness.settings = null;
   harness.refresh.mockReset();
   harness.api.terminal.open.mockReset().mockImplementation(async (input: TerminalOpenInput) => ({
     ...input,
@@ -151,6 +159,43 @@ beforeEach(() => {
       ? { message: "OpenCode CLI (`opencode`) is not installed or not on PATH." }
       : {}),
   }));
+});
+
+it("opens Antigravity limits in the selected account's native terminal", async () => {
+  harness.settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: {
+      antigravity_work: { driver: "antigravity", displayName: "Work Antigravity" },
+      antigravity_old: { driver: "antigravity", displayName: "Old Antigravity", enabled: false },
+    },
+  };
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ProviderUsageSettingsPanel />
+    </QueryClientProvider>,
+  );
+
+  await expect
+    .element(page.getByRole("button", { name: /limits for Old Antigravity/ }))
+    .not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Open limits for Work Antigravity in CLI" }).click();
+  const dialog = page.getByRole("dialog", { name: "Limits for Work Antigravity" });
+  await expect.element(dialog.getByText(/Run \/usage/)).toBeVisible();
+  await expect
+    .poll(() => harness.api.terminal.open.mock.calls[0]?.[0])
+    .toMatchObject({
+      providerAuthInstanceId: "antigravity_work",
+      terminalId: "usage",
+    });
+  expect(harness.api.terminal.write).not.toHaveBeenCalled();
+  const session = harness.api.terminal.open.mock.calls[0]![0] as TerminalOpenInput;
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(harness.api.terminal.close).toHaveBeenCalledWith({
+    threadId: session.threadId,
+    terminalId: "usage",
+    deleteHistory: true,
+  });
 });
 
 // --- Accounts page: one card per agent listing every account, default included; an
