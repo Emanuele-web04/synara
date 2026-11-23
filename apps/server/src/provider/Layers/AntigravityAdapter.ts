@@ -1675,55 +1675,62 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             issue: "Antigravity has no active turn that supports live steering.",
           });
         }
+        const reportDeliveryFailure = (detail: string) =>
+          options?.onSteerDeliveryFailure?.(detail) ??
+          Effect.gen(function* () {
+            yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+              type: "runtime.warning",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              turnId,
+              payload: {
+                message: "Antigravity could not deliver the steering message.",
+                detail,
+              },
+            });
+          });
         ctx.activeSteerRequests += 1;
         ctx.lastTurnActivityAt = Date.now();
-        yield* Effect.suspend(() =>
-          ctx.pendingTurnInterrupted ||
-          ctx.finishingTurnId !== undefined ||
-          ctx.stopped ||
-          ctx.activeTurnId !== turnId
-            ? Effect.void
-            : ctx.acp.prompt({ prompt }, { continueActiveTurn: true }).pipe(
-                Effect.tap((result) =>
-                  Effect.gen(function* () {
-                    if (result.stopReason !== "cancelled") return;
-                    // Apply late tool failures before releasing the background wait.
-                    yield* waitForQueuedTurnEventsDrained(ctx);
-                    if (
-                      ctx.activeTurnId !== turnId ||
-                      ctx.pendingTurnInterrupted ||
-                      ctx.finishingTurnId !== undefined ||
-                      ctx.stopped ||
-                      ctx.activeSteerCompletion?.state === "failed"
-                    )
-                      return;
-                    ctx.activeSteerCompletion = {
-                      ...classifyAcpPromptTurnCompletion({
+        // Only the ACP call is interruptible so a rejected send can report its outcome.
+        yield* Effect.uninterruptibleMask((restore) =>
+          Effect.suspend(() =>
+            ctx.pendingTurnInterrupted ||
+            ctx.finishingTurnId !== undefined ||
+            ctx.stopped ||
+            ctx.activeTurnId !== turnId
+              ? reportDeliveryFailure("The active turn ended before the steering message was sent.")
+              : restore(ctx.acp.prompt({ prompt }, { continueActiveTurn: true })).pipe(
+                  Effect.tap((result) =>
+                    Effect.gen(function* () {
+                      if (result.stopReason !== "cancelled") return;
+                      // Apply late tool failures before releasing the background wait.
+                      yield* waitForQueuedTurnEventsDrained(ctx);
+                      if (
+                        ctx.activeTurnId !== turnId ||
+                        ctx.pendingTurnInterrupted ||
+                        ctx.finishingTurnId !== undefined ||
+                        ctx.stopped ||
+                        ctx.activeSteerCompletion?.state === "failed"
+                      )
+                        return;
+                      ctx.activeSteerCompletion = {
+                        ...classifyAcpPromptTurnCompletion({
+                          stopReason: result.stopReason,
+                          failedToolDetail: ctx.activeTurnFailedToolDetail,
+                        }),
                         stopReason: result.stopReason,
-                        failedToolDetail: ctx.activeTurnFailedToolDetail,
-                      }),
-                      stopReason: result.stopReason,
-                    };
-                  }),
+                      };
+                    }),
+                  ),
+                  Effect.catch((error) =>
+                    error._tag === "AcpRequestError" ||
+                    (!ctx.pendingTurnInterrupted && !ctx.stopped && ctx.activeTurnId === turnId)
+                      ? reportDeliveryFailure(error.message)
+                      : Effect.void,
+                  ),
                 ),
-                Effect.catch((error) =>
-                  Effect.gen(function* () {
-                    if (ctx.pendingTurnInterrupted || ctx.stopped || ctx.activeTurnId !== turnId)
-                      return;
-                    yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-                      type: "runtime.warning",
-                      ...(yield* makeEventStamp()),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId,
-                      payload: {
-                        message: "Antigravity could not deliver the steering message.",
-                        detail: error.message,
-                      },
-                    });
-                  }),
-                ),
-              ),
+          ),
         ).pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -1731,7 +1738,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               if (ctx.activeTurnId === turnId) ctx.lastTurnActivityAt = Date.now();
             }),
           ),
-          Effect.forkIn(ctx.scope),
+          Effect.forkIn(ctx.scope, { startImmediately: true }),
         );
         return { threadId: input.threadId, turnId, resumeCursor: ctx.acpSessionId };
       });
