@@ -168,6 +168,7 @@ import Migration0141 from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.
 import Migration0143 from "./Migrations/143_UsageAnalyticsDeletedTokens.ts";
 import Migration0144 from "./Migrations/144_ProjectionThreadsPullRequestLinks.ts";
 import Migration0145 from "./Migrations/145_ProjectionThreadSessionSteering.ts";
+import Migration0146 from "./Migrations/146_AgentGatewayOperationWaves.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -329,6 +330,7 @@ export const migrationEntries = [
   [143, "UsageAnalyticsDeletedTokens", Migration0143],
   [144, "ProjectionThreadsPullRequestLinks", Migration0144],
   [145, "ProjectionThreadSessionSteering", Migration0145],
+  [146, "AgentGatewayOperationWaves", Migration0146],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

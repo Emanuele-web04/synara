@@ -11,6 +11,12 @@ export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean
   return AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
 }
 
+/** Whether the provider can enforce the requested execution mode. */
+export function providerSupportsRuntimeMode(provider: ProviderKind, mode: RuntimeMode): boolean {
+  if (provider === "antigravity") return mode === "full-access";
+  return mode !== "auto" || providerSupportsAutoRuntimeMode(provider);
+}
+
 export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): string {
   return `Provider "${provider}" does not support Auto runtime mode. Auto is available only for Codex and Claude Code.`;
 }

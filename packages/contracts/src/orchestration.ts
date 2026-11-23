@@ -1831,6 +1831,16 @@ export const ThreadTurnStartCommand = Schema.Struct({
   // taken (the recorded turn itself, or any later one). Clients cannot set it:
   // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
   resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  // Server-only conditional dispatch for a completed wave of delegated work.
+  gatewayCompletionPrecondition: Schema.optional(
+    Schema.Struct({
+      sourceTurnId: TurnId,
+      provider: ProviderKind,
+      instanceId: Schema.optional(ProviderInstanceId),
+      runtimeMode: RuntimeMode,
+      latestUserMessageAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 

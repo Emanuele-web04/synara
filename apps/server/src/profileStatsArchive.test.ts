@@ -945,7 +945,7 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
-  it("deletes terminal gateway plans and redacts live recovery plans with a purged caller", async () => {
+  it("retains only live gateway recovery evidence for a purged caller", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -984,19 +984,20 @@ describe("ProfileStatsArchive", () => {
           INSERT INTO agent_gateway_operations (
             operation_id, caller_thread_id, caller_turn_id, operation_kind,
             request_id, fingerprint, requested_count, plan_json, status,
-            result_json, error_json, created_at, updated_at
+            result_json, error_json, resume_context_json, created_at, updated_at
           ) VALUES
             (
               'operation-terminal', 'thread-purge', 'turn-purge-terminal', 'create_threads',
               'terminal-request', 'terminal-fingerprint', 1,
               '[{"spec":{"prompt":"private terminal prompt"}}]', 'completed',
-              '{"workspaceRoot":"/private/result"}', NULL,
+              '{"workspaceRoot":"/private/result"}', NULL, NULL,
               '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
             ),
             (
               'operation-live', 'thread-purge', 'turn-purge-live', 'create_threads',
               'private-request-id', 'private-fingerprint', 1,
               ${livePlan}, 'dispatching', NULL, '{"path":"/private/error"}',
+              '{"provider":"codex","instanceId":"private-profile","runtimeMode":"full-access","latestUserMessageAt":"2026-06-14T10:06:00.000Z"}',
               '2026-06-14T10:06:00.000Z', '2026-06-14T10:06:00.000Z'
             )
         `;
@@ -1014,13 +1015,15 @@ describe("ProfileStatsArchive", () => {
           readonly status: string;
           readonly resultJson: string | null;
           readonly errorJson: string | null;
+          readonly resumeContextJson: string | null;
           readonly callerPurgedAt: string | null;
         }>`
           SELECT
             operation_id AS "operationId", caller_thread_id AS "callerThreadId",
             caller_turn_id AS "callerTurnId", request_id AS "requestId", fingerprint,
             plan_json AS "planJson", status, result_json AS "resultJson",
-            error_json AS "errorJson", caller_purged_at AS "callerPurgedAt"
+            error_json AS "errorJson", resume_context_json AS "resumeContextJson",
+            caller_purged_at AS "callerPurgedAt"
           FROM agent_gateway_operations
           WHERE operation_id = 'operation-live'
         `;
@@ -1034,6 +1037,7 @@ describe("ProfileStatsArchive", () => {
           status: "dispatching",
           resultJson: null,
           errorJson: null,
+          resumeContextJson: null,
           callerPurgedAt: expect.any(String),
         });
         const retainedCallerIds = yield* sql<{ readonly count: number }>`

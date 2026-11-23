@@ -14,6 +14,7 @@ import { ProviderInstanceId } from "./providerInstance";
 import { ServerProviderAuthStatus } from "./server";
 
 export const SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION = 20;
+export const SYNARA_GATEWAY_MAX_THREADS_PER_TURN = 20;
 export const SYNARA_GATEWAY_MAX_REQUEST_ID_LENGTH = 256;
 export const SYNARA_GATEWAY_MAX_WAIT_MS = 60_000;
 
@@ -24,6 +25,7 @@ export const SynaraGatewayErrorCode = Schema.Literals([
   "provider_unavailable",
   "model_unavailable",
   "model_option_unavailable",
+  "runtime_mode_unavailable",
   "idempotency_conflict",
   "creation_plan_locked",
   "creation_limit_exceeded",
@@ -104,6 +106,7 @@ const SynaraGatewayRequestId = Schema.String.check(Schema.isNonEmpty()).check(
 
 export const SynaraCreateThreadsInput = Schema.Struct({
   requestId: SynaraGatewayRequestId,
+  resumeCreatorOnComplete: Schema.optional(Schema.Boolean),
   threads: Schema.Array(SynaraCreateThreadSpec)
     .check(Schema.isMinLength(1))
     .check(Schema.isMaxLength(SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION)),
@@ -115,11 +118,14 @@ export const SynaraProviderInstanceCatalog = Schema.Struct({
   displayName: Schema.String.check(Schema.isNonEmpty()),
   isDefault: Schema.Boolean,
   enabled: Schema.Boolean,
+  available: Schema.optional(Schema.Boolean),
+  authStatus: Schema.optional(ServerProviderAuthStatus),
 });
 export type SynaraProviderInstanceCatalog = typeof SynaraProviderInstanceCatalog.Type;
 
 export const SynaraProviderCatalog = Schema.Struct({
   provider: ProviderKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   defaultModel: Schema.NullOr(Schema.String),
   models: Schema.Array(ProviderModelDescriptor),
   // Optional for older MCP clients that decode a capability response from a
@@ -128,6 +134,8 @@ export const SynaraProviderCatalog = Schema.Struct({
   instances: Schema.optional(Schema.Array(SynaraProviderInstanceCatalog)),
   enabled: Schema.Boolean,
   available: Schema.Boolean,
+  runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
+  compatibleRuntimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   authStatus: Schema.optional(ServerProviderAuthStatus),
   source: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
@@ -168,6 +176,7 @@ export const SynaraCapabilitiesResult = Schema.Struct({
     maxThreadsPerOperation: Schema.Int,
     maxWaitMs: Schema.Int,
     oneCreationPlanPerActiveTurn: Schema.Boolean,
+    maxThreadsPerActiveTurn: Schema.optional(Schema.Int),
   }),
 });
 export type SynaraCapabilitiesResult = typeof SynaraCapabilitiesResult.Type;

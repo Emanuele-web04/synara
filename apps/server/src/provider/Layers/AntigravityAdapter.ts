@@ -23,6 +23,7 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { providerSupportsRuntimeMode } from "@synara/shared/runtimeMode";
 import {
   Cause,
   DateTime,
@@ -792,7 +793,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
             });
           }
-          if (input.runtimeMode !== "full-access") {
+          if (!providerSupportsRuntimeMode(PROVIDER, input.runtimeMode)) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "session/start",
@@ -1049,6 +1050,16 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               method: "session/resume",
               detail:
                 "Antigravity could not resume the requested conversation. Synara refused the fresh fallback to avoid silently losing conversation context.",
+            });
+          }
+          if (gatewaySessionLease) {
+            yield* Effect.logDebug("antigravity.acp.gateway_configured", {
+              threadId: input.threadId,
+              setupMethod: started.sessionSetupMethod,
+              transport:
+                started.initializeResult.agentCapabilities?.mcpCapabilities?.http === true
+                  ? "http"
+                  : "stdio",
             });
           }
 
@@ -1488,7 +1499,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         const promptParts = yield* buildPromptParts(input);
         const harnessPolicy = takeAntigravitySynaraHarnessPolicyTextPart(
           ctx,
-          agentGatewayCredentials !== undefined,
+          ctx.gatewaySessionLease !== undefined,
         );
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
