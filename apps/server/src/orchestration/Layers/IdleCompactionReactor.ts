@@ -63,7 +63,8 @@ const defaultObservationFor = (
  * A compaction candidate has nothing for the user or the provider to act on:
  * its last turn settled normally, no interaction or review is pending, and the
  * thread is neither snoozed, archived, deleted, nor a derived conversation
- * (subagent, side chat) whose parent owns compaction cadence.
+ * (subagent, side chat) whose parent owns compaction cadence. A completed
+ * handoff is just history; only one still bootstrapping blocks compaction.
  */
 const isThreadIdleForCompaction = (thread: OrchestrationThread): boolean =>
   thread.latestTurn?.state === "completed" &&
@@ -72,7 +73,7 @@ const isThreadIdleForCompaction = (thread: OrchestrationThread): boolean =>
   thread.hasPendingApprovals !== true &&
   thread.hasPendingUserInput !== true &&
   thread.claudeCacheReview == null &&
-  thread.handoff == null &&
+  thread.handoff?.bootstrapStatus !== "pending" &&
   thread.archivedAt == null &&
   thread.deletedAt == null &&
   thread.snoozedUntil == null &&
@@ -97,11 +98,26 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
         yield* providerService.prewarmSession({ threadId });
       }
       // Prewarm ran the same recovery a send would run; the session may have
-      // come up with queued work, so re-verify the thread is still idle before
-      // consuming one provider request on a maintenance compaction.
-      const readModel = yield* orchestrationEngine.getReadModel();
+      // come up with queued work, or recovery may have replaced the cache lease
+      // (e.g. a startup hook reporting expiry). Re-verify idleness and
+      // re-derive the observation from the fresh binding before spending a
+      // provider request on maintenance.
+      const [readModel, binding] = yield* Effect.all([
+        orchestrationEngine.getReadModel(),
+        providerSessionDirectory.getBinding(threadId),
+      ]);
       const thread = readModel.threads.find((candidate) => candidate.id === threadId);
       if (!thread || !isThreadIdleForCompaction(thread)) {
+        return;
+      }
+      const observation =
+        provider === "claudeAgent"
+          ? Option.match(binding, {
+              onNone: () => undefined,
+              onSome: (entry) => claudeCacheFromResumeCursor(entry.resumeCursor),
+            })
+          : defaultObservationFor(provider, thread);
+      if (!observation || !idleCompactionDue(observation, Date.now())) {
         return;
       }
       if (provider === "claudeAgent") {
@@ -112,9 +128,10 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
         yield* startClaudeCompaction({
           threadId,
           turnId: TurnId.makeUnsafe(crypto.randomUUID()),
+          purpose: "maintenance",
         });
       } else {
-        yield* providerService.compactThread({ threadId });
+        yield* providerService.compactThread({ threadId, purpose: "maintenance" });
       }
     });
 

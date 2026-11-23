@@ -943,6 +943,9 @@ export const OrchestrationLatestTurn = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Marks turns dispatched by background maintenance (e.g. pre-expiry idle
+  // compaction) so clients can exclude them from completion alerts.
+  purpose: Schema.optional(Schema.Literals(["maintenance"])),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
@@ -2847,6 +2850,8 @@ export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
   pendingResumeMessageId: Schema.optional(MessageId),
+  // Purpose of the active turn when the runtime marked it as maintenance.
+  turnPurpose: Schema.optional(Schema.Literals(["maintenance"])),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({

@@ -3112,9 +3112,18 @@ const make = Effect.gen(function* () {
             }
           }
 
+          // Adapters flag background maintenance turns (e.g. pre-expiry idle
+          // compaction) in turn.started so the projector can mark the latest
+          // turn and clients can exclude it from completion alerts.
+          const turnPurpose =
+            event.type === "turn.started" && runtimePayloadRecord(event)?.purpose === "maintenance"
+              ? ("maintenance" as const)
+              : undefined;
+
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
             ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
+            ...(turnPurpose !== undefined ? { turnPurpose } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {

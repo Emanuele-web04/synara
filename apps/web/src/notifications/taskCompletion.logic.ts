@@ -228,6 +228,11 @@ export function collectCompletedThreadCandidates(
     if (!latestTurn || !completedAt) {
       continue;
     }
+    // Maintenance turns (e.g. pre-expiry idle compaction) complete without a
+    // user prompt; "Finished working." would notify for work nobody asked for.
+    if (latestTurn.purpose === "maintenance") {
+      continue;
+    }
     // Interrupted/error settlements are not completions: the stop was either
     // user-initiated or already surfaced through the error state, and "Finished
     // working." copy would be wrong for both.

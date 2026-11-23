@@ -1220,6 +1220,30 @@ export function projectEvent(
           "session",
         );
 
+        const nextLatestTurn =
+          session.status === "running" && session.activeTurnId !== null
+            ? thread.latestTurn?.turnId === session.activeTurnId &&
+              isTerminalLatestTurn(thread.latestTurn)
+              ? thread.latestTurn
+              : {
+                  turnId: session.activeTurnId,
+                  state: "running" as const,
+                  requestedAt:
+                    thread.latestTurn?.turnId === session.activeTurnId
+                      ? thread.latestTurn.requestedAt
+                      : session.updatedAt,
+                  startedAt:
+                    thread.latestTurn?.turnId === session.activeTurnId
+                      ? (thread.latestTurn.startedAt ?? session.updatedAt)
+                      : session.updatedAt,
+                  completedAt: null,
+                  assistantMessageId:
+                    thread.latestTurn?.turnId === session.activeTurnId
+                      ? thread.latestTurn.assistantMessageId
+                      : null,
+                }
+            : settleLatestTurnForSessionStatus(thread.latestTurn, session);
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
@@ -1228,28 +1252,9 @@ export function projectEvent(
               ? { sidechatLastActivityAt: session.updatedAt }
               : {}),
             latestTurn:
-              session.status === "running" && session.activeTurnId !== null
-                ? thread.latestTurn?.turnId === session.activeTurnId &&
-                  isTerminalLatestTurn(thread.latestTurn)
-                  ? thread.latestTurn
-                  : {
-                      turnId: session.activeTurnId,
-                      state: "running",
-                      requestedAt:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? thread.latestTurn.requestedAt
-                          : session.updatedAt,
-                      startedAt:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? (thread.latestTurn.startedAt ?? session.updatedAt)
-                          : session.updatedAt,
-                      completedAt: null,
-                      assistantMessageId:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? thread.latestTurn.assistantMessageId
-                          : null,
-                    }
-                : settleLatestTurnForSessionStatus(thread.latestTurn, session),
+              nextLatestTurn && payload.turnPurpose !== undefined
+                ? { ...nextLatestTurn, purpose: payload.turnPurpose }
+                : nextLatestTurn,
             updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };

@@ -4807,8 +4807,9 @@ export function makeDevinAdapter(
       );
     };
 
-    const compactThread: NonNullable<DevinAdapterShape["compactThread"]> = (threadId) =>
+    const compactThread: NonNullable<DevinAdapterShape["compactThread"]> = (input) =>
       Effect.gen(function* () {
+        const { threadId } = input;
         // Wait for a settling resume replay before taking the thread lock:
         // stopSession/startSession need that lock, and stopping the session is
         // what resolves the deferred early, so awaiting under the lock would

@@ -8215,6 +8215,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       input: ProviderSendTurnInput,
       compactionTurnId?: TurnId,
       cancelled?: Deferred.Deferred<void>,
+      maintenancePurpose = false,
     ): ReturnType<ClaudeAdapterShape["sendTurn"]> =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
@@ -8549,11 +8550,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             createdAt: turnStartedStamp.createdAt,
             threadId: context.session.threadId,
             turnId,
-            payload: context.currentApiModelId
-              ? { model: stripClaudeContextWindowSuffix(context.currentApiModelId) }
-              : modelSelection?.model
-                ? { model: modelSelection.model }
-                : {},
+            payload: {
+              ...(context.currentApiModelId
+                ? { model: stripClaudeContextWindowSuffix(context.currentApiModelId) }
+                : modelSelection?.model
+                  ? { model: modelSelection.model }
+                  : {}),
+              ...(maintenancePurpose ? { purpose: "maintenance" as const } : {}),
+            },
             providerRefs: {},
           });
 
@@ -8708,6 +8712,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             { threadId: input.threadId, input: "/compact", attachments: [] },
             input.turnId,
             cancelled,
+            input.purpose === "maintenance",
           ),
         input.cancellation,
       );

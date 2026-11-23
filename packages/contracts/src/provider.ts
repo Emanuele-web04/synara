@@ -206,6 +206,9 @@ export type ProviderStopSessionInput = typeof ProviderStopSessionInput.Type;
 
 export const ProviderCompactThreadInput = Schema.Struct({
   threadId: ThreadId,
+  // "maintenance" marks a background compaction that must not surface as user
+  // work (completion alerts, chat activity).
+  purpose: Schema.optional(Schema.Literal("maintenance")),
 });
 export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 

@@ -5642,7 +5642,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 `Context compaction is unavailable for provider '${routed.adapter.provider}'.`,
               );
             }
-            yield* routed.adapter.compactThread(input.threadId);
+            yield* routed.adapter.compactThread(input);
             const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
             if (binding) {
               yield* directory.upsert({

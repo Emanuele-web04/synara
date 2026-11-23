@@ -389,6 +389,9 @@ export type ThreadRealtimeClosedPayload = typeof ThreadRealtimeClosedPayload.Typ
 const TurnStartedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Set when the turn exists only for background maintenance (e.g. pre-expiry
+  // idle compaction), not for user-requested work.
+  purpose: Schema.optional(Schema.Literal("maintenance")),
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 

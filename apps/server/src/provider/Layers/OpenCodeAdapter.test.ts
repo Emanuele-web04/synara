@@ -2090,7 +2090,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           },
           { name: "readThread", run: () => adapter.readThread(threadId) },
           { name: "rollbackThread", run: () => adapter.rollbackThread(threadId, 1) },
-          { name: "compactThread", run: () => adapter.compactThread!(threadId) },
+          { name: "compactThread", run: () => adapter.compactThread!({ threadId }) },
         ];
 
         // Absent: the probe is false and every guarded operation reports missing.

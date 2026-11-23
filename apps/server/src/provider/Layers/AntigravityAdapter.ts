@@ -216,6 +216,8 @@ interface AntigravitySessionContext {
   sessionUpdatesProcessed: number;
   turnStarting: boolean;
   pendingTurnInterrupted: boolean;
+  /** The next turn was requested by background maintenance (idle compaction). */
+  pendingMaintenanceTurn: boolean;
   stopped: boolean;
 }
 
@@ -835,6 +837,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             sessionUpdatesProcessed: 0,
             turnStarting: false,
             pendingTurnInterrupted: false,
+            pendingMaintenanceTurn: false,
             stopped: false,
           };
 
@@ -1212,8 +1215,12 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: model ? { model } : {},
+          payload: {
+            ...(model ? { model } : {}),
+            ...(ctx.pendingMaintenanceTurn ? { purpose: "maintenance" as const } : {}),
+          },
         });
+        ctx.pendingMaintenanceTurn = false;
 
         ctx.activePromptFiber = yield* Effect.suspend(() =>
           ctx.pendingTurnInterrupted || ctx.stopped
@@ -1327,18 +1334,19 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
     // real context compaction when it receives the command in a prompt. Older
     // runtimes would read "/compact" as plain text, so the command is only
     // dispatched when the session announces it.
-    const compactThread: NonNullable<AntigravityAdapterShape["compactThread"]> = (threadId) =>
+    const compactThread: NonNullable<AntigravityAdapterShape["compactThread"]> = (input) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
+        const ctx = yield* requireSession(input.threadId);
         const commands = yield* ctx.acp.getAvailableCommands.pipe(
           Effect.mapError((cause) =>
-            mapAcpToAdapterError(PROVIDER, threadId, "session/commands", cause),
+            mapAcpToAdapterError(PROVIDER, input.threadId, "session/commands", cause),
           ),
         );
         if (!commands.some((command) => command.name === "compact")) {
           return;
         }
-        yield* sendTurn({ threadId, input: "/compact" });
+        ctx.pendingMaintenanceTurn = input.purpose === "maintenance";
+        yield* sendTurn({ threadId: input.threadId, input: "/compact" });
       });
 
     const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId, turnId) =>
