@@ -110,6 +110,7 @@ export function useComposerSlashCommands(input: {
   handleInteractionModeChange: (mode: ProviderInteractionMode) => Promise<void> | void;
   openForkTargetPicker: () => void;
   openReviewTargetPicker: () => void;
+  openFusionPicker: () => void;
   setComposerDraftProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
@@ -165,6 +166,7 @@ export function useComposerSlashCommands(input: {
     handleInteractionModeChange,
     openForkTargetPicker,
     openReviewTargetPicker,
+    openFusionPicker,
     setComposerDraftProviderModelOptions,
     editorActions,
   } = input;
@@ -1067,6 +1069,11 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "fusion") {
+        editorActions.clearComposerSlashDraft();
+        openFusionPicker();
+        return true;
+      }
       if (slashInvocation.command === "side") {
         // Execute allows `/side <provider> [prompt]` even though the menu offer still
         // requires an otherwise-empty composer (the args are meaningful prompt text).
@@ -1337,6 +1344,17 @@ export function useComposerSlashCommands(input: {
         }
         editorActions.setComposerHighlightedItemId(null);
         openForkTargetPicker();
+        editorActions.scheduleComposerFocus();
+        return;
+      }
+
+      if (item.command === "fusion") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        openFusionPicker();
         editorActions.scheduleComposerFocus();
         return;
       }

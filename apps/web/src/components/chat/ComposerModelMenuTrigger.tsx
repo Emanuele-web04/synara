@@ -52,6 +52,8 @@ export function ComposerModelMenuTrigger(props: {
    *  place, invisible and frozen at its open-time value, so it keeps sizing the pill:
    *  tuning effort in the open panel cannot resize the trigger and drag the popup sideways. */
   openPlaceholderLabel?: string | null | undefined;
+  /** Fusion pairing (RFC #1301): the sidekick provider's icon rides on the lead's. */
+  fusionSidekickProvider?: ProviderKind | null | undefined;
   shortcutLabel?: string | null | undefined;
 }) {
   const { t } = useTranslation();
@@ -77,6 +79,10 @@ export function ComposerModelMenuTrigger(props: {
   const [hasShownPlaceholder, setHasShownPlaceholder] = useState(false);
   if (showsPlaceholder && !hasShownPlaceholder) setHasShownPlaceholder(true);
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[props.provider];
+  const fusionSidekickProvider = props.fusionSidekickProvider ?? null;
+  const SidekickProviderIcon = fusionSidekickProvider
+    ? PROVIDER_ICON_COMPONENT_BY_PROVIDER[fusionSidekickProvider]
+    : null;
   const hiddenTriggerTitle = [
     props.accountLabel,
     props.hideModelLabel ? props.modelLabel : null,
@@ -121,6 +127,18 @@ export function ComposerModelMenuTrigger(props: {
             accentColor={props.accountAccentColor}
             className="-ms-1 size-1.5 shrink-0 self-start ring-0"
           />
+          {SidekickProviderIcon ? (
+            <SidekickProviderIcon
+              aria-hidden="true"
+              className={cn(
+                "-ms-1 size-3 shrink-0 opacity-100",
+                getProviderIconClassName(
+                  fusionSidekickProvider ?? props.provider,
+                  "text-muted-foreground",
+                ),
+              )}
+            />
+          ) : null}
           {props.accountName ? (
             props.hideModelLabel ? (
               <span className="sr-only">{props.accountLabel}</span>

@@ -320,6 +320,9 @@ const PersistedComposerThreadDraftState = Schema.Struct({
     Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
+  fusion: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ sidekick: Schema.NullOr(ModelSelection) })),
+  ),
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
@@ -1070,6 +1073,12 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.computerControlGeneration >= 0
         ? draftCandidate.computerControlGeneration
         : undefined;
+    const persistedFusion = draftCandidate.fusion;
+    const fusionSidekick =
+      persistedFusion?.sidekick == null
+        ? null
+        : (normalizeModelSelection(persistedFusion.sidekick) ?? null);
+    const fusion = persistedFusion ? { sidekick: fusionSidekick } : null;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -1153,6 +1162,7 @@ function normalizePersistedDraftsByThreadId(
       !hasQueuedTurns &&
       restoredSourceProposedPlan === null &&
       !hasModelData &&
+      fusion === null &&
       providerOptionsForDispatch === undefined &&
       !runtimeMode &&
       !interactionMode &&
@@ -1183,6 +1193,7 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
+      ...(fusion !== null ? { fusion } : {}),
       ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
@@ -1363,7 +1374,8 @@ export function partializeComposerDraftStoreState(
       draft.runtimeMode === null &&
       draft.interactionMode === null &&
       draft.enableComputerControl === undefined &&
-      draft.computerControlMode === undefined
+      draft.computerControlMode === undefined &&
+      draft.fusion == null
     ) {
       continue;
     }
@@ -1518,6 +1530,7 @@ export function partializeComposerDraftStoreState(
             activeProvider: draft.activeProvider,
           }
         : {}),
+      ...(draft.fusion ? { fusion: draft.fusion } : {}),
       ...(draft.providerOptionsForDispatch
         ? { providerOptionsForDispatch: draft.providerOptionsForDispatch }
         : {}),

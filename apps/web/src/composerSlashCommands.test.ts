@@ -415,6 +415,7 @@ describe("composerSlashCommands", () => {
       "fork",
       "side",
       "export",
+      "fusion",
       "goal",
       "rename",
       "debug",

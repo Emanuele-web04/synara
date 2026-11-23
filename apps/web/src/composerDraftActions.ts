@@ -1331,6 +1331,39 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    setFusion: (threadId, fusion) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const base = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (base.fusion === fusion) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = { ...base, fusion };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    setFusionSidekick: (threadId, sidekick) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const base = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          fusion: { sidekick },
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId, [threadId]: nextDraft };
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     // Keep queued follow-ups with the thread draft so route changes do not hide them.
     enqueueQueuedTurn: (threadId, queuedTurn) => {
       if (threadId.length === 0) {

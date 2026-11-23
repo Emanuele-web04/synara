@@ -322,6 +322,7 @@ export function useHandleNewThread() {
       if (!api) {
         return;
       }
+      const draftFusion = useComposerDraftStore.getState().draftsByThreadId[threadId]?.fusion;
       await promoteThreadCreate(
         {
           type: "thread.create",
@@ -337,6 +338,9 @@ export function useHandleNewThread() {
           worktreePath: creationState.worktreePath,
           workingDirectory: creationState.workingDirectory,
           lastKnownPr: creationState.lastKnownPr,
+          ...(draftFusion?.sidekick
+            ? { fusion: { lead: creationState.modelSelection, sidekick: draftFusion.sidekick } }
+            : {}),
           createdAt: new Date().toISOString(),
         },
         api,

@@ -356,10 +356,14 @@ export function resolveSubagentPresentation(input: {
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
 
   const accentSeed =
-    identityLabel ??
-    fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ??
-    normalizeWhitespace(input.placeholderLabel) ??
-    DEFAULT_SUBAGENT_LABEL;
+    role === "sidekick"
+      ? // Fusion sidekicks (RFC #1301) keep one deterministic accent regardless of
+        // their display nickname, so the pair is easy to spot in the strip.
+        "fusion-sidekick"
+      : (identityLabel ??
+        fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ??
+        normalizeWhitespace(input.placeholderLabel) ??
+        DEFAULT_SUBAGENT_LABEL);
 
   return {
     primaryLabel,

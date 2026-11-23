@@ -7,6 +7,7 @@
 
 import {
   type ModelSlug,
+  type ModelSelection,
   type ProviderAgentDescriptor,
   type ProviderInstanceId,
   type ProviderKind,
@@ -126,6 +127,19 @@ type ComposerModelPickerProps = {
   // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
   // stepped slider card in the footer instead.
   effortControl?: ComposerEffortControl;
+  // Fusion pairing (RFC #1301 v1): the picker gains a Fusion section. The lead is
+  // the composer's ordinary selection; the sidekick is a second model chosen in
+  // the same panel when the "sidekick" role is active.
+  fusion?: {
+    enabled: boolean;
+    sidekick: ModelSelection | null;
+    onToggle: (enabled: boolean) => void;
+    onSidekickModelChange: (
+      provider: ProviderKind,
+      model: ModelSlug,
+      options?: ComposerModelSelectionOptions,
+    ) => void;
+  };
   onProviderModelChange: (
     provider: ProviderKind,
     model: ModelSlug,
@@ -183,6 +197,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const { onOpenChange, onRefreshModels, open, lockedProvider, threadId } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  // Which fusion role a row commit targets; resets to "lead" whenever fusion is off.
+  const [fusionRole, setFusionRole] = useState<"lead" | "sidekick">("lead");
   const isMenuOpen = open ?? uncontrolledOpen;
   const activeProvider = lockedProvider ?? props.provider;
   const effortControl = props.effortControl ?? "menu";
@@ -453,6 +469,24 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     const instanceId = (
       row.preset ? starredModelInstanceId(row.preset) : (row.instanceId ?? row.provider)
     ) as ProviderInstanceId;
+    if (props.fusion?.enabled && fusionRole === "sidekick") {
+      props.fusion.onSidekickModelChange(row.provider, model, {
+        ...(Object.keys(patch).length > 0
+          ? {
+              modelOptions: buildNextProviderOptions(
+                row.provider,
+                providerOptionsFor(row.provider),
+                patch,
+              ),
+            }
+          : {}),
+        instanceId,
+      });
+      selectionCommittedWhileOpenRef.current = false;
+      setMenuOpen(false);
+      props.onSelectionCommitted?.();
+      return;
+    }
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -479,6 +513,21 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     if (props.disabled) return;
     const model = row.selectableModel;
     if (model === null) return;
+
+    if (props.fusion?.enabled && fusionRole === "sidekick") {
+      commitRow(
+        row,
+        model,
+        row.preset
+          ? buildStarredModelOptionsPatch({
+              provider: row.provider,
+              selection: traitSelectionFor(row.provider, model, row.instanceId ?? row.provider),
+              starred: row.preset,
+            })
+          : {},
+      );
+      return;
+    }
 
     const selection = traitSelectionFor(row.provider, model, row.instanceId ?? row.provider);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
@@ -573,6 +622,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
         isMenuOpen={isMenuOpen}
+        fusionSidekickProvider={
+          props.fusion?.enabled ? (props.fusion.sidekick?.provider ?? null) : null
+        }
         openPlaceholderLabel={usesEffortSlider ? "Select effort" : null}
         shortcutLabel={props.shortcutLabel}
       />
@@ -598,6 +650,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             onTabChange={setTab}
             onAddProviders={lockedProvider === null ? openProviderSettings : undefined}
           />
+          {props.fusion ? (
+            <FusionSection fusion={props.fusion} role={fusionRole} onRoleChange={setFusionRole} />
+          ) : null}
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 *:min-w-0">
             <SearchIcon aria-hidden="true" className={PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME} />
             <Input
@@ -767,5 +822,74 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         />
       ) : null}
     </Menu>
+  );
+}
+
+function FusionSection(props: {
+  fusion: NonNullable<ComposerModelPickerProps["fusion"]>;
+  role: "lead" | "sidekick";
+  onRoleChange: (role: "lead" | "sidekick") => void;
+}) {
+  const { t } = useTranslation();
+  const { fusion } = props;
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={fusion.enabled}
+        onClick={() => {
+          const nextEnabled = !fusion.enabled;
+          fusion.onToggle(nextEnabled);
+          if (!nextEnabled) props.onRoleChange("lead");
+        }}
+        className={cn(
+          "inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
+          fusion.enabled ? "bg-primary" : "bg-muted",
+        )}
+        aria-label={t("chat:fusionPairing")}
+      >
+        <span
+          className={cn(
+            "size-3 rounded-full bg-white shadow transition-transform",
+            fusion.enabled ? "translate-x-3.5" : "translate-x-0.5",
+          )}
+        />
+      </button>
+      <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+        {t("chat:fusion")}
+      </span>
+      {fusion.enabled ? (
+        <div className="ml-auto flex items-center gap-1">
+          {(
+            [
+              ["lead", t("chat:lead")],
+              ["sidekick", t("chat:sidekick")],
+            ] as const
+          ).map(([role, roleLabel]) => (
+            <button
+              key={role}
+              type="button"
+              onClick={() => props.onRoleChange(role)}
+              className={cn(
+                "rounded-full px-2 py-0.5 text-ui-xs",
+                props.role === role
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {role === "lead"
+                ? roleLabel
+                : fusion.sidekick
+                  ? `${roleLabel}: ${composerModelDisplayName(
+                      fusion.sidekick.provider,
+                      fusion.sidekick.model,
+                    )}`
+                  : roleLabel}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }

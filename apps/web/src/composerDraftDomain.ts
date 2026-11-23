@@ -217,6 +217,12 @@ export interface ComposerThreadDraftState {
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
   modelSelectionByProvider: ModelSelectionByProviderInstance;
   activeProvider: ProviderInstanceId | null;
+  /**
+   * Fusion pairing intent for a not-yet-created thread (RFC #1301): the lead is
+   * the resolved `modelSelection`; `sidekick` is the second model picked in the
+   * picker's Fusion section. Null/absent = ordinary single-model thread.
+   */
+  fusion?: { readonly sidekick: ModelSelection | null } | null;
   // Per-thread provider start options staged for dispatch (e.g. a group's worker
   // routing defaults). Unset means the global settings-derived options apply.
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
@@ -402,6 +408,11 @@ export interface ComposerDraftStoreState {
     options?: { revokeQueued?: boolean; generation?: number },
   ) => void;
   setEnableComputerControl: (threadId: ThreadId, enabled: boolean) => void;
+  setFusion: (
+    threadId: ThreadId,
+    fusion: { readonly sidekick: ModelSelection | null } | null,
+  ) => void;
+  setFusionSidekick: (threadId: ThreadId, sidekick: ModelSelection) => void;
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
   insertQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn, index: number) => void;
   removeQueuedTurn: (threadId: ThreadId, queuedTurnId: string) => void;
@@ -935,7 +946,8 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     // An explicit false is still content: it records the user's choice to keep
     // computer control off in this chat when the new-chat default is on.
     draft.enableComputerControl === undefined &&
-    draft.computerControlMode === undefined
+    draft.computerControlMode === undefined &&
+    draft.fusion == null
   );
 }
 

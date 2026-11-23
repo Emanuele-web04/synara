@@ -1102,5 +1102,11 @@
   "usageLimit_alwaysResume": "Always resume after limits",
   "usageLimit_alwaysResumeDescription": "Default for every chat on this computer",
   "usageLimit_pausedAt": "Paused at the {{provider}} usage limit · {{time}}",
-  "usageLimit_pausedAtNoProvider": "Paused at the usage limit · {{time}}"
+  "usageLimit_pausedAtNoProvider": "Paused at the usage limit · {{time}}",
+  "fusion": "Fusion",
+  "fusionPairing": "Fusion pairing",
+  "lead": "Lead",
+  "sidekick": "Sidekick",
+  "fusionLeadRole": "Lead — picks the model in charge",
+  "fusionSidekickRole": "Sidekick — pick the delegated model"
 }

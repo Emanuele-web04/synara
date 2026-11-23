@@ -442,6 +442,16 @@ async function dispatchDraftThreadOnce(
           worktreePath: creationState.worktreePath,
           workingDirectory: creationState.workingDirectory,
           lastKnownPr: creationState.lastKnownPr,
+          // Fusion pairing staged on the draft (/fusion + picker): lead is the
+          // thread's own selection; the sidekick was picked as the second model.
+          ...(draftComposerState?.fusion?.sidekick
+            ? {
+                fusion: {
+                  lead: modelSelection,
+                  sidekick: draftComposerState.fusion.sidekick,
+                },
+              }
+            : {}),
           // A local draft's createdAt is the time its composer opened. The durable
           // thread is created by this dispatch, so use the same send timestamp as
           // the first turn instead of carrying the draft's idle time into sorting.

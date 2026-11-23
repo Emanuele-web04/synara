@@ -106,6 +106,9 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     // lineage (native session forking per provider), which a provider-native
     // "fork" text command cannot do.
     command === "fork" ||
+    // /fusion is app-owned: it opens the picker's Fusion section and stages a
+    // pairing on the draft — there is no provider-native equivalent.
+    command === "fusion" ||
     command === "goal" ||
     command === "rename" ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
@@ -127,6 +130,7 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
     (normalizedCommand === "export" && appCommandIsAvailable) ||
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
     (normalizedCommand === "fork" && appCommandIsAvailable) ||
+    (normalizedCommand === "fusion" && appCommandIsAvailable) ||
     (normalizedCommand === "goal" && appCommandIsAvailable) ||
     (normalizedCommand === "rename" && appCommandIsAvailable) ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
@@ -214,6 +218,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "side",
     label: "/side",
     description: "Open a guarded Side from this thread, optionally on another provider",
+    source: "app",
+  },
+  fusion: {
+    command: "fusion",
+    label: "/fusion",
+    description: "Pair the next thread with a cheaper sidekick model (lead stays in charge)",
     source: "app",
   },
   status: {
@@ -512,6 +522,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          "fusion",
           "status",
           "subagents",
           "computer-use",
@@ -531,6 +542,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "fusion",
           "goal",
           "rename",
           "debug",

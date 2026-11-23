@@ -129,6 +129,7 @@ import {
   type DraftThreadEnvMode,
 } from "../composerDraftStore";
 import { composerDraftHasUnsentContent } from "../composerDraftDomain";
+import { normalizeModelSelection } from "../composerDraftModels";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import {
   buildGoalSlashCommandPrompt,
@@ -688,6 +689,8 @@ export default function ChatView({
   const setComposerDraftModelSelectionAndSticky = useComposerDraftStore(
     (store) => store.setModelSelectionAndSticky,
   );
+  const setComposerFusion = useComposerDraftStore((store) => store.setFusion);
+  const setComposerFusionSidekick = useComposerDraftStore((store) => store.setFusionSidekick);
   const timestampFormat = settings.timestampFormat;
   // The composer floats over the transcript; its measured height becomes the
   // transcript's bottom content inset (see composerOverlay.ts).
@@ -5196,6 +5199,26 @@ export default function ChatView({
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
+      fusion={{
+        enabled: composerDraft?.fusion != null,
+        sidekick: composerDraft?.fusion?.sidekick ?? null,
+        onToggle: (enabled) =>
+          setComposerFusion(
+            threadId,
+            enabled ? { sidekick: composerDraft?.fusion?.sidekick ?? null } : null,
+          ),
+        onSidekickModelChange: (provider, model, options) => {
+          const sidekick = normalizeModelSelection({
+            provider,
+            instanceId: options?.instanceId ?? provider,
+            model,
+            ...(options?.modelOptions ? { options: options.modelOptions } : {}),
+          });
+          if (sidekick) {
+            setComposerFusionSidekick(threadId, sidekick);
+          }
+        },
+      }}
       onProviderModelChange={handleProviderModelChange}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
@@ -5411,6 +5434,15 @@ export default function ChatView({
     openReviewTargetPicker: () => {
       setComposerCommandPicker("review-target");
       setComposerHighlightedItemId("review-target:changes");
+    },
+    openFusionPicker: () => {
+      // /fusion stages a pairing on the draft and opens the model picker so the
+      // Fusion section can collect the sidekick model.
+      setComposerFusion(threadId, {
+        sidekick:
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.fusion?.sidekick ?? null,
+      });
+      handleModelPickerOpenChange(true);
     },
     setComposerDraftProviderModelOptions,
     editorActions: slashEditorActions,
