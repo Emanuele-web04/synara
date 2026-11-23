@@ -121,6 +121,8 @@ export type OmpServerProviderSettings = typeof OmpServerProviderSettings.Type;
 export const DevinServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "devin")),
+  /** Opt-in: keep imported external Devin history in sync from a server-side worker. */
+  externalHistorySync: Schema.optionalKey(Schema.Boolean),
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 

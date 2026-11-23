@@ -221,6 +221,7 @@ import { makeProjectImportHandlers } from "./orchestration/projectImportRoute";
 import { makeProjectImportRepository } from "./persistence/projectImportRepository";
 import { ExternalHistoryRepository } from "./persistence/Services/ExternalHistory";
 import { makeExternalHistoryService } from "./providerHistory/externalHistoryService.ts";
+import { makeExternalHistorySyncLoop } from "./providerHistory/externalHistorySync.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
@@ -977,6 +978,16 @@ const makeWsRpcHandlersLayer = () =>
         orchestrationEngine,
         homeDir: config.homeDir,
       });
+      // DHI-10 opt-in auto-sync worker: fenced per-source scans routed through
+      // the same importHistory coordinator. Honors the devin.externalHistorySync
+      // setting; a no-op while it stays disabled.
+      yield* makeExternalHistorySyncLoop({
+        repository: yield* ExternalHistoryRepository,
+        orchestrationEngine,
+        projectionSnapshotQuery: projectionReadModelQuery,
+        serverSettings,
+        homeDir: config.homeDir,
+      }).pipe(Effect.forkScoped);
       const projectImports = makeProjectImportHandlers({
         repository: yield* makeProjectImportRepository,
         orchestrationEngine,
