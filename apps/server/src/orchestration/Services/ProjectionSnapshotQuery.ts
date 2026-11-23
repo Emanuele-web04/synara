@@ -17,6 +17,8 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
   CheckpointRef,
+  IsoDateTime,
+  MessageId,
   ProjectId,
   ProjectKind,
   SpaceId,
@@ -381,6 +383,37 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshotById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Page the thread's durable messages older than the snapshot's retained
+   * window, for imported or otherwise long histories (DHI-09). The cursor is
+   * the absolute offset into the newest-first message order; a missing cursor
+   * probes availability and returns the retained-window boundary as nextCursor.
+   */
+  readonly listThreadHistoryPage: (input: {
+    readonly threadId: ThreadId;
+    readonly cursor?: string | undefined;
+  }) => Effect.Effect<OrchestrationThreadHistoryPage, ProjectionRepositoryError>;
+}
+
+/**
+ * One page of durable thread history beyond the snapshot's retained window.
+ * nextCursor echoes the offset the caller should pass for the next older page;
+ * null when none remain. Messages are ordered oldest-first inside the page.
+ */
+export interface OrchestrationThreadHistoryPage {
+  readonly messages: ReadonlyArray<OrchestrationThreadHistoryMessage>;
+  readonly nextCursor: string | null;
+  /** Durable message total for the thread, capped-count independent. */
+  readonly totalMessageCount: number;
+}
+
+export interface OrchestrationThreadHistoryMessage {
+  readonly messageId: MessageId;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAt: IsoDateTime;
+  readonly updatedAt: IsoDateTime;
 }
 
 /**

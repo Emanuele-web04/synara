@@ -45,6 +45,7 @@ export function fakeProjectionSnapshotQuery(
     getThreadMentionContextById: unused,
     getThreadDetailForExportById: unused,
     getThreadDetailSnapshotById: unused,
+    listThreadHistoryPage: unused,
     ...overrides,
   };
 }

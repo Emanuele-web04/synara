@@ -7272,6 +7272,7 @@ export default function ChatView({
                     isTemporaryThread={isThreadTemporary}
                     isLocalDraft={isLocalDraftThread}
                     isProjectImport={activeThread.isProjectImport === true}
+                    isExternalHistoryImport={activeThread.creationSource === "provider_native"}
                     timelineEntries={timelineEntries}
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

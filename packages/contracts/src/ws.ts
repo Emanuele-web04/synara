@@ -98,6 +98,7 @@ import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
   ExternalHistoryImportInput,
+  OrchestrationGetThreadHistoryPageInput,
   OrchestrationImportThreadInput,
   OrchestrationShellStreamItem,
   OrchestrationSubscribeShellInput,
@@ -597,6 +598,10 @@ const WebSocketRequestBody = Schema.Union([
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.readExternalHistory, ExternalHistoryReadHistoryInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importExternalHistory, ExternalHistoryImportInput),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
+    OrchestrationGetThreadHistoryPageInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
   tagRequestBody(

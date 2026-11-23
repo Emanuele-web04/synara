@@ -77,6 +77,7 @@ export const ORCHESTRATION_WS_METHODS = {
   listExternalHistorySessions: "orchestration.listExternalHistorySessions",
   readExternalHistory: "orchestration.readExternalHistory",
   importExternalHistory: "orchestration.importExternalHistory",
+  getThreadHistoryPage: "orchestration.getThreadHistoryPage",
   regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -3451,6 +3452,37 @@ export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
 });
 export type OrchestrationUnsubscribeThreadInput = typeof OrchestrationUnsubscribeThreadInput.Type;
 
+/**
+ * Paged read of a thread's durable messages beyond the snapshot's retained
+ * window (DHI-09): cursor is the absolute offset into the newest-first order,
+ * echoed from the previous result's nextCursor. Omit the cursor to probe —
+ * it returns the retained-window offset as nextCursor when older pages exist.
+ */
+export const OrchestrationGetThreadHistoryPageInput = Schema.Struct({
+  threadId: ThreadId,
+  cursor: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationGetThreadHistoryPageInput =
+  typeof OrchestrationGetThreadHistoryPageInput.Type;
+
+export const OrchestrationGetThreadHistoryPageResult = Schema.Struct({
+  messages: Schema.Array(
+    Schema.Struct({
+      messageId: MessageId,
+      role: Schema.Literals(["user", "assistant"]),
+      text: Schema.String,
+      createdAt: IsoDateTime,
+      updatedAt: IsoDateTime,
+    }),
+  ),
+  /** Absolute newest-first offset to pass for the next older page; null when none remain. */
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  /** Durable message total, independent of the snapshot's retained window. */
+  totalMessageCount: NonNegativeInt,
+});
+export type OrchestrationGetThreadHistoryPageResult =
+  typeof OrchestrationGetThreadHistoryPageResult.Type;
+
 export const ExternalHistoryImportInput = Schema.Struct({
   sourceId: TrimmedNonEmptyString,
   externalSessionId: TrimmedNonEmptyString,
@@ -3514,6 +3546,10 @@ export const OrchestrationRpcSchemas = {
   importExternalHistory: {
     input: ExternalHistoryImportInput,
     output: ExternalHistoryImportResult,
+  },
+  getThreadHistoryPage: {
+    input: OrchestrationGetThreadHistoryPageInput,
+    output: OrchestrationGetThreadHistoryPageResult,
   },
   regenerateThreadTitle: {
     input: OrchestrationRegenerateThreadTitleInput,

@@ -51,6 +51,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
   isPersistenceError,
+  PersistenceDecodeError,
   ProjectionStateIncompleteError,
   toPersistenceDecodeError,
   toPersistenceSqlOrDecodeError,
@@ -114,6 +115,8 @@ const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThrea
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const MAX_THREAD_MESSAGES = 2_000;
+const THREAD_HISTORY_PAGE_SIZE = 200;
+const THREAD_HISTORY_PAGE_BYTES = 256 * 1024;
 // Bulk read-model snapshot: stays aligned with the in-memory projector window
 // (`orchestration/projector.ts`), which trims every live thread to the same cap.
 const MAX_SNAPSHOT_THREAD_ACTIVITIES = 500;
@@ -305,6 +308,20 @@ const ThreadTurnLookupInput = Schema.Struct({
 const ThreadMessagesByThreadLookupInput = Schema.Struct({
   threadId: ThreadId,
   maxMessages: Schema.NullOr(Schema.Number),
+});
+const ThreadHistoryPageLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  skip: Schema.Number,
+  take: Schema.Number,
+});
+const ThreadHistoryMessageDbRowSchema = Schema.Struct({
+  messageId: MessageId,
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+  encodedText: Schema.optional(Schema.NullOr(Schema.fromJsonString(Schema.String))),
+  textChunks: Schema.optional(Schema.fromJsonString(Schema.Array(Schema.String))),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
 });
 const SyntheticSubagentParentLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -2551,6 +2568,51 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // DHI-09: count and page through the same role set the history-page query
+  // returns, so the total and the offset cursor stay consistent.
+  const countThreadHistoryMessageRows = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS count
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND role IN ('user', 'assistant')
+      `,
+  });
+
+  // The newest-first rank order matches listThreadMessageRowsByThread, so
+  // `skip` counts from the same boundary the snapshot retains.
+  const listThreadHistoryPageRows = SqlSchema.findAll({
+    Request: ThreadHistoryPageLookupInput,
+    Result: ThreadHistoryMessageDbRowSchema,
+    execute: ({ threadId, skip, take }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          role,
+          text,
+          text_json AS "encodedText",
+          ${selectMessageTextChunks(sql, "projection_thread_messages")},
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM (
+          SELECT thread_id, message_id
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId} AND role IN ('user', 'assistant')
+          ORDER BY sequence DESC, created_at DESC, message_id DESC
+          LIMIT ${take} OFFSET ${skip}
+        ) AS tail
+        JOIN projection_thread_messages USING (thread_id, message_id)
+        WHERE thread_id = ${threadId}
+        ORDER BY
+          CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+          sequence ASC,
+          created_at ASC,
+          message_id ASC
+      `,
+  });
+
   const listThreadRowsByIds = SqlSchema.findAll({
     Request: ThreadIdsLookupInput,
     Result: ProjectionThreadDbRowSchema,
@@ -4338,6 +4400,90 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       );
   };
 
+  const listThreadHistoryPage: ProjectionSnapshotQueryShape["listThreadHistoryPage"] = (input) => {
+    const tracePrefix = "ProjectionSnapshotQuery.listThreadHistoryPage";
+    return sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const { count } = yield* countThreadHistoryMessageRows({
+            threadId: input.threadId,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                `${tracePrefix}:countMessages:query`,
+                `${tracePrefix}:countMessages:decodeRow`,
+              ),
+            ),
+          );
+          if (count <= MAX_THREAD_MESSAGES) {
+            return {
+              messages: [],
+              nextCursor: null,
+              totalMessageCount: count,
+            };
+          }
+          if (input.cursor === undefined) {
+            return {
+              messages: [],
+              nextCursor: String(MAX_THREAD_MESSAGES),
+              totalMessageCount: count,
+            };
+          }
+          const skip = Number(input.cursor);
+          if (
+            !Number.isSafeInteger(skip) ||
+            skip < MAX_THREAD_MESSAGES ||
+            String(skip) !== input.cursor
+          ) {
+            return yield* new PersistenceDecodeError({
+              operation: `${tracePrefix}:cursor`,
+              issue: "Invalid thread history page cursor.",
+            });
+          }
+          const rows = yield* listThreadHistoryPageRows({
+            threadId: input.threadId,
+            skip,
+            take: THREAD_HISTORY_PAGE_SIZE,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                `${tracePrefix}:listPage:query`,
+                `${tracePrefix}:listPage:decodeRows`,
+              ),
+            ),
+          );
+          // Byte-bounded: keep the oldest prefix of the fetched page that fits;
+          // a single oversized message still returns alone rather than stalling.
+          const kept: Array<(typeof rows)[number]> = [];
+          let bytes = 0;
+          for (const row of rows) {
+            const size = Buffer.byteLength(joinMessageTextChunks(row), "utf8");
+            if (kept.length > 0 && bytes + size > THREAD_HISTORY_PAGE_BYTES) break;
+            kept.push(row);
+            bytes += size;
+          }
+          const nextSkip = skip + kept.length;
+          return {
+            messages: kept.map((row) => ({
+              messageId: row.messageId,
+              role: row.role,
+              text: joinMessageTextChunks(row),
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+            })),
+            nextCursor: nextSkip < count ? String(nextSkip) : null,
+            totalMessageCount: count,
+          };
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) => {
+          if (isPersistenceError(error)) return error;
+          return toPersistenceSqlError(`${tracePrefix}:query`)(error);
+        }),
+      );
+  };
+
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
     readThreadDetail(threadId, {
       messageLimit: MAX_THREAD_MESSAGES,
@@ -4469,6 +4615,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadMentionContextById,
     getThreadDetailForExportById,
     getThreadDetailSnapshotById,
+    listThreadHistoryPage,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

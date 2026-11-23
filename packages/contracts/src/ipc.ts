@@ -395,6 +395,8 @@ import type {
   OrchestrationSearchThreadsResult,
   OrchestrationGetThreadDetailSnapshotResult,
   ExternalHistoryImportInput,
+  OrchestrationGetThreadHistoryPageInput,
+  OrchestrationGetThreadHistoryPageResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
   OrchestrationRegenerateThreadTitleInput,
@@ -1542,6 +1544,9 @@ export interface NativeApi {
     importExternalHistory: (
       input: ExternalHistoryImportInput,
     ) => Promise<ExternalHistoryImportResult>;
+    getThreadHistoryPage: (
+      input: OrchestrationGetThreadHistoryPageInput,
+    ) => Promise<OrchestrationGetThreadHistoryPageResult>;
     importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
     loadProjectImportHistory: (
       input: LoadProjectImportHistoryInput,

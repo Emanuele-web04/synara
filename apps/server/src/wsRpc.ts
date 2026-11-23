@@ -1700,6 +1700,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(externalHistory.readHistory(input), "Failed to read external history"),
         [ORCHESTRATION_WS_METHODS.importExternalHistory]: (input) =>
           rpcEffect(externalHistory.importHistory(input), "Failed to import external history"),
+        [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
+          rpcEffect(
+            projectionReadModelQuery.listThreadHistoryPage(input),
+            "Failed to load thread history page",
+          ),
         [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
           rpcEffect(
             providerCommandReactor.regenerateThreadTitle(input),

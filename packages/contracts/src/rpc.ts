@@ -497,6 +497,11 @@ export const WsOrchestrationSettleTurnDispatchRpc = Rpc.make(
   },
 );
 
+export const WsGetThreadHistoryPageRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getThreadHistoryPage, {
+  payload: OrchestrationRpcSchemas.getThreadHistoryPage.input,
+  success: OrchestrationRpcSchemas.getThreadHistoryPage.output,
+});
+
 export const WsListProjectImportsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.listProjectImports, {
   payload: OrchestrationRpcSchemas.listProjectImports.input,
   success: OrchestrationRpcSchemas.listProjectImports.output,
@@ -2397,6 +2402,7 @@ export type WsFeatureRpc =
   | typeof WsListExternalHistorySessionsRpc
   | typeof WsReadExternalHistoryRpc
   | typeof WsImportExternalHistoryRpc
+  | typeof WsGetThreadHistoryPageRpc
   | typeof WsOrchestrationRegenerateThreadTitleRpc
   | typeof WsOrchestrationGetSnapshotRpc
   | typeof WsOrchestrationGetShellSnapshotRpc
@@ -2607,6 +2613,7 @@ const wsOrchestrationRpcGroup = RpcGroup.make(
   WsListExternalHistorySessionsRpc,
   WsReadExternalHistoryRpc,
   WsImportExternalHistoryRpc,
+  WsGetThreadHistoryPageRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,

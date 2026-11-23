@@ -13,7 +13,10 @@ type HistoryState = LoadProjectImportHistoryResult & {
 };
 const EMPTY_MESSAGES: LoadProjectImportHistoryResult["messages"] = [];
 
-export function useImportedHistory(threadId: string, enabled: boolean) {
+type HistoryPageResult = LoadProjectImportHistoryResult;
+type HistoryPageFetcher = (cursor: string | null) => Promise<HistoryPageResult>;
+
+function useOlderHistory(threadId: string, enabled: boolean, fetchPage: HistoryPageFetcher) {
   const [state, setState] = useState<HistoryState | null>(null);
   const generation = useRef(0);
   const requestPending = useRef(false);
@@ -31,10 +34,7 @@ export function useImportedHistory(threadId: string, enabled: boolean) {
         failureCount: previous?.threadId === threadId ? previous.failureCount : 0,
       }));
       try {
-        const result = await ensureNativeApi().orchestration.loadProjectImportHistory({
-          threadId: ThreadId.makeUnsafe(threadId),
-          ...(cursor ? { cursor } : {}),
-        });
+        const result = await fetchPage(cursor);
         if (generation.current !== requestGeneration) return;
         setState((previous) => {
           const existing = previous?.threadId === threadId ? previous.messages : EMPTY_MESSAGES;
@@ -65,7 +65,7 @@ export function useImportedHistory(threadId: string, enabled: boolean) {
         if (generation.current === requestGeneration) requestPending.current = false;
       }
     },
-    [threadId, enabled],
+    [threadId, enabled, fetchPage],
   );
 
   useEffect(() => {
@@ -105,10 +105,35 @@ export function useImportedHistory(threadId: string, enabled: boolean) {
   };
 }
 
+export function useImportedHistory(threadId: string, enabled: boolean) {
+  const fetchPage = useCallback<HistoryPageFetcher>(
+    (cursor) =>
+      ensureNativeApi().orchestration.loadProjectImportHistory({
+        threadId: ThreadId.makeUnsafe(threadId),
+        ...(cursor ? { cursor } : {}),
+      }),
+    [threadId],
+  );
+  return useOlderHistory(threadId, enabled, fetchPage);
+}
+
+/** Older durable messages beyond the snapshot's retained window (DHI-09). */
+export function useThreadHistoryPage(threadId: string, enabled: boolean) {
+  const fetchPage = useCallback<HistoryPageFetcher>(
+    (cursor) =>
+      ensureNativeApi().orchestration.getThreadHistoryPage({
+        threadId: ThreadId.makeUnsafe(threadId),
+        ...(cursor ? { cursor } : {}),
+      }),
+    [threadId],
+  );
+  return useOlderHistory(threadId, enabled, fetchPage);
+}
+
 export function ImportedHistoryButton({
   history,
 }: {
-  history: ReturnType<typeof useImportedHistory>;
+  history: ReturnType<typeof useOlderHistory>;
 }) {
   const { t } = useTranslation();
 

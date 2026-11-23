@@ -3449,4 +3449,48 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         yield* sql`DELETE FROM projection_thread_activities WHERE activity_id = 'activity-undecodable'`;
       }),
   );
+
+  it.effect(
+    "listThreadHistoryPage probes, pages beyond the retained window, and rejects bad cursors",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = asThreadId("history-page-thread");
+        const at = "2026-10-13T10:00:00.000Z";
+        // 2,001 durable messages: one beyond the retained 2,000 window.
+        yield* sql`INSERT INTO projection_thread_messages
+          (message_id, thread_id, turn_id, role, text, dispatch_origin,
+           is_streaming, source, sequence, created_at, updated_at)
+          WITH RECURSIVE seq(n) AS (
+            SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 2001
+          )
+          SELECT 'm-' || n, ${threadId}, NULL,
+                 CASE WHEN n % 2 = 0 THEN 'user' ELSE 'assistant' END,
+                 'msg-' || n, NULL, 0, 'native', n, ${at}, ${at}
+          FROM seq`;
+
+        const probe = yield* query.listThreadHistoryPage({ threadId });
+        assert.equal(probe.messages.length, 0);
+        assert.equal(probe.nextCursor, "2000");
+        assert.equal(probe.totalMessageCount, 2001);
+
+        const page = yield* query.listThreadHistoryPage({ threadId, cursor: "2000" });
+        assert.equal(page.messages.length, 1);
+        assert.equal(page.messages[0]?.messageId, "m-1");
+        assert.equal(page.messages[0]?.role, "assistant");
+        assert.equal(page.nextCursor, null);
+
+        const short = yield* query.listThreadHistoryPage({
+          threadId: asThreadId("no-such-thread"),
+        });
+        assert.equal(short.nextCursor, null);
+        assert.equal(short.totalMessageCount, 0);
+
+        const badCursor = yield* Effect.flip(
+          query.listThreadHistoryPage({ threadId, cursor: "abc" }),
+        );
+        assert.equal(badCursor._tag, "PersistenceDecodeError");
+      }),
+  );
 });

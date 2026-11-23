@@ -931,6 +931,8 @@ export function createWsNativeApi(): NativeApi {
         executionRequest(ORCHESTRATION_WS_METHODS.readExternalHistory, input),
       importExternalHistory: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.importExternalHistory, input),
+      getThreadHistoryPage: (input) =>
+        executionRequest(ORCHESTRATION_WS_METHODS.getThreadHistoryPage, input),
       importProject: (input) => executionRequest(ORCHESTRATION_WS_METHODS.importProject, input),
       loadProjectImportHistory: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, input),

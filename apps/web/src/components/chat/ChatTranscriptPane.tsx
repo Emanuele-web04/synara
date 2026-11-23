@@ -47,7 +47,11 @@ import {
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
 } from "./composerPickerStyles";
-import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
+import {
+  ImportedHistoryButton,
+  useImportedHistory,
+  useThreadHistoryPage,
+} from "~/projectImport/ImportedHistoryButton";
 import { useTranslation } from "~/i18n";
 
 interface ChatTranscriptPaneProps {
@@ -79,6 +83,8 @@ interface ChatTranscriptPaneProps {
   /** A new chat the server has not created yet. The server refuses history requests for it. */
   isLocalDraft?: boolean;
   isProjectImport?: boolean;
+  /** Thread imported from an external provider session (DHI-09 older pages). */
+  isExternalHistoryImport?: boolean;
   isWorking: boolean;
   workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
@@ -185,6 +191,7 @@ export function ChatTranscriptPane({
   isTemporaryThread,
   isLocalDraft,
   isProjectImport,
+  isExternalHistoryImport,
   isWorking,
   workingLabel,
   followLiveOutput,
@@ -294,9 +301,14 @@ export function ChatTranscriptPane({
     activeThreadId,
     isProjectImport === true && !isTemporaryThread && !isLocalDraft,
   );
+  const externalHistory = useThreadHistoryPage(
+    activeThreadId,
+    isExternalHistoryImport === true && !isTemporaryThread && !isLocalDraft,
+  );
+  const olderHistory = isProjectImport === true ? importedHistory : externalHistory;
   const olderTimelineEntries = useMemo(
     () =>
-      importedHistory.messages.map((message) => ({
+      olderHistory.messages.map((message) => ({
         id: message.messageId,
         kind: "message" as const,
         createdAt: message.createdAt,
@@ -311,7 +323,7 @@ export function ChatTranscriptPane({
           source: "native" as const,
         },
       })),
-    [importedHistory.messages],
+    [olderHistory.messages],
   );
   const visibleTimelineEntries = useMemo(
     () =>
@@ -319,8 +331,8 @@ export function ChatTranscriptPane({
     [olderTimelineEntries, timelineEntries],
   );
   const olderMessageIds = useMemo(
-    () => new Set(importedHistory.messages.map((message) => message.messageId)),
-    [importedHistory.messages],
+    () => new Set(olderHistory.messages.map((message) => message.messageId)),
+    [olderHistory.messages],
   );
   const canActOnMessage = useCallback(
     (messageId: MessageId) =>
@@ -402,8 +414,8 @@ export function ChatTranscriptPane({
               heightCacheScope={activeThreadId}
               subagentThread={subagentThread ?? null}
               historyHeader={
-                importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
-                  <ImportedHistoryButton history={importedHistory} />
+                olderHistory.nextCursor || olderHistory.error || olderHistory.loading ? (
+                  <ImportedHistoryButton history={olderHistory} />
                 ) : subagentThread ? (
                   <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
                 ) : undefined
