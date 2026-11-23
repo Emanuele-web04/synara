@@ -24,12 +24,16 @@ const nativeApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn<() => Promise<ServerConfig>>(),
   getSettings: vi.fn<() => Promise<unknown>>(),
   getRecap: vi.fn(),
+  ensureNativeApiCalls: { count: 0 },
 }));
 vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({
-    server: { getConfig: nativeApiMocks.getConfig, getSettings: nativeApiMocks.getSettings },
-    stats: { getRecap: nativeApiMocks.getRecap },
-  }),
+  ensureNativeApi: () => {
+    nativeApiMocks.ensureNativeApiCalls.count += 1;
+    return {
+      server: { getConfig: nativeApiMocks.getConfig, getSettings: nativeApiMocks.getSettings },
+      stats: { getRecap: nativeApiMocks.getRecap },
+    };
+  },
 }));
 const streamSnapshotMocks = vi.hoisted(() => ({
   readLatestServerConfigSnapshot: vi.fn<() => ServerConfig | null>(),
@@ -40,6 +44,7 @@ const streamSnapshotMocks = vi.hoisted(() => ({
 vi.mock("~/wsNativeApi", () => streamSnapshotMocks);
 
 beforeEach(() => {
+  nativeApiMocks.ensureNativeApiCalls.count = 0;
   // No transport by default, as in the suites below that never open one.
   streamSnapshotMocks.readLatestServerConfigSnapshot.mockReset().mockReturnValue(null);
   streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReset().mockReturnValue(null);
@@ -565,6 +570,29 @@ describe("server config and settings boot snapshots", () => {
 
     expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
     expect(refreshed.providers).toEqual([READY_CODEX_STATUS]);
+  });
+
+  it("does not resolve the native API again after waiting for the boot snapshot", async () => {
+    // Resolving it again would open a new connection for a query whose
+    // transport was disposed while it waited.
+    let releaseWait: (config: ServerConfig | null) => void = () => undefined;
+    streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReturnValue(
+      new Promise<ServerConfig | null>((resolve) => {
+        releaseWait = resolve;
+      }),
+    );
+    nativeApiMocks.getConfig.mockReset().mockResolvedValue(makeServerConfig([READY_CODEX_STATUS]));
+    const queryClient = new QueryClient();
+
+    const pending = queryClient.fetchQuery(serverConfigQueryOptions());
+    await Promise.resolve();
+    const callsBeforeWaitEnded = nativeApiMocks.ensureNativeApiCalls.count;
+    releaseWait(null);
+    await pending;
+
+    expect(callsBeforeWaitEnded).toBe(1);
+    expect(nativeApiMocks.ensureNativeApiCalls.count).toBe(1);
+    expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
   });
 
   it("reads settings from the server when a hydrated cache is invalidated", async () => {

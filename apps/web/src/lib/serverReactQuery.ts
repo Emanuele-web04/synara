@@ -58,7 +58,12 @@ export const serverMutationKeys = {
   stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
 };
 
-let sharedInitialServerConfigRequest: Promise<ServerConfig> | null = null;
+type NativeApiInstance = ReturnType<typeof ensureNativeApi>;
+
+let sharedInitialServerConfigRequest: {
+  readonly api: NativeApiInstance;
+  readonly request: Promise<ServerConfig>;
+} | null = null;
 
 /**
  * Loads the config for a cache that holds none yet. The config subscription
@@ -68,26 +73,28 @@ let sharedInitialServerConfigRequest: Promise<ServerConfig> | null = null;
  * the server.
  */
 function fetchInitialServerConfigShared(): Promise<ServerConfig> {
+  // Bound before anything is awaited. Resolving the API again after the wait
+  // would open a new connection on behalf of a query whose transport was
+  // disposed or replaced in the meantime; the bound one just rejects.
+  const api = ensureNativeApi();
   const streamSnapshot = readLatestServerConfigSnapshot();
   if (streamSnapshot !== null) {
     return Promise.resolve(streamSnapshot);
   }
-  if (sharedInitialServerConfigRequest !== null) {
-    return sharedInitialServerConfigRequest;
+  if (sharedInitialServerConfigRequest?.api === api) {
+    return sharedInitialServerConfigRequest.request;
   }
   const pendingStreamSnapshot = waitForInitialServerConfigSnapshot();
   const request = (
     pendingStreamSnapshot !== null
-      ? pendingStreamSnapshot.then(
-          (awaitedSnapshot) => awaitedSnapshot ?? ensureNativeApi().server.getConfig(),
-        )
-      : ensureNativeApi().server.getConfig()
+      ? pendingStreamSnapshot.then((awaitedSnapshot) => awaitedSnapshot ?? api.server.getConfig())
+      : api.server.getConfig()
   ).finally(() => {
-    if (sharedInitialServerConfigRequest === request) {
+    if (sharedInitialServerConfigRequest?.request === request) {
       sharedInitialServerConfigRequest = null;
     }
   });
-  sharedInitialServerConfigRequest = request;
+  sharedInitialServerConfigRequest = { api, request };
   return request;
 }
 
@@ -361,6 +368,9 @@ export function serverSettingsQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.settings(),
     queryFn: async ({ client, queryKey }) => {
+      // Bound before the wait below, for the reason given in
+      // fetchInitialServerConfigShared.
+      const api = ensureNativeApi();
       // The settings stream may seed an empty cache at boot. A refetch always
       // asks the server: it can run before the push for the change that caused it.
       if (client.getQueryData(queryKey) === undefined) {
@@ -376,7 +386,6 @@ export function serverSettingsQueryOptions() {
           }
         }
       }
-      const api = ensureNativeApi();
       return api.server.getSettings();
     },
     staleTime: Infinity,
