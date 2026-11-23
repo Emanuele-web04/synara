@@ -4,6 +4,7 @@ import type {
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
+  ServerProviderUsageSnapshot,
   ServerProviderStatus,
   ServerStopLocalServerInput,
   StatsGetRecapInput,
@@ -22,6 +23,8 @@ import { withWorkspaceKeybindings } from "./hosts/workspaceKeybindings";
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
 
+type ProviderUsageScope = "antigravity" | "other";
+
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
@@ -34,6 +37,8 @@ export const serverQueryKeys = {
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  scopedProviderUsage: (scope: ProviderUsageScope) =>
+    ["server", "allProviderUsage", scope] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -445,6 +450,31 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
+function filterProviderUsageScope(
+  data: readonly ServerProviderUsageSnapshot[],
+  scope: ProviderUsageScope,
+) {
+  return data.filter(
+    (snapshot) => (snapshot.provider === "antigravity") === (scope === "antigravity"),
+  );
+}
+
+// Keep both rail queries current after an explicit Settings refresh of the full batch.
+export function setProviderUsageQueryData(
+  queryClient: QueryClient,
+  data: readonly ServerProviderUsageSnapshot[],
+) {
+  queryClient.setQueryData(serverQueryKeys.allProviderUsage(), data);
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("antigravity"),
+    filterProviderUsageScope(data, "antigravity"),
+  );
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("other"),
+    filterProviderUsageScope(data, "other"),
+  );
+}
+
 export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
   const api = ensureNativeApi();
   return api.server.consumeCodexResetCredit(input);
@@ -553,24 +583,34 @@ export function serverUsageAnalyticsQueryOptions(
   });
 }
 
-// Live remaining-usage for every provider. Always fetches the full batch under a single query
-// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
+// Single-provider surfaces use scoped batches so Antigravity's CLI can't delay unrelated quota.
+// Other surfaces keep the shared full-batch cache.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean
     | {
         enabled?: boolean;
+        scope?: ProviderUsageScope;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const scope = typeof input === "boolean" ? undefined : input.scope;
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(),
+    queryKey: scope
+      ? serverQueryKeys.scopedProviderUsage(scope)
+      : serverQueryKeys.allProviderUsage(),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(),
+    queryFn: async () => {
+      if (!scope) return fetchAllProviderUsage();
+      const data = await fetchAllProviderUsage(
+        scope === "antigravity" ? { provider: "antigravity" } : { excludeProvider: "antigravity" },
+      );
+      // Older remote hosts can ignore excludeProvider. Keep each rail cache scoped.
+      return filterProviderUsageScope(data, scope);
+    },
   });
 }

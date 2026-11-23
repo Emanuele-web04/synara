@@ -104,6 +104,8 @@ export async function runAntigravityHelperProcess(
     cwd?: string;
     timeoutMs?: number;
     environment?: Readonly<Record<string, string>>;
+    baseEnvironment?: NodeJS.ProcessEnv;
+    stopOnStderr?: string;
   } = {},
 ): Promise<{
   stdout: string;
@@ -115,14 +117,15 @@ export async function runAntigravityHelperProcess(
       cwd: options.cwd,
       env: buildProviderChildEnvironment({
         provider: PROVIDER,
-        ...(options.environment ? { baseEnv: { ...process.env, ...options.environment } } : {}),
+        baseEnv: options.baseEnvironment ?? process.env,
+        ...(options.environment ? { overrides: options.environment } : {}),
       }),
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
     const output = createBoundedProcessOutput();
     let settled = false;
-    let timedOut = false;
+    let stopping = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -130,46 +133,56 @@ export async function runAntigravityHelperProcess(
       clearTimeout(timer);
       callback();
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      // Do not return until the supervised tree teardown has observed the
-      // root exit and verified captured descendants are gone. A direct signal
-      // can leave an updater/helper descendant alive on Windows.
+    const stop = (timeout: boolean) => {
+      if (settled || stopping) return;
+      stopping = true;
+      const message = timeout
+        ? `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`
+        : "Antigravity helper requested interactive input";
+      // Wait for the supervised teardown before returning output or releasing the caller's cwd.
       void teardownChildProcessTree(child).then(
         (result) =>
-          finish(() =>
-            reject(
-              result.signalErrors.length > 0
-                ? new Error(
-                    `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${result.signalErrors.map((error) => error.message).join("; ")}`,
-                    { cause: result.signalErrors[0] },
-                  )
-                : new Error(
-                    `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
-                  ),
-            ),
-          ),
+          finish(() => {
+            if (result.signalErrors.length > 0) {
+              reject(
+                new Error(
+                  `${message} and teardown was unproven: ${result.signalErrors.map((error) => error.message).join("; ")}`,
+                  { cause: result.signalErrors[0] },
+                ),
+              );
+            } else if (timeout) {
+              reject(new Error(message));
+            } else {
+              resolve({ ...output.snapshot(), code: 1 });
+            }
+          }),
         (cause) =>
           finish(() =>
             reject(
               new Error(
-                `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${messageFromCause(cause, "unknown teardown failure")}`,
+                `${message} and teardown was unproven: ${messageFromCause(cause, "unknown teardown failure")}`,
                 { cause },
               ),
             ),
           ),
       );
-    }, timeoutMs);
+    };
+    const timer = setTimeout(() => stop(true), timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => output.append("stdout", chunk));
-    child.stderr.on("data", (chunk) => output.append("stderr", chunk));
+    child.stderr.on("data", (chunk) => {
+      output.append("stderr", chunk);
+      if (options.stopOnStderr && output.snapshot().stderr.includes(options.stopOnStderr)) {
+        stop(false);
+      }
+    });
     child.once("error", (cause) => {
-      if (timedOut) return;
+      if (stopping) return;
       finish(() => reject(cause));
     });
     child.once("close", (code) => {
-      if (timedOut) return;
+      if (stopping) return;
       const { stdout, stderr } = output.snapshot();
       finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
     });
