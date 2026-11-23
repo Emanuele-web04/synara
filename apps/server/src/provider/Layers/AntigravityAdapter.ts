@@ -105,7 +105,11 @@ import {
   isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
-import { buildAcpModelDescriptor, flattenConfigOptions } from "../acp/AcpConfigOptions.ts";
+import {
+  buildAcpModelDescriptor,
+  findSelectConfig,
+  flattenConfigOptions,
+} from "../acp/AcpConfigOptions.ts";
 import {
   type AntigravityAcpModel,
   antigravityInteractionQuestion,
@@ -298,6 +302,14 @@ function sessionModelName(
   const name = availableModels.find((model) => model.modelId === modelId)?.name;
   return name ? (parseAntigravityCliModelLabel(name)?.model ?? name) : undefined;
 }
+
+// The advertised config value wins over the deprecated session mode state.
+const readAntigravityPermissionMode = Effect.fnUntraced(function* (acp: AcpSessionRuntimeShape) {
+  const config = findSelectConfig(yield* acp.getConfigOptions, { id: "mode", category: "mode" });
+  if (config) return { id: config.currentValue, configId: config.id };
+  const legacyMode = yield* acp.getModeState;
+  return legacyMode ? { id: legacyMode.currentModeId } : undefined;
+});
 
 export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependencies = {}) {
   return Effect.gen(function* () {
@@ -920,15 +932,13 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               yield* logNative(input.threadId, "session/request_permission", params);
               const cancelled = { outcome: { outcome: "cancelled" as const } };
               const turnId = ctx?.activeTurnId;
-              if (
-                turnId === undefined ||
-                params.sessionId !== ctx.acpSessionId ||
-                ctx.pendingTurnInterrupted ||
-                ctx.finishingTurnId !== undefined ||
-                ctx.stopped
-              ) {
-                return cancelled;
-              }
+              if (turnId === undefined || params.sessionId !== ctx.acpSessionId) return cancelled;
+              const ownsTurn = () =>
+                ctx.activeTurnId === turnId &&
+                !ctx.pendingTurnInterrupted &&
+                ctx.finishingTurnId === undefined &&
+                !ctx.stopped;
+              if (!ownsTurn()) return cancelled;
               if (params.toolCall.toolCallId.startsWith("interaction_")) {
                 const question = antigravityInteractionQuestion(params);
                 if (!question) return cancelled;
@@ -944,21 +954,12 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 );
                 ctx.lastTurnActivityAt = Date.now();
                 const optionId = answers[question.id];
-                return typeof optionId === "string"
+                return ownsTurn() && typeof optionId === "string"
                   ? { outcome: { outcome: "selected" as const, optionId } }
                   : cancelled;
               }
-              const nativeMode = yield* acp.getModeState.pipe(
-                Effect.orElseSucceed(() => undefined),
-              );
-              if (
-                ctx.activeTurnId !== turnId ||
-                ctx.finishingTurnId !== undefined ||
-                ctx.pendingTurnInterrupted ||
-                ctx.stopped
-              ) {
-                return cancelled;
-              }
+              const nativeMode = yield* Effect.exit(readAntigravityPermissionMode(acp));
+              if (Exit.isFailure(nativeMode) || !ownsTurn()) return cancelled;
               // Full access may grant this call but must not install a lasting native rule.
               const policyOptions = params.options.filter(
                 (option) => option.kind !== "allow_always",
@@ -969,7 +970,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               const policyOutcome = resolveAcpPermissionPolicy({
                 runtimeMode: hasOneTimeGrant ? ctx.session.runtimeMode : "approval-required",
                 interactionMode:
-                  nativeMode?.currentModeId === "plan" ? "plan" : ctx.activeInteractionMode,
+                  nativeMode.value?.id === "plan" ? "plan" : ctx.activeInteractionMode,
                 options: policyOptions,
                 computerControlEnabled: ctx?.enableComputerControl === true,
                 activeTurn: ctx?.activeTurnId !== undefined,
@@ -989,50 +990,52 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
               const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
               const decision = yield* Deferred.make<ProviderApprovalDecision>();
+              if (!ownsTurn()) return cancelled;
               pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
-              yield* offerRuntimeEvent(
-                input.lifecycleGeneration,
-                makeAcpRequestOpenedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
-                  args: params,
-                  source: "acp.jsonrpc",
-                  method: "session/request_permission",
-                  rawPayload: params,
-                }),
-              );
-              const resolved = yield* Deferred.await(decision).pipe(
-                Effect.ensuring(Effect.sync(() => void pendingApprovals.delete(requestId))),
-              );
-              yield* offerRuntimeEvent(
-                input.lifecycleGeneration,
-                makeAcpRequestResolvedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  decision: resolved,
-                }),
-              );
-              const selectedOptionId = selectAcpPermissionOptionId(
-                resolved,
-                resolved === "accept"
-                  ? params.options.filter((option) => option.kind === "allow_once")
-                  : params.options,
-              );
-              return {
-                outcome:
-                  selectedOptionId === undefined
-                    ? ({ outcome: "cancelled" } as const)
-                    : ({ outcome: "selected", optionId: selectedOptionId } as const),
-              };
+              return yield* Effect.gen(function* () {
+                yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
+                  makeAcpRequestOpenedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
+                    args: params,
+                    source: "acp.jsonrpc",
+                    method: "session/request_permission",
+                    rawPayload: params,
+                  }),
+                );
+                const response = yield* Deferred.await(decision);
+                const stamp = yield* makeEventStamp();
+                const resolved = ownsTurn() ? response : "cancel";
+                yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
+                  makeAcpRequestResolvedEvent({
+                    stamp,
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    decision: resolved,
+                  }),
+                );
+                // Publishing can wait on subscribers. Stop must still cancel the ACP response.
+                if (!ownsTurn()) return cancelled;
+                const selectedOptionId = selectAcpPermissionOptionId(
+                  resolved,
+                  resolved === "accept"
+                    ? params.options.filter((option) => option.kind === "allow_once")
+                    : params.options,
+                );
+                return selectedOptionId === undefined
+                  ? cancelled
+                  : { outcome: { outcome: "selected" as const, optionId: selectedOptionId } };
+              }).pipe(Effect.ensuring(Effect.sync(() => void pendingApprovals.delete(requestId))));
             }),
           );
 
@@ -1505,23 +1508,21 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           });
         }
         // Supervision must also hold when a restored native session was in Auto.
-        const nativeMode = yield* ctx.acp.getModeState.pipe(
+        const nativeMode = yield* readAntigravityPermissionMode(ctx.acp).pipe(
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
           ),
         );
-        if (
-          nativeMode &&
-          nativeMode.currentModeId !== "default" &&
-          nativeMode.currentModeId !== "plan"
-        ) {
-          yield* ctx.acp
-            .setMode("default")
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
-              ),
-            );
+        if (nativeMode && nativeMode.id !== "default" && nativeMode.id !== "plan") {
+          yield* (
+            nativeMode.configId !== undefined
+              ? ctx.acp.setConfigOption(nativeMode.configId, "default")
+              : ctx.acp.setMode("default")
+          ).pipe(
+            Effect.mapError((error) =>
+              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
+            ),
+          );
         }
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
