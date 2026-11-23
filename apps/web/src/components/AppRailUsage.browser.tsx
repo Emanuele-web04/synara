@@ -2,12 +2,13 @@ import "../index.css";
 
 import {
   DEFAULT_SERVER_SETTINGS_VIEW,
+  type ServerListProviderUsageInput,
   type ServerProviderUsageSnapshot,
   type ServerSettingsView,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const settings = vi.hoisted(() => ({
@@ -21,20 +22,20 @@ const updateSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings, updateSettings }) }));
 
-import { serverQueryKeys } from "~/lib/serverReactQuery";
+import { serverQueryKeys, setProviderUsageQueryData } from "~/lib/serverReactQuery";
 
 import { AppRailUsage } from "./AppRailUsage";
 import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
 
 async function renderAccounts(
-  snapshots: readonly ServerProviderUsageSnapshot[],
+  snapshots: readonly ServerProviderUsageSnapshot[] | undefined,
   serverSettings: ServerSettingsView = DEFAULT_SERVER_SETTINGS_VIEW,
   showSettings = false,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, enabled: false } },
   });
-  client.setQueryData(serverQueryKeys.allProviderUsage(), snapshots);
+  if (snapshots) setProviderUsageQueryData(client, snapshots);
   client.setQueryData(serverQueryKeys.settings(), serverSettings);
   const onOpenUsageSettings = vi.fn();
   const content = () => (
@@ -111,6 +112,43 @@ describe("AppRailUsage", () => {
     settings.railUsageProviders = ["codex"];
     settings.railUsageInstanceIds = null;
     updateSettings.mockReset().mockImplementation((patch) => Object.assign(settings, patch));
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows Codex quotas while selected Antigravity quotas are still loading", async () => {
+    settings.railUsageInstanceIds = ["codex", "antigravity"];
+    const codex: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: "2026-10-02T12:00:00.000Z",
+      source: "test",
+      status: "ok",
+      limits: [{ window: "Weekly", usedPercent: 20 }],
+      usageLines: [],
+    };
+    const antigravity = { ...codex, provider: "antigravity" } as const;
+    let releaseQuota!: (snapshot: ServerProviderUsageSnapshot) => void;
+    const slow = new Promise<ServerProviderUsageSnapshot>((resolve) => {
+      releaseQuota = resolve;
+    });
+    const listProviderUsage = vi.fn(async (input: ServerListProviderUsageInput) => {
+      if (input.excludeProvider === "antigravity") return [codex];
+      const quota = await slow;
+      return input.provider === "antigravity" ? [quota] : [codex, quota];
+    });
+    vi.stubGlobal("nativeApi", { server: { listProviderUsage } });
+
+    try {
+      await renderAccounts(undefined);
+      await expect.element(page.getByRole("button", { name: /^Codex usage:/ })).toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: /^Antigravity usage:/ }))
+        .not.toBeInTheDocument();
+      releaseQuota(antigravity);
+      await expect.element(page.getByRole("button", { name: /^Antigravity usage:/ })).toBeVisible();
+    } finally {
+      releaseQuota(antigravity);
+    }
   });
 
   it("hides globally disabled selected accounts without erasing their saved selection", async () => {

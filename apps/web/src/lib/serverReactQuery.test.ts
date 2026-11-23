@@ -2,7 +2,12 @@
 // Purpose: Locks down server React Query polling profiles and cache options.
 // Layer: Web data-fetching unit tests
 
-import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
+import type {
+  ServerConfig,
+  ServerListProviderUsageInput,
+  ServerProviderStatus,
+  ServerProviderUsageSnapshot,
+} from "@synara/contracts";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +17,7 @@ import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
+  serverAllProviderUsageQueryOptions,
   serverConfigQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
@@ -24,13 +30,18 @@ const nativeApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn<() => Promise<ServerConfig>>(),
   getSettings: vi.fn<() => Promise<unknown>>(),
   getRecap: vi.fn(),
+  listProviderUsage: vi.fn(),
   ensureNativeApiCalls: { count: 0 },
 }));
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => {
     nativeApiMocks.ensureNativeApiCalls.count += 1;
     return {
-      server: { getConfig: nativeApiMocks.getConfig, getSettings: nativeApiMocks.getSettings },
+      server: {
+        getConfig: nativeApiMocks.getConfig,
+        getSettings: nativeApiMocks.getSettings,
+        listProviderUsage: nativeApiMocks.listProviderUsage,
+      },
       stats: { getRecap: nativeApiMocks.getRecap },
     };
   },
@@ -646,15 +657,59 @@ describe("sidebarLocalServersQueryOptions", () => {
   });
 });
 
+describe("scoped provider usage", () => {
+  it("keeps other quota independent when selected Antigravity has not replied", async () => {
+    const queryClient = new QueryClient();
+    const codex: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: "2026-11-23T12:00:00Z",
+      limits: [],
+      usageLines: [],
+      source: "test",
+    };
+    const antigravity: ServerProviderUsageSnapshot = { ...codex, provider: "antigravity" };
+    let replyToAntigravity!: (snapshots: ServerProviderUsageSnapshot[]) => void;
+    const waiting = new Promise<ServerProviderUsageSnapshot[]>((resolve) => {
+      replyToAntigravity = resolve;
+    });
+    // Simulate an older host ignoring the exclusion and returning its full batch.
+    nativeApiMocks.listProviderUsage
+      .mockReset()
+      .mockImplementation((input: ServerListProviderUsageInput) =>
+        input.provider === "antigravity" ? waiting : Promise.resolve([codex, antigravity]),
+      );
+
+    const selectedAntigravity = queryClient.fetchQuery(
+      serverAllProviderUsageQueryOptions({ scope: "antigravity" }),
+    );
+    const other = queryClient.fetchQuery(serverAllProviderUsageQueryOptions({ scope: "other" }));
+
+    try {
+      await expect(other).resolves.toEqual([codex]);
+      expect(nativeApiMocks.listProviderUsage.mock.calls).toEqual([
+        [{ provider: "antigravity" }],
+        [{ excludeProvider: "antigravity" }],
+      ]);
+    } finally {
+      replyToAntigravity([antigravity]);
+      await selectedAntigravity;
+    }
+  });
+});
+
 describe("invalidateProviderUsageQueries", () => {
   it("invalidates batch and provider-scoped caches after enablement changes", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
     queryClient.setQueryData(serverQueryKeys.providerUsage("codex", null), null);
 
     await invalidateProviderUsageQueries(queryClient);
 
     expect(queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated).toBe(true);
+    expect(
+      queryClient.getQueryState(serverQueryKeys.scopedProviderUsage("other"))?.isInvalidated,
+    ).toBe(true);
     expect(
       queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))?.isInvalidated,
     ).toBe(true);

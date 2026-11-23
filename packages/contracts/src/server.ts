@@ -360,6 +360,7 @@ export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsage
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
   provider: Schema.optional(ProviderKind),
+  excludeProvider: Schema.optional(ProviderKind),
 });
 export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;
 
