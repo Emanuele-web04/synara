@@ -86,9 +86,7 @@ export function buildAntigravityAcpSpawnInput(
   const baseEnv = { ...process.env, ...settings?.environment };
   return {
     command: settings?.binaryPath?.trim() || "agy",
-    // Synara runs Antigravity with full access: the CLI has no per-call gate
-    // that Synara surfaces, so Computer tools keep Synara's own approval cards.
-    args: ["acp", "--dangerously-skip-permissions"],
+    args: ["acp"],
     cwd,
     env: buildProviderChildEnvironment({ provider: "antigravity", baseEnv }),
   };

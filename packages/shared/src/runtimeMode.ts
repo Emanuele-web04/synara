@@ -11,8 +11,11 @@ export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean
   return AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
 }
 
-/** Whether the provider can enforce the requested execution mode. */
-export function providerSupportsRuntimeMode(provider: ProviderKind, mode: RuntimeMode): boolean {
+/** Whether the Agent Gateway supports this mode for a delegated target. */
+export function providerSupportsDelegatedRuntimeMode(
+  provider: ProviderKind,
+  mode: RuntimeMode,
+): boolean {
   if (provider === "antigravity") return mode === "full-access";
   return mode !== "auto" || providerSupportsAutoRuntimeMode(provider);
 }

@@ -7,7 +7,7 @@ import {
   ThreadId,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +28,7 @@ import {
   resolveAntigravityCliModelLabel,
 } from "../antigravityCli";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter";
+import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter";
 import {
   type AntigravityAdapterDependencies,
   makeAntigravityAdapterLive,
@@ -56,6 +57,8 @@ function makeControllableRuntime(
     readonly agentVersion?: string;
     readonly sessionId?: string;
     readonly configOptions?: Acp.SessionConfigOption[];
+    readonly nativeMode?: string;
+    readonly ignoredConfigUpdate?: string;
     readonly modelChanged?: (value: string) => Acp.SessionConfigOption | undefined;
   } = {},
 ) {
@@ -67,6 +70,7 @@ function makeControllableRuntime(
   const sessionId = options.sessionId ?? SESSION_ID;
   const pendingPrompts: Array<Deferred.Deferred<Acp.PromptResponse, AcpErrors.AcpError>> = [];
   let configOptions = options.configOptions ?? [];
+  let nativeMode = options.nativeMode ?? "default";
   let enqueued = 0;
   let cancels = 0;
   let permissionHandler: Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
@@ -112,11 +116,18 @@ function makeControllableRuntime(
         permissionHandler = handler;
       }),
     getConfigOptions: Effect.sync(() => configOptions),
+    getModeState: Effect.sync(() => ({ currentModeId: nativeMode, availableModes: [] })),
+    setMode: (modeId: string) =>
+      Effect.sync(() => {
+        requests.push({ method: "session/set_mode", payload: modeId });
+        nativeMode = modeId;
+        return {};
+      }),
     setConfigOption: (id: string, value: string) =>
       Effect.sync(() => {
         requests.push({ method: "session/set_config_option", payload: { id, value } });
         configOptions = configOptions.map((option) =>
-          option.id === id && option.type === "select"
+          option.id === id && option.type === "select" && id !== options.ignoredConfigUpdate
             ? { ...option, currentValue: value }
             : option,
         );
@@ -287,6 +298,19 @@ const thoughtLevel = (selected: string): Acp.SessionConfigOption => ({
       : [{ value: "low", name: "Low" }],
 });
 
+const modeConfig = (currentValue: string): Acp.SessionConfigOption => ({
+  category: "mode",
+  id: "execution_mode",
+  name: "Execution mode",
+  type: "select",
+  currentValue,
+  options: [
+    { value: "default", name: "Default" },
+    { value: "auto", name: "Auto" },
+    { value: "plan", name: "Plan" },
+  ],
+});
+
 const { createHarness, readHarnessThread } = useProviderCommandReactorHarness();
 
 describe("Antigravity ACP adapter", () => {
@@ -412,7 +436,7 @@ describe("Antigravity ACP adapter", () => {
     },
   );
 
-  it("fails closed on malformed interaction choices without changing normal full-access permissions", async () => {
+  it("auto-approves an ordinary full-access request and rejects malformed interaction choices", async () => {
     const fake = makeControllableRuntime();
     await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
       Effect.gen(function* () {
@@ -435,7 +459,7 @@ describe("Antigravity ACP adapter", () => {
             ...request,
             toolCall: { toolCallId: "normal-tool", title: "Run echo", kind: "execute" },
           }),
-        ).toEqual({ outcome: { outcome: "cancelled" } });
+        ).toEqual({ outcome: { outcome: "selected", optionId: "planner-a" } });
         expect(
           yield* fake.requestPermission({
             ...request,
@@ -451,6 +475,211 @@ describe("Antigravity ACP adapter", () => {
           { interaction_decision: "Continue" },
         );
         expect(yield* Fiber.join(native)).toEqual({ outcome: { outcome: "cancelled" } });
+        yield* adapter.interruptTurn(threadId, turn.turnId);
+      }),
+    );
+  });
+
+  it("routes native permission requests to the active supervised turn and cancels them on Stop", async () => {
+    const fake = makeControllableRuntime({ nativeMode: "auto" });
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-supervised");
+        yield* adapter.startSession({ ...startInput(threadId), runtimeMode: "approval-required" });
+        const requests =
+          yield* Queue.unbounded<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
+        const resolutions =
+          yield* Queue.unbounded<Extract<ProviderRuntimeEvent, { type: "request.resolved" }>>();
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) => {
+            if (event.type === "request.opened") return Queue.offer(requests, event);
+            if (event.type === "request.resolved") return Queue.offer(resolutions, event);
+            return Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        const permission = {
+          sessionId: SESSION_ID,
+          toolCall: { toolCallId: "command-1", title: "Run echo", kind: "execute" },
+          options: [
+            { optionId: "allow", name: "Allow once", kind: "allow_once" },
+            { optionId: "reject", name: "Reject", kind: "reject_once" },
+          ],
+        } satisfies Acp.RequestPermissionRequest;
+        expect(yield* fake.requestPermission(permission)).toEqual({
+          outcome: { outcome: "cancelled" },
+        });
+
+        const turn = yield* adapter.sendTurn({ threadId, input: "Inspect", attachments: [] });
+        expect(fake.requests).toContainEqual({ method: "session/set_mode", payload: "default" });
+        expect(yield* fake.requestPermission({ ...permission, sessionId: "other" })).toEqual({
+          outcome: { outcome: "cancelled" },
+        });
+        const first = yield* fake.requestPermission(permission).pipe(Effect.forkChild);
+        const opened = yield* Queue.take(requests);
+        expect(opened.turnId).toBe(turn.turnId);
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe(opened.requestId!),
+          "accept",
+        );
+        expect(yield* Fiber.join(first)).toEqual({
+          outcome: { outcome: "selected", optionId: "allow" },
+        });
+        expect((yield* Queue.take(resolutions)).payload.decision).toBe("accept");
+
+        const persistentOnly = yield* fake
+          .requestPermission({
+            ...permission,
+            options: [{ optionId: "always", name: "Always allow", kind: "allow_always" }],
+          })
+          .pipe(Effect.forkChild);
+        const persistentRequest = yield* Queue.take(requests);
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe(persistentRequest.requestId!),
+          "accept",
+        );
+        expect(yield* Fiber.join(persistentOnly)).toEqual({ outcome: { outcome: "cancelled" } });
+        expect((yield* Queue.take(resolutions)).payload.decision).toBe("cancel");
+
+        const second = yield* fake.requestPermission(permission).pipe(Effect.forkChild);
+        const pending = yield* Queue.take(requests);
+        expect(pending.turnId).toBe(turn.turnId);
+        yield* adapter.interruptTurn(threadId, turn.turnId);
+        expect(yield* Fiber.join(second)).toEqual({ outcome: { outcome: "cancelled" } });
+      }),
+    );
+  });
+
+  it("returns cancelled when Stop overtakes an accepted ACP permission response", async () => {
+    const fake = makeControllableRuntime();
+    const queueFull = Deferred.makeUnsafe<void>();
+    let contentEvents = 0;
+    let filling = false;
+    await runWithAdapter(
+      {
+        makeRuntime: fake.makeRuntime,
+        nativeEventLogger: {
+          filePath: "",
+          close: () => Effect.void,
+          write: () =>
+            Effect.suspend(() =>
+              filling && ++contentEvents === PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY + 1
+                ? Deferred.succeed(queueFull, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
+        },
+      },
+      (adapter) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.makeUnsafe("thread-agy-approval-backpressure");
+          yield* adapter.startSession({
+            ...startInput(threadId),
+            runtimeMode: "approval-required",
+          });
+          const turn = yield* adapter.sendTurn({ threadId, input: "Inspect", attachments: [] });
+          const opened =
+            yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
+          const drain = yield* Deferred.make<void>();
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              event.type === "request.opened"
+                ? Deferred.succeed(opened, event).pipe(Effect.andThen(Deferred.await(drain)))
+                : Effect.void,
+            ),
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+
+          const permission = yield* fake
+            .requestPermission({
+              sessionId: SESSION_ID,
+              toolCall: { toolCallId: "command-1", title: "Run echo", kind: "execute" },
+              options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }],
+            })
+            .pipe(Effect.forkChild);
+          const request = yield* Deferred.await(opened);
+          // Keep the event subscriber paused so request.resolved cannot publish until Stop starts.
+          filling = true;
+          for (let index = 0; index <= PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY; index++) {
+            fake.emit(assistantText("pending output"));
+          }
+          yield* Deferred.await(queueFull);
+          yield* adapter.respondToRequest(
+            threadId,
+            ApprovalRequestId.makeUnsafe(request.requestId!),
+            "accept",
+          );
+          const stopping = yield* adapter
+            .interruptTurn(threadId, turn.turnId)
+            .pipe(Effect.forkChild);
+          yield* Effect.promise(() => waitFor(() => fake.cancels() > 0));
+          yield* Deferred.succeed(drain, undefined);
+          expect(yield* Fiber.join(permission)).toEqual({ outcome: { outcome: "cancelled" } });
+          yield* Fiber.join(stopping);
+        }),
+    );
+  });
+
+  it("resets Auto using the advertised config selector before sending a prompt", async () => {
+    const fake = makeControllableRuntime({ configOptions: [modeConfig("auto")] });
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-config-auto");
+        yield* adapter.startSession({ ...startInput(threadId), runtimeMode: "approval-required" });
+        const turn = yield* adapter.sendTurn({ threadId, input: "Inspect", attachments: [] });
+        expect(fake.requests).toContainEqual({
+          method: "session/set_config_option",
+          payload: { id: "execution_mode", value: "default" },
+        });
+        yield* adapter.interruptTurn(threadId, turn.turnId);
+      }),
+    );
+  });
+
+  it("does not send a prompt if the native config keeps Auto after a reset", async () => {
+    const fake = makeControllableRuntime({
+      configOptions: [modeConfig("auto")],
+      ignoredConfigUpdate: "execution_mode",
+    });
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-config-auto-held");
+        yield* adapter.startSession({ ...startInput(threadId), runtimeMode: "approval-required" });
+        const result = yield* adapter
+          .sendTurn({ threadId, input: "Inspect", attachments: [] })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(fake.prompts).toHaveLength(0);
+      }),
+    );
+  });
+
+  it.each([
+    { name: "legacy mode state", options: { nativeMode: "plan" } },
+    { name: "session config option", options: { configOptions: [modeConfig("plan")] } },
+  ])("keeps native Plan ($name) and refuses reverse tool requests in it", async ({ options }) => {
+    const fake = makeControllableRuntime(options);
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-plan-approval");
+        yield* adapter.startSession(startInput(threadId));
+        const turn = yield* adapter.sendTurn({ threadId, input: "Plan", attachments: [] });
+        expect(fake.requests).not.toContainEqual({
+          method: "session/set_mode",
+          payload: "default",
+        });
+        expect(
+          yield* fake.requestPermission({
+            sessionId: SESSION_ID,
+            toolCall: { toolCallId: "write-in-plan", title: "Edit file", kind: "edit" },
+            options: [
+              { optionId: "allow", name: "Allow once", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        ).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
         yield* adapter.interruptTurn(threadId, turn.turnId);
       }),
     );

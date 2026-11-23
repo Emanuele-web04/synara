@@ -30,6 +30,7 @@ const rejectConfigDuringLoadReplay =
 const promptResponseText =
   process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT ?? process.env.ACP_MOCK_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
+const legacyModesOnly = process.env.SYNARA_ACP_LEGACY_MODES_ONLY === "1";
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
@@ -520,7 +521,7 @@ app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params
 
 app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
   modes: modeState(),
-  configOptions: configOptions(),
+  ...(legacyModesOnly ? {} : { configOptions: configOptions() }),
 }));
 
 app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
@@ -534,7 +535,17 @@ app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
   };
 });
 
+app.onRequest(OfficialAcp.methods.agent.session.setMode, ({ params }) => {
+  if (!legacyModesOnly) throw OfficialAcp.RequestError.methodNotFound("session/set_mode");
+  if (params.sessionId !== sessionId || !availableModes.some((mode) => mode.id === params.modeId)) {
+    throw OfficialAcp.RequestError.invalidParams(params, "Unknown legacy session or mode");
+  }
+  currentModeId = params.modeId;
+  return {};
+});
+
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
+  if (legacyModesOnly) throw OfficialAcp.RequestError.methodNotFound("session/set_config_option");
   if (rejectConfigDuringLoadReplay && pendingLoadReplayUpdates > 0) {
     throw OfficialAcp.RequestError.invalidParams(
       { method: "session/set_config_option", params: request },

@@ -566,6 +566,7 @@ export interface AcpSessionRuntimeShape {
   readonly cancel: Effect.Effect<void, AcpErrors.AcpError>;
   readonly setMode: (
     modeId: string,
+    options?: { readonly legacy?: boolean },
   ) => Effect.Effect<Acp.SetSessionModeResponse, AcpErrors.AcpError>;
   readonly setConfigOption: (
     configId: string,
@@ -912,6 +913,8 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(acpSdk.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
         ),
+      setSessionMode: (payload: Acp.SetSessionModeRequest) =>
+        request(acpSdk.methods.agent.session.setMode, payload),
       setSessionConfigOption: (payload: Acp.SetSessionConfigOptionRequest) =>
         request(acpSdk.methods.agent.session.setConfigOption, payload),
       prompt: (payload: Acp.PromptRequest) =>
@@ -2240,11 +2243,26 @@ const makeAcpSessionRuntime = (
       cancel: getStartedState.pipe(
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
-      setMode: (modeId) =>
+      setMode: (modeId, setModeOptions) =>
         getModeState.pipe(
           Effect.flatMap((modeState) => {
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies Acp.SetSessionModeResponse);
+            }
+            // Some restored sessions advertise only the original ACP modes API.
+            if (setModeOptions?.legacy === true) {
+              return getStartedState.pipe(
+                Effect.flatMap(({ sessionId }) => {
+                  const payload = { sessionId, modeId };
+                  return runLoggedRequest(
+                    "session/set_mode",
+                    payload,
+                    acp.agent.setSessionMode(payload),
+                  );
+                }),
+                Effect.tap(() => updateCurrentModeId(modeId)),
+                Effect.as({} satisfies Acp.SetSessionModeResponse),
+              );
             }
             return getConfigOptions.pipe(
               Effect.map((options) =>

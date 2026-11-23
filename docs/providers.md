@@ -479,6 +479,13 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+Antigravity runs Google's official `agy acp` and uses the sign-in saved by the CLI.
+Use **Approval required** to review native permission requests in the conversation.
+**Full access** can grant a request once. Native Plan mode keeps its tool restrictions.
+Google documents personal Google sign-in for interactive, single-user development
+with eligible Gemini models. For automated Gemini workflows, use a Gemini API key
+or Gemini Enterprise. [Google ACP guidance](https://antigravity.google/docs/ide/extensions/acp/)
+
 Antigravity shows native questions in the composer, including in Full Access. For ACP
 sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
 session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
@@ -906,9 +913,9 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 ## Passive results from delegated tasks
 
 Use `synara_capabilities` with `instanceId` for a specific provider account's catalog. The
-response lists `runtimeModes` and `compatibleRuntimeModes` for the caller. Antigravity requires
-Full access, so an Approval required or Approve for me caller cannot delegate to it. The
-gateway rejects that combination before creating a thread or worktree. An external OpenCode
+response lists `runtimeModes` and `compatibleRuntimeModes` for the caller. The Agent Gateway
+requires Full access to delegate to Antigravity. The gateway enforces this before creating
+a thread or worktree. An external OpenCode
 server configured by URL does not receive the thread-scoped Synara MCP credential.
 
 Ordinary Synara threads may submit successive creation batches in the same active turn, up
