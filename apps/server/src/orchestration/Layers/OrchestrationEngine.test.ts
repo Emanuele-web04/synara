@@ -1350,6 +1350,100 @@ describe("OrchestrationEngine", () => {
     },
   );
 
+  it("admits a gateway continuation for the latest persisted user message on a live thread", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("gateway-wake-project");
+    const threadId = ThreadId.makeUnsafe("gateway-wake-thread");
+    const sourceTurnId = asTurnId("gateway-wake-source-turn");
+    const createdAt = "2026-08-01T00:00:00.000Z";
+    const completedAt = "2026-08-01T00:00:02.000Z";
+    const turnOptions = {
+      threadId,
+      interactionMode: "default",
+      runtimeMode: "approval-required",
+    } as const;
+    try {
+      const dispatch = (command: OrchestrationCommand) => system.run(engine.dispatch(command));
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-project"),
+        projectId,
+        title: "Gateway wake",
+        workspaceRoot: "/tmp/gateway-wake-project",
+        defaultModelSelection: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-thread"),
+        ...turnOptions,
+        projectId,
+        title: "Gateway wake",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-user-send"),
+        ...turnOptions,
+        message: {
+          messageId: asMessageId("gateway-wake-original-message"),
+          role: "user",
+          text: "Review the changes when the delegated task finishes.",
+          attachments: [],
+        },
+        createdAt,
+      });
+      for (const status of ["running", "ready"] as const) {
+        const running = status === "running";
+        const updatedAt = running ? createdAt : completedAt;
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`gateway-wake-${status}`),
+          threadId,
+          session: {
+            threadId,
+            providerName: "codex",
+            status,
+            activeTurnId: running ? sourceTurnId : null,
+            runtimeMode: turnOptions.runtimeMode,
+            lastError: null,
+            updatedAt,
+          },
+          createdAt: updatedAt,
+        });
+      }
+
+      const wake = await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-follow-up"),
+        ...turnOptions,
+        dispatchOrigin: "agent",
+        dispatchMode: "queue",
+        gatewayCompletionPrecondition: {
+          sourceTurnId,
+          provider: "codex",
+          instanceId: "codex",
+          runtimeMode: turnOptions.runtimeMode,
+          latestUserMessageAt: createdAt,
+        },
+        message: {
+          messageId: asMessageId("gateway-wake-follow-up-message"),
+          role: "user",
+          text: "Read the delegated result.",
+          attachments: [],
+        },
+        createdAt: completedAt,
+      });
+      expect(wake.sequence).toBeGreaterThan(0);
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it.each([false, true])(
     "persists async questions and admits one concurrent answer (running=%s)",
     async (running) => {

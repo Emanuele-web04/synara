@@ -1219,6 +1219,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           let deciderReadModel = yield* buildDeciderReadModel(command);
+          if (command.type === "thread.turn.start" && command.gatewayCompletionPrecondition) {
+            const thread = deciderReadModel.threads.find((entry) => entry.id === command.threadId);
+            if (thread) {
+              // Wake admission is serialized with user sends and Stop. Read
+              // the committed message because the command cache omits this timestamp.
+              const latestUserMessageAt = yield* messageRepository
+                .getLatestUserMessageAt({ threadId: command.threadId })
+                .pipe(
+                  Effect.mapError((error) =>
+                    makeCommandInternalError(
+                      command,
+                      `Failed to verify the last user message for gateway continuation: ${error.message}`,
+                    ),
+                  ),
+                );
+              deciderReadModel = overlayThread(deciderReadModel, {
+                ...thread,
+                latestUserMessageAt,
+              });
+            }
+          }
           if (resolvedGoal !== null && command.type === "thread.meta.update") {
             const currentThread = deciderReadModel.threads.find(
               (entry) => entry.id === command.threadId,
