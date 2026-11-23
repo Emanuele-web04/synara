@@ -11,10 +11,13 @@ describe("runtime mode provider support", () => {
   it("offers AI-reviewed auto mode to Codex and Claude Code", () => {
     expect(providerSupportsAutoRuntimeMode("codex")).toBe(true);
     expect(providerSupportsAutoRuntimeMode("claudeAgent")).toBe(true);
+    // Devin maps Auto onto its native Smart permission mode.
+    expect(providerSupportsAutoRuntimeMode("devin")).toBe(true);
   });
 
   it("falls back to supervised mode for providers without auto review", () => {
     expect(normalizeRuntimeModeForProvider("auto", "opencode")).toBe("approval-required");
+    expect(normalizeRuntimeModeForProvider("auto", "devin")).toBe("auto");
     expect(normalizeRuntimeModeForProvider("full-access", "opencode")).toBe("full-access");
   });
 

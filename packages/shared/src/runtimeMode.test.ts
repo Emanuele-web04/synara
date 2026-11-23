@@ -10,12 +10,15 @@ describe("runtime mode compatibility", () => {
   it("limits Auto to providers with a native reviewer", () => {
     expect(providerSupportsAutoRuntimeMode("codex")).toBe(true);
     expect(providerSupportsAutoRuntimeMode("claudeAgent")).toBe(true);
+    // Devin's native reviewer is its Smart permission mode.
+    expect(providerSupportsAutoRuntimeMode("devin")).toBe(true);
     expect(providerSupportsAutoRuntimeMode("opencode")).toBe(false);
     expect(providerSupportsAutoRuntimeMode("cursor")).toBe(false);
   });
 
   it("normalizes only unsupported Auto selections", () => {
     expect(normalizeRuntimeModeForProvider("auto", "opencode")).toBe("approval-required");
+    expect(normalizeRuntimeModeForProvider("auto", "devin")).toBe("auto");
     expect(normalizeRuntimeModeForProvider("approval-required", "opencode")).toBe(
       "approval-required",
     );

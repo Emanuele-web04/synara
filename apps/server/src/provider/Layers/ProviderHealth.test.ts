@@ -3388,6 +3388,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authType, "apiKey");
         assert.strictEqual(status.authLabel, "Devin API Key");
         assert.strictEqual(status.version, "2.0.0");
+        // Auto maps onto Devin's native Smart permission mode.
+        assert.strictEqual(status.supportsAutoRuntimeMode, true);
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {

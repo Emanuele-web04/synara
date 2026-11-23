@@ -47,7 +47,7 @@ const RUNTIME_MODE_PRESENTATION_KEYS = {
  * sandbox + approval policy); every other provider keeps the generic wording.
  */
 const PROVIDER_RUNTIME_MODE_DESCRIPTION_KEYS: Partial<
-  Record<ProviderKind, Record<RuntimeMode, string>>
+  Record<ProviderKind, Partial<Record<RuntimeMode, string>>>
 > = {
   claudeAgent: {
     "approval-required": "settings:runtimeClaudeAsk",
@@ -58,6 +58,9 @@ const PROVIDER_RUNTIME_MODE_DESCRIPTION_KEYS: Partial<
     "approval-required": "settings:runtimeCodexAsk",
     auto: "settings:runtimeCodexAuto",
     "full-access": "settings:runtimeCodexFull",
+  },
+  devin: {
+    auto: "settings:runtimeDevinAuto",
   },
 };
 

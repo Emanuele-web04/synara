@@ -2163,6 +2163,51 @@ describe("resolveRequestedModeId", () => {
     }
   });
 
+  it("maps auto to Smart with the same fallbacks as approval-required", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: devin300067Modes },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBe("smart");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: {
+            currentModeId: "ask",
+            availableModes: devin300067Modes.filter((mode) => mode.id !== "smart"),
+          },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBe("accept-edits");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: {
+            currentModeId: "ask",
+            availableModes: [{ id: "bypass", name: "Full Access" }],
+          },
+          runtimeMode: "auto",
+          interactionMode: undefined,
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+  });
+
   it("keeps Plan precedence over Smart for approval-required threads", async () => {
     await expect(
       Effect.runPromise(

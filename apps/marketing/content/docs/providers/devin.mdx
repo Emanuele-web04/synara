@@ -114,6 +114,7 @@ Synara does not currently classify Devin as supporting native live-turn steering
 Synara maps its runtime modes onto the permission modes the installed Devin ACP server advertises:
 
 - **Approval required** targets Devin's native **Smart** mode, which runs safe routine work unhindered and asks only for risky or uncertain actions. Those prompts still reach Synara's approval cards. On installs that do not advertise Smart, Synara falls back to **Accept Edits** (shown as `code` in some catalogs) and surfaces a one-time warning in the thread; when neither mode is offered the session fails to start rather than granting broader access.
+- **Approve for me (Auto)** targets the same **Smart** mode — Smart is Devin's native auto-review engine, so Auto threads behave like approval-required threads that only interrupt on risky or uncertain actions.
 - **Plan** keeps precedence over every other mode while a plan interaction is active.
 - **Full Access** targets Devin's unrestricted `bypass` mode and is unchanged.
 

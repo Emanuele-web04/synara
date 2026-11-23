@@ -2589,6 +2589,10 @@ export const makeCheckDevinProviderStatus = (
       available: true,
       authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
       version: parsedVersion,
+      // Auto maps onto Devin's native Smart permission mode at session
+      // configuration time; the CLI probes above prove the binary runs, and
+      // Smart has shipped since CLI 3000.3.22.
+      supportsAutoRuntimeMode: true,
       checkedAt,
       ...(hasApiKey
         ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
