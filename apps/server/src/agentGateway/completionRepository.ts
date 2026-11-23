@@ -67,6 +67,22 @@ export const makeCompletionRepository = Effect.gen(function* () {
     sql`
     UPDATE agent_gateway_completions SET result_json = ${resultJson}
     WHERE child_thread_id = ${childThreadId} AND result_json IS NULL`.pipe(Effect.asVoid);
+  // Fusion delegates bypass agent_gateway_operations, so their completion row
+  // is enqueued directly. REPLACE (not IGNORE): a re-delegation to the same
+  // sidekick must restart delivery tracking for the new initial run.
+  const enqueue = (input: {
+    readonly childThreadId: string;
+    readonly creatorThreadId: string;
+    readonly initialMessageId: string;
+    readonly createdAt: string;
+  }) =>
+    sql`
+    INSERT OR REPLACE INTO agent_gateway_completions
+      (child_thread_id, creator_thread_id, initial_message_id, result_json,
+       delivery_state, context_event_sequence, context_consumed, created_at)
+    VALUES (${input.childThreadId}, ${input.creatorThreadId},
+      ${input.initialMessageId}, NULL, 'pending', NULL, 0, ${input.createdAt})
+  `.pipe(Effect.asVoid);
   const delivered = (childThreadId: string, available: boolean) =>
     sql`
     UPDATE agent_gateway_completions SET delivery_state = ${available ? "delivered" : "unavailable"}
@@ -129,6 +145,7 @@ export const makeCompletionRepository = Effect.gen(function* () {
     hasGoalHistory,
     pending,
     saveResult,
+    enqueue,
     delivered,
     claimContext,
     settleContext,

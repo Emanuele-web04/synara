@@ -133,6 +133,7 @@ import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
+import { makeFusionTools } from "../fusionCoordinator.ts";
 import { makeAgentGatewayTodoTools } from "../todoTools.ts";
 import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
 import { makeAgentGatewayTurnPlanTools } from "../turnPlanTools.ts";
@@ -1792,6 +1793,14 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...computerBrowserTools,
     // Offer Hub tools only when the authoritative shared feature policy enables them.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
+    ...makeFusionTools({
+      snapshotQuery,
+      orchestrationEngine,
+      completions: operationRepository.completions,
+      requireThreadShell,
+      assertCallerMayDriveThread,
+      newId: randomUUID,
+    }),
   ];
 
   // The computer family by name, read off the unfiltered catalog above: a

@@ -399,6 +399,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           : context.kind !== "external-client"
             ? yield* requireThreadShell(context.callerThreadId)
             : null;
+      // Fusion sidekicks cannot create threads: no fusion recursion (#1301).
+      if (
+        caller !== null &&
+        "creationSource" in caller &&
+        caller.creationSource === "fusion_sidekick"
+      ) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            "Fusion sidekick threads cannot create threads. Report results to your lead thread instead.",
+          ),
+        );
+      }
       const operationId = `gateway:create:${stableGatewayDigest({
         principalKind: context.kind,
         principalId:

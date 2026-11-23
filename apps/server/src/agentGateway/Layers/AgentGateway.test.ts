@@ -1093,6 +1093,7 @@ function makeHarnessLayer(
       initialFailure: () => Effect.succeed(null),
       hasGoalHistory: () => Effect.succeed(false),
       saveResult: () => Effect.void,
+      enqueue: () => Effect.void,
       delivered: () => Effect.void,
       claimContext: () => Effect.succeed(""),
       settleContext: (_sequence, _accepted, settle) => settle,
