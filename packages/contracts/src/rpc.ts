@@ -417,6 +417,8 @@ import {
   TerminalWriteInput,
 } from "./terminal";
 import {
+  StatsGetFusionStatsInput,
+  StatsGetFusionStatsResult,
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
@@ -1675,6 +1677,12 @@ export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
   error: WsRpcError,
 });
 
+export const WsStatsGetFusionStatsRpc = Rpc.make(WS_METHODS.statsGetFusionStats, {
+  payload: StatsGetFusionStatsInput,
+  success: StatsGetFusionStatsResult,
+  error: WsRpcError,
+});
+
 export const WsStatsGetUsageAnalyticsRpc = Rpc.make(WS_METHODS.statsGetUsageAnalytics, {
   payload: StatsGetUsageAnalyticsInput,
   success: StatsGetUsageAnalyticsResult,
@@ -2521,6 +2529,7 @@ export type WsFeatureRpc =
   | typeof WsStatsGetProfileStatsRpc
   | typeof WsStatsGetProfileTokenStatsRpc
   | typeof WsStatsGetRecapRpc
+  | typeof WsStatsGetFusionStatsRpc
   | typeof WsStatsGetUsageAnalyticsRpc
   | typeof WsServerGetDiagnosticsRpc
   | typeof WsServerReadThreadDiagnosticsRpc
@@ -2735,6 +2744,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsStatsGetRecapRpc,
+  WsStatsGetFusionStatsRpc,
   WsStatsGetUsageAnalyticsRpc,
   WsServerGetDiagnosticsRpc,
   WsServerReadThreadDiagnosticsRpc,
