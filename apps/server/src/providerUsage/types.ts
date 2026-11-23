@@ -25,6 +25,8 @@ export interface ProviderUsageContext {
   readonly claudeBinaryPath?: string;
   /** Codex CLI binary (settings.providers.codex.binaryPath); defaults to "codex". */
   readonly codexBinaryPath?: string;
+  /** Antigravity CLI binary for the selected account; defaults to "agy". */
+  readonly antigravityBinaryPath?: string;
   /** Stable account route; omitted by legacy provider-only callers. */
   readonly instanceId?: ProviderInstanceId;
   /** Recovery-only: owning task cwd used to exclude project authentication overrides. */

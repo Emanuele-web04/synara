@@ -141,6 +141,7 @@ async function resolveCredentialKey(
         homeDir: ctx.homeDir,
         codexBinaryPath: ctx.codexBinaryPath,
         claudeBinaryPath: ctx.claudeBinaryPath,
+        antigravityBinaryPath: ctx.antigravityBinaryPath,
         isolateCredentials: ctx.isolateCredentials,
         disableResetCredits: ctx.disableResetCredits,
         skipLocalUsage: ctx.skipLocalUsage,
@@ -303,6 +304,7 @@ export async function collectProviderUsageSnapshots(
 
 const GENERIC_USAGE_DRIVERS: Partial<Record<ProviderKind, ProviderProcessEnvDriver>> = {
   cursor: "cursor",
+  antigravity: "gemini",
   grok: "grok",
   droid: "kilo",
   opencode: "opencode",
@@ -428,6 +430,9 @@ function instanceUsageContext(
     ...(localUsageHomePath ? { localUsageHomePath } : {}),
     ...(start?.codex?.binaryPath ? { codexBinaryPath: start.codex.binaryPath } : {}),
     ...(start?.claudeAgent?.binaryPath ? { claudeBinaryPath: start.claudeAgent.binaryPath } : {}),
+    ...(start?.antigravity?.binaryPath
+      ? { antigravityBinaryPath: start.antigravity.binaryPath }
+      : {}),
   };
 }
 

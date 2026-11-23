@@ -2,7 +2,7 @@ import { localizedProviderUsageNeedsAuthDetail } from "~/lib/providerUsageDispla
 // FILE: ProviderUsageSettingsPanel.tsx
 // Purpose: Settings → Usage panel. One card per supported provider account showing live remaining
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
-// Antigravity users open their account's native CLI to check quota.
+// Usage is fetched read-only from each CLI's stored credentials by the server.
 
 import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
@@ -10,7 +10,7 @@ import {
   providerUsageDisplayName,
   selectVisibleProviderUsageSnapshots,
 } from "@synara/shared/providerUsage";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAppSettings, type RailUsageWindow } from "~/appSettings";
@@ -54,7 +54,6 @@ const RAIL_USAGE_WINDOW_OPTIONS = [
 ] as const satisfies ReadonlyArray<{ value: RailUsageWindow; label: string }>;
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
-const AntigravityUsageDialog = lazy(() => import("./AntigravityUsageDialog"));
 
 interface StatusPill {
   label: string;
@@ -198,10 +197,6 @@ export function ProviderUsageSettingsPanel() {
 
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
-  const [antigravityUsageAccount, setAntigravityUsageAccount] = useState<{
-    instanceId: string;
-    accountLabel: string;
-  } | null>(null);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = useMemo(
     () =>
@@ -252,12 +247,6 @@ export function ProviderUsageSettingsPanel() {
   const cards = selectVisibleProviderUsageSnapshots(
     activeSnapshots.filter((snapshot) => !settings.disabledProviders.includes(snapshot.provider)),
   );
-  const antigravityAccounts =
-    serverSettingsQuery.data && !settings.disabledProviders.includes("antigravity")
-      ? [...providerInstances.values()].filter(
-          (instance) => instance.enabled && instance.driver === "antigravity",
-        )
-      : [];
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
@@ -385,42 +374,6 @@ export function ProviderUsageSettingsPanel() {
           </Button>
         }
       >
-        {antigravityAccounts.length > 0 ? (
-          <SettingsCard>
-            {antigravityAccounts.map((instance) => (
-              <SettingsListRow
-                key={instance.instanceId}
-                title={
-                  <span className="flex min-w-0 items-center gap-2">
-                    <ProviderAccountAvatar
-                      provider="antigravity"
-                      accentColor={instance.raw.accentColor}
-                      className="size-6"
-                    />
-                    <span className="truncate">{instance.displayName}</span>
-                  </span>
-                }
-                actions={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    aria-label={t("settings:antigravityQuotaOpenFor", {
-                      account: instance.displayName,
-                    })}
-                    onClick={() =>
-                      setAntigravityUsageAccount({
-                        instanceId: instance.instanceId,
-                        accountLabel: instance.displayName,
-                      })
-                    }
-                  >
-                    {t("settings:antigravityQuotaOpen")}
-                  </Button>
-                }
-              />
-            ))}
-          </SettingsCard>
-        ) : null}
         {showInitialLoading ? (
           <SettingsCard>
             <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
@@ -452,14 +405,6 @@ export function ProviderUsageSettingsPanel() {
           {t("settings:usageIsReadLocallyFromEachProviderCLIS")}
         </p>
       </SettingsSectionShell>
-      {antigravityUsageAccount ? (
-        <Suspense fallback={null}>
-          <AntigravityUsageDialog
-            {...antigravityUsageAccount}
-            onClose={() => setAntigravityUsageAccount(null)}
-          />
-        </Suspense>
-      ) : null}
     </>
   );
 }
