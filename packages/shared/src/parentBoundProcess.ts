@@ -1,7 +1,7 @@
 // Owns a quiet helper process whose stdin is a kernel-backed parent lifetime lease.
 import type { ChildProcess } from "node:child_process";
 import { prepareProcess } from "./platformProcess";
-import { resolveWindowsSystemExecutable } from "./platformEnvironment";
+import { resolveWindowsTaskkillExecutable } from "./platformEnvironment";
 import { spawnProcess } from "./processRuntime";
 
 // Static source also works in packaged Electron's Node mode without another
@@ -147,7 +147,7 @@ export function spawnParentBoundProcess(
         electronRunAsNode: options.env.ELECTRON_RUN_AS_NODE ?? null,
         treeKillCommand:
           process.platform === "win32" && plan.command !== plan.resolvedCommand
-            ? resolveWindowsSystemExecutable(["System32", "taskkill.exe"], options.env)
+            ? resolveWindowsTaskkillExecutable(options.env)
             : null,
       }),
     ],

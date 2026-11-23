@@ -1,5 +1,5 @@
 // FILE: windowsProcessEffect.test.ts
-// Purpose: Verifies Effect forwards verbatim Windows command lines to Node spawn.
+// Purpose: Verifies Effect launch and supervised ACP process-tree retirement on Windows.
 // Layer: Server process integration test
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -8,9 +8,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import * as Path from "node:path";
 
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+
+import { AcpSessionRuntime } from "./provider/acp/AcpSessionRuntime.ts";
 
 it.runIf(process.platform === "win32")(
   "forwards encoded Codex arguments verbatim through the Effect Node spawner",
@@ -63,6 +65,61 @@ it.runIf(process.platform === "win32")(
 
       expect(Number(exitCode)).toBe(0);
       expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual(expectedArgs);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
+
+it.runIf(process.platform === "win32")(
+  "retires an ACP process and its child before allowing a replacement runtime",
+  async () => {
+    const root = mkdtempSync(Path.join(tmpdir(), "synara-windows-acp-retirement-"));
+    const scriptPath = Path.join(root, "agent.cjs");
+    const marker = Path.join(root, "pids.json");
+    // Use a real persistent child to exercise process-tree proof, without a
+    // provider install or credentials. The timers bound cleanup on test failure.
+    const fixture = [
+      'const { spawn } = require("node:child_process");',
+      'const { writeFileSync, renameSync } = require("node:fs");',
+      'const worker = spawn(process.execPath, ["-e", "setTimeout(() => {}, 25_000);"], { stdio: "ignore", windowsHide: true });',
+      'worker.once("spawn", () => {',
+      "  const marker = process.argv[2];",
+      '  writeFileSync(marker + ".tmp", JSON.stringify([process.pid, worker.pid]));',
+      '  renameSync(marker + ".tmp", marker);',
+      "});",
+      "setTimeout(() => {}, 25_000);",
+    ].join("\n");
+
+    try {
+      writeFileSync(scriptPath, fixture);
+      for (let launch = 0; launch < 2; launch++) {
+        const runtimeLayer = AcpSessionRuntime.layer({
+          spawn: { command: process.execPath, args: [scriptPath, marker], cwd: root },
+          cwd: root,
+          clientInfo: { name: "synara-windows-retirement-test", version: "0.0.0" },
+        }).pipe(Layer.provide(NodeServices.layer));
+        const pids = await Effect.runPromise(
+          Effect.service(AcpSessionRuntime).pipe(
+            Effect.flatMap(() =>
+              Effect.promise(() =>
+                vi.waitFor(
+                  () => {
+                    const pids = JSON.parse(readFileSync(marker, "utf8")) as number[];
+                    expect(pids).toHaveLength(2);
+                    for (const pid of pids) expect(process.kill(pid, 0)).toBe(true);
+                    return pids;
+                  },
+                  { timeout: 5_000 },
+                ),
+              ),
+            ),
+            Effect.provide(runtimeLayer),
+          ),
+        );
+        for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow(/ESRCH/u);
+        rmSync(marker);
+      }
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

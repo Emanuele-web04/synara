@@ -31,6 +31,7 @@ import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec }
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 import {
+  prepareProviderProcessTeardown,
   teardownEffectProcessTree,
   teardownProviderProcessTree,
   type SupervisedProcessTeardownResult,
@@ -91,6 +92,7 @@ export const DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS: AcpSessionStartupTimeouts = {
 
 /** JSON-RPC implementation-defined server error; not produced by ACP agents. */
 export const ACP_STARTUP_TIMEOUT_ERROR_CODE = -32001;
+const ACP_WINDOWS_OBSERVER_STARTUP_MS = 8_000;
 
 export interface AcpStartupTimeoutData {
   readonly reason: "acp-startup-timeout";
@@ -1499,10 +1501,35 @@ const makeAcpSessionRuntime = (
       try: () => buildAcpSpawnProcessEnv(options.spawn),
       catch: (cause) => new AcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
     });
-    const child = yield* spawnProviderProcess(spawner, options.spawn.command, options.spawn.args, {
-      ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-      env,
-    }).pipe(
+    // Warm the Windows observer while there is no provider to retire. The
+    // teardown still takes a fresh snapshot of the child and its descendants.
+    const preparedTeardown = yield* Effect.acquireRelease(
+      Effect.sync(() => prepareProviderProcessTeardown(options, ACP_WINDOWS_OBSERVER_STARTUP_MS)),
+      (prepared) => Effect.sync(() => prepared.dispose()),
+    );
+    if (preparedTeardown.waitUntilReady) {
+      const ready = yield* Effect.promise(preparedTeardown.waitUntilReady);
+      if (!ready) {
+        return yield* new AcpErrors.AcpTransportError({
+          detail:
+            "Windows could not verify process tracking for this ACP session. Try starting the session again.",
+          cause: new Error("The Windows process snapshot observer did not become ready."),
+        });
+      }
+    }
+
+    const child = yield* spawnProviderProcess(
+      {
+        // Own the native handle before interruption can leave the spawn boundary.
+        spawn: (command) =>
+          Effect.acquireRelease(spawner.spawn(command), (child) =>
+            teardownAcpChildProcess(child, preparedTeardown.teardownProcessTree),
+          ),
+      },
+      options.spawn.command,
+      options.spawn.args,
+      { ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}), env },
+    ).pipe(
       Effect.provideService(Scope.Scope, runtimeScope),
       Effect.mapError(
         (cause) =>
@@ -1513,7 +1540,6 @@ const makeAcpSessionRuntime = (
       ),
     );
 
-    yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
     // Registered after child teardown so LIFO scope closure releases any first
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
