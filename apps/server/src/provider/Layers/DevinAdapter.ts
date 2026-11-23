@@ -65,6 +65,7 @@ import {
   type SynaraHarnessPolicyDeliveryState,
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
+import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
@@ -153,7 +154,6 @@ import {
   runDevinAcpCompactionCommand,
   type DevinAcpRuntimeSettings,
 } from "../acp/DevinAcpSupport.ts";
-import { createDevinSessionConfig, type DevinSessionConfig } from "../acp/DevinSessionConfig.ts";
 import { isAcpStartupTimeoutError, type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -548,7 +548,6 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
   gatewaySessionLease: AgentGatewaySessionLease | undefined;
-  readonly devinSessionConfig: DevinSessionConfig | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1708,20 +1707,6 @@ function clearDevinActiveToolCallIdleState(ctx: DevinSessionContext): void {
   ctx.devinToolCallLifecycleById.clear();
 }
 
-export function closeDevinSessionResources(input: {
-  readonly scope: Scope.Closeable;
-  readonly config: Pick<DevinSessionConfig, "cleanup"> | undefined;
-}) {
-  return Effect.gen(function* () {
-    yield* Effect.ignore(Scope.close(input.scope, Exit.void));
-    if (input.config) {
-      yield* Effect.tryPromise(input.config.cleanup).pipe(
-        Effect.catch(() => Effect.logWarning("devin.acp.session_config_cleanup_failed")),
-      );
-    }
-  });
-}
-
 export function makeDevinAdapter(
   devinSettings: DevinAcpRuntimeSettings = {},
   options?: DevinAdapterLiveOptions,
@@ -2235,10 +2220,7 @@ export function makeDevinAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* closeDevinSessionResources({
-          scope: ctx.scope,
-          config: ctx.devinSessionConfig,
-        });
+        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "session.exited",
@@ -2536,33 +2518,6 @@ export function makeDevinAdapter(
               : Effect.sync(gatewaySessionLease.release),
           );
 
-          const devinSessionConfig = yield* Effect.tryPromise({
-            try: async () => {
-              if (!gatewaySessionLease || !agentGatewayCredentials) return undefined;
-              const bootstrapToken = gatewaySessionLease.issueStdioBootstrapToken?.();
-              if (!bootstrapToken)
-                throw new Error("Synara gateway bootstrap token was unavailable.");
-              return createDevinSessionConfig({
-                connection: gatewaySessionLease.connection,
-                stdioProxy: agentGatewayCredentials.stdioProxy,
-                bootstrapToken,
-                env: providerEnvironment,
-              });
-            },
-            catch: (error) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/start",
-                detail:
-                  error instanceof Error ? error.message : "Failed to install Devin MCP config.",
-              }),
-          });
-          yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred || !devinSessionConfig
-              ? Effect.void
-              : Effect.promise(devinSessionConfig.cleanup),
-          );
-
           let ctx!: DevinSessionContext;
           const resume = parseDevinResume(input.resumeCursor);
           const resumeSessionId = resume?.sessionId;
@@ -2684,7 +2639,17 @@ export function makeDevinAdapter(
               },
             },
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            ...(devinSessionConfig ? { sessionConfig: devinSessionConfig } : {}),
+            // Keep Devin's native config and login paths intact, including APPDATA on Windows.
+            ...(gatewaySessionLease && agentGatewayCredentials
+              ? {
+                  buildMcpServers: (initializeResult: Acp.InitializeResponse) =>
+                    buildAcpSynaraMcpServers({
+                      connection: gatewaySessionLease.connection,
+                      initializeResult,
+                      stdioProxy: agentGatewayCredentials.stdioProxy,
+                    }),
+                }
+              : {}),
             onChildStderrLine,
             ...acpRuntimeLoggers,
           }).pipe(
@@ -3067,7 +3032,6 @@ export function makeDevinAdapter(
             latestSessionCostUsd: undefined,
             stopped: false,
             gatewaySessionLease,
-            devinSessionConfig,
           };
 
           yield* forkDevinWedgeSupervisor(ctx);
@@ -4077,7 +4041,7 @@ export function makeDevinAdapter(
 
         const harnessPolicy = takeDevinSynaraHarnessPolicyTextPart(
           ctx,
-          ctx.devinSessionConfig?.installed === true,
+          ctx.gatewaySessionLease !== undefined,
         );
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);

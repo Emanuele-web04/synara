@@ -4699,6 +4699,28 @@ const make = Effect.gen(function* () {
             : antigravitySteer?.activeTurnId
               ? providerService.steerTurn(turnInput, {
                   expectedTurnId: antigravitySteer.activeTurnId,
+                  onSteerDeliveryFailure: (detail) =>
+                    appendProviderFailureActivity({
+                      threadId: input.threadId,
+                      kind: "provider.turn.start.failed",
+                      summary: "Antigravity could not deliver the steering message.",
+                      detail,
+                      turnId: null,
+                      messageId: MessageId.makeUnsafe(input.messageId),
+                      createdAt: new Date().toISOString(),
+                    }).pipe(
+                      Effect.catch((cause) =>
+                        Effect.logWarning(
+                          "could not record Antigravity steering delivery failure",
+                          {
+                            threadId: input.threadId,
+                            messageId: input.messageId,
+                            cause,
+                          },
+                        ),
+                      ),
+                      Effect.asVoid,
+                    ),
                 })
               : providerService.steerTurn(turnInput);
         }),
@@ -5677,6 +5699,8 @@ const make = Effect.gen(function* () {
                   (thread.creationSource === "provider_native" ||
                     thread.id.startsWith("subagent:")) &&
                   classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
+                const failedAntigravitySteer =
+                  isNativeSteer && liveSession?.provider === "antigravity";
                 if (event.payload.initialGoalStartedAt !== undefined) {
                   yield* pauseActiveThreadGoal({
                     threadId: event.payload.threadId,
@@ -5687,11 +5711,15 @@ const make = Effect.gen(function* () {
                   yield* appendProviderFailureActivity({
                     threadId: event.payload.threadId,
                     kind: "provider.turn.start.failed",
-                    summary: "Provider turn start failed",
+                    summary: failedAntigravitySteer
+                      ? "Antigravity could not deliver the steering message."
+                      : "Provider turn start failed",
                     detail: rejectedNativeSubagentSteer
                       ? `Your message was not sent to the subagent. ${failure instanceof Error ? failure.message : detail}`
                       : detail,
-                    ...(rejectedNativeSubagentSteer ? { messageId: message.id } : {}),
+                    ...(rejectedNativeSubagentSteer || failedAntigravitySteer
+                      ? { messageId: message.id }
+                      : {}),
                     turnId: null,
                     createdAt: event.payload.createdAt,
                   });
@@ -5706,8 +5734,9 @@ const make = Effect.gen(function* () {
                 // This request never entered the prompt queue. Its original
                 // turn already settled or was replaced; preserve that newer state.
                 if (
-                  failure instanceof ProviderAdapterValidationError &&
-                  failure.operation === "turn/steer.stale"
+                  failedAntigravitySteer ||
+                  (failure instanceof ProviderAdapterValidationError &&
+                    failure.operation === "turn/steer.stale")
                 ) {
                   return yield* Effect.failCause(cause);
                 }

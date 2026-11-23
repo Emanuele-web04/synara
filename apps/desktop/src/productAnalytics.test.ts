@@ -464,8 +464,10 @@ it("keeps opt-out in memory after a persistence error and retries durable opt-ou
     channel: "stable",
     appVersion: "1.0.0",
     platform: "linux",
+    defaultEnabled: true,
     fetcher: vi.fn(async () => new Response(null, { status: 204 })),
   });
+  expect(analytics.getState()).toEqual({ enabled: true });
   analytics.setEnabled(true);
   analytics.track({ event: "app.open", outcome: "succeeded" });
 
@@ -482,6 +484,7 @@ it("keeps opt-out in memory after a persistence error and retries durable opt-ou
     channel: "stable",
     appVersion: "1.0.0",
     platform: "linux",
+    defaultEnabled: true,
   });
   expect(restored.getState()).toEqual({ enabled: false });
   expect(existsSync(join(analyticsDir, "install-id"))).toBe(false);

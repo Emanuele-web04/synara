@@ -297,6 +297,22 @@ provider feature is supported through Synara.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
 
+### Devin CLI
+
+On the machine running Synara, check the installed CLI with `devin --version` and the default
+CLI account with `devin auth status`. If the CLI is signed out, run `devin auth login`. For a
+separate Synara account profile, use **Sign in** on that profile so Devin saves the login in
+the selected account environment.
+
+If a turn stalls, run `devin update`, then start a new Devin thread in Synara to launch the
+updated executable. Cognition's 3000.14.30821 stable release shortened stalled model stream
+retries from four minutes to 40 seconds. See the [Devin CLI changelog](https://docs.devin.ai/cli/changelog/stable).
+
+Synara passes its thread-scoped orchestration tools and granted connectors through ACP when
+creating or reopening a Devin session. Devin keeps using its own login, skills, and MCP settings.
+On Windows, Synara prepares process tracking before launching Devin so Stop can verify that the
+CLI and its child processes have exited before Synara starts a replacement runtime.
+
 ## Enable or disable providers
 
 In **Settings → Providers → Enabled providers**, turn a provider off to hide it
