@@ -3114,46 +3114,34 @@ function DesktopProjectBootstrap() {
       return;
     }
 
-    const recover = () => {
-      const attempt = recoveryAttemptGate.begin();
-      if (!attempt) return;
-      const ownsAttempt = () => !disposed && attempt.isCurrent();
+    const attempt = recoveryAttemptGate.begin();
+    if (!attempt) return;
+    const ownsAttempt = () => !disposed && attempt.isCurrent();
 
-      // Verify missing projects against the server before repairing them.
-      void api.orchestration
-        .getShellSnapshot()
-        .then((snapshot) => {
-          if (!ownsAttempt()) return;
-          if (!shouldRepairDesktopProjectSnapshot(snapshot)) {
-            if (!attempt.complete()) return;
-            useStore.getState().syncServerShellSnapshot(snapshot);
-            return;
-          }
-          return api.orchestration.repairState().then((repairedSnapshot) => {
-            if (!ownsAttempt() || !attempt.complete()) return;
-            syncServerReadModel(repairedSnapshot);
-          });
-        })
-        .catch(() => {
-          attempt.release();
+    // Shell subscriptions should normally hydrate the sidebar. If project rows
+    // are missing while live threads exist, repair before accepting the snapshot.
+    void api.orchestration
+      .getShellSnapshot()
+      .then((snapshot) => {
+        if (!ownsAttempt()) return;
+        const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
+        if (!needsRepair) {
+          if (!ownsAttempt() || !attempt.complete()) return;
+          useStore.getState().syncServerShellSnapshot(snapshot);
+          return;
+        }
+        return api.orchestration.repairState().then((repairedSnapshot) => {
+          if (!ownsAttempt() || !attempt.complete()) return;
+          syncServerReadModel(repairedSnapshot);
         });
-      return attempt;
-    };
+      })
+      .catch(() => {
+        attempt.release();
+      });
 
-    let attempt = recover();
-    let disconnected = false;
-    const unsubscribeTransport = addWsTransportStateListener((state) => {
-      if (state === "closed") disconnected = true;
-      if (state === "open" && disconnected) {
-        disconnected = false;
-        attempt?.release();
-        attempt = recover();
-      }
-    });
     return () => {
       disposed = true;
-      unsubscribeTransport();
-      attempt?.release();
+      attempt.release();
     };
   }, [needsRecovery, projects, recoveryAttemptGate, syncServerReadModel, threadIds]);
 
