@@ -237,7 +237,7 @@ export function FusionSettingsPanel({ active }: { active: boolean }) {
                 className="w-full sm:w-48"
                 aria-label={t("settings:fusion_briefStyle")}
               >
-                <SelectValue />
+                <SelectValue>{t(`settings:fusion_briefStyle_${briefStyle}`)}</SelectValue>
               </SelectTrigger>
               <SettingsSelectPopup align="start">
                 <SelectItem hideIndicator value="default">
@@ -301,7 +301,7 @@ function PairingSelects(props: {
         onValueChange={(value) => props.onProviderChange(value as ProviderKind)}
       >
         <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={props.providerLabel}>
-          <SelectValue />
+          <SelectValue>{PROVIDER_DISPLAY_NAMES[props.provider]}</SelectValue>
         </SelectTrigger>
         <SettingsSelectPopup align="start">
           {PROVIDERS.map((provider) => (
@@ -318,7 +318,9 @@ function PairingSelects(props: {
         }}
       >
         <SelectTrigger size="sm" className="w-full sm:w-52" aria-label={props.modelLabel}>
-          <SelectValue />
+          <SelectValue>
+            {props.model ? composerModelDisplayName(props.provider, props.model) : null}
+          </SelectValue>
         </SelectTrigger>
         <SettingsSelectPopup align="start">
           {props.choices.map((model) => (
