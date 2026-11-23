@@ -440,6 +440,9 @@ export function makeExternalHistoryService(options: ExternalHistoryServiceOption
           input.externalSessionId,
         );
         const offset = input.cursor !== undefined ? Number(input.cursor) : 0;
+        if (Number.isNaN(offset)) {
+          fail("read-failed", OPERATION, "Invalid history cursor.", false);
+        }
         const pageItems = transcript.messages.slice(offset, offset + PAGE_LIMIT);
         const nextOffset = offset + pageItems.length;
         return {
@@ -514,7 +517,19 @@ export function makeExternalHistoryService(options: ExternalHistoryServiceOption
         sourceRevision,
         committedMessageCursor: null,
         historyStatus: "reading" as const,
-        nativeResumeDescriptor: null,
+        // Only the local CLI store row can be reloaded natively through ACP
+        // `session/load`; Cloud and ATIF imports stay transcript-only and take
+        // the bounded-context handoff path on first send.
+        nativeResumeDescriptor:
+          input.sourceId === LOCAL_SOURCE_ID
+            ? ({
+                kind: "devin-acp",
+                sessionId: input.externalSessionId,
+                ...(sessionDescriptor?.model !== undefined
+                  ? { model: sessionDescriptor.model }
+                  : {}),
+              } as Schema.Json)
+            : null,
         upstreamMetadata:
           sessionDescriptor !== null ? (sessionDescriptor as unknown as Schema.Json) : null,
         userOverrideFlags: null,

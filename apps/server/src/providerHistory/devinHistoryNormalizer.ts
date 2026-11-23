@@ -110,6 +110,7 @@ export function normalizeLocalSessionCatalog(
     externalSessionId: row.sessionId,
     ...(row.title !== null ? { title: row.title } : {}),
     sourceOrigin: "devin-local",
+    ...(row.model !== "unknown" ? { model: row.model } : {}),
     ...(row.createdAt !== null ? { originalCreatedAt: row.createdAt } : {}),
     ...(row.lastActivityAt !== null ? { originalUpdatedAt: row.lastActivityAt } : {}),
     workspaceHint: row.workingDirectory,

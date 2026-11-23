@@ -175,6 +175,13 @@ layer("ExternalHistoryService", (it) => {
       if (link._tag === "Some") {
         assert.strictEqual(link.value.historyStatus, "complete");
         assert.strictEqual(link.value.threadId, first.threadId);
+        // DHI-07: a local-store import keeps the native resume descriptor so the
+        // first send reloads the upstream session through `session/load`.
+        assert.deepStrictEqual(link.value.nativeResumeDescriptor, {
+          kind: "devin-acp",
+          sessionId: "sess-1",
+          model: "swe-2-medium",
+        });
       }
     }),
   );

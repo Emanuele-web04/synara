@@ -87,6 +87,8 @@ export const ExternalHistorySessionDescriptor = Schema.Struct({
   workspaceHint: Schema.optional(TrimmedNonEmptyString),
   repositoryHints: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   sourceUrl: Schema.optional(TrimmedNonEmptyString),
+  /** Model the upstream session recorded at creation, when the source reports it. */
+  model: Schema.optional(TrimmedNonEmptyString),
   rawStatus: Schema.optional(Schema.String),
   rawStatusDetail: Schema.optional(Schema.String),
 });

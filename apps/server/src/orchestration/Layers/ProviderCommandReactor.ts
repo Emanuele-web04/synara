@@ -177,6 +177,7 @@ import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/Queu
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+import { ExternalHistoryRepository } from "../../persistence/Services/ExternalHistory.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -1138,6 +1139,7 @@ const make = Effect.gen(function* () {
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
+  const externalHistoryRepository = yield* Effect.serviceOption(ExternalHistoryRepository);
   const projectionTurns = yield* ProjectionTurnRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
@@ -3264,6 +3266,55 @@ const make = Effect.gen(function* () {
       };
     }
 
+    const isJsonRecord = (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    // An imported (provider_native) Devin thread has no Synara session yet:
+    // its external-history link says whether the upstream session can be
+    // reloaded natively (`session/load`) or must continue as transcript-only.
+    const importedHistoryLink =
+      preferredProvider === "devin" &&
+      thread.creationSource === "provider_native" &&
+      Option.isSome(externalHistoryRepository)
+        ? yield* externalHistoryRepository.value
+            .getLinkByThreadId({ threadId })
+            .pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning(
+                  "provider command reactor could not resolve external history link",
+                  { threadId, cause },
+                ).pipe(Effect.as(Option.none())),
+              ),
+            )
+        : Option.none();
+    const importedResumeCursor = Option.isSome(importedHistoryLink)
+      ? yield* Effect.succeed(importedHistoryLink)
+          .pipe(
+            Effect.map((link) =>
+              Option.flatMap(link, (record) => {
+                if (!isJsonRecord(record.nativeResumeDescriptor)) return Option.none();
+                const descriptor = record.nativeResumeDescriptor;
+                if (
+                  descriptor.kind !== "devin-acp" ||
+                  typeof descriptor.sessionId !== "string" ||
+                  descriptor.sessionId.trim() === ""
+                ) {
+                  return Option.none();
+                }
+                const model =
+                  typeof descriptor.model === "string" && descriptor.model.trim() !== ""
+                    ? descriptor.model.trim()
+                    : undefined;
+                return Option.some({
+                  schemaVersion: 1,
+                  sessionId: descriptor.sessionId.trim(),
+                  ...(model !== undefined ? { model } : {}),
+                });
+              }),
+            ),
+          )
+          .pipe(Effect.map(Option.getOrUndefined))
+      : undefined;
+
     let bootstrapTranscriptIfResumeFails = false;
     if (providerService.forkThread && thread.forkSourceThreadId) {
       // P1 activation stickiness: forks mint fresh control state. The child
@@ -3371,9 +3422,11 @@ const make = Effect.gen(function* () {
 
     const registerPriorTranscriptBootstrapOnFreshStart =
       shouldRegisterContextBootstrap &&
-      (options?.registerPriorTranscriptBootstrapOnFreshStart === true || providerRebindRequested);
+      (options?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+        providerRebindRequested ||
+        (Option.isSome(importedHistoryLink) && importedResumeCursor === undefined));
     const startOutcome = yield* startProviderSessionWithOutcome(
-      undefined,
+      importedResumeCursor,
       registerPriorTranscriptBootstrapOnFreshStart,
     ).pipe(
       Effect.map((outcome) => ({
