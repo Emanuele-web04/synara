@@ -2508,4 +2508,58 @@ describe("ProfileStatsQuery", () => {
       }),
     );
   });
+
+  it("reports lead vs sidekick token split for fusion pairings", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, fusion_json)
+          VALUES
+            ('lead-1', 'project', 'Lead chat', '{"provider":"claudeAgent","model":"opus"}',
+             'full-access', 'default', 'local', '2026-06-13', '2026-06-13', NULL, NULL,
+             '{"lead":{"provider":"claudeAgent","model":"opus"},"sidekick":{"provider":"codex","model":"mini"}}'),
+            ('sidekick-1', 'project', 'Sidekick', '{"provider":"codex","model":"mini"}',
+             'full-access', 'default', 'local', '2026-06-13', '2026-06-13',
+             'lead-1', 'fusion_sidekick', NULL),
+            ('plain', 'project', 'Plain chat', '{"provider":"codex","model":"mini"}',
+             'full-access', 'default', 'local', '2026-06-13', '2026-06-13', NULL, NULL, NULL)
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES
+            ('a-lead', 'lead-1', 'turn-lead', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":1000}',
+              1, '2026-06-13T10:00:00.000Z'),
+            ('a-sidekick', 'sidekick-1', 'turn-sidekick', 'info', 'context-window.updated', 'tokens',
+              '{"totalProcessedTokens":3000}', 1, '2026-06-13T10:01:00.000Z'),
+            ('a-plain', 'plain', 'turn-plain', 'info', 'context-window.updated', 'tokens',
+              '{"totalProcessedTokens":9000}', 1, '2026-06-13T10:02:00.000Z'),
+            ('a-retarget', 'lead-1', NULL, 'info', 'synara.fusion.retargeted', 'retargeted',
+              '{}', 2, '2026-06-13T10:03:00.000Z')
+        `;
+
+        const stats = yield* statsQuery.getFusionStats();
+
+        expect(stats.pairings).toHaveLength(1);
+        expect(stats.pairings[0]).toMatchObject({
+          leadThreadId: "lead-1",
+          leadTitle: "Lead chat",
+          leadProvider: "claudeAgent",
+          leadModel: "opus",
+          leadTokens: 1000,
+          sidekickThreads: 1,
+          sidekickTokens: 3000,
+          retargets: 1,
+        });
+        expect(stats.pairings[0]?.sidekickProviders).toEqual(["codex"]);
+      }),
+    );
+  });
 });

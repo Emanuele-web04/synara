@@ -14,6 +14,8 @@ import {
   type ProfileStats,
   type ProfileTokenStats,
   type ProviderKind,
+  type StatsFusionPairingUsage,
+  type StatsGetFusionStatsResult,
   type StatsGetProfileStatsInput,
   type StatsGetProfileTokenStatsInput,
 } from "@synara/contracts";
@@ -99,6 +101,18 @@ interface TokenDayRow {
   readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
+}
+
+interface FusionPairingRow {
+  readonly leadThreadId: string;
+  readonly leadTitle: string | null;
+  readonly leadProvider: ProviderKind;
+  readonly leadModel: string | null;
+  readonly leadTokens: number;
+  readonly sidekickThreads: number;
+  readonly sidekickTokens: number;
+  readonly sidekickProviders: string | null;
+  readonly retargets: number;
 }
 
 type UsageKind = "skill" | "agent";
@@ -1116,6 +1130,7 @@ export interface ProfileStatsQueryShape {
   readonly getProfileTokenStats: (
     input: StatsGetProfileTokenStatsInput,
   ) => Effect.Effect<ProfileTokenStats, unknown>;
+  readonly getFusionStats: () => Effect.Effect<StatsGetFusionStatsResult, unknown>;
 }
 
 export class ProfileStatsQuery extends ServiceMap.Service<
@@ -1727,7 +1742,80 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       } satisfies ProfileTokenStats;
     });
 
-  return { getProfileStats, getProfileTokenStats } satisfies ProfileStatsQueryShape;
+  // RFC #1301 P7: per-lead usage for Fusion pairings — lead thread tokens vs
+  // the tokens of its `fusion_sidekick` children, plus how often the sidekick
+  // was retargeted. Sidekicks are matched by parent_thread_id; their providers
+  // come from the token rows so retargets across providers all show up.
+  const getFusionStats = () =>
+    Effect.map(
+      legacyCompatibleQuery(
+        "profileStats.fusionPairings",
+        sql<FusionPairingRow>`
+          WITH ${tokenDeltaCtes(sql)},
+          lead_tokens AS (
+            SELECT thread_id, SUM(tokens) AS tokens
+            FROM token_delta_rows
+            GROUP BY thread_id
+          ),
+          sidekick_tokens AS (
+            SELECT
+              s.parent_thread_id AS lead_thread_id,
+              COUNT(DISTINCT s.thread_id) AS threads,
+              SUM(t.tokens) AS tokens,
+              GROUP_CONCAT(DISTINCT t.provider) AS providers
+            FROM projection_threads s
+            LEFT JOIN token_delta_rows t ON t.thread_id = s.thread_id
+            WHERE s.creation_source = 'fusion_sidekick'
+            GROUP BY s.parent_thread_id
+          ),
+          retargets AS (
+            SELECT thread_id, COUNT(*) AS retargets
+            FROM projection_thread_activities
+            WHERE kind = 'synara.fusion.retargeted'
+            GROUP BY thread_id
+          )
+          SELECT
+            l.thread_id AS leadThreadId,
+            l.title AS leadTitle,
+            json_extract(l.fusion_json, '$.lead.provider') AS leadProvider,
+            json_extract(l.fusion_json, '$.lead.model') AS leadModel,
+            COALESCE(lt.tokens, 0) AS leadTokens,
+            COALESCE(st.threads, 0) AS sidekickThreads,
+            COALESCE(st.tokens, 0) AS sidekickTokens,
+            st.providers AS sidekickProviders,
+            COALESCE(rt.retargets, 0) AS retargets
+          FROM projection_threads l
+          LEFT JOIN lead_tokens lt ON lt.thread_id = l.thread_id
+          LEFT JOIN sidekick_tokens st ON st.lead_thread_id = l.thread_id
+          LEFT JOIN retargets rt ON rt.thread_id = l.thread_id
+          WHERE l.fusion_json IS NOT NULL
+          ORDER BY COALESCE(st.tokens, 0) + COALESCE(lt.tokens, 0) DESC
+        `,
+      ),
+      (rows): StatsGetFusionStatsResult => ({
+        generatedAt: new Date().toISOString(),
+        pairings: rows.map(
+          (row): StatsFusionPairingUsage => ({
+            leadThreadId: row.leadThreadId,
+            leadTitle: row.leadTitle ?? "Untitled",
+            leadProvider: row.leadProvider,
+            leadModel: row.leadModel ?? "unknown",
+            leadTokens: Math.max(0, Math.trunc(row.leadTokens)),
+            sidekickThreads: Math.max(0, Math.trunc(row.sidekickThreads)),
+            sidekickTokens: Math.max(0, Math.trunc(row.sidekickTokens)),
+            sidekickProviders: (row.sidekickProviders?.split(",") ?? [])
+              .map((provider) => provider.trim())
+              .filter((provider) => provider.length > 0)
+              .map((provider) => (provider === "unknown" ? "unknown" : provider)) as Array<
+              ProviderKind | "unknown"
+            >,
+            retargets: Math.max(0, Math.trunc(row.retargets)),
+          }),
+        ),
+      }),
+    );
+
+  return { getProfileStats, getProfileTokenStats, getFusionStats } satisfies ProfileStatsQueryShape;
 });
 
 export const ProfileStatsQueryLive = Layer.effect(ProfileStatsQuery, makeProfileStatsQuery);

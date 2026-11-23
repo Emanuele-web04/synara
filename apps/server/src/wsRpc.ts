@@ -2859,6 +2859,8 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.statsGetRecap]: (input) =>
           rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
+        [WS_METHODS.statsGetFusionStats]: () =>
+          rpcEffect(profileStatsQuery.getFusionStats(), "Failed to load fusion stats"),
         [WS_METHODS.statsGetUsageAnalytics]: (input) =>
           requireUsageAnalyticsAccess(input.scope).pipe(
             Effect.andThen(() =>

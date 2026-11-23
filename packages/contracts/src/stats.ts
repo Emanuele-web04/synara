@@ -364,3 +364,37 @@ export const StatsGetUsageAnalyticsResult = Schema.Struct({
   unavailableProviders: Schema.Array(ProviderKind),
 });
 export type StatsGetUsageAnalyticsResult = typeof StatsGetUsageAnalyticsResult.Type;
+
+// ── Fusion stats (RFC #1301 P7) ─────────────────────────────────────
+
+// Per-lead usage for Fusion pairings: the lead thread's own token burn versus
+// the burn of its `fusion_sidekick` children. Lifetime figures over the chats
+// still present; a deleted lead or sidekick stops contributing (its tokens move
+// to the deleted-work archives, which no longer carry the pairing link).
+export const StatsGetFusionStatsInput = Schema.Struct({});
+export type StatsGetFusionStatsInput = typeof StatsGetFusionStatsInput.Type;
+
+export const StatsFusionPairingUsage = Schema.Struct({
+  leadThreadId: TrimmedNonEmptyString,
+  leadTitle: TrimmedNonEmptyString,
+  leadProvider: ProviderKind,
+  leadModel: TrimmedNonEmptyString,
+  // Tokens processed by turns on the lead thread (cache reads/writes included).
+  leadTokens: NonNegativeInt,
+  // `fusion_sidekick` child threads of this lead and the tokens they processed.
+  sidekickThreads: NonNegativeInt,
+  sidekickTokens: NonNegativeInt,
+  // Distinct providers the sidekicks ran on; retargets and retried delegations
+  // can span several. Provider attribution is 'unknown' when the emitting
+  // adapter reported none.
+  sidekickProviders: Schema.Array(Schema.Union([ProviderKind, Schema.Literal("unknown")])),
+  // `synara.fusion.retargeted` activities posted on the lead.
+  retargets: NonNegativeInt,
+});
+export type StatsFusionPairingUsage = typeof StatsFusionPairingUsage.Type;
+
+export const StatsGetFusionStatsResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  pairings: Schema.Array(StatsFusionPairingUsage),
+});
+export type StatsGetFusionStatsResult = typeof StatsGetFusionStatsResult.Type;

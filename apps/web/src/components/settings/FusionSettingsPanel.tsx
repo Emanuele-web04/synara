@@ -11,6 +11,7 @@ import {
   type ProviderKind,
 } from "@synara/contracts";
 import { getModelOptions } from "@synara/shared/model";
+import { formatCompact } from "@synara/profile-ui/formatting";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -20,7 +21,11 @@ import { PlusIcon, TrashCanIcon } from "~/lib/icons";
 import { composerModelDisplayName } from "~/components/chat/ComposerModelPicker.logic";
 import { normalizeModelSelection } from "~/composerDraftModels";
 import { ensureNativeApi } from "~/nativeApi";
-import { serverQueryKeys, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverFusionStatsQueryOptions,
+  serverQueryKeys,
+  serverSettingsQueryOptions,
+} from "~/lib/serverReactQuery";
 import { toastManager } from "~/components/ui/toast";
 import { randomUUID } from "~/lib/utils";
 import {
@@ -53,6 +58,7 @@ export function FusionSettingsPanel({ active }: { active: boolean }) {
   const serverSettings = useQuery(serverSettingsQueryOptions());
   const { settings } = useAppSettings();
   const presets = serverSettings.data?.fusionPresets ?? [];
+  const fusionStats = useQuery(serverFusionStatsQueryOptions({ enabled: active }));
 
   const [name, setName] = useState("");
   const [leadProvider, setLeadProvider] = useState<ProviderKind>("claudeAgent");
@@ -190,6 +196,57 @@ export function FusionSettingsPanel({ active }: { active: boolean }) {
               </div>
             ))}
           </>
+        )}
+      </SettingsSection>
+
+      <SettingsSection title="settings:fusion_usage">
+        {fusionStats.data === undefined || fusionStats.data.pairings.length === 0 ? (
+          <div className={SETTINGS_CARD_ROW_CLASS_NAME}>
+            <p className="text-ui-sm text-muted-foreground">{t("settings:fusion_noUsage")}</p>
+          </div>
+        ) : (
+          fusionStats.data.pairings.map((pairing) => {
+            const total = pairing.leadTokens + pairing.sidekickTokens;
+            const sidekickPercent =
+              total > 0 ? Math.round((pairing.sidekickTokens / total) * 100) : 0;
+            return (
+              <div
+                key={pairing.leadThreadId}
+                className={`flex items-center gap-3 ${SETTINGS_CARD_ROW_CLASS_NAME}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-ui font-medium text-foreground">
+                    {pairing.leadTitle}
+                  </p>
+                  <p className="truncate text-ui-sm text-muted-foreground">
+                    {composerModelDisplayName(pairing.leadProvider, pairing.leadModel)}
+                    {pairing.sidekickProviders.length > 0
+                      ? ` → ${pairing.sidekickProviders
+                          .map((provider) =>
+                            provider === "unknown" ? provider : PROVIDER_DISPLAY_NAMES[provider],
+                          )
+                          .join(", ")}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-ui-sm text-foreground">
+                    {t("settings:fusion_usageSplit", {
+                      lead: formatCompact(pairing.leadTokens),
+                      sidekick: formatCompact(pairing.sidekickTokens),
+                      percent: sidekickPercent,
+                    })}
+                  </p>
+                  <p className="text-ui-xs text-muted-foreground">
+                    {t("settings:fusion_usageDetail", {
+                      threads: pairing.sidekickThreads,
+                      retargets: pairing.retargets,
+                    })}
+                  </p>
+                </div>
+              </div>
+            );
+          })
         )}
       </SettingsSection>
 

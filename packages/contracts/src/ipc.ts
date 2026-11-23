@@ -439,6 +439,8 @@ import type {
 } from "./providerDiscovery";
 import type { ProviderCompactThreadInput } from "./provider";
 import type {
+  StatsGetFusionStatsInput,
+  StatsGetFusionStatsResult,
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
@@ -1500,6 +1502,7 @@ export interface NativeApi {
       input: StatsGetProfileTokenStatsInput,
     ) => Promise<StatsGetProfileTokenStatsResult>;
     getRecap: (input: StatsGetRecapInput) => Promise<StatsGetRecapResult>;
+    getFusionStats: (input: StatsGetFusionStatsInput) => Promise<StatsGetFusionStatsResult>;
     getUsageAnalytics: (
       input: StatsGetUsageAnalyticsInput,
     ) => Promise<StatsGetUsageAnalyticsResult>;

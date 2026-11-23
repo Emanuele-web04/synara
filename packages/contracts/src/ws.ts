@@ -227,6 +227,7 @@ import {
   ServerVoiceTranscriptionInput,
 } from "./server";
 import {
+  StatsGetFusionStatsInput,
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
   StatsGetRecapInput,
@@ -409,6 +410,7 @@ export const WS_METHODS = {
   statsGetProfileStats: "stats.getProfileStats",
   statsGetProfileTokenStats: "stats.getProfileTokenStats",
   statsGetRecap: "stats.getRecap",
+  statsGetFusionStats: "stats.getFusionStats",
   statsGetUsageAnalytics: "stats.getUsageAnalytics",
   serverGetDiagnostics: "server.getDiagnostics",
   serverReadThreadDiagnostics: "server.readThreadDiagnostics",
@@ -769,6 +771,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
   tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
   tagRequestBody(WS_METHODS.statsGetRecap, StatsGetRecapInput),
+  tagRequestBody(WS_METHODS.statsGetFusionStats, StatsGetFusionStatsInput),
   tagRequestBody(WS_METHODS.statsGetUsageAnalytics, StatsGetUsageAnalyticsInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverReadThreadDiagnostics, ServerReadThreadDiagnosticsInput),

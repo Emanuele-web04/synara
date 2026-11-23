@@ -40,6 +40,7 @@ export const serverQueryKeys = {
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
   recap: (input: StatsGetRecapInput) =>
     ["server", "recap", input.from, input.to, input.slotBoundaries.join(",")] as const,
+  fusionStats: () => ["server", "fusionStats"] as const,
   usageAnalytics: (input: StatsGetUsageAnalyticsInput) =>
     ["server", "usageAnalytics", input.from, input.to, input.scope ?? "synara"] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
@@ -531,6 +532,19 @@ export function serverRecapQueryOptions(
     },
     retryDelay: expensiveReadRetryDelay,
     queryFn: async () => ensureNativeApi().stats.getRecap(input),
+  });
+}
+
+// Per-lead Fusion usage (RFC #1301 P7): lead vs sidekick token split for
+// Settings → Fusion. Lifetime figures; refreshes while the panel is open.
+export function serverFusionStatsQueryOptions(input: { enabled?: boolean } = {}) {
+  return queryOptions({
+    queryKey: serverQueryKeys.fusionStats(),
+    enabled: input.enabled ?? true,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => ensureNativeApi().stats.getFusionStats({}),
   });
 }
 
