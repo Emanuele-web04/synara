@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ClaudeCacheObservation } from "@synara/contracts";
 import {
+  IDLE_COMPACTION_ESTIMATED_CHARS_PER_TOKEN,
   IDLE_COMPACTION_MIN_CONTEXT_TOKENS,
+  IDLE_COMPACTION_PROVIDER_DEFAULT_TTL_SECONDS,
   IDLE_COMPACTION_TTL_FRACTION,
   idleCompactionDue,
+  idleCompactionEstimatedContextTokens,
   idleCompactionLeaseKey,
 } from "./idleCompaction";
 
@@ -61,5 +64,31 @@ describe("Idle compaction eligibility", () => {
     expect(idleCompactionLeaseKey(baseline)).toBe(baseline.cacheReferenceAt);
     const { cacheReferenceAt: _ref, ...responseOnly } = baseline;
     expect(idleCompactionLeaseKey(responseOnly)).toBe(baseline.lastResponseAt);
+  });
+
+  it("fires on the last fifth of each provider's default TTL window", () => {
+    for (const [provider, ttlSeconds] of Object.entries(
+      IDLE_COMPACTION_PROVIDER_DEFAULT_TTL_SECONDS,
+    )) {
+      const observation = {
+        cacheReferenceAt: baseline.cacheReferenceAt,
+        ttlSeconds,
+        contextTokens: IDLE_COMPACTION_MIN_CONTEXT_TOKENS,
+      };
+      const boundary = ttlSeconds * IDLE_COMPACTION_TTL_FRACTION;
+      expect(idleCompactionDue(observation, time(boundary - 1)), provider).toBe(false);
+      expect(idleCompactionDue(observation, time(boundary)), provider).toBe(true);
+      expect(idleCompactionDue(observation, time(ttlSeconds)), provider).toBe(false);
+    }
+  });
+
+  it("estimates context tokens conservatively from message text", () => {
+    expect(idleCompactionEstimatedContextTokens(0)).toBe(0);
+    expect(idleCompactionEstimatedContextTokens(IDLE_COMPACTION_ESTIMATED_CHARS_PER_TOKEN)).toBe(1);
+    expect(
+      idleCompactionEstimatedContextTokens(
+        IDLE_COMPACTION_MIN_CONTEXT_TOKENS * IDLE_COMPACTION_ESTIMATED_CHARS_PER_TOKEN,
+      ),
+    ).toBe(IDLE_COMPACTION_MIN_CONTEXT_TOKENS);
   });
 });

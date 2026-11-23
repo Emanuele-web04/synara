@@ -43,6 +43,8 @@ type ProviderInstallBooleanKey =
   | "claudeEnableArtifacts"
   | "claudeConfirmColdCacheResume"
   | "claudeCompactIdleThreads"
+  | "codexCompactIdleThreads"
+  | "antigravityCompactIdleThreads"
   | "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
@@ -121,6 +123,12 @@ export const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "settings:providers_codexHomePath",
         placeholder: "settings:cODEXHOME",
         description: "settings:providers_codexHomeDescription",
+      },
+      {
+        kind: "boolean",
+        settingsKey: "codexCompactIdleThreads",
+        label: "settings:compactIdleThreadsBeforeTheCacheExpires",
+        description: "settings:offByDefaultASweepCompactsIdleThreads",
       },
     ],
   },
@@ -238,6 +246,12 @@ export const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
             components={{ command: <code /> }}
           />
         ),
+      },
+      {
+        kind: "boolean",
+        settingsKey: "antigravityCompactIdleThreads",
+        label: "settings:compactIdleThreadsBeforeTheCacheExpires",
+        description: "settings:offByDefaultASweepCompactsIdleThreads",
       },
     ],
   },
@@ -555,11 +569,13 @@ export function providerInstanceConfigKey(field: ProviderInstallField): string |
       return "serverPassword";
     case "openCodeExperimentalWebSockets":
       return "experimentalWebSockets";
-    // Every Claude account's sessions read Artifacts from the Claude provider setting,
-    // never from an account's config, so the switch lives on the default account only.
+    // Provider-level switches live on the provider's server settings, never on
+    // one account's config, so they apply to the default account only.
     case "claudeEnableArtifacts":
     case "claudeConfirmColdCacheResume":
     case "claudeCompactIdleThreads":
+    case "codexCompactIdleThreads":
+    case "antigravityCompactIdleThreads":
       return null;
     case "piAgentDir":
     case "ompAgentDir":

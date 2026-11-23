@@ -375,6 +375,8 @@ export const AppSettingsSchema = Schema.Struct({
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
   claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => true)),
   claudeCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
+  codexCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
+  antigravityCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
   // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -1673,6 +1675,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     claudeCompactIdleThreads: settings.providers.claudeAgent.compactIdleThreads,
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
+    codexCompactIdleThreads: settings.providers.codex.compactIdleThreads,
     codexHomePath: settings.providers.codex.homePath,
     codexAccounts: settings.providers.codex.accounts,
     selectedCodexAccountId: settings.providers.codex.selectedAccountId,
@@ -1687,6 +1690,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
+    antigravityCompactIdleThreads: settings.providers.antigravity.compactIdleThreads,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
@@ -1881,6 +1885,7 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "codexHomePath") ||
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
+    hasOwn(patch, "codexCompactIdleThreads") ||
     hasOwn(patch, "customCodexModels")
   ) {
     const codexAccounts = patch.codexAccounts
@@ -1893,6 +1898,9 @@ export function appSettingsPatchToServerSettingsPatch(
       ...(codexAccounts !== undefined ? { accounts: codexAccounts } : {}),
       ...(selectedCodexAccountId && isValidCodexAccountId(selectedCodexAccountId)
         ? { selectedAccountId: selectedCodexAccountId }
+        : {}),
+      ...(hasOwn(patch, "codexCompactIdleThreads")
+        ? { compactIdleThreads: Boolean(patch.codexCompactIdleThreads) }
         : {}),
       ...(hasOwn(patch, "customCodexModels")
         ? { customModels: patch.customCodexModels ?? [] }
@@ -1945,10 +1953,17 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
-  if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
+  if (
+    hasOwn(patch, "antigravityBinaryPath") ||
+    hasOwn(patch, "antigravityCompactIdleThreads") ||
+    hasOwn(patch, "customAntigravityModels")
+  ) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
         ? { binaryPath: patch.antigravityBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "antigravityCompactIdleThreads")
+        ? { compactIdleThreads: Boolean(patch.antigravityCompactIdleThreads) }
         : {}),
       ...(hasOwn(patch, "customAntigravityModels")
         ? { customModels: patch.customAntigravityModels ?? [] }

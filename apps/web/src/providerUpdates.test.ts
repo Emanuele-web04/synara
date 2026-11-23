@@ -76,6 +76,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         homePath: "",
         selectedAccountId: "default",
         accounts: [],
+        compactIdleThreads: false,
       },
       claudeAgent: {
         ...provider,
@@ -88,7 +89,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
-      antigravity: { ...provider, binaryPath: "agy" },
+      antigravity: { ...provider, binaryPath: "agy", compactIdleThreads: false },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
       opencode: {

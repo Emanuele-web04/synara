@@ -50,6 +50,9 @@ export const CodexServerProviderSettings = Schema.Struct({
   selectedAccountId: CodexAccountId.pipe(
     Schema.withDecodingDefault(() => DEFAULT_CODEX_ACCOUNT_ID),
   ),
+  // Opt-in: a periodic sweep compacts idle Codex threads shortly before their
+  // prompt-cache window closes, so the next message still reads a warm prefix.
+  compactIdleThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type CodexServerProviderSettings = typeof CodexServerProviderSettings.Type;
 
@@ -77,6 +80,10 @@ export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.T
 export const AntigravityServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "agy")),
+  // Opt-in: a periodic sweep compacts idle Antigravity threads just before the
+  // ~5-minute Gemini prompt-cache window closes. Requires agy >= 1.5.9, which
+  // advertises `compact` in available_commands.
+  compactIdleThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type AntigravityServerProviderSettings = typeof AntigravityServerProviderSettings.Type;
 
@@ -255,6 +262,7 @@ export const ServerSettingsPatch = Schema.Struct({
           homePath: Schema.optionalKey(StringSetting),
           accounts: Schema.optionalKey(CodexAccountConfigs),
           selectedAccountId: Schema.optionalKey(CodexAccountId),
+          compactIdleThreads: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       claudeAgent: Schema.optionalKey(
@@ -273,7 +281,12 @@ export const ServerSettingsPatch = Schema.Struct({
           apiEndpoint: Schema.optionalKey(StringSetting),
         }),
       ),
-      antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      antigravity: Schema.optionalKey(
+        Schema.Struct({
+          ...ProviderSettingsBasePatch,
+          compactIdleThreads: Schema.optionalKey(Schema.Boolean),
+        }),
+      ),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       opencode: Schema.optionalKey(

@@ -34,14 +34,22 @@ last-response time does not block ordinary use.
 
 ## Idle compaction before expiry
 
-While **Compact idle threads before the cache expires** is on in Settings → Providers → Claude
-(off by default), a periodic sweep reads the persisted observations above — it never asks the
-provider — and runs the native compact on an idle thread once its lease enters the last fifth of
-its observed TTL. A thread qualifies only when its last turn completed normally, no turn, approval,
-user input, cache review, or handoff is pending, and it is not archived, deleted, snoozed, a side
-chat, or a subagent. Below 20,000 context tokens the sweep stays quiet: a cold resume is cheaper
-than the maintenance request. Each lease compacts once; a fresh provider request renews it and can
-make the thread eligible again.
+While **Compact idle threads before the cache expires** is on for a provider in Settings →
+Providers (off by default for Claude, Codex, and Antigravity), a periodic sweep runs the native
+compact on an idle thread once its lease enters the last fifth of its prompt-cache TTL. A thread
+qualifies only when its last turn completed normally, no turn, approval, user input, cache review,
+or handoff is pending, and it is not archived, deleted, snoozed, a side chat, or a subagent. Below
+20,000 context tokens the sweep stays quiet: a cold resume is cheaper than the maintenance request.
+Each lease compacts once; a fresh provider request renews it and can make the thread eligible
+again.
+
+The sweep never asks the provider anything to pick candidates. Claude threads are timed by the
+persisted observations above; Codex and Antigravity persist no cache telemetry, so their lease
+anchors on the thread's last runtime activity against a default TTL (Codex 30 minutes for the
+OpenAI prompt-cache window, Antigravity 5 minutes for the Gemini window its own keep-alive pings
+target) and the context floor is estimated from message text. Codex compacts through its app-server
+`thread/compact` method; Antigravity sends `/compact` over ACP, which only fires when the runtime
+advertises the `compact` command (agy ≥ 1.5.9), so older CLIs are left alone.
 
 The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider

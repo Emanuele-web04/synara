@@ -1323,6 +1323,24 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         );
       });
 
+    // agy >= 1.5.9 advertises `compact` in available_commands and performs a
+    // real context compaction when it receives the command in a prompt. Older
+    // runtimes would read "/compact" as plain text, so the command is only
+    // dispatched when the session announces it.
+    const compactThread: NonNullable<AntigravityAdapterShape["compactThread"]> = (threadId) =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        const commands = yield* ctx.acp.getAvailableCommands.pipe(
+          Effect.mapError((cause) =>
+            mapAcpToAdapterError(PROVIDER, threadId, "session/commands", cause),
+          ),
+        );
+        if (!commands.some((command) => command.name === "compact")) {
+          return;
+        }
+        yield* sendTurn({ threadId, input: "/compact" });
+      });
+
     const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
@@ -1500,6 +1518,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
       },
       startSession,
       sendTurn,
+      compactThread,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

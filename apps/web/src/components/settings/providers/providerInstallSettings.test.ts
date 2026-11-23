@@ -36,6 +36,7 @@ describe("createProviderInstallResetPatch", () => {
     expect(Object.keys(patch).sort()).toEqual(
       [
         "antigravityBinaryPath",
+        "antigravityCompactIdleThreads",
         "claudeBinaryPath",
         "claudeCompactIdleThreads",
         "claudeConfirmColdCacheResume",
@@ -43,6 +44,7 @@ describe("createProviderInstallResetPatch", () => {
         "claudeHomePath",
         "codexAccounts",
         "codexBinaryPath",
+        "codexCompactIdleThreads",
         "codexHomePath",
         "cursorApiEndpoint",
         "cursorBinaryPath",

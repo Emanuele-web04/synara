@@ -5,9 +5,12 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import {
+  IDLE_COMPACTION_PROVIDER_DEFAULT_TTL_SECONDS,
   IDLE_COMPACTION_SWEEP_MS,
   idleCompactionDue,
+  idleCompactionEstimatedContextTokens,
   idleCompactionLeaseKey,
+  type IdleCompactionObservation,
 } from "@synara/shared/idleCompaction";
 import { Cause, Duration, Effect, Layer, Option, Schema } from "effect";
 
@@ -28,6 +31,32 @@ const claudeCacheFromResumeCursor = (resumeCursor: unknown): ClaudeCacheObservat
   }
   const { claudeCache } = resumeCursor as { readonly claudeCache?: unknown };
   return Option.getOrUndefined(decodeClaudeCacheObservation(claudeCache));
+};
+
+/**
+ * Providers without native cache telemetry get a synthetic observation:
+ * the lease anchors on the thread's last provider-runtime activity, the TTL
+ * is the provider's default prompt-cache window, and context size is
+ * estimated from message text since no token counts are persisted.
+ */
+const defaultObservationFor = (
+  provider: string,
+  thread: OrchestrationThread,
+): IdleCompactionObservation | undefined => {
+  const ttlSeconds = IDLE_COMPACTION_PROVIDER_DEFAULT_TTL_SECONDS[provider];
+  const lease = thread.session?.lastActivityAt ?? thread.session?.lastProgressAt;
+  if (ttlSeconds === undefined || lease == null) {
+    return undefined;
+  }
+  const messageTextLength = thread.messages.reduce(
+    (total, message) => total + message.text.length,
+    0,
+  );
+  return {
+    ttlSeconds,
+    cacheReferenceAt: lease,
+    contextTokens: idleCompactionEstimatedContextTokens(messageTextLength),
+  };
 };
 
 /**
@@ -62,12 +91,8 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
   const compactedLeases = new Map<ThreadId, string>();
   const inFlight = new Set<ThreadId>();
 
-  const compactThread = (threadId: ThreadId) =>
+  const compactThread = (threadId: ThreadId, provider: string) =>
     Effect.gen(function* () {
-      const startClaudeCompaction = providerService.startClaudeCompaction;
-      if (!startClaudeCompaction) {
-        return;
-      }
       if (providerService.prewarmSession) {
         yield* providerService.prewarmSession({ threadId });
       }
@@ -79,18 +104,34 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
       if (!thread || !isThreadIdleForCompaction(thread)) {
         return;
       }
-      yield* startClaudeCompaction({
-        threadId,
-        turnId: TurnId.makeUnsafe(crypto.randomUUID()),
-      });
+      if (provider === "claudeAgent") {
+        const startClaudeCompaction = providerService.startClaudeCompaction;
+        if (!startClaudeCompaction) {
+          return;
+        }
+        yield* startClaudeCompaction({
+          threadId,
+          turnId: TurnId.makeUnsafe(crypto.randomUUID()),
+        });
+      } else {
+        yield* providerService.compactThread({ threadId });
+      }
     });
 
   const sweepOnce = Effect.gen(function* () {
     const settings = yield* serverSettings.getSettings;
-    if (settings.providers.claudeAgent.compactIdleThreads !== true) {
-      return;
-    }
-    if (!providerService.startClaudeCompaction) {
+    const enabledProviders = new Set<string>(
+      (
+        [
+          ["claudeAgent", settings.providers.claudeAgent.compactIdleThreads],
+          ["codex", settings.providers.codex.compactIdleThreads],
+          ["antigravity", settings.providers.antigravity.compactIdleThreads],
+        ] as const
+      )
+        .filter(([, enabled]) => enabled === true)
+        .map(([provider]) => provider),
+    );
+    if (enabledProviders.size === 0) {
       return;
     }
     const [readModel, bindings] = yield* Effect.all([
@@ -100,10 +141,17 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
     const threadById = new Map(readModel.threads.map((thread) => [thread.id, thread]));
     const nowMs = Date.now();
     for (const binding of bindings) {
-      if (binding.provider !== "claudeAgent") {
+      if (!enabledProviders.has(binding.provider)) {
         continue;
       }
-      const observation = claudeCacheFromResumeCursor(binding.resumeCursor);
+      const thread = threadById.get(binding.threadId);
+      if (!thread || !isThreadIdleForCompaction(thread)) {
+        continue;
+      }
+      const observation =
+        binding.provider === "claudeAgent"
+          ? claudeCacheFromResumeCursor(binding.resumeCursor)
+          : defaultObservationFor(binding.provider, thread);
       if (!observation || !idleCompactionDue(observation, nowMs)) {
         continue;
       }
@@ -115,13 +163,9 @@ export const makeIdleCompactionReactor = Effect.gen(function* () {
       ) {
         continue;
       }
-      const thread = threadById.get(binding.threadId);
-      if (!thread || !isThreadIdleForCompaction(thread)) {
-        continue;
-      }
       inFlight.add(binding.threadId);
       compactedLeases.set(binding.threadId, leaseKey);
-      yield* compactThread(binding.threadId).pipe(
+      yield* compactThread(binding.threadId, binding.provider).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("idle cache compaction failed", {
             threadId: binding.threadId,
