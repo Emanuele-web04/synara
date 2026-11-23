@@ -1108,5 +1108,7 @@
   "lead": "Lead",
   "sidekick": "Sidekick",
   "fusionLeadRole": "Lead — picks the model in charge",
-  "fusionSidekickRole": "Sidekick — pick the delegated model"
+  "fusionSidekickRole": "Sidekick — pick the delegated model",
+  "fusionPairings": "Pairings",
+  "fusionPickSidekick": "Pick a model"
 }

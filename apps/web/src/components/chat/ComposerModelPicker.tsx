@@ -667,6 +667,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             <FusionSection
               fusion={props.fusion}
               role={fusionRole}
+              leadModelLabel={composerModelDisplayName(activeProvider, modelLabel)}
               onRoleChange={setFusionRole}
               usableProviders={fusionUsableProviders}
               onApplyPreset={(preset) => {
@@ -851,6 +852,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 function FusionSection(props: {
   fusion: NonNullable<ComposerModelPickerProps["fusion"]>;
   role: "lead" | "sidekick";
+  leadModelLabel: string;
   onRoleChange: (role: "lead" | "sidekick") => void;
   usableProviders: ReadonlySet<ProviderKind>;
   onApplyPreset: (preset: FusionPairingPreset) => void;
@@ -859,9 +861,15 @@ function FusionSection(props: {
   const { fusion } = props;
   // Presets whose lead+sidekick both resolve to a usable provider account.
   const presets = usableFusionPresets(fusion.presets ?? [], props.usableProviders);
+  const sidekickLabel = fusion.sidekick
+    ? composerModelDisplayName(fusion.sidekick.provider, fusion.sidekick.model)
+    : t("chat:fusionPickSidekick");
   return (
     <div className="flex shrink-0 flex-col border-b border-border">
-      <div className="flex items-center gap-1 px-3 py-2">
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+          {t("chat:fusion")}
+        </span>
         <button
           type="button"
           role="switch"
@@ -884,56 +892,68 @@ function FusionSection(props: {
             )}
           />
         </button>
-        <span className="text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
-          {t("chat:fusion")}
-        </span>
-        {fusion.enabled ? (
-          <div className="ml-auto flex items-center gap-1">
+      </div>
+      {fusion.enabled ? (
+        <div className="flex flex-col gap-1 px-2 pb-2">
+          <div className="grid grid-cols-2 gap-1">
             {(
               [
-                ["lead", t("chat:lead")],
-                ["sidekick", t("chat:sidekick")],
+                ["lead", t("chat:lead"), props.leadModelLabel],
+                ["sidekick", t("chat:sidekick"), sidekickLabel],
               ] as const
-            ).map(([role, roleLabel]) => (
-              <button
-                key={role}
-                type="button"
-                onClick={() => props.onRoleChange(role)}
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-ui-xs",
-                  props.role === role
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {role === "lead"
-                  ? roleLabel
-                  : fusion.sidekick
-                    ? `${roleLabel}: ${composerModelDisplayName(
-                        fusion.sidekick.provider,
-                        fusion.sidekick.model,
-                      )}`
-                    : roleLabel}
-              </button>
-            ))}
+            ).map(([role, roleLabel, modelName]) => {
+              const active = props.role === role;
+              const unset = role === "sidekick" && fusion.sidekick === null;
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => props.onRoleChange(role)}
+                  aria-pressed={active}
+                  className={cn(
+                    "flex min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1.5 text-left transition-colors",
+                    active
+                      ? "border-primary/50 bg-accent text-foreground"
+                      : "border-border/60 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )}
+                >
+                  <span className="text-ui-xs font-medium uppercase tracking-[0.06em]">
+                    {roleLabel}
+                  </span>
+                  <span
+                    className={cn(
+                      "w-full truncate text-ui-xs",
+                      unset ? "text-muted-foreground/70 italic" : "text-foreground",
+                    )}
+                  >
+                    {modelName}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        ) : null}
-      </div>
-      {fusion.enabled && presets.length > 0 ? (
-        <div className="flex flex-col gap-px px-1 pb-1">
-          {presets.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => props.onApplyPreset(preset)}
-              className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
-            >
-              <span className="truncate text-ui-xs font-medium text-foreground">{preset.name}</span>
-              <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
-                {fusionPresetSummary(preset, composerModelDisplayName)}
+          {presets.length > 0 ? (
+            <div className="flex flex-col gap-px">
+              <span className="px-1 pt-1 pb-0.5 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+                {t("chat:fusionPairings")}
               </span>
-            </button>
-          ))}
+              {presets.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => props.onApplyPreset(preset)}
+                  className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
+                >
+                  <span className="truncate text-ui-xs font-medium text-foreground">
+                    {preset.name}
+                  </span>
+                  <span className="shrink-0 truncate text-ui-xs text-muted-foreground">
+                    {fusionPresetSummary(preset, composerModelDisplayName)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
