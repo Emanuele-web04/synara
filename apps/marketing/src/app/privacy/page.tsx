@@ -73,10 +73,9 @@ export default function PrivacyPage() {
         </h1>
         <p className="mt-5 text-[14px] leading-[1.7] text-[var(--text-secondary)] sm:text-[15px]">
           Synara stores workspace history on the computer running the workspace. Optional account
-          features, connections and mobile access use additional services as described below. Stable
-          and Beta product analytics are off by default. Synara Remote from .18 and iPhone/iPad from
-          build 139 share limited usage data by default, with a local switch to turn it off. Synara
-          Beta has separate, always-on crash and release diagnostics.
+          features, connections and mobile access use additional services as described below.
+          Product analytics defaults vary by release and platform, and each installation has a local
+          sharing switch. Synara Beta has separate, always-on crash and release diagnostics.
         </p>
 
         <Section title="Where your data lives">
@@ -113,12 +112,13 @@ export default function PrivacyPage() {
 
         <Section title="Product analytics and Remote diagnostics">
           <p>
-            Stable and Beta product analytics are off by default. Synara Remote from version
+            Stable desktop releases after 1.6.5 share limited product analytics by default. Earlier
+            Stable releases and Beta desktop default to off. Synara Remote from version
             1.0.6-remote.18 and the native iPhone/iPad apps from build 139 share limited usage data
-            by default. Settings → Privacy →<strong> Share usage and diagnostics</strong> turns
-            sharing off on that installation; an existing off choice is preserved. On Remote desktop
-            this switch also controls crash and error diagnostics. Another computer or account does
-            not change your local choice.
+            by default. To turn sharing off in Stable or Beta, open Settings → Privacy and turn off
+            <strong> Share product analytics</strong>. Remote and mobile use
+            <strong> Share usage and diagnostics</strong>. On Remote desktop this switch also
+            controls crash and error diagnostics. Each installation keeps its saved choice.
           </p>
           <p className="mt-6">
             Product events use a random identifier for this installation. It is independent of your

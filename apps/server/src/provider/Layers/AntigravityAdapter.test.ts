@@ -16,7 +16,7 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials";
-import type * as AcpErrors from "../acp/AcpErrors";
+import * as AcpErrors from "../acp/AcpErrors";
 import type { AcpParsedSessionEvent, AcpToolCallState } from "../acp/AcpRuntimeModel";
 import type { AntigravityAcpRuntimeInput } from "../acp/AntigravityAcpSupport";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime";
@@ -77,6 +77,13 @@ function makeControllableRuntime(
   };
   const finishPrompt = (stopReason: Acp.StopReason, index = pendingPrompts.length - 1) =>
     Effect.runSync(Deferred.succeed(pendingPrompts[index]!, { stopReason }));
+  const rejectPrompt = (index: number) =>
+    Effect.runSync(
+      Deferred.fail(
+        pendingPrompts[index]!,
+        new AcpErrors.AcpRequestError({ code: -32602, errorMessage: "Steering was rejected" }),
+      ),
+    );
 
   const runtime = {
     ...makeFakeAcpSessionRuntime({ sessionId }),
@@ -150,6 +157,7 @@ function makeControllableRuntime(
     makeRuntime,
     emit,
     finishPrompt,
+    rejectPrompt,
     exit: Deferred.succeed(exited, undefined),
     requestPermission: (request: Acp.RequestPermissionRequest) =>
       Effect.suspend(() => permissionHandler(request)),
@@ -447,6 +455,95 @@ describe("Antigravity ACP adapter", () => {
       }),
     );
   });
+
+  it.each(["rejected", "stopped"])(
+    "records an undelivered steer on its user message (reason=%s)",
+    async (reason) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const messageId = MessageId.makeUnsafe("undelivered-agy-steer");
+      const fake = makeControllableRuntime({ agentVersion: "1.5.1" });
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        threadModelSelection: { provider: "antigravity", model: "Gemini 4 Neon" },
+      });
+      await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+        Effect.gen(function* () {
+          const enteredSteer = yield* Deferred.make<void>();
+          const releaseSteer = yield* Deferred.make<void>();
+          harness.listSessions.mockImplementation(adapter.listSessions);
+          harness.steerTurn.mockImplementation((input, opts) =>
+            reason === "stopped"
+              ? Deferred.succeed(enteredSteer, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseSteer)),
+                  Effect.andThen(adapter.steerTurn!(input, opts)),
+                )
+              : adapter.steerTurn!(input, opts),
+          );
+          const events: ProviderRuntimeEvent[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.promise(async () => {
+                events.push(event);
+                await harness.emitRuntimeEvent(event);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* adapter.startSession(startInput(threadId));
+          const turn = yield* adapter.sendTurn({ threadId, input: "First", attachments: [] });
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.session?.activeTurnId === turn.turnId &&
+                fake.prompts.length === 1,
+            ),
+          );
+          yield* harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("agy-undelivered-steer"),
+            threadId,
+            message: { messageId, role: "user", text: "Steer", attachments: [] },
+            dispatchMode: "steer",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: new Date().toISOString(),
+          });
+          if (reason === "stopped") {
+            yield* Deferred.await(enteredSteer);
+            yield* adapter.interruptTurn(threadId, turn.turnId);
+            yield* Deferred.succeed(releaseSteer, undefined);
+            expect(fake.prompts).toHaveLength(1);
+          } else {
+            yield* Effect.promise(() => waitFor(() => fake.prompts.length === 2));
+            fake.rejectPrompt(1);
+          }
+          // Finish the original turn even if the steering input could not be sent.
+          if (reason === "rejected") fake.finishPrompt("end_turn", 0);
+          yield* Effect.promise(() =>
+            waitFor(
+              async () =>
+                (await readHarnessThread(harness))?.activities.some(
+                  (activity) =>
+                    activity.kind === "provider.turn.start.failed" &&
+                    typeof activity.payload === "object" &&
+                    activity.payload !== null &&
+                    "messageId" in activity.payload &&
+                    activity.payload.messageId === messageId,
+                ) === true,
+            ),
+          );
+          yield* Effect.promise(() =>
+            waitFor(() => events.some((event) => event.type === "turn.completed")),
+          );
+          expect(
+            events
+              .filter((event) => event.type === "turn.completed")
+              .map((event) => [event.turnId, event.payload.state]),
+          ).toEqual([[turn.turnId, reason === "stopped" ? "cancelled" : "completed"]]);
+        }),
+      );
+    },
+  );
 
   it.each(["completed", "cancelled", "failed"])(
     "steers the live ACP session through the reactor and owns a late question (outcome=%s)",

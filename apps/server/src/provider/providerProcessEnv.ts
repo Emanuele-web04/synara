@@ -163,9 +163,10 @@ const GROK_ACCOUNT_ENV_KEYS = new Set<string>([
 
 const CURSOR_ACCOUNT_ENV_KEYS = new Set<string>(["CURSOR_API_KEY"]);
 
-function normalizedEnvironment(
+/** Preserve the platform's environment-key semantics when copying a process environment. */
+export function normalizeProviderProcessEnvironment(
   environment: Readonly<NodeJS.ProcessEnv>,
-  platform: NodeJS.Platform,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   if (platform !== "win32") {
     return { ...environment };
@@ -243,7 +244,7 @@ function sanitizedSelectedEnvironment(
   environment: Readonly<Record<string, string>>,
   platform: NodeJS.Platform,
 ): NodeJS.ProcessEnv {
-  const selected = normalizedEnvironment(environment, platform);
+  const selected = normalizeProviderProcessEnvironment(environment, platform);
   const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
   for (const key of PROVIDER_OWNED_PATH_ENV_KEYS) {
     const value = selected[key];
@@ -407,7 +408,7 @@ export function buildProviderProcessEnv(input: {
     return baseEnv as NodeJS.ProcessEnv;
   }
 
-  const normalizedBaseEnv = normalizedEnvironment(baseEnv, platform);
+  const normalizedBaseEnv = normalizeProviderProcessEnvironment(baseEnv, platform);
   const env = isolatesAccount
     ? safeInheritedEnvironment(normalizedBaseEnv, platform)
     : normalizedBaseEnv;
@@ -465,7 +466,7 @@ export function buildProviderProcessEnv(input: {
     }
   }
   if (input.overlay !== undefined) {
-    Object.assign(env, normalizedEnvironment(input.overlay, platform));
+    Object.assign(env, normalizeProviderProcessEnvironment(input.overlay, platform));
   }
   return env;
 }

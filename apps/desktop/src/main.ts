@@ -481,14 +481,14 @@ const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-// Remote shares usage and diagnostics by default; Settings turns both off.
-// Stable stays opt-in for product events and never runs diagnostics.
+// Stable and Remote share product events by default. Saved choices take precedence.
+// Stable never runs the release diagnostics sender.
 const productAnalytics = new ProductAnalytics({
   homeDir: BASE_DIR,
   channel: desktopFlavor === "beta" ? "beta" : desktopFlavor === "remote" ? "remote" : "stable",
   appVersion: app.getVersion(),
   platform: process.platform,
-  defaultEnabled: desktopFlavor === "remote",
+  defaultEnabled: desktopFlavor === "production" || desktopFlavor === "remote",
 });
 if (hasSingleInstanceLock) productAnalytics.initialize();
 

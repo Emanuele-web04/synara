@@ -5,6 +5,7 @@ import {
   buildUsageAnalyticsView,
   localDayKey,
   percentChange,
+  usageAnalyticsDeviceScopeLabels,
   usageAnalyticsWindow,
 } from "./usageAnalytics.logic";
 
@@ -155,5 +156,33 @@ describe("percentChange", () => {
     expect(percentChange(150, 100)).toBe(50);
     expect(percentChange(5, 0)).toBeNull();
     expect(percentChange(5, null)).toBeNull();
+  });
+});
+
+describe("usageAnalyticsDeviceScopeLabels", () => {
+  it("uses Mac labels on macOS platforms", () => {
+    expect(usageAnalyticsDeviceScopeLabels("MacIntel")).toEqual({
+      pickerLabel: "This Mac",
+      inlineLabel: "this Mac",
+    });
+    expect(usageAnalyticsDeviceScopeLabels("darwin")).toEqual({
+      pickerLabel: "This Mac",
+      inlineLabel: "this Mac",
+    });
+  });
+
+  it("uses Device labels on non-Mac platforms", () => {
+    expect(usageAnalyticsDeviceScopeLabels("Linux x86_64")).toEqual({
+      pickerLabel: "This Device",
+      inlineLabel: "this device",
+    });
+    expect(usageAnalyticsDeviceScopeLabels("Win32")).toEqual({
+      pickerLabel: "This Device",
+      inlineLabel: "this device",
+    });
+    expect(usageAnalyticsDeviceScopeLabels("")).toEqual({
+      pickerLabel: "This Device",
+      inlineLabel: "this device",
+    });
   });
 });
