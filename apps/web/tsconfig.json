@@ -26,6 +26,7 @@
     "src",
     "perf",
     "../../scripts/bun-lockfile.ts",
+    "scripts/boot-chunk-groups*.ts",
     "scripts/compiler-cache-key.ts",
     "scripts/production-assets*.ts",
     "scripts/transform-cache*.ts",
