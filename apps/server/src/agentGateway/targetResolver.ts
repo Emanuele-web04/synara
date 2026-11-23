@@ -10,11 +10,16 @@ import {
   type ProviderKind,
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
+  type RuntimeMode,
   type ServerProviderAuthStatus,
   type SynaraProviderInstanceCatalog,
 } from "@synara/contracts";
 import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
 import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
+import {
+  providerSupportsDelegatedRuntimeMode,
+  runtimeModeEscalatesPrivilege,
+} from "@synara/shared/runtimeMode";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -38,11 +43,14 @@ export class AgentGatewayTargetError extends Error {
 
 export interface AgentGatewayProviderCatalog {
   readonly provider: ProviderKind;
+  readonly instanceId?: string;
   readonly defaultModel: string | null;
   readonly models: ReadonlyArray<ProviderModelDescriptor>;
   readonly instances?: ReadonlyArray<SynaraProviderInstanceCatalog>;
   readonly enabled: boolean;
   readonly available: boolean;
+  readonly runtimeModes: ReadonlyArray<RuntimeMode>;
+  readonly compatibleRuntimeModes: ReadonlyArray<RuntimeMode>;
   readonly authStatus?: ServerProviderAuthStatus;
   readonly source?: string;
   readonly error?: string;
@@ -282,37 +290,54 @@ function providerDefaultModel(provider: ProviderKind): string | null {
   return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
+// The gateway create tools accept the two explicit modes. Auto stays a caller setting.
+function gatewayRuntimeModes(provider: ProviderKind, callerMode?: RuntimeMode) {
+  return (["approval-required", "full-access"] as const).filter(
+    (mode) =>
+      providerSupportsDelegatedRuntimeMode(provider, mode) &&
+      (callerMode === undefined || !runtimeModeEscalatesPrivilege(callerMode, mode)),
+  );
+}
+
 export function loadAgentGatewayProviderCatalog(input: {
   readonly provider: ProviderKind;
   readonly discovery: ProviderDiscoveryServiceShape;
   readonly availability?: AgentGatewayProviderAvailability;
   readonly instanceId?: string;
   readonly cwd?: string;
+  readonly callerMode?: RuntimeMode;
 }): Effect.Effect<AgentGatewayProviderCatalog> {
   const defaultModel = providerDefaultModel(input.provider);
-  const availability = input.availability ?? { enabled: true };
-  const catalogInstances = availability.instances?.map(
-    ({ instanceId, displayName, isDefault, enabled }) => ({
-      instanceId,
-      displayName,
-      isDefault,
-      enabled,
-    }),
-  );
+  const selectedInstance = input.instanceId
+    ? input.availability?.instances?.find((instance) => instance.instanceId === input.instanceId)
+    : undefined;
+  const discoveryInstanceId =
+    input.instanceId ??
+    input.availability?.instances?.find((instance) => instance.isDefault)?.instanceId;
+  const availability = selectedInstance ?? input.availability ?? { enabled: true };
+  const catalogBase = {
+    provider: input.provider,
+    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+    ...(input.availability?.instances !== undefined
+      ? { instances: input.availability.instances }
+      : {}),
+    defaultModel,
+    runtimeModes: gatewayRuntimeModes(input.provider),
+    compatibleRuntimeModes: gatewayRuntimeModes(input.provider, input.callerMode),
+  };
+  const statusMessage = "message" in availability ? availability.message : undefined;
   const unavailableReason =
     availability.enabled === false
       ? `Provider "${input.provider}" is disabled in Synara settings.`
       : availability.available === false
-        ? (availability.message ?? `Provider "${input.provider}" is not available.`)
+        ? (statusMessage ?? `Provider "${input.provider}" is not available.`)
         : availability.authStatus === "unauthenticated"
-          ? (availability.message ?? `Provider "${input.provider}" is not authenticated.`)
+          ? (statusMessage ?? `Provider "${input.provider}" is not authenticated.`)
           : null;
   if (unavailableReason !== null) {
     return Effect.succeed({
-      provider: input.provider,
-      defaultModel,
+      ...catalogBase,
       models: [],
-      ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
       enabled: availability.enabled,
       available: false,
       ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -322,15 +347,13 @@ export function loadAgentGatewayProviderCatalog(input: {
   return input.discovery
     .listModels({
       provider: input.provider,
-      ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+      ...(discoveryInstanceId ? { instanceId: discoveryInstanceId } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
     })
     .pipe(
       Effect.map((result: ProviderListModelsResult) => ({
-        provider: input.provider,
-        defaultModel,
+        ...catalogBase,
         models: result.models,
-        ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
         enabled: true,
         available: result.models.length > 0 || defaultModel !== null,
         ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -338,10 +361,8 @@ export function loadAgentGatewayProviderCatalog(input: {
       })),
       Effect.catch((error) =>
         Effect.succeed({
-          provider: input.provider,
-          defaultModel,
+          ...catalogBase,
           models: [],
-          ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
           enabled: true,
           available: defaultModel !== null,
           ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -477,7 +498,10 @@ function exampleOptionsForRules(
 
 /** Compact, typed construction guidance returned before the full model catalog. */
 export function agentGatewayTargetOptionGuidance(
-  catalog: AgentGatewayProviderCatalog,
+  catalog: Pick<
+    AgentGatewayProviderCatalog,
+    "provider" | "instanceId" | "models" | "defaultModel" | "available" | "enabled"
+  >,
 ): AgentGatewayTargetOptionGuidance {
   const primaryOptionKey = providerPrimaryOptionKey(catalog.provider);
   const providerOptions = providerTargetOptionRules(catalog.provider);
@@ -501,7 +525,7 @@ export function agentGatewayTargetOptionGuidance(
       catalog.available && exampleModel
         ? {
             provider: catalog.provider,
-            instanceId: defaultInstanceIdForProvider(catalog.provider),
+            instanceId: catalog.instanceId ?? defaultInstanceIdForProvider(catalog.provider),
             model: exampleModel,
             options: exampleOptionsForRules(primaryOptionKey, exampleRules),
           }

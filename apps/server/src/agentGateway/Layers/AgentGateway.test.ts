@@ -1078,12 +1078,9 @@ function makeHarnessLayer(
     streamChanges: Stream.empty,
   } as unknown as (typeof ProviderHealth)["Service"]);
 
-  const operationsByScope = new Map<string, AgentGatewayOperationRecord>();
+  const operationsById = new Map<string, AgentGatewayOperationRecord>();
   for (const operation of options.interruptedOperations ?? []) {
-    operationsByScope.set(
-      `${operation.callerThreadId}:${operation.callerTurnId}:${operation.operationKind}`,
-      operation,
-    );
+    operationsById.set(operation.operationId, operation);
   }
   const operationLayer = Layer.succeed(AgentGatewayOperationRepository, {
     completions: {
@@ -1094,6 +1091,8 @@ function makeHarnessLayer(
       hasGoalHistory: () => Effect.succeed(false),
       saveResult: () => Effect.void,
       delivered: () => Effect.void,
+      pendingWakes: () => Effect.succeed([]),
+      finishWake: () => Effect.void,
       claimContext: () => Effect.succeed(""),
       settleContext: (_sequence, _accepted, settle) => settle,
     },
@@ -1105,12 +1104,18 @@ function makeHarnessLayer(
       requestId: string;
       fingerprint: string;
       requestedCount: number;
+      allowAdditionalPlans?: boolean;
       planJson: string;
       now: string;
     }) =>
       Effect.gen(function* () {
-        const key = `${input.callerThreadId}:${input.callerTurnId}:${input.operationKind}`;
-        const existing = operationsByScope.get(key);
+        const existing = [...operationsById.values()].find(
+          (operation) =>
+            operation.callerThreadId === input.callerThreadId &&
+            operation.callerTurnId === input.callerTurnId &&
+            operation.operationKind === input.operationKind &&
+            (!input.allowAdditionalPlans || operation.requestId === input.requestId),
+        );
         if (existing) {
           const kind =
             existing.requestId !== input.requestId
@@ -1128,7 +1133,7 @@ function makeHarnessLayer(
           createdAt: input.now,
           updatedAt: input.now,
         };
-        operationsByScope.set(key, operation);
+        operationsById.set(input.operationId, operation);
         if (options.pauseAfterReservation) {
           yield* Deferred.succeed(options.pauseAfterReservation.entered, undefined);
           yield* Deferred.await(options.pauseAfterReservation.release);
@@ -1137,9 +1142,9 @@ function makeHarnessLayer(
       }),
     markDispatching: ({ operationId, now }: { operationId: string; now: string }) =>
       Effect.sync(() => {
-        for (const [key, operation] of operationsByScope) {
+        for (const [key, operation] of operationsById) {
           if (operation.operationId !== operationId || operation.status !== "reserved") continue;
-          operationsByScope.set(key, {
+          operationsById.set(key, {
             ...operation,
             status: "dispatching",
             updatedAt: now,
@@ -1160,11 +1165,11 @@ function makeHarnessLayer(
       now: string;
     }) =>
       Effect.sync(() => {
-        for (const [key, operation] of operationsByScope) {
+        for (const [key, operation] of operationsById) {
           if (operation.operationId !== input.operationId || operation.status !== "dispatching") {
             continue;
           }
-          operationsByScope.set(key, {
+          operationsById.set(key, {
             ...operation,
             planJson: recordCreatedWorktreeInPlan({
               planJson: operation.planJson,
@@ -1179,9 +1184,9 @@ function makeHarnessLayer(
       }),
     markCompensating: ({ operationId, now }: { operationId: string; now: string }) =>
       Effect.sync(() => {
-        for (const [key, operation] of operationsByScope) {
+        for (const [key, operation] of operationsById) {
           if (operation.operationId === operationId) {
-            operationsByScope.set(key, {
+            operationsById.set(key, {
               ...operation,
               status: "compensating",
               updatedAt: now,
@@ -1199,12 +1204,12 @@ function makeHarnessLayer(
       now: string;
     }) =>
       Effect.sync(() => {
-        for (const [key, operation] of operationsByScope) {
+        for (const [key, operation] of operationsById) {
           if (
             operation.operationId === operationId &&
             (operation.status === "dispatching" || operation.status === "compensating")
           ) {
-            operationsByScope.set(key, {
+            operationsById.set(key, {
               ...operation,
               status: "compensating",
               errorJson,
@@ -1231,9 +1236,9 @@ function makeHarnessLayer(
           return yield* Effect.fail(new Error("injected operation completion failure"));
         }
         yield* Effect.sync(() => {
-          for (const [key, operation] of operationsByScope) {
+          for (const [key, operation] of operationsById) {
             if (operation.operationId === operationId) {
-              operationsByScope.set(key, {
+              operationsById.set(key, {
                 ...operation,
                 status: "completed",
                 resultJson,
@@ -1258,9 +1263,9 @@ function makeHarnessLayer(
       now: string;
     }) =>
       Effect.sync(() => {
-        for (const [key, operation] of operationsByScope) {
+        for (const [key, operation] of operationsById) {
           if (operation.operationId === operationId) {
-            operationsByScope.set(key, {
+            operationsById.set(key, {
               ...operation,
               status: "failed",
               errorJson,
@@ -1272,24 +1277,28 @@ function makeHarnessLayer(
     getById: (operationId: string) =>
       Effect.sync(
         () =>
-          [...operationsByScope.values()].find(
-            (operation) => operation.operationId === operationId,
-          ) ?? null,
+          [...operationsById.values()].find((operation) => operation.operationId === operationId) ??
+          null,
       ),
     getByScope: (input: {
       callerThreadId: string;
       callerTurnId: string;
       operationKind: "create_threads";
+      requestId?: string;
     }) =>
       Effect.sync(
         () =>
-          operationsByScope.get(
-            `${input.callerThreadId}:${input.callerTurnId}:${input.operationKind}`,
+          [...operationsById.values()].find(
+            (operation) =>
+              operation.callerThreadId === input.callerThreadId &&
+              operation.callerTurnId === input.callerTurnId &&
+              operation.operationKind === input.operationKind &&
+              (input.requestId === undefined || operation.requestId === input.requestId),
           ) ?? null,
       ),
     listNonTerminal: () =>
       Effect.sync(() =>
-        [...operationsByScope.values()].filter(
+        [...operationsById.values()].filter(
           (operation) =>
             operation.status === "reserved" ||
             operation.status === "dispatching" ||
@@ -1481,12 +1490,12 @@ function makeHarnessLayer(
       setProviderStatuses: (statuses) => {
         providerStatuses = statuses;
       },
-      getOperationPlan: () => [...operationsByScope.values()][0]!.planJson,
+      getOperationPlan: () => [...operationsById.values()][0]!.planJson,
       getOperationStatus: (callerTurnId) =>
-        [...operationsByScope.values()].find((operation) => operation.callerTurnId === callerTurnId)
+        [...operationsById.values()].find((operation) => operation.callerTurnId === callerTurnId)
           ?.status ?? null,
       getOperationErrorCode: (callerTurnId) => {
-        const errorJson = [...operationsByScope.values()].find(
+        const errorJson = [...operationsById.values()].find(
           (operation) => operation.callerTurnId === callerTurnId,
         )?.errorJson;
         if (!errorJson) return null;
@@ -2728,6 +2737,8 @@ describe("AgentGateway", () => {
           displayName: "Codex",
           isDefault: true,
           enabled: true,
+          available: true,
+          authStatus: "authenticated",
         },
         {
           instanceId: "codex_work",
@@ -2736,6 +2747,47 @@ describe("AgentGateway", () => {
           enabled: true,
         },
       ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("returns the selected OpenCode account's catalog and canonical example", () => {
+    const accountModel = "anthropic/claude-example";
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      serverSettings: {
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            displayName: "Work OpenCode",
+            enabled: true,
+            config: {},
+          },
+        },
+      },
+      listModels: (input) =>
+        input.instanceId === "opencode_work"
+          ? Effect.succeed({
+              source: "fixture",
+              models: [
+                { slug: accountModel, name: "Claude example", isCustom: false, isDefault: true },
+              ],
+            })
+          : listDefaultTestModels(input),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: { instanceId: "opencode_work" },
+      });
+      const payload = toolResultJson(response.result);
+      assert.lengthOf(payload.providers as unknown[], 1);
+      assert.nestedInclude(payload, {
+        "providers[0].instanceId": "opencode_work",
+        "providers[0].models[0].slug": accountModel,
+        "targetConstruction.opencode.exampleTarget.instanceId": "opencode_work",
+        "targetConstruction.opencode.exampleTarget.model": accountModel,
+      });
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4177,41 +4229,53 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("locks a second distinct creation plan in the same caller turn", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
-    return Effect.gen(function* () {
-      const harness = yield* makeHarness;
-      const create = (requestId: string, prompt: string) =>
-        harness.callTool({
+  it.effect(
+    "admits a second valid creation plan in the same caller turn and replays it independently",
+    () => {
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const create = (requestId: string, prompt: string) =>
+          harness.callTool({
+            token: "token-parent",
+            name: "synara_create_threads",
+            args: {
+              requestId,
+              threads: [{ prompt, target: { provider: "codex", model: "gpt-5.5" } }],
+            },
+          });
+        const first = yield* create("first-plan", "first");
+        const invalid = yield* harness.callTool({
           token: "token-parent",
           name: "synara_create_threads",
           args: {
-            requestId,
-            threads: [{ prompt, target: { provider: "codex", model: "gpt-5.5" } }],
+            requestId: "invalid-plan",
+            threads: [
+              {
+                prompt: "invalid second plan",
+                target: { provider: "codex", model: "made-up-model" },
+              },
+            ],
           },
         });
-      yield* create("first-plan", "first");
-      const second = yield* harness.callTool({
-        token: "token-parent",
-        name: "synara_create_threads",
-        args: {
-          requestId: "second-plan",
-          threads: [
-            {
-              prompt: "invalid second plan",
-              target: { provider: "codex", model: "made-up-model" },
-            },
-          ],
-        },
-      });
-      assert.isTrue(isToolError(second.result));
-      assert.equal(
-        (toolResultJson(second.result).error as { code: string }).code,
-        "creation_plan_locked",
-      );
-      assert.equal(dispatchedCount(harness, "thread.create"), 1);
-    }).pipe(Effect.provide(gatewayLayer));
-  });
+        assert.isTrue(isToolError(invalid.result));
+        assert.equal(
+          (toolResultJson(invalid.result).error as { code: string }).code,
+          "model_unavailable",
+        );
+        const second = yield* create("second-plan", "second");
+        assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+        assert.isFalse(isToolError(second.result), toolErrorText(second.result));
+        assert.notEqual(
+          toolResultJson(first.result).operationId,
+          toolResultJson(second.result).operationId,
+        );
+        const replay = yield* create("second-plan", "second");
+        assert.deepEqual(toolResultJson(replay.result), toolResultJson(second.result));
+        assert.equal(dispatchedCount(harness, "thread.create"), 2);
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
 
   it.effect("rejects an unavailable or unauthenticated provider before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
@@ -5502,6 +5566,77 @@ describe("AgentGateway", () => {
       assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
+
+  it.effect("advertises that an approval-required caller cannot delegate to Antigravity", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const catalog = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: { instanceId: "antigravity" },
+      });
+      assert.nestedInclude(toolResultJson(catalog.result), {
+        "providers[0].runtimeModes[0]": "full-access",
+      });
+      assert.deepEqual(
+        (toolResultJson(catalog.result).providers as Array<{ compatibleRuntimeModes: string[] }>)[0]
+          ?.compatibleRuntimeModes,
+        [],
+      );
+      const rejected = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: {
+          requestId: "antigravity-incompatible",
+          prompt: "Inspect project",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
+          environment: "worktree",
+        },
+      });
+      assert.nestedInclude(toolResultJson(rejected.result), {
+        "error.code": "runtime_mode_unavailable",
+      });
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  for (const humanStarted of [true, false]) {
+    it.effect(
+      `only accepts automatic continuation from a human-started turn (${humanStarted})`,
+      () => {
+        const { gatewayLayer, makeHarness } = makeHarnessLayer([
+          makeThreadShell("thread-parent", {
+            latestUserMessageAt: NOW,
+            latestHumanMessageAt: humanStarted ? NOW : "2026-01-01T00:00:00.000Z",
+          }),
+        ]);
+        return Effect.gen(function* () {
+          const harness = yield* makeHarness;
+          const response = yield* harness.callTool({
+            token: "token-parent",
+            name: "synara_create_thread",
+            args: {
+              requestId: "resume-on-complete",
+              prompt: "Inspect project",
+              provider: "codex",
+              resumeCreatorOnComplete: true,
+            },
+          });
+          if (humanStarted) {
+            assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+            assert.equal(dispatchedCount(harness, "thread.create"), 1);
+          } else {
+            assert.nestedInclude(toolResultJson(response.result), {
+              "error.code": "capability_denied",
+            });
+            assert.equal(harness.dispatched.length, 0);
+          }
+        }).pipe(Effect.provide(gatewayLayer));
+      },
+    );
+  }
 
   it.effect("creates a heartbeat automation on the caller thread by default", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);

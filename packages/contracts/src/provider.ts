@@ -45,6 +45,8 @@ export const ProviderSession = Schema.Struct({
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),
+  /** Negotiated for runtimes whose steering support depends on the running version. */
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   lastError: Schema.optional(TrimmedNonEmptyString),
@@ -68,7 +70,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   /**
    * Extra folders of a multi-folder project the session may read and write besides `cwd`.
-   * Only providers that can grant them natively (Codex, Claude) receive this.
+   * Only providers that can grant them natively (Codex, Claude, Antigravity) receive this.
    */
   additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),

@@ -247,6 +247,7 @@ export type SubagentRunPhase =
   | "starting"
   | "running"
   | "waiting"
+  | "unreported"
   | "done"
   | "failed"
   | "stopped"
@@ -498,6 +499,7 @@ function directRowPhase(input: {
   if (outcome) {
     return phaseFromStatusKind(null, outcome);
   }
+  if (subagent.rawStatus === "unreported") return "unreported";
   if (subagent.isActive) {
     return "running";
   }
@@ -769,7 +771,10 @@ export function deriveSubagentRunCard(input: {
         item.isBackground,
       ),
       action: childAction ?? actionFromStep(member?.latestStep ?? null),
-      outcomeText: outcomeTextFor(phase, thread, member?.failure ?? null),
+      outcomeText:
+        phase === "unreported"
+          ? firstLinePreview(subagent.latestUpdate)
+          : outcomeTextFor(phase, thread, member?.failure ?? null),
       nested,
     };
   });
@@ -781,7 +786,7 @@ export function deriveSubagentRunCard(input: {
     else if (row.phase === "done") counts.done += 1;
     else if (row.phase === "failed") counts.failed += 1;
     else if (row.phase === "interrupted") counts.interrupted += 1;
-    else counts.stopped += 1;
+    else if (row.phase === "stopped") counts.stopped += 1;
   }
   const startTimes = allRows.flatMap((row) => (row.startedAtMs !== null ? [row.startedAtMs] : []));
   const endTimes = allRows.flatMap((row) => (row.endedAtMs !== null ? [row.endedAtMs] : []));
@@ -806,6 +811,8 @@ export function subagentRunPhaseStatusKind(phase: SubagentRunPhase): SubagentSta
       return "running";
     case "starting":
       return "queued";
+    case "unreported":
+      return "idle";
     case "done":
       return "completed";
     case "failed":
@@ -850,6 +857,13 @@ export function describeSubagentRunRow(
   switch (row.phase) {
     case "starting":
       return { statusKind, word: "Starting", durationLabel: null, detail: null };
+    case "unreported":
+      return {
+        statusKind,
+        word: "Status unknown",
+        durationLabel: null,
+        detail: row.outcomeText ? { kind: "outcome", text: row.outcomeText } : null,
+      };
     case "running":
       return {
         statusKind,

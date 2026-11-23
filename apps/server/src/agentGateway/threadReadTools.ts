@@ -1,5 +1,6 @@
 import {
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+  SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
   ThreadId,
   ProjectId,
   TurnId,
@@ -119,13 +120,18 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_capabilities",
-      description: `List canonical Synara provider/model targets, exact provider option keys, examples, and gateway limits used to validate thread creation. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
+      description: `List canonical Synara provider/model targets and delegation constraints. Use instanceId to look up the catalog and exact options for a particular account. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
       inputSchema: {
         type: "object",
         properties: {
           projectId: {
             type: "string",
             description: "Project for provider discovery; required on another computer.",
+          },
+          instanceId: {
+            type: "string",
+            description:
+              "Exact account ID from providers[].instances[].instanceId. Omit for the default catalogs.",
           },
         },
         additionalProperties: false,
@@ -141,9 +147,12 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     handler: (args, context) =>
       Effect.gen(function* () {
         const projectArg = readStringArg(args, "projectId", { required: !!context.remoteCaller });
-        const projectId = projectArg
-          ? ProjectId.makeUnsafe(projectArg)
-          : (yield* requireThreadShell(context.callerThreadId)).projectId;
+        const instanceId = readStringArg(args, "instanceId");
+        const localCaller = context.remoteCaller
+          ? undefined
+          : yield* requireThreadShell(context.callerThreadId);
+        const callerMode = context.remoteCaller?.runtimeMode ?? localCaller?.runtimeMode;
+        const projectId = ProjectId.makeUnsafe((projectArg ?? localCaller?.projectId)!);
         const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -155,7 +164,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           ),
         );
         const availabilities = yield* loadProviderAvailabilities;
-        const providers = yield* Effect.forEach(PROVIDER_KINDS, (provider) =>
+        const providerKinds = instanceId
+          ? PROVIDER_KINDS.filter((provider) =>
+              availabilities
+                .get(provider)
+                ?.instances?.some((instance) => instance.instanceId === instanceId),
+            )
+          : PROVIDER_KINDS;
+        if (providerKinds.length === 0) {
+          return yield* Effect.fail(
+            new ToolInputError(
+              `Unknown provider instance "${instanceId}". Use an ID from synara_capabilities.`,
+            ),
+          );
+        }
+        const providers = yield* Effect.forEach(providerKinds, (provider) =>
           loadAgentGatewayProviderCatalog({
             provider,
             discovery: providerDiscovery,
@@ -163,6 +186,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
               ? { availability: availabilities.get(provider)! }
               : {}),
             cwd: project.workspaceRoot,
+            ...(callerMode ? { callerMode } : {}),
+            ...(instanceId ? { instanceId } : {}),
           }),
         );
         const targetConstruction = Object.fromEntries(
@@ -180,7 +205,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           limits: {
             maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
             maxWaitMs: 60_000,
-            oneCreationPlanPerActiveTurn: true,
+            oneCreationPlanPerActiveTurn: false,
+            maxThreadsPerActiveTurn: SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
           },
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),

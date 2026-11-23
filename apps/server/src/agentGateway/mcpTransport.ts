@@ -138,6 +138,10 @@ export function makeAgentGatewayMcpTransport(input: {
     Effect.gen(function* () {
       switch (request.method) {
         case "initialize":
+          yield* Effect.logDebug("agent_gateway.mcp.initialized", {
+            provider: context.callerProvider,
+            threadId: context.callerThreadId,
+          });
           return jsonRpcResult(
             request.id,
             buildMcpInitializeResult({
@@ -149,6 +153,10 @@ export function makeAgentGatewayMcpTransport(input: {
         case "ping":
           return jsonRpcResult(request.id, {});
         case "tools/list":
+          yield* Effect.logDebug("agent_gateway.mcp.catalog_served", {
+            provider: context.callerProvider,
+            threadId: context.callerThreadId,
+          });
           return jsonRpcResult(request.id, {
             tools: filterToolsByCapability(input.tools, context.callerCapabilities)
               // Discovery-only tools stay callable by exact name — toolsByName

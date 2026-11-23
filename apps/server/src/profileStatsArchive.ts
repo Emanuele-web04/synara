@@ -960,6 +960,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
                 fingerprint = operation_id,
                 result_json = NULL,
                 error_json = NULL,
+                resume_context_json = NULL,
                 caller_purged_at = ${deletedAt},
                 updated_at = ${deletedAt}
             WHERE operation_id = ${operation.operationId}
