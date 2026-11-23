@@ -7,7 +7,7 @@ import {
   ThreadId,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Queue, Scope, Stream } from "effect";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -58,6 +58,7 @@ function makeControllableRuntime(
     readonly sessionId?: string;
     readonly configOptions?: Acp.SessionConfigOption[];
     readonly nativeMode?: string;
+    readonly ignoredConfigUpdate?: string;
     readonly modelChanged?: (value: string) => Acp.SessionConfigOption | undefined;
   } = {},
 ) {
@@ -119,7 +120,7 @@ function makeControllableRuntime(
       Effect.sync(() => {
         requests.push({ method: "session/set_config_option", payload: { id, value } });
         configOptions = configOptions.map((option) =>
-          option.id === id && option.type === "select"
+          option.id === id && option.type === "select" && id !== options.ignoredConfigUpdate
             ? { ...option, currentValue: value }
             : option,
         );
@@ -479,10 +480,14 @@ describe("Antigravity ACP adapter", () => {
         yield* adapter.startSession({ ...startInput(threadId), runtimeMode: "approval-required" });
         const requests =
           yield* Queue.unbounded<Extract<ProviderRuntimeEvent, { type: "request.opened" }>>();
+        const resolutions =
+          yield* Queue.unbounded<Extract<ProviderRuntimeEvent, { type: "request.resolved" }>>();
         yield* adapter.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            event.type === "request.opened" ? Queue.offer(requests, event) : Effect.void,
-          ),
+          Stream.runForEach((event) => {
+            if (event.type === "request.opened") return Queue.offer(requests, event);
+            if (event.type === "request.resolved") return Queue.offer(resolutions, event);
+            return Effect.void;
+          }),
           Effect.forkChild,
         );
         const permission = {
@@ -513,6 +518,22 @@ describe("Antigravity ACP adapter", () => {
         expect(yield* Fiber.join(first)).toEqual({
           outcome: { outcome: "selected", optionId: "allow" },
         });
+        expect((yield* Queue.take(resolutions)).payload.decision).toBe("accept");
+
+        const persistentOnly = yield* fake
+          .requestPermission({
+            ...permission,
+            options: [{ optionId: "always", name: "Always allow", kind: "allow_always" }],
+          })
+          .pipe(Effect.forkChild);
+        const persistentRequest = yield* Queue.take(requests);
+        yield* adapter.respondToRequest(
+          threadId,
+          ApprovalRequestId.makeUnsafe(persistentRequest.requestId!),
+          "accept",
+        );
+        expect(yield* Fiber.join(persistentOnly)).toEqual({ outcome: { outcome: "cancelled" } });
+        expect((yield* Queue.take(resolutions)).payload.decision).toBe("cancel");
 
         const second = yield* fake.requestPermission(permission).pipe(Effect.forkChild);
         const pending = yield* Queue.take(requests);
@@ -605,6 +626,24 @@ describe("Antigravity ACP adapter", () => {
           payload: { id: "execution_mode", value: "default" },
         });
         yield* adapter.interruptTurn(threadId, turn.turnId);
+      }),
+    );
+  });
+
+  it("does not send a prompt if the native config keeps Auto after a reset", async () => {
+    const fake = makeControllableRuntime({
+      configOptions: [modeConfig("auto")],
+      ignoredConfigUpdate: "execution_mode",
+    });
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe("thread-agy-config-auto-held");
+        yield* adapter.startSession({ ...startInput(threadId), runtimeMode: "approval-required" });
+        const result = yield* adapter
+          .sendTurn({ threadId, input: "Inspect", attachments: [] })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(fake.prompts).toHaveLength(0);
       }),
     );
   });

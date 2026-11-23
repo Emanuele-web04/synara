@@ -99,7 +99,11 @@ import {
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
-import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import {
+  type AcpToolCallState,
+  findSessionConfigOption,
+  parsePermissionRequest,
+} from "../acp/AcpRuntimeModel.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   isAcpTurnProgressEventTag,
@@ -940,15 +944,22 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
 
           yield* acp.handleRequestPermission((params) =>
             Effect.gen(function* () {
-              yield* logNative(input.threadId, "session/request_permission", params);
               const cancelled = { outcome: { outcome: "cancelled" as const } };
               const turnId = ctx?.activeTurnId;
               if (turnId === undefined || params.sessionId !== ctx.acpSessionId) return cancelled;
-              const ownsTurn = () =>
-                ctx.activeTurnId === turnId &&
-                !ctx.pendingTurnInterrupted &&
-                ctx.finishingTurnId === undefined &&
-                !ctx.stopped;
+              // Earlier background calls can still report after another turn starts.
+              const ownsTurn = () => {
+                const toolOwner = ctx.toolCallOwners.get(params.toolCall.toolCallId);
+                return (
+                  ctx.activeTurnId === turnId &&
+                  (toolOwner === undefined || toolOwner.turnId === turnId) &&
+                  !ctx.pendingTurnInterrupted &&
+                  ctx.finishingTurnId === undefined &&
+                  !ctx.stopped
+                );
+              };
+              if (!ownsTurn()) return cancelled;
+              yield* logNative(input.threadId, "session/request_permission", params);
               if (!ownsTurn()) return cancelled;
               if (params.toolCall.toolCallId.startsWith("interaction_")) {
                 const question = antigravityInteractionQuestion(params);
@@ -1022,7 +1033,12 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 );
                 const response = yield* Deferred.await(decision);
                 const stamp = yield* makeEventStamp();
-                const resolved = ownsTurn() ? response : "cancel";
+                const selectedOptionId = selectAcpPermissionOptionId(
+                  ownsTurn() ? response : "cancel",
+                  response === "accept"
+                    ? params.options.filter((option) => option.kind === "allow_once")
+                    : params.options,
+                );
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
                   makeAcpRequestResolvedEvent({
@@ -1032,18 +1048,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                     turnId,
                     requestId: runtimeRequestId,
                     permissionRequest,
-                    decision: resolved,
+                    decision: selectedOptionId === undefined ? "cancel" : response,
                   }),
                 );
                 // Publishing can wait on subscribers. Stop must still cancel the ACP response.
-                if (!ownsTurn()) return cancelled;
-                const selectedOptionId = selectAcpPermissionOptionId(
-                  resolved,
-                  resolved === "accept"
-                    ? params.options.filter((option) => option.kind === "allow_once")
-                    : params.options,
-                );
-                return selectedOptionId === undefined
+                return selectedOptionId === undefined || !ownsTurn()
                   ? cancelled
                   : { outcome: { outcome: "selected" as const, optionId: selectedOptionId } };
               }).pipe(Effect.ensuring(Effect.sync(() => void pendingApprovals.delete(requestId))));
@@ -1519,23 +1528,6 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             issue: "An Antigravity turn is already active for this thread.",
           });
         }
-        // Supervision must also hold when a restored native session was in Auto.
-        const nativeMode = yield* readAntigravityPermissionMode(ctx.acp).pipe(
-          Effect.mapError((error) =>
-            mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
-          ),
-        );
-        if (nativeMode && nativeMode.id !== "default" && nativeMode.id !== "plan") {
-          yield* (
-            nativeMode.configId !== undefined
-              ? ctx.acp.setConfigOption(nativeMode.configId, "default")
-              : ctx.acp.setMode("default")
-          ).pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
-            ),
-          );
-        }
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         if (turnModelSelection?.model) {
@@ -1547,6 +1539,50 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         const model = turnModelSelection?.model ?? ctx.session.model;
 
         const promptParts = yield* buildPromptParts(input);
+        // Check after model selection, which can replace the native config options.
+        const nativeMode = yield* readAntigravityPermissionMode(ctx.acp).pipe(
+          Effect.mapError((error) =>
+            mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
+          ),
+        );
+        if (nativeMode && nativeMode.id !== "default" && nativeMode.id !== "plan") {
+          if (nativeMode.configId === undefined) {
+            yield* withAcpTimeout(
+              "session/set_mode",
+              ctx.acp
+                .setMode("default", { legacy: true })
+                .pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/set_mode", error),
+                  ),
+                ),
+            );
+          } else {
+            const config = yield* withAcpTimeout(
+              "session/set_config_option",
+              ctx.acp
+                .setConfigOption(nativeMode.configId, "default")
+                .pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(
+                      PROVIDER,
+                      ctx.threadId,
+                      "session/set_config_option",
+                      error,
+                    ),
+                  ),
+                ),
+            );
+            const mode = findSessionConfigOption(config.configOptions, nativeMode.configId);
+            if (mode?.type !== "select" || mode.currentValue !== "default") {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/set_config_option",
+                detail: "Antigravity did not confirm the native Default permission mode.",
+              });
+            }
+          }
+        }
         const harnessPolicy = takeAntigravitySynaraHarnessPolicyTextPart(
           ctx,
           ctx.gatewaySessionLease !== undefined,
