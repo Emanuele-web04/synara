@@ -169,12 +169,7 @@ export default defineConfig({
     precompressPlugin(),
   ],
   optimizeDeps: {
-    include: [
-      "@pierre/diffs",
-      "@pierre/diffs/react",
-      "@pierre/diffs/worker/worker.js",
-      "react-icons/gr",
-    ],
+    include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },
   define: {
     // In dev mode, tell the web app where the WebSocket server lives
@@ -206,6 +201,95 @@ export default defineConfig({
       checks: {
         // React Compiler is expected to dominate transform time in this app.
         pluginTimings: false,
+      },
+      output: {
+        // Consolidate small shared modules and core vendors to avoid HTTP/1.1
+        // connection queueing across hundreds of micro-chunks on cold load,
+        // while keeping lazy-loaded heavy libraries (monaco, xterm, pdfjs,
+        // katex, shiki grammars, non-default locales) in separate async chunks.
+        codeSplitting: {
+          minSize: 20_000,
+          groups: [
+            {
+              name: "vendor-react",
+              test: /node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+              priority: 40,
+            },
+            {
+              name: "vendor-tanstack",
+              test: /node_modules[\\/]@tanstack[\\/]/,
+              priority: 35,
+            },
+            {
+              name: "vendor-base-ui",
+              test: /node_modules[\\/]@base-ui[\\/]/,
+              priority: 35,
+            },
+            {
+              name: "vendor-effect",
+              test: /node_modules[\\/]effect[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "vendor-icons",
+              test: /node_modules[\\/](?:@tabler[\\/]icons-react|react-icons|lucide-react)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "vendor-lexical",
+              test: /node_modules[\\/](?:lexical|@lexical)[\\/]/,
+              minShareCount: 2,
+              priority: 30,
+            },
+            {
+              name: "vendor-markdown",
+              test: /node_modules[\\/](?:react-markdown|remark-gfm|mdast-|micromark|unist-|hast-|vfile|property-information|comma-separated-tokens|space-separated-tokens|trim-lines|ccount|devlop|decode-named-character-reference|character-entities|bail|trough|unified|is-plain-obj|extend|html-url-attributes)/,
+              minShareCount: 2,
+              priority: 28,
+            },
+            {
+              name: "vendor-i18n",
+              test: /node_modules[\\/](?:i18next|react-i18next)[\\/]/,
+              priority: 25,
+            },
+            {
+              name: "app-shared-contracts",
+              test: (id: string) =>
+                (id.includes("/packages/contracts/") || id.includes("/packages/shared/")) &&
+                !id.includes("uiLocalizationResourcesEs") &&
+                !id.includes("uiLocalizationResourcesZhCn"),
+              minShareCount: 2,
+              priority: 22,
+            },
+            {
+              name: "app-ui-primitives",
+              test: /apps[\\/]web[\\/]src[\\/]components[\\/]ui[\\/]/,
+              minShareCount: 2,
+              priority: 20,
+            },
+            {
+              name: "app-lib-core",
+              test: (id: string) =>
+                id.includes("/apps/web/src/lib/") &&
+                !id.includes("diffRendering") &&
+                !id.includes("syntaxHighlighting") &&
+                !id.includes("editorGutterDiff") &&
+                !id.includes("fileDiffTree"),
+              minShareCount: 2,
+              priority: 18,
+            },
+            {
+              name: "vendor-core",
+              test: (id: string) =>
+                id.includes("/node_modules/") &&
+                !/node_modules[\\/](?:monaco-editor|@xterm|katex|pdfjs-dist|@pierre[\\/]diffs|shiki|@shikijs|mermaid|recharts|d3-|cytoscape|elkjs|html-to-image|rehype-katex|remark-math|rehype-raw|rehype-sanitize|@tanstack[\\/]react-virtual)/.test(
+                  id,
+                ),
+              minShareCount: 2,
+              priority: 10,
+            },
+          ],
+        },
       },
     },
   },

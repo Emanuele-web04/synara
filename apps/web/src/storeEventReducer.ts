@@ -459,7 +459,7 @@ function rebindTurnDiffSummariesForAssistantMessage(
       assistantMessageId: assistantMessageId ?? undefined,
     };
   });
-  return changed ? nextSummaries : [...turnDiffSummaries];
+  return changed ? nextSummaries : (turnDiffSummaries as Thread["turnDiffSummaries"]);
 }
 
 function retainThreadMessagesAfterRevert(

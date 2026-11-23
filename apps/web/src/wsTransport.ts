@@ -59,6 +59,7 @@ import {
   type ProjectDevServerEvent,
   type ProjectFileChangeEvent,
   type ProjectWatchFileInput,
+  type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -1019,6 +1020,76 @@ export class WsTransport {
     (failure: WsThreadStreamFailure) => void
   >();
   private readonly latestPushByChannel = new Map<string, WsPush>();
+  private latestServerConfigSnapshot: ServerConfig | null = null;
+  private latestServerSettingsSnapshot: ServerSettingsUpdatedPayload["settings"] | null = null;
+  private readonly initialServerConfigWaiters = new Set<(config: ServerConfig | null) => void>();
+  private readonly initialServerSettingsWaiters = new Set<
+    (settings: ServerSettingsUpdatedPayload["settings"] | null) => void
+  >();
+
+  private resolveInitialServerConfigWaiters(config: ServerConfig | null): void {
+    if (!this.initialServerConfigWaiters || this.initialServerConfigWaiters.size === 0) return;
+    for (const resolve of this.initialServerConfigWaiters) {
+      resolve(config);
+    }
+    this.initialServerConfigWaiters.clear();
+  }
+
+  private resolveInitialServerSettingsWaiters(
+    settings: ServerSettingsUpdatedPayload["settings"] | null,
+  ): void {
+    if (!this.initialServerSettingsWaiters || this.initialServerSettingsWaiters.size === 0) return;
+    for (const resolve of this.initialServerSettingsWaiters) {
+      resolve(settings);
+    }
+    this.initialServerSettingsWaiters.clear();
+  }
+
+  getLatestServerConfigSnapshot(): ServerConfig | null {
+    return this.latestServerConfigSnapshot;
+  }
+
+  getLatestServerSettingsSnapshot(): ServerSettingsUpdatedPayload["settings"] | null {
+    return this.latestServerSettingsSnapshot;
+  }
+
+  waitForInitialServerConfigSnapshot(timeoutMs = 1500): Promise<ServerConfig | null> | null {
+    if (this.latestServerConfigSnapshot !== null) {
+      return Promise.resolve(this.latestServerConfigSnapshot);
+    }
+    if (this.disposed || !this.listeners.has(WS_CHANNELS.serverConfigUpdated)) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      const finish = (config: ServerConfig | null) => {
+        window.clearTimeout(timer);
+        this.initialServerConfigWaiters.delete(finish);
+        resolve(config);
+      };
+      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      this.initialServerConfigWaiters.add(finish);
+    });
+  }
+
+  waitForInitialServerSettingsSnapshot(
+    timeoutMs = 1500,
+  ): Promise<ServerSettingsUpdatedPayload["settings"] | null> | null {
+    if (this.latestServerSettingsSnapshot !== null) {
+      return Promise.resolve(this.latestServerSettingsSnapshot);
+    }
+    if (this.disposed || !this.listeners.has(WS_CHANNELS.serverSettingsUpdated)) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      const finish = (settings: ServerSettingsUpdatedPayload["settings"] | null) => {
+        window.clearTimeout(timer);
+        this.initialServerSettingsWaiters.delete(finish);
+        resolve(settings);
+      };
+      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      this.initialServerSettingsWaiters.add(finish);
+    });
+  }
   private sequence = 0;
   private sessionVersion = 0;
   private state: WsTransportState = "connecting";
@@ -1604,6 +1675,10 @@ export class WsTransport {
     this.projectAgentSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     this.shellStreamFailureListeners.clear();
+    this.latestServerConfigSnapshot = null;
+    this.latestServerSettingsSnapshot = null;
+    this.resolveInitialServerConfigWaiters(null);
+    this.resolveInitialServerSettingsWaiters(null);
     this.currentFeatureSession = null;
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1690,6 +1765,10 @@ export class WsTransport {
   }
 
   private createSession() {
+    this.latestServerConfigSnapshot = null;
+    this.latestServerSettingsSnapshot = null;
+    this.resolveInitialServerConfigWaiters(null);
+    this.resolveInitialServerSettingsWaiters(null);
     const sessionVersion = ++this.sessionVersion;
     const remoteRecoveryVersion = this.remoteRecoveryVersion;
     const analyticsEvent = sessionVersion === 1 ? "connection.connect" : "connection.reconnect";
@@ -2303,7 +2382,15 @@ export class WsTransport {
       channel,
       data,
     } as WsPush;
-    this.latestPushByChannel.set(channel, message);
+    // Never pin multi-MB orchestration shell/thread snapshot payloads in the
+    // replay map; orchestration streams manage their own cursor/snapshot flow.
+    if (
+      channel !== ORCHESTRATION_WS_CHANNELS.shellEvent &&
+      channel !== ORCHESTRATION_WS_CHANNELS.threadEvent &&
+      channel !== ORCHESTRATION_WS_CHANNELS.domainEvent
+    ) {
+      this.latestPushByChannel.set(channel, message);
+    }
     const listeners = this.listeners.get(channel);
     if (!listeners) return;
     for (const listener of listeners) {
@@ -2343,11 +2430,14 @@ export class WsTransport {
             client[WS_METHODS.subscribeServerConfig]({}),
             (event: ServerConfigStreamEvent) => {
               if (event.type === "snapshot") {
+                this.latestServerConfigSnapshot = event.config;
+                this.resolveInitialServerConfigWaiters(event.config);
                 this.emit(WS_CHANNELS.serverConfigUpdated, {
                   issues: event.config.issues,
                   providers: event.config.providers,
                 });
               } else if (event.type === "configUpdated") {
+                this.latestServerConfigSnapshot = null;
                 this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
               }
             },
@@ -2367,8 +2457,11 @@ export class WsTransport {
             client,
             "server.settings",
             client[WS_METHODS.subscribeServerSettings]({}),
-            (payload: ServerSettingsUpdatedPayload) =>
-              this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
+            (payload: ServerSettingsUpdatedPayload) => {
+              this.latestServerSettingsSnapshot = payload.settings;
+              this.resolveInitialServerSettingsWaiters(payload.settings);
+              this.emit(WS_CHANNELS.serverSettingsUpdated, payload);
+            },
             restartChannel,
           );
         } else if (channel === WS_CHANNELS.serverKeepAwakeUpdated) {

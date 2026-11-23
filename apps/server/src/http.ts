@@ -1534,6 +1534,48 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+interface CachedImmutableStaticAsset {
+  readonly data: Uint8Array;
+  readonly etag: string;
+  readonly contentType: string;
+  readonly encoding: string | undefined;
+  readonly byteLength: number;
+}
+
+const IMMUTABLE_STATIC_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const canonicalStaticRootCache = new Map<string, string>();
+const immutableStaticAssetCache = new Map<string, CachedImmutableStaticAsset>();
+let immutableStaticAssetCacheBytes = 0;
+
+function getCachedImmutableStaticAsset(key: string): CachedImmutableStaticAsset | undefined {
+  const hit = immutableStaticAssetCache.get(key);
+  if (!hit) return undefined;
+  immutableStaticAssetCache.delete(key);
+  immutableStaticAssetCache.set(key, hit);
+  return hit;
+}
+
+function setCachedImmutableStaticAsset(key: string, entry: CachedImmutableStaticAsset): void {
+  if (entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES / 4) return;
+  const previous = immutableStaticAssetCache.get(key);
+  if (previous) {
+    immutableStaticAssetCacheBytes -= previous.byteLength;
+    immutableStaticAssetCache.delete(key);
+  }
+  while (
+    immutableStaticAssetCacheBytes + entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES &&
+    immutableStaticAssetCache.size > 0
+  ) {
+    const oldestKey = immutableStaticAssetCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = immutableStaticAssetCache.get(oldestKey);
+    immutableStaticAssetCache.delete(oldestKey);
+    if (oldest) immutableStaticAssetCacheBytes -= oldest.byteLength;
+  }
+  immutableStaticAssetCache.set(key, entry);
+  immutableStaticAssetCacheBytes += entry.byteLength;
+}
+
 export const staticAndDevEffectRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -1579,9 +1621,13 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     // symlinks, so a link inside the root pointing outside it would be served.
     // Canonicalize before opening anything. The root itself is canonicalized
     // too, otherwise a symlinked staticDir would fail its own check.
-    const canonicalStaticRoot = yield* fileSystem
-      .realPath(staticRoot)
-      .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
+    let canonicalStaticRoot = canonicalStaticRootCache.get(staticRoot);
+    if (canonicalStaticRoot === undefined) {
+      canonicalStaticRoot = yield* fileSystem
+        .realPath(staticRoot)
+        .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
+      canonicalStaticRootCache.set(staticRoot, canonicalStaticRoot);
+    }
     const isWithinCanonicalRoot = (candidate: string) =>
       candidate === canonicalStaticRoot ||
       candidate.startsWith(
@@ -1617,8 +1663,11 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     // when a sidecar is served, so validators differ per encoding), making
     // no-cache revalidation a 304 instead of a full re-transfer.
     const serveStaticFile = Effect.fn(function* (resolvedPath: string) {
+      const relativeResolved = path.relative(staticRoot, resolvedPath).replaceAll("\\", "/");
+      const cacheControl = staticCacheControl(relativeResolved);
+      const isImmutableAsset = relativeResolved.startsWith("assets/");
       const cacheHeaders = {
-        "Cache-Control": staticCacheControl(path.relative(staticRoot, resolvedPath)),
+        "Cache-Control": cacheControl,
         Vary: "Accept-Encoding",
       };
       const ifNoneMatch = request.headers["if-none-match"];
@@ -1626,6 +1675,21 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       const contentType =
         baseContentType === "text/html" ? "text/html; charset=utf-8" : baseContentType;
       const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
+        if (isImmutableAsset) {
+          const cached = getCachedImmutableStaticAsset(servedPath);
+          if (cached) {
+            const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
+            const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
+            if (ifNoneMatchSatisfies(ifNoneMatch, cached.etag)) {
+              return HttpServerResponse.empty({ status: 304, headers });
+            }
+            return HttpServerResponse.uint8Array(cached.data, {
+              status: 200,
+              contentType: cached.contentType,
+              headers,
+            });
+          }
+        }
         // Canonicalize before opening: a symlink inside the root pointing
         // outside it passes the lexical guard but must not be served.
         if (!(yield* resolvesInsideRoot(servedPath))) return null;
@@ -1643,6 +1707,15 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
           .readFile(servedPath)
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!data) return null;
+        if (isImmutableAsset) {
+          setCachedImmutableStaticAsset(servedPath, {
+            data,
+            etag,
+            contentType,
+            encoding,
+            byteLength: data.byteLength,
+          });
+        }
         return HttpServerResponse.uint8Array(data, { status: 200, contentType, headers });
       });
       const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);
@@ -1672,6 +1745,35 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       }
       return null;
     });
+
+    // Fast path: if an immutable hashed asset is already cached in memory
+    // (which only happens after passing resolvesInsideRoot + stat), skip the
+    // outer fileSystem.stat(filePath) probe completely.
+    const isImmutableRequestPath = relativePath.replaceAll("\\", "/").startsWith("assets/");
+    if (isImmutableRequestPath) {
+      const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);
+      for (const candidate of preference.candidates) {
+        const servedPath =
+          candidate === null ? filePath : `${filePath}${candidate.sidecarExtension}`;
+        const cached = getCachedImmutableStaticAsset(servedPath);
+        if (cached) {
+          const cacheHeaders = {
+            "Cache-Control": staticCacheControl(relativePath),
+            Vary: "Accept-Encoding",
+          };
+          const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
+          const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
+          if (ifNoneMatchSatisfies(request.headers["if-none-match"], cached.etag)) {
+            return HttpServerResponse.empty({ status: 304, headers });
+          }
+          return HttpServerResponse.uint8Array(cached.data, {
+            status: 200,
+            contentType: cached.contentType,
+            headers,
+          });
+        }
+      }
+    }
 
     const fileInfo = yield* fileSystem
       .stat(filePath)

@@ -2145,25 +2145,41 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       };
 
       yield* Effect.forEach(selectedProjectors, (projector) =>
-        projector.apply(event, attachmentSideEffects).pipe(
-          Effect.flatMap(() => {
-            if (projector.name === phaseCursor) {
-              return Effect.void;
-            }
-            return projectionStateRepository.upsert({
-              projector: projector.name,
-              lastAppliedSequence: event.sequence,
-              updatedAt: event.occurredAt,
-            });
-          }),
-        ),
+        projector.apply(event, attachmentSideEffects),
       );
+      const cursorProjectors: ProjectorName[] = [];
+      for (const projector of selectedProjectors) {
+        if (projector.name !== phaseCursor) {
+          cursorProjectors.push(projector.name);
+        }
+      }
       if (phaseCursor !== undefined) {
+        cursorProjectors.push(phaseCursor);
+      }
+      if (cursorProjectors.length === 1) {
         yield* projectionStateRepository.upsert({
-          projector: phaseCursor,
+          projector: cursorProjectors[0]!,
           lastAppliedSequence: event.sequence,
           updatedAt: event.occurredAt,
         });
+      } else if (cursorProjectors.length > 1) {
+        const rows = cursorProjectors.map((projector) => ({
+          projector,
+          last_applied_sequence: event.sequence,
+          updated_at: event.occurredAt,
+        }));
+        yield* sql`
+          INSERT INTO projection_state ${sql.insert(rows)}
+          ON CONFLICT (projector)
+          DO UPDATE SET
+            last_applied_sequence = excluded.last_applied_sequence,
+            updated_at = excluded.updated_at
+        `.pipe(
+          Effect.asVoid,
+          Effect.mapError(
+            toPersistenceSqlError("ProjectionPipeline.batchUpsertProjectionStates:query"),
+          ),
+        );
       }
       for (const threadId of attachmentSideEffects.deletedThreadIds) {
         yield* managedAttachments.markCleanupByThread({

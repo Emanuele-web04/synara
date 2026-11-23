@@ -5,15 +5,16 @@
 // Layer: Web UI component
 
 import type { ProviderKind } from "@synara/contracts";
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 
-import ThreadTerminalDrawer from "~/components/ThreadTerminalDrawer";
 import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { readNativeApi } from "~/nativeApi";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { useTerminalStateStore } from "~/terminalStateStore";
 import { onboardingTerminalThreadId } from "../onboardingTerminalScope";
+
+const ThreadTerminalDrawer = lazy(() => import("~/components/ThreadTerminalDrawer"));
 
 export function ProviderConnectTerminal(props: {
   provider: ProviderKind;
@@ -70,21 +71,23 @@ export function ProviderConnectTerminal(props: {
 
   return (
     <div className="h-70 overflow-hidden rounded-lg border border-border/70">
-      <ThreadTerminalDrawer
-        key={scopeId}
-        threadId={scopeId}
-        cwd={props.cwd}
-        runtimeEnv={{}}
-        isVisible
-        terminalLabelsById={terminalState.terminalLabelsById}
-        terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
-        terminalCliKindsById={terminalState.terminalCliKindsById}
-        activeTerminalId={terminalState.activeTerminalId}
-        focusRequestId={terminal.focusRequestId}
-        onTerminalSessionExited={terminal.handleTerminalSessionExited}
-        onTerminalMetadataChange={terminal.setTerminalMetadata}
-        onTerminalActivityChange={terminal.setTerminalActivity}
-      />
+      <Suspense fallback={null}>
+        <ThreadTerminalDrawer
+          key={scopeId}
+          threadId={scopeId}
+          cwd={props.cwd}
+          runtimeEnv={{}}
+          isVisible
+          terminalLabelsById={terminalState.terminalLabelsById}
+          terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
+          terminalCliKindsById={terminalState.terminalCliKindsById}
+          activeTerminalId={terminalState.activeTerminalId}
+          focusRequestId={terminal.focusRequestId}
+          onTerminalSessionExited={terminal.handleTerminalSessionExited}
+          onTerminalMetadataChange={terminal.setTerminalMetadata}
+          onTerminalActivityChange={terminal.setTerminalActivity}
+        />
+      </Suspense>
     </div>
   );
 }

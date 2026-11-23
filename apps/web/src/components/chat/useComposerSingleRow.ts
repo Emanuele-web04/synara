@@ -17,17 +17,25 @@ const UNMEASURED_ROW_CHROME_SHARE = 0.5;
  *  slot, so a line within it of the edge never flips row ↔ block on every render. */
 const SLOT_FIT_MARGIN_PX = 2;
 
+const cachedLineHeightByEditor = new WeakMap<HTMLElement, number>();
+
 /** Natural width of the draft's only line, or Infinity once it spans more than one. */
 function measureDraftLineWidth(editor: HTMLElement): number {
-  const [line, ...rest] = Array.from(editor.children);
-  if (rest.length > 0) return Number.POSITIVE_INFINITY;
+  const childCount = editor.children.length;
+  if (childCount > 1) return Number.POSITIVE_INFINITY;
+  const line = editor.children[0];
   if (!line) return 0;
   // Selecting the paragraph's contents (not the paragraph) measures the inline text and
   // chips, not the block box that always spans the editor's full width.
   const range = document.createRange();
   range.selectNodeContents(line);
   const rect = range.getBoundingClientRect();
-  const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight);
+  let lineHeight = cachedLineHeightByEditor.get(editor);
+  if (lineHeight === undefined) {
+    const parsed = Number.parseFloat(getComputedStyle(editor).lineHeight);
+    lineHeight = Number.isFinite(parsed) ? parsed : Number.NaN;
+    cachedLineHeightByEditor.set(editor, lineHeight);
+  }
   if (Number.isFinite(lineHeight) && rect.height > lineHeight * 1.5) {
     return Number.POSITIVE_INFINITY;
   }
@@ -44,13 +52,29 @@ export function useComposerSingleRow(input: {
   const singleRow = eligible && fits;
   // Surface width minus editor width while the row shows: the controls beside the slot.
   const rowChromeWidthRef = useRef<number | null>(null);
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const singleRowRef = useRef(singleRow);
+  singleRowRef.current = singleRow;
+  const syncRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
-    if (!eligible) return;
+    if (!eligible) {
+      syncRef.current = null;
+      return;
+    }
     const editor = formRef.current?.querySelector<HTMLElement>(EDITOR_SELECTOR);
     const surface = editor?.closest<HTMLElement>(SURFACE_SELECTOR);
-    if (!editor || !surface) return;
+    if (!editor || !surface) {
+      syncRef.current = null;
+      return;
+    }
     const sync = () => {
+      const currentPrompt = promptRef.current;
+      if (currentPrompt.includes("\n")) {
+        setFits(false);
+        return;
+      }
       // Fractional widths: rounded clientWidth would leave a sub-pixel band where the row
       // wraps while the block measures the same line as fitting.
       const surfaceWidth = surface.getBoundingClientRect().width;
@@ -58,23 +82,39 @@ export function useComposerSingleRow(input: {
       // Dictation and hidden panes have no measurable editor slot. Preserve the last
       // visible layout until ResizeObserver sees the editor again.
       if (surfaceWidth <= 0 || editorWidth <= 0) return;
-      if (singleRow) {
+      if (singleRowRef.current) {
         rowChromeWidthRef.current = surfaceWidth - editorWidth;
+      }
+      if (currentPrompt.length === 0) {
+        setFits(true);
+        return;
       }
       const rowChromeWidth =
         rowChromeWidthRef.current ?? surfaceWidth * UNMEASURED_ROW_CHROME_SHARE;
       const slotWidth = surfaceWidth - rowChromeWidth;
-      setFits(
-        !prompt.includes("\n") && measureDraftLineWidth(editor) <= slotWidth - SLOT_FIT_MARGIN_PX,
-      );
+      setFits(measureDraftLineWidth(editor) <= slotWidth - SLOT_FIT_MARGIN_PX);
     };
+    syncRef.current = sync;
     sync();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(sync);
+    const observer = new ResizeObserver(() => {
+      cachedLineHeightByEditor.delete(editor);
+      sync();
+    });
     observer.observe(editor);
     observer.observe(surface);
-    return () => observer.disconnect();
-  }, [eligible, formRef, prompt, singleRow]);
+    return () => {
+      observer.disconnect();
+      if (syncRef.current === sync) {
+        syncRef.current = null;
+      }
+    };
+  }, [eligible, formRef]);
+
+  useLayoutEffect(() => {
+    if (!eligible) return;
+    syncRef.current?.();
+  }, [eligible, prompt, singleRow]);
 
   return singleRow;
 }

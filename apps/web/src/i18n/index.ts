@@ -11,8 +11,48 @@ import {
   resolveLocale,
   UI_LOCALES,
 } from "./locale";
-import { uiLocalizationResources } from "@synara/shared/uiLocalizationResources";
+import { uiLocalizationResourcesEn } from "@synara/shared/uiLocalizationResourcesEn";
 import { UI_LOCALE_REGISTRY, isUiMessageKey } from "@synara/shared/uiLocale";
+
+type LocaleBundles = Readonly<Record<string, Readonly<Record<string, string>>>>;
+
+const loadedLocales = new Set<SupportedLocale>(["en"]);
+const loadingLocalePromises = new Map<SupportedLocale, Promise<void>>();
+
+async function loadLocaleBundles(locale: SupportedLocale): Promise<LocaleBundles | null> {
+  if (locale === "en") return uiLocalizationResourcesEn;
+  if (locale === "es") {
+    const mod = await import("@synara/shared/uiLocalizationResourcesEs");
+    return mod.uiLocalizationResourcesEs;
+  }
+  if (locale === "zh-CN") {
+    const mod = await import("@synara/shared/uiLocalizationResourcesZhCn");
+    return mod.uiLocalizationResourcesZhCn;
+  }
+  return null;
+}
+
+function registerLocaleBundles(locale: SupportedLocale, bundles: LocaleBundles): void {
+  for (const [namespace, resources] of Object.entries(bundles)) {
+    i18n.addResourceBundle(locale, namespace, resources, true, true);
+  }
+  loadedLocales.add(locale);
+}
+
+export function ensureLocaleLoaded(locale: SupportedLocale): Promise<void> {
+  if (loadedLocales.has(locale)) return Promise.resolve();
+  const inFlight = loadingLocalePromises.get(locale);
+  if (inFlight) return inFlight;
+  const promise = loadLocaleBundles(locale)
+    .then((bundles) => {
+      if (bundles) registerLocaleBundles(locale, bundles);
+    })
+    .finally(() => {
+      loadingLocalePromises.delete(locale);
+    });
+  loadingLocalePromises.set(locale, promise);
+  return promise;
+}
 
 function browserLanguages(): readonly string[] {
   try {
@@ -66,16 +106,35 @@ function syncDesktopLanguage(force = false): void {
   void synchronize();
 }
 
+// In Vitest, tests synchronously switch locales and assert immediate translations.
+// In production builds, Vite constant-folds `import.meta.env.MODE === "test"` to
+// `false`, tree-shaking non-English locale JSON (~640 KB raw / ~145 KB br) into
+// on-demand dynamic chunks loaded only when that locale is active.
+const initialResources: Record<string, LocaleBundles> = {
+  en: uiLocalizationResourcesEn,
+};
+if (import.meta.env.MODE === "test") {
+  const { uiLocalizationResources } = await import("@synara/shared/uiLocalizationResources");
+  for (const locale of UI_LOCALES) {
+    if (locale !== "en") {
+      initialResources[locale] = uiLocalizationResources[locale];
+      loadedLocales.add(locale);
+    }
+  }
+}
+
+const initialLocale = resolveLocale(
+  preference,
+  resolveLanguagePreference(preference) === "system" ? browserLanguages() : [],
+);
+
 export const i18n = createInstance();
 void i18n.use(initReactI18next).init({
-  lng: resolveLocale(
-    preference,
-    resolveLanguagePreference(preference) === "system" ? browserLanguages() : [],
-  ),
+  lng: loadedLocales.has(initialLocale) ? initialLocale : "en",
   fallbackLng: "en",
   supportedLngs: [...UI_LOCALES],
-  resources: uiLocalizationResources,
-  ns: Object.keys(uiLocalizationResources.en),
+  resources: initialResources,
+  ns: Object.keys(uiLocalizationResourcesEn),
   defaultNS: "common",
   initAsync: false,
   keySeparator: false,
@@ -84,8 +143,20 @@ void i18n.use(initReactI18next).init({
   react: { useSuspense: false, transSupportBasicHtmlNodes: false },
 });
 
+if (!loadedLocales.has(initialLocale)) {
+  void ensureLocaleLoaded(initialLocale).then(() => {
+    const currentResolved = resolveLocale(
+      preference,
+      resolveLanguagePreference(preference) === "system" ? browserLanguages() : [],
+    );
+    if (currentResolved === initialLocale && i18n.language !== initialLocale) {
+      void i18n.changeLanguage(initialLocale);
+    }
+  });
+}
+
 export function t(message: string, values?: Record<string, unknown>): string {
-  if (!isUiMessageKey(message, uiLocalizationResources.en)) return message;
+  if (!isUiMessageKey(message, uiLocalizationResourcesEn)) return message;
   return i18n.t(message, { ...values, returnObjects: false });
 }
 
@@ -120,6 +191,22 @@ function updateDocumentLanguage(locale: SupportedLocale): void {
   }
 }
 
+function applyResolvedLocale(locale: SupportedLocale): void {
+  if (loadedLocales.has(locale)) {
+    void i18n.changeLanguage(locale);
+    return;
+  }
+  void ensureLocaleLoaded(locale).then(() => {
+    const latest = resolveLocale(
+      preference,
+      resolveLanguagePreference(preference) === "system" ? browserLanguages() : [],
+    );
+    if (latest === locale) {
+      void i18n.changeLanguage(locale);
+    }
+  });
+}
+
 /** Changes only the runtime; the existing app-settings hook owns persistence. */
 export function setLanguagePreference(next: LanguagePreference): void {
   const locale = resolveLocale(
@@ -128,7 +215,7 @@ export function setLanguagePreference(next: LanguagePreference): void {
   );
   if (preference !== next || i18n.language !== locale) {
     preference = next;
-    void i18n.changeLanguage(locale);
+    applyResolvedLocale(locale);
   }
   updateDocumentLanguage(locale);
   syncDesktopLanguage();
@@ -144,7 +231,7 @@ export function initializeI18n(): () => void {
     if (resolveLanguagePreference(preference) !== "system") return;
     // Refresh native candidates once: preload values would otherwise stay frozen at launch.
     const locale = resolveLocale(preference, browserLanguages());
-    void i18n.changeLanguage(locale);
+    applyResolvedLocale(locale);
     updateDocumentLanguage(locale);
     syncDesktopLanguage(true);
   };

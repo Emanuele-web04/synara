@@ -520,6 +520,18 @@
       "types": "./src/uiLocalizationResources.ts",
       "import": "./src/uiLocalizationResources.ts"
     },
+    "./uiLocalizationResourcesEn": {
+      "types": "./src/uiLocalizationResourcesEn.ts",
+      "import": "./src/uiLocalizationResourcesEn.ts"
+    },
+    "./uiLocalizationResourcesEs": {
+      "types": "./src/uiLocalizationResourcesEs.ts",
+      "import": "./src/uiLocalizationResourcesEs.ts"
+    },
+    "./uiLocalizationResourcesZhCn": {
+      "types": "./src/uiLocalizationResourcesZhCn.ts",
+      "import": "./src/uiLocalizationResourcesZhCn.ts"
+    },
     "./nativeLocalizationResources": {
       "types": "./src/nativeLocalizationResources.ts",
       "import": "./src/nativeLocalizationResources.ts"

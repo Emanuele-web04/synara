@@ -2,7 +2,15 @@
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
@@ -15,7 +23,8 @@ import { useTerminalStateStore } from "~/terminalStateStore";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
-import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
+
+const ThreadTerminalDrawer = lazy(() => import("../ThreadTerminalDrawer"));
 
 export function DockTerminalPane(props: {
   hostThreadId: ThreadId;
@@ -93,22 +102,24 @@ export function DockTerminalPane(props: {
   if (!terminalId) return null;
 
   return (
-    <ThreadTerminalDrawer
-      key={scopeId}
-      threadId={scopeId}
-      cwd={cwd}
-      runtimeEnv={runtimeEnv}
-      isVisible={props.isActive ?? true}
-      terminalLabelsById={terminalState.terminalLabelsById}
-      terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
-      terminalCliKindsById={terminalState.terminalCliKindsById}
-      activeTerminalId={terminalId}
-      focusRequestId={terminal.focusRequestId}
-      onTerminalSessionExited={onSessionExited}
-      onTerminalMetadataChange={terminal.setTerminalMetadata}
-      onTerminalActivityChange={terminal.setTerminalActivity}
-      onAddTerminalContext={composerTarget}
-    />
+    <Suspense fallback={null}>
+      <ThreadTerminalDrawer
+        key={scopeId}
+        threadId={scopeId}
+        cwd={cwd}
+        runtimeEnv={runtimeEnv}
+        isVisible={props.isActive ?? true}
+        terminalLabelsById={terminalState.terminalLabelsById}
+        terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
+        terminalCliKindsById={terminalState.terminalCliKindsById}
+        activeTerminalId={terminalId}
+        focusRequestId={terminal.focusRequestId}
+        onTerminalSessionExited={onSessionExited}
+        onTerminalMetadataChange={terminal.setTerminalMetadata}
+        onTerminalActivityChange={terminal.setTerminalActivity}
+        onAddTerminalContext={composerTarget}
+      />
+    </Suspense>
   );
 }
 

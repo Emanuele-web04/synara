@@ -14,24 +14,21 @@ export function usePreloadRouteChunks() {
   const router = useRouter();
 
   useEffect(() => {
-    // New-task navigation is a primary startup action. Warm that route as soon
-    // as the root commits so an immediate click never waits for the browser's
-    // idle callback (which can be delayed for several seconds during hydration).
-    router.preloadRoute({ to: "/$threadId", params: { threadId: "chunk-preload" } }).catch(() => {
-      // Preloading is best-effort; navigation falls back to loading on demand.
-    });
-
-    const preloadSettings = () => {
-      router.preloadRoute({ to: "/settings" }).catch(() => {
+    // Defer thread-route warming until the browser is idle so it never competes
+    // with initial paint, WebSocket hydration, or landing-page interactivity.
+    // Settings relies on TanStack Router's `defaultPreload: "intent"` on hover/focus
+    // instead of downloading ~450 KB unconditionally on every cold boot.
+    const preloadThreadRoute = () => {
+      router.preloadRoute({ to: "/$threadId", params: { threadId: "chunk-preload" } }).catch(() => {
         // Preloading is best-effort; navigation falls back to loading on demand.
       });
     };
 
     if (typeof requestIdleCallback === "function") {
-      const idleCallbackId = requestIdleCallback(preloadSettings, { timeout: 5000 });
+      const idleCallbackId = requestIdleCallback(preloadThreadRoute, { timeout: 4000 });
       return () => cancelIdleCallback(idleCallbackId);
     }
-    const timeoutId = setTimeout(preloadSettings, 1500);
+    const timeoutId = setTimeout(preloadThreadRoute, 2500);
     return () => clearTimeout(timeoutId);
   }, [router]);
 }

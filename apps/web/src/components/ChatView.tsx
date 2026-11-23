@@ -299,7 +299,7 @@ import {
   createThreadLineageSelector,
 } from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
-import PlanSidebar from "./PlanSidebar";
+const PlanSidebar = lazy(() => import("./PlanSidebar"));
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -407,7 +407,11 @@ import {
   visibleCoordinatorSuggestionChips,
 } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
-import { LibraryPanel } from "./chat/group/LibraryPanel";
+const LibraryPanel = lazy(() =>
+  import("./chat/group/LibraryPanel").then((module) => ({
+    default: module.LibraryPanel,
+  })),
+);
 import { useHubWorkItems } from "./chat/project/useHubWorkItems";
 import { hubWorkItemsBySourceMessage } from "./chat/project/hubWorkItems";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
@@ -800,8 +804,8 @@ export default function ChatView({
     serverThread?.creationSource && serverThread.sourceThreadId
       ? serverThread.sourceThreadId
       : null;
-  const crossTaskSourceThread = useStore(
-    useMemo(() => createThreadSelector(crossTaskSourceThreadId), [crossTaskSourceThreadId]),
+  const crossTaskSourceThread = useStore((state) =>
+    crossTaskSourceThreadId ? (state.threadShellById?.[crossTaskSourceThreadId] ?? null) : null,
   );
   const crossTaskOrigin = useMemo(
     () =>
@@ -816,18 +820,18 @@ export default function ChatView({
   const forkSourceThreadId = serverThread?.sidechatSourceThreadId
     ? null
     : (serverThread?.forkSourceThreadId ?? null);
-  const forkSourceThread = useStore(
-    useMemo(() => createThreadSelector(forkSourceThreadId), [forkSourceThreadId]),
+  const forkSourceTitle = useStore((state) =>
+    forkSourceThreadId ? (state.threadShellById?.[forkSourceThreadId]?.title ?? null) : null,
   );
   const forkSource = useMemo(
     () =>
       forkSourceThreadId
         ? {
             sourceThreadId: forkSourceThreadId,
-            sourceTitle: forkSourceThread?.title ?? "chat",
+            sourceTitle: forkSourceTitle ?? "chat",
           }
         : null,
-    [forkSourceThread?.title, forkSourceThreadId],
+    [forkSourceTitle, forkSourceThreadId],
   );
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -3125,6 +3129,10 @@ export default function ChatView({
       }
     },
     [dismissEffortPreview, setIsModelPickerOpen, setIsTraitsPickerOpen],
+  );
+  const handleOpenRecoveryModelPicker = useCallback(
+    () => handleModelPickerOpenChange(true),
+    [handleModelPickerOpenChange],
   );
   const handleTraitsPickerOpenChange = useCallback(
     (open: boolean) => {
@@ -7149,7 +7157,7 @@ export default function ChatView({
                       pendingUserInputs.length > 0
                     }
                     onContinueFailedTurn={onContinueFailedTurn}
-                    onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
+                    onChangeRecoveryModel={handleOpenRecoveryModelPicker}
                     unblockingThread={unblockingActiveThread}
                     onDismissThreadError={dismissActiveThreadError}
                     onUnblockThread={unblockThread}
@@ -7381,34 +7389,38 @@ export default function ChatView({
               }}
             />
           ) : null}
-          {projectPanelEnabled ? (
-            <LibraryPanel
-              open={libraryPanelVisible}
-              variant={environmentOverlayVariant}
-              projectId={activeProjectId}
-              onClose={() => setLibraryFromAuxiliary(false)}
-            />
+          {projectPanelEnabled && libraryPanelVisible ? (
+            <Suspense fallback={null}>
+              <LibraryPanel
+                open={libraryPanelVisible}
+                variant={environmentOverlayVariant}
+                projectId={activeProjectId}
+                onClose={() => setLibraryFromAuxiliary(false)}
+              />
+            </Suspense>
           ) : null}
         </div>
         {/* end chat column */}
 
         {/* Plan sidebar */}
         {planSidebarOpen ? (
-          <PlanSidebar
-            activeTaskList={activeTaskList}
-            activeProposedPlan={sidebarProposedPlan}
-            markdownCwd={threadWorkspaceCwd ?? undefined}
-            workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
-            timestampFormat={timestampFormat}
-            onClose={() => {
-              setPlanSidebarOpen(false);
-              // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
-              const turnKey = activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? null;
-              if (turnKey) {
-                planSidebarDismissedForTurnRef.current = turnKey;
-              }
-            }}
-          />
+          <Suspense fallback={null}>
+            <PlanSidebar
+              activeTaskList={activeTaskList}
+              activeProposedPlan={sidebarProposedPlan}
+              markdownCwd={threadWorkspaceCwd ?? undefined}
+              workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
+              timestampFormat={timestampFormat}
+              onClose={() => {
+                setPlanSidebarOpen(false);
+                // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
+                const turnKey = activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? null;
+                if (turnKey) {
+                  planSidebarDismissedForTurnRef.current = turnKey;
+                }
+              }}
+            />
+          </Suspense>
         ) : null}
       </div>
       {/* end horizontal flex container */}

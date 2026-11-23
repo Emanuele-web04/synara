@@ -2726,6 +2726,9 @@ function resolveAppSettings(
   return settings;
 }
 
+let lastNormalizedLocalSettingsRef: AppSettings | null = null;
+let lastNormalizedMigrationCompleted: boolean | null = null;
+
 export function useAppSettings() {
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2760,19 +2763,32 @@ export function useAppSettings() {
       return;
     }
     normalizedStoredSettingsRef.current = true;
+    const migrationCompleted = hasCompletedServerSettingsMigration();
+    if (
+      lastNormalizedLocalSettingsRef === localSettings &&
+      lastNormalizedMigrationCompleted === migrationCompleted
+    ) {
+      return;
+    }
 
     setSettings((previous) => {
       const normalized = normalizeAppSettings(previous);
-      const migrationCompleted = hasCompletedServerSettingsMigration();
-      if (!migrationCompleted) {
+      const currentMigrationCompleted = hasCompletedServerSettingsMigration();
+      if (!currentMigrationCompleted) {
         pendingServerSettingsMigrationPatchRef.current =
           buildInitialServerSettingsMigrationPatch(normalized);
       }
       // Legacy localStorage may be the only remaining plaintext source until
       // the server confirms migration; redact it immediately after that write.
-      return normalizeInitialStoredAppSettingsForServerMigration(normalized, migrationCompleted);
+      const next = normalizeInitialStoredAppSettingsForServerMigration(
+        normalized,
+        currentMigrationCompleted,
+      );
+      lastNormalizedLocalSettingsRef = next;
+      lastNormalizedMigrationCompleted = currentMigrationCompleted;
+      return next;
     });
-  }, [setSettings]);
+  }, [localSettings, setSettings]);
 
   useEffect(() => {
     if (

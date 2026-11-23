@@ -4,14 +4,15 @@
 
 import { ThreadId, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_AUTHENTICATION } from "@synara/shared/providerCliProfiles";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
-import TerminalViewport from "../terminal/TerminalViewport";
 import type { TerminalRuntimeStatus } from "../terminal/terminalRuntimeTypes";
 import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
+
+const TerminalViewport = lazy(() => import("../terminal/TerminalViewport"));
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -156,19 +157,21 @@ export default function ProviderSignInDialog(props: {
         </DialogHeader>
         <div className="h-[min(55vh,28rem)] min-h-48 overflow-hidden rounded-xl border border-border mx-5">
           {config.data?.cwd ? (
-            <TerminalViewport
-              {...session}
-              cwd={config.data.cwd}
-              providerAuthInstanceId={props.instanceId}
-              terminalLabel={`Sign in · ${props.accountLabel}`}
-              onSessionExited={() => void checkStatus()}
-              onRuntimeStatusChange={setRuntimeStatus}
-              onTerminalMetadataChange={ignoreMetadata}
-              onTerminalActivityChange={ignoreMetadata}
-              focusRequestId={0}
-              autoFocus
-              isVisible
-            />
+            <Suspense fallback={null}>
+              <TerminalViewport
+                {...session}
+                cwd={config.data.cwd}
+                providerAuthInstanceId={props.instanceId}
+                terminalLabel={`Sign in · ${props.accountLabel}`}
+                onSessionExited={() => void checkStatus()}
+                onRuntimeStatusChange={setRuntimeStatus}
+                onTerminalMetadataChange={ignoreMetadata}
+                onTerminalActivityChange={ignoreMetadata}
+                focusRequestId={0}
+                autoFocus
+                isVisible
+              />
+            </Suspense>
           ) : (
             <p className="p-3 text-ui-sm">
               {config.isError

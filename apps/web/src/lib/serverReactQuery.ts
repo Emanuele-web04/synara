@@ -12,6 +12,12 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 import {
+  readLatestServerConfigSnapshot,
+  readLatestServerSettingsSnapshot,
+  waitForInitialServerConfigSnapshot,
+  waitForInitialServerSettingsSnapshot,
+} from "~/wsNativeApi";
+import {
   EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadRetryDelay,
   shouldRetryExpensiveRead,
@@ -49,12 +55,37 @@ export const serverMutationKeys = {
   stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
 };
 
+let sharedInitialServerConfigRequest: Promise<ServerConfig> | null = null;
+
+function fetchServerConfigShared(): Promise<ServerConfig> {
+  const streamSnapshot = readLatestServerConfigSnapshot();
+  if (streamSnapshot !== null) {
+    return Promise.resolve(streamSnapshot);
+  }
+  if (sharedInitialServerConfigRequest !== null) {
+    return sharedInitialServerConfigRequest;
+  }
+  const pendingStreamSnapshot = waitForInitialServerConfigSnapshot();
+  const request = (
+    pendingStreamSnapshot !== null
+      ? pendingStreamSnapshot.then(
+          (awaitedSnapshot) => awaitedSnapshot ?? ensureNativeApi().server.getConfig(),
+        )
+      : ensureNativeApi().server.getConfig()
+  ).finally(() => {
+    if (sharedInitialServerConfigRequest === request) {
+      sharedInitialServerConfigRequest = null;
+    }
+  });
+  sharedInitialServerConfigRequest = request;
+  return request;
+}
+
 export function serverConfigQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.config(),
     queryFn: async () => {
-      const api = ensureNativeApi();
-      return withWorkspaceKeybindings(await api.server.getConfig());
+      return withWorkspaceKeybindings(await fetchServerConfigShared());
     },
     staleTime: Infinity,
   });
@@ -205,7 +236,7 @@ export async function reconcileServerProviderStatuses(
       if (inFlight) return inFlight;
       // Coalesce initial stream hydration without fetchQuery's automatic cache
       // write, which would erase a newer cache writer before reconciliation.
-      const request = ensureNativeApi().server.getConfig();
+      const request = fetchServerConfigShared();
       providerConfigHydrationByQueryClient.set(queryClient, request);
       try {
         return await request;
@@ -313,6 +344,17 @@ export function serverSettingsQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.settings(),
     queryFn: async () => {
+      const immediateSnapshot = readLatestServerSettingsSnapshot();
+      if (immediateSnapshot !== null) {
+        return immediateSnapshot;
+      }
+      const pendingStreamSnapshot = waitForInitialServerSettingsSnapshot();
+      if (pendingStreamSnapshot !== null) {
+        const awaitedSnapshot = await pendingStreamSnapshot;
+        if (awaitedSnapshot !== null) {
+          return awaitedSnapshot;
+        }
+      }
       const api = ensureNativeApi();
       return api.server.getSettings();
     },

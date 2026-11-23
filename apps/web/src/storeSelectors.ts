@@ -118,6 +118,46 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
   };
 }
 
+/**
+ * Streaming-immune thread selector for lifecycle notifications.
+ * `collectCompletedThreadCandidates` and `collectInputNeededThreadCandidates` only react to
+ * thread shells, session state, turn state, and activities — never to mid-turn token deltas in
+ * `messageByThreadId`. Ignoring message/plan/diff slice churn prevents rebuilding hundreds of
+ * Thread objects on every 100ms streaming flush while still exposing the final assistant message
+ * once `threadTurnStateById` or `threadSessionById` settles.
+ */
+export function createNotificationThreadsSelector(): (state: AppState) => readonly Thread[] {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById = {} as AppState["threadShellById"];
+  let previousThreadSessionById = {} as AppState["threadSessionById"];
+  let previousThreadTurnStateById = {} as AppState["threadTurnStateById"];
+  let previousActivityIdsByThreadId = {} as AppState["activityIdsByThreadId"];
+  let previousActivityByThreadId = {} as AppState["activityByThreadId"];
+  let previousThreads: readonly Thread[] = [];
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousThreadShellById === state.threadShellById &&
+      previousThreadSessionById === state.threadSessionById &&
+      previousThreadTurnStateById === state.threadTurnStateById &&
+      previousActivityIdsByThreadId === state.activityIdsByThreadId &&
+      previousActivityByThreadId === state.activityByThreadId
+    ) {
+      return previousThreads;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousThreadShellById = state.threadShellById;
+    previousThreadSessionById = state.threadSessionById;
+    previousThreadTurnStateById = state.threadTurnStateById;
+    previousActivityIdsByThreadId = state.activityIdsByThreadId;
+    previousActivityByThreadId = state.activityByThreadId;
+    previousThreads = getThreadsFromState(state);
+    return previousThreads;
+  };
+}
+
 export interface AccountRateLimitThreadActivities {
   readonly activities: Thread["activities"];
 }

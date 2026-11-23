@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 
-import { Effect, Layer, PubSub, Ref, Stream } from "effect";
+import { Deferred, Effect, Layer, PubSub, Ref, Stream } from "effect";
 import type {
   GitStatusLocalResult,
   GitStatusRemoteResult,
@@ -50,6 +50,43 @@ export const GitStatusBroadcasterLive = Layer.effect(
       (pubsub) => PubSub.shutdown(pubsub),
     );
     const cacheRef = yield* Ref.make(new Map<string, CachedGitStatus>());
+    // Single-flight coalesce concurrent git status reads for the same cwd so
+    // bursty sidebar/header/panel mounts share one subprocess wave instead of
+    // multiplying git executions.
+    const inFlightStatusByKey = new Map<string, Deferred.Deferred<GitStatusResult, unknown>>();
+
+    const singleFlightStatus = <E, R>(
+      key: string,
+      compute: Effect.Effect<GitStatusResult, E, R>,
+    ): Effect.Effect<GitStatusResult, E, R> =>
+      Effect.suspend(() => {
+        const existing = inFlightStatusByKey.get(key);
+        if (existing) {
+          return Deferred.await(existing) as Effect.Effect<GitStatusResult, E>;
+        }
+        return Effect.gen(function* () {
+          const deferred = yield* Deferred.make<GitStatusResult, unknown>();
+          inFlightStatusByKey.set(key, deferred);
+          return yield* compute.pipe(
+            Effect.tap((result) => Deferred.succeed(deferred, result)),
+            Effect.tapError((error) => Deferred.fail(deferred, error)),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                if (inFlightStatusByKey.get(key) === deferred) {
+                  inFlightStatusByKey.delete(key);
+                }
+              }),
+            ),
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (inFlightStatusByKey.get(key) === deferred) {
+                  inFlightStatusByKey.delete(key);
+                }
+              }),
+            ),
+          );
+        });
+      });
 
     const getCachedStatus = (cwd: string) =>
       Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
@@ -101,12 +138,15 @@ export const GitStatusBroadcasterLive = Layer.effect(
       });
 
     const loadStatus = (cwd: string, options?: { readonly publish?: boolean }) =>
-      Effect.gen(function* () {
-        const status = yield* gitManager.status({ cwd });
-        const local = yield* updateCachedLocalStatus(cwd, splitLocalStatus(status), options);
-        const remote = yield* updateCachedRemoteStatus(cwd, splitRemoteStatus(status), options);
-        return mergeGitStatusParts(local, remote) as GitStatusResult;
-      });
+      singleFlightStatus(
+        `${options?.publish ? "publish" : "load"}:${cwd}`,
+        Effect.gen(function* () {
+          const status = yield* gitManager.status({ cwd });
+          const local = yield* updateCachedLocalStatus(cwd, splitLocalStatus(status), options);
+          const remote = yield* updateCachedRemoteStatus(cwd, splitRemoteStatus(status), options);
+          return mergeGitStatusParts(local, remote) as GitStatusResult;
+        }),
+      );
 
     const getStatus: GitStatusBroadcasterShape["getStatus"] = (input) =>
       Effect.gen(function* () {
