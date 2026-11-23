@@ -390,6 +390,7 @@ export function makePiBashProcessSupervisor(
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly enableComputerControl?: boolean;
+  readonly fusionRole?: "lead" | "sidekick";
   /**
    * Whether the CURRENT gateway rotation exposes Synara control. Recomputed on
    * every credential rotation, never inherited blindly from session start.
@@ -3515,6 +3516,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         };
         const context: PiSessionContext = {
           enableComputerControl: input.enableComputerControl === true,
+          ...(input.fusionRole !== undefined ? { fusionRole: input.fusionRole } : {}),
           gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }

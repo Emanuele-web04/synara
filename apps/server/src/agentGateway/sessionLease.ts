@@ -24,6 +24,8 @@ export interface AgentGatewaySessionLeaseOptions {
  */
 export interface AgentGatewayCapabilityInput {
   readonly enableComputerControl?: boolean | undefined;
+  /** Fusion pairing role for the once-per-session policy channel (not a capability). */
+  readonly fusionRole?: "lead" | "sidekick" | undefined;
 }
 
 /** Lease no optional capabilities. Spelled out so an omission reads as a choice. */
@@ -70,7 +72,10 @@ export function agentGatewaySessionLeaseOptionsFor(
 export function captureAgentGatewayCapabilityInput(
   input: AgentGatewayCapabilityInput,
 ): AgentGatewayCapabilityInput {
-  return { enableComputerControl: input.enableComputerControl === true };
+  return {
+    enableComputerControl: input.enableComputerControl === true,
+    fusionRole: input.fusionRole,
+  };
 }
 
 type AgentGatewaySessionLeaseCredentials = Pick<

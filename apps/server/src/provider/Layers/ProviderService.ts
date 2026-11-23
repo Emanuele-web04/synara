@@ -312,6 +312,8 @@ function toRuntimePayloadFromSession(
     readonly providerOptions?: unknown;
     readonly enableComputerControl?: boolean;
     readonly autoApproveSynaraTools?: boolean;
+    /** Fusion pairing role, so recovery re-delivers the matching policy half. */
+    readonly fusionRole?: "lead" | "sidekick";
     /** Extra folders of a multi-folder project, so recovery restarts with the same grant. */
     readonly additionalDirectories?: ReadonlyArray<string>;
     readonly providerInstanceId?: string;
@@ -382,6 +384,11 @@ function toRuntimePayloadFromSession(
     ...(extra?.autoApproveSynaraTools !== undefined
       ? { autoApproveSynaraTools: extra.autoApproveSynaraTools }
       : {}),
+    ...(extra?.fusionRole !== undefined
+      ? { fusionRole: extra.fusionRole }
+      : extra?.launchOptionsAuthoritative
+        ? { fusionRole: null }
+        : {}),
     ...(extra?.additionalDirectories !== undefined
       ? { additionalDirectories: [...extra.additionalDirectories] }
       : extra?.launchOptionsAuthoritative
@@ -458,6 +465,13 @@ function readPersistedAutoApproveSynaraTools(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): boolean {
   return runtimePayloadRecord(runtimePayload).autoApproveSynaraTools === true;
+}
+
+function readPersistedFusionRole(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): "lead" | "sidekick" | undefined {
+  const raw = runtimePayloadRecord(runtimePayload).fusionRole;
+  return raw === "lead" || raw === "sidekick" ? raw : undefined;
 }
 
 function readPersistedAdditionalDirectories(
@@ -1893,6 +1907,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const enableComputerControl =
             Option.isSome(existingBinding) &&
             readPersistedComputerControl(existingBinding.value.runtimePayload);
+          const persistedFusionRole = Option.isSome(existingBinding)
+            ? readPersistedFusionRole(existingBinding.value.runtimePayload)
+            : undefined;
           // The row must keep the generation that owned this dispatch alongside
           // the computer-control flag, atomically with the turn intent write.
           // A retained older dispatch settling after a lifecycle rotation must
@@ -1931,13 +1948,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? { lifecycleGeneration: dispatchLifecycleGeneration }
                 : {}),
               ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-              ...(input.modelSelection !== undefined || enableComputerControl
+              ...(input.modelSelection !== undefined ||
+              enableComputerControl ||
+              persistedFusionRole !== undefined
                 ? {
                     runtimePayload: {
                       ...(input.modelSelection !== undefined
                         ? { modelSelection: input.modelSelection }
                         : {}),
                       ...(enableComputerControl ? { enableComputerControl: true } : {}),
+                      ...(persistedFusionRole !== undefined
+                        ? { fusionRole: persistedFusionRole }
+                        : {}),
                     },
                   }
                 : {}),
@@ -1966,6 +1988,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? { modelSelection: input.modelSelection }
                 : {}),
               ...(enableComputerControl ? { enableComputerControl: true } : {}),
+              ...(persistedFusionRole !== undefined ? { fusionRole: persistedFusionRole } : {}),
               activeTurnId: input.turnId,
               lastRuntimeEvent: input.lastRuntimeEvent,
               lastRuntimeEventAt: new Date().toISOString(),
@@ -2615,6 +2638,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedAutoApproveSynaraTools = readPersistedAutoApproveSynaraTools(
               binding.runtimePayload,
             );
+            const persistedFusionRole = readPersistedFusionRole(binding.runtimePayload);
             const persistedAdditionalDirectories = readPersistedAdditionalDirectories(
               binding.runtimePayload,
             );
@@ -2635,6 +2659,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
               ...(persistedComputerControl ? { enableComputerControl: true } : {}),
               ...(persistedAutoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+              ...(persistedFusionRole !== undefined ? { fusionRole: persistedFusionRole } : {}),
               ...(persistedAdditionalDirectories.length > 0
                 ? { additionalDirectories: persistedAdditionalDirectories }
                 : {}),
@@ -2673,6 +2698,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
                 ...(persistedComputerControl ? { enableComputerControl: true } : {}),
                 ...(persistedAutoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+                ...(persistedFusionRole !== undefined ? { fusionRole: persistedFusionRole } : {}),
                 additionalDirectories: persistedAdditionalDirectories,
                 launchOptionsAuthoritative: true,
               }).pipe(
@@ -2687,6 +2713,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           ...(persistedComputerControl ? { enableComputerControl: true } : {}),
                           ...(persistedAutoApproveSynaraTools
                             ? { autoApproveSynaraTools: true }
+                            : {}),
+                          ...(persistedFusionRole !== undefined
+                            ? { fusionRole: persistedFusionRole }
                             : {}),
                         },
                       })
@@ -3304,6 +3333,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 (persistedBinding?.provider === input.provider
                   ? readPersistedAutoApproveSynaraTools(persistedBinding.runtimePayload)
                   : false);
+              const effectiveFusionRole =
+                input.fusionRole ??
+                (persistedBinding?.provider === input.provider
+                  ? readPersistedFusionRole(persistedBinding.runtimePayload)
+                  : undefined);
               let replacementStarted = false;
               const startupLifecycle = new ProviderStartupLifecycle();
               const startAndPersistReplacement = Effect.gen(function* () {
@@ -3322,6 +3356,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   providerInstanceId: resolved.instance.instanceId,
                   enableComputerControl: effectiveComputerControl,
                   autoApproveSynaraTools: effectiveAutoApproveSynaraTools,
+                  ...(effectiveFusionRole !== undefined ? { fusionRole: effectiveFusionRole } : {}),
                   lifecycleGeneration: lease.generation,
                   ...(resolved.modelSelection !== undefined
                     ? { modelSelection: resolved.modelSelection }
@@ -3432,12 +3467,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     providerInstanceId: resolved.instance.instanceId,
                     enableComputerControl: effectiveComputerControl,
                     autoApproveSynaraTools: effectiveAutoApproveSynaraTools,
+                    ...(effectiveFusionRole !== undefined
+                      ? { fusionRole: effectiveFusionRole }
+                      : {}),
                     additionalDirectories: input.additionalDirectories ?? [],
                     lifecycleGeneration: lease.generation,
                     launchOptionsAuthoritative: true,
                     runtimePayload: {
                       [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
                       ...(effectiveComputerControl ? { enableComputerControl: true } : {}),
+                      ...(effectiveFusionRole !== undefined
+                        ? { fusionRole: effectiveFusionRole }
+                        : {}),
                       [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
                     },
                   }),
@@ -3510,6 +3551,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 input.enableComputerControl ?? previousComputerControl;
               const restoredAutoApproveSynaraTools =
                 input.autoApproveSynaraTools ?? previousAutoApproveSynaraTools;
+              const restoredFusionRole =
+                input.fusionRole ?? readPersistedFusionRole(persistedBinding.runtimePayload);
               const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
               yield* previousAdapter.stopSession(threadId);
 
@@ -3544,6 +3587,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           ...(restoredAutoApproveSynaraTools
                             ? { autoApproveSynaraTools: true }
                             : {}),
+                          ...(restoredFusionRole !== undefined
+                            ? { fusionRole: restoredFusionRole }
+                            : {}),
                           ...(previousAdditionalDirectories.length > 0
                             ? { additionalDirectories: previousAdditionalDirectories }
                             : {}),
@@ -3571,6 +3617,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                             providerOptions: previousProviderOptions,
                             enableComputerControl: restoredComputerControl,
                             autoApproveSynaraTools: restoredAutoApproveSynaraTools,
+                            ...(restoredFusionRole !== undefined
+                              ? { fusionRole: restoredFusionRole }
+                              : {}),
                             additionalDirectories: previousAdditionalDirectories,
                             runtimePayload: {
                               providerOptionsCredentialsFingerprint:

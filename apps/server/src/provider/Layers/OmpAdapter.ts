@@ -204,6 +204,7 @@ interface PendingUserInput {
 
 interface OmpSessionContext {
   harnessPolicyDelivered?: boolean;
+  readonly fusionRole?: "lead" | "sidekick";
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
@@ -1129,6 +1130,7 @@ export function makeOmpAdapter(
 
           ctx = {
             threadId: input.threadId,
+            ...(input.fusionRole !== undefined ? { fusionRole: input.fusionRole } : {}),
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: input.lifecycleGeneration }

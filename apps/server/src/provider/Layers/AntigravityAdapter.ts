@@ -822,6 +822,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
 
           ctx = {
             enableComputerControl: input.enableComputerControl === true,
+            ...(input.fusionRole !== undefined ? { fusionRole: input.fusionRole } : {}),
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             threadId: input.threadId,
             ...(input.lifecycleGeneration !== undefined

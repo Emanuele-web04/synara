@@ -114,6 +114,54 @@ describe("Synara harness policy", () => {
     assert.isNull(takeSynaraHarnessPolicyTextPartForProviderSession(partState, input));
   });
 
+  it("renders each fusion policy half only for a scoped session with that role", () => {
+    const lead = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      fusionRole: "lead",
+    });
+    assert.include(lead, "## Fusion lead");
+    assert.include(lead, "synara_fusion_delegate");
+    assert.notInclude(lead, "## Fusion sidekick");
+
+    const sidekick = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      fusionRole: "sidekick",
+    });
+    assert.include(sidekick, "## Fusion sidekick");
+    assert.include(sidekick, "cannot create threads");
+    assert.notInclude(sidekick, "## Fusion lead");
+
+    // No role → no fusion section at all.
+    const plain = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    assert.notInclude(plain, "## Fusion");
+
+    // No scoped MCP → the fusion half is withheld with the rest of the
+    // mutation guidance.
+    const unscoped = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: false,
+      fusionRole: "lead",
+    });
+    assert.notInclude(unscoped, "## Fusion");
+  });
+
+  it("delivers the fusion half through the per-session provider channel", () => {
+    const state: { harnessPolicyDelivered?: boolean; fusionRole?: "lead" | "sidekick" } = {
+      fusionRole: "sidekick",
+    };
+    const text =
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider: "devin",
+        scopedGatewayConnectionAvailable: true,
+      }) ?? "";
+    assert.include(text, "## Fusion sidekick");
+    assert.isNull(
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider: "devin",
+        scopedGatewayConnectionAvailable: true,
+      }),
+    );
+  });
+
   it("keeps OpenCode and Pi identity-only until scoped setup succeeds", () => {
     for (const provider of ["opencode", "pi"] as const) {
       const text =

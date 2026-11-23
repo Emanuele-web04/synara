@@ -89,6 +89,12 @@ export const ProviderSessionStartInput = Schema.Struct({
    * group coordinator. File edits and shell commands still ask.
    */
   autoApproveSynaraTools: Schema.optional(Schema.Boolean),
+  /**
+   * Fusion pairing role for this thread ("lead" pairs with a sidekick,
+   * "sidekick" was delegated by one). Delivers the matching
+   * SYNARA_FUSION_POLICY half through the once-per-session channel.
+   */
+  fusionRole: Schema.optional(Schema.Literals(["lead", "sidekick"])),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;

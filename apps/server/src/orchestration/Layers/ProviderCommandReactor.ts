@@ -2904,6 +2904,14 @@ const make = Effect.gen(function* () {
         ? { enableComputerControl: options.enableComputerControl }
         : {}),
       ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
+      // Fusion pairing role for the once-per-session policy channel: the
+      // creation marker decides, so a sidekick keeps its half even if the
+      // pairing payload changes later.
+      ...(thread.creationSource === "fusion_sidekick"
+        ? { fusionRole: "sidekick" as const }
+        : thread.fusion !== null
+          ? { fusionRole: "lead" as const }
+          : {}),
       runtimeMode: desiredRuntimeMode,
     };
     const autoApproveSynaraToolsChanged = autoApproveSynaraTools !== previousAutoApproveSynaraTools;

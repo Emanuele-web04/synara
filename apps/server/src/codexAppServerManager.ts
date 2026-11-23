@@ -222,6 +222,7 @@ interface CodexSessionContext {
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
+  readonly fusionRole?: "lead" | "sidekick";
   gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
   gatewayCredentialRetired?: boolean;
@@ -906,6 +907,7 @@ function buildCodexInitializeParams() {
 
 export function buildCodexCollaborationMode(input: {
   readonly enableComputerControl?: boolean;
+  readonly fusionRole?: "lead" | "sidekick";
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: string;
@@ -919,7 +921,11 @@ export function buildCodexCollaborationMode(input: {
       };
     }
   | undefined {
-  if (input.interactionMode === undefined && input.enableComputerControl !== true) {
+  if (
+    input.interactionMode === undefined &&
+    input.enableComputerControl !== true &&
+    input.fusionRole === undefined
+  ) {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
@@ -934,12 +940,13 @@ export function buildCodexCollaborationMode(input: {
       model,
       reasoning_effort: input.effort ?? "medium",
       developer_instructions:
-        input.enableComputerControl === true
+        input.enableComputerControl === true || input.fusionRole !== undefined
           ? instructions.replace(
               SYNARA_GATEWAY_HARNESS_POLICY,
               renderSynaraHarnessPolicy({
                 gatewayControlAvailable: true,
-                enableComputerControl: true,
+                enableComputerControl: input.enableComputerControl === true,
+                fusionRole: input.fusionRole,
               }),
             )
           : instructions,
@@ -1460,6 +1467,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         enableComputerControl:
           gatewaySessionLease !== undefined &&
           input.agentGatewayCapabilityInput.enableComputerControl === true,
+        ...(input.agentGatewayCapabilityInput.fusionRole !== undefined
+          ? { fusionRole: input.agentGatewayCapabilityInput.fusionRole }
+          : {}),
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
         session,
         ...(input.lifecycleGeneration !== undefined
@@ -1780,6 +1790,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const collaborationMode = buildCodexCollaborationMode({
       enableComputerControl: context.enableComputerControl === true,
+      ...(context.fusionRole !== undefined ? { fusionRole: context.fusionRole } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),

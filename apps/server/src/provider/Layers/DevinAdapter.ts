@@ -3078,6 +3078,7 @@ export function makeDevinAdapter(
 
           ctx = {
             enableComputerControl: input.enableComputerControl === true,
+            ...(input.fusionRole !== undefined ? { fusionRole: input.fusionRole } : {}),
             threadId: input.threadId,
             acpSessionId: started.sessionId,
             lifecycleGeneration: input.lifecycleGeneration,

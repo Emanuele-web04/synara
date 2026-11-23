@@ -1109,6 +1109,7 @@ export function makeCursorAdapter(
 
           ctx = {
             enableComputerControl: input.enableComputerControl === true,
+            ...(input.fusionRole !== undefined ? { fusionRole: input.fusionRole } : {}),
             threadId: input.threadId,
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined

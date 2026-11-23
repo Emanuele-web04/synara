@@ -1678,6 +1678,7 @@ const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
 export const buildEmbeddedClaudeSystemPromptAppend = (
   gatewayControlAvailable: boolean,
   enableComputerControl = false,
+  fusionRole?: "lead" | "sidekick",
 ) =>
   [
     "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
@@ -1691,6 +1692,7 @@ export const buildEmbeddedClaudeSystemPromptAppend = (
       gatewayControlAvailable,
       enableComputerControl,
       automationAuthoring: "tool-descriptions",
+      fusionRole,
     }),
   ].join("\n");
 
@@ -7773,6 +7775,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             append: buildEmbeddedClaudeSystemPromptAppend(
               agentGatewayCredentials !== undefined,
               input.enableComputerControl === true,
+              input.fusionRole,
             ),
             // Strip per-user dynamic sections (working directory, auto-memory
             // path) into the first user message so the cached system-prompt
