@@ -440,6 +440,17 @@ describe("buildDevinAcpSpawnInput", () => {
     });
     expect(JSON.stringify(spawn.args)).not.toContain("bootstrap-must-not-propagate");
   });
+
+  it("never adds a permission-mode flag for any runtime mode", () => {
+    // Mode selection must stay on the ACP session/set_mode path: a spawn flag
+    // would re-do the permission model at process level.
+    const base = buildDevinAcpSpawnInput(undefined, "/tmp/project", "approval-required");
+    for (const runtimeMode of ["approval-required", "auto", "full-access"] as const) {
+      const spawn = buildDevinAcpSpawnInput(undefined, "/tmp/project", runtimeMode);
+      expect(spawn.args).toEqual(base.args);
+      expect(JSON.stringify(spawn.args)).not.toContain("permission");
+    }
+  });
 });
 
 describe("makeDevinAcpRuntime", () => {

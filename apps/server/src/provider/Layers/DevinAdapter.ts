@@ -342,6 +342,11 @@ const DEVIN_COMPACT_OUTCOME_QUIET_MS = 200;
 const DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
+// Smart is Devin's own classifier-backed auto-approval mode: safe routine work
+// runs unhindered while risky or uncertain actions still reach Synara as
+// permission requests. The Accept Edits aliases below are only a conservative
+// fallback for installs/accounts that do not advertise Smart.
+const ACP_SMART_MODE_ALIASES = ["smart"] as const;
 const ACP_APPROVAL_MODE_ALIASES = ["accept-edits", "code"] as const;
 const ACP_FULL_ACCESS_MODE_ALIASES = ["bypass", "full access"] as const;
 const DEVIN_PLAN_MODE_PROMPT_PREFIX = [
@@ -822,28 +827,28 @@ export function resolveRequestedModeId(input: {
       return undefined;
     }
 
-    const aliases =
-      interactionMode === "plan"
-        ? ACP_PLAN_MODE_ALIASES
-        : runtimeMode === "approval-required"
-          ? ACP_APPROVAL_MODE_ALIASES
-          : ACP_FULL_ACCESS_MODE_ALIASES;
-
     // For plan mode, only an exact normalized id or name match is considered
     // safe; whole-token matching is too permissive for a fail-closed gate.
     const targetMode =
       interactionMode === "plan"
-        ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
-        : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
-          // Some Devin catalogs expose Ask Everytime instead of Code. Match the
-          // full name: the separate Ask mode must never count as approval mode.
-          (runtimeMode === "approval-required"
-            ? findModeByExactNormalizedAliases(modeState.availableModes, [
-                "ask everytime",
-                "ask every time",
-              ])
-            : undefined) ??
-          findModeByWholeTokenAliases(modeState.availableModes, aliases));
+        ? findModeByExactNormalizedAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)
+        : runtimeMode === "approval-required"
+          ? // Smart first, then the prompt-heavier Accept Edits fallbacks. Each
+            // step down only ever means more prompts, never less safety.
+            (findModeByExactNormalizedAliases(modeState.availableModes, ACP_SMART_MODE_ALIASES) ??
+            findModeByExactNormalizedAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES) ??
+            // Some Devin catalogs expose Ask Everytime instead of Code. Match the
+            // full name: the separate Ask mode must never count as approval mode.
+            findModeByExactNormalizedAliases(modeState.availableModes, [
+              "ask everytime",
+              "ask every time",
+            ]) ??
+            findModeByWholeTokenAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES))
+          : (findModeByExactNormalizedAliases(
+              modeState.availableModes,
+              ACP_FULL_ACCESS_MODE_ALIASES,
+            ) ??
+            findModeByWholeTokenAliases(modeState.availableModes, ACP_FULL_ACCESS_MODE_ALIASES));
 
     if (!targetMode) {
       if (runtimeMode === "full-access" && interactionMode !== "plan") {
@@ -868,7 +873,7 @@ export function applyDevinSessionConfiguration(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "getModeState" | "setMode">;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
-}): Effect.Effect<void, ProviderAdapterError> {
+}): Effect.Effect<string | undefined, ProviderAdapterError> {
   return Effect.gen(function* () {
     const readModeState = () =>
       input.runtime.getModeState.pipe(
@@ -919,7 +924,11 @@ export function applyDevinSessionConfiguration(input: {
           issue: `setMode("${requestedModeId}") was not confirmed by the ACP agent. Current mode: ${modeStateAfter?.currentModeId ?? "undefined"}`,
         });
       }
+
+      return requestedModeId;
     }
+
+    return modeState?.currentModeId;
   });
 }
 
@@ -3648,11 +3657,32 @@ export function makeDevinAdapter(
           // OR interruption of the remaining startup steps must tear the session
           // down explicitly instead of leaking a live child.
           yield* Effect.gen(function* () {
-            yield* applyDevinSessionConfiguration({
+            const appliedModeId = yield* applyDevinSessionConfiguration({
               runtime: acp,
               runtimeMode: input.runtimeMode,
               interactionMode: undefined,
             });
+            if (
+              input.runtimeMode === "approval-required" &&
+              appliedModeId !== undefined &&
+              normalizeModeToken(appliedModeId) !== "smart"
+            ) {
+              // Once per session: Smart is missing from this install's mode
+              // catalog, so the thread runs the prompt-heavier fallback.
+              yield* Effect.logWarning("devin.acp.smart_mode_unavailable", {
+                threadId: input.threadId,
+                mode: appliedModeId,
+              });
+              yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+                type: "runtime.warning",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                payload: {
+                  message: `Devin Smart mode is not available in this session (running in "${appliedModeId}" instead), so approval prompts may be more frequent. Update the Devin CLI to get Smart approvals.`,
+                },
+              });
+            }
             // Startup configuration has settled; turns gated on this deferred
             // can now prompt. Devin model options are process-start settings.
             yield* Deferred.succeed(sessionConfigReady, undefined);

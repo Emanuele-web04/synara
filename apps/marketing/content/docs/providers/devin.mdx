@@ -109,6 +109,16 @@ Devin sessions can expose:
 
 Synara does not currently classify Devin as supporting native live-turn steering. Queue a follow-up or wait for the current turn to settle instead of assuming another provider's active-turn controls are available.
 
+## Permissions
+
+Synara maps its runtime modes onto the permission modes the installed Devin ACP server advertises:
+
+- **Approval required** targets Devin's native **Smart** mode, which runs safe routine work unhindered and asks only for risky or uncertain actions. Those prompts still reach Synara's approval cards. On installs that do not advertise Smart, Synara falls back to **Accept Edits** (shown as `code` in some catalogs) and surfaces a one-time warning in the thread; when neither mode is offered the session fails to start rather than granting broader access.
+- **Plan** keeps precedence over every other mode while a plan interaction is active.
+- **Full Access** targets Devin's unrestricted `bypass` mode and is unchanged.
+
+Modes are selected through ACP `session/set_mode`, matching [Devin's permissions model](https://docs.devin.ai/cli/reference/permissions); Synara never passes a permission flag at process start. Update the Devin CLI if Smart mode is missing from an install.
+
 ## Configuration
 
 Keep Devin configuration in locations supported by the installed CLI. A custom Synara binary path must point to the `devin` executable, not its configuration directory.
@@ -164,6 +174,7 @@ This is expected: Synara does not advertise native live-turn steering for Devin.
 
 - [Devin CLI quickstart](https://docs.devin.ai/cli)
 - [Devin CLI commands and flags](https://docs.devin.ai/cli/reference/commands)
+- [Devin CLI permissions](https://docs.devin.ai/cli/reference/permissions)
 - [Devin CLI configuration file](https://docs.devin.ai/cli/reference/configuration/config-file)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
