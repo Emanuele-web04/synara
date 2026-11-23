@@ -114,7 +114,7 @@ export function normalizeLocalSessionCatalog(
     ...(row.lastActivityAt !== null ? { originalUpdatedAt: row.lastActivityAt } : {}),
     workspaceHint: row.workingDirectory,
     repositoryHints: row.workspaceDirs,
-    rawStatus: row.hidden ? "hidden" : undefined,
+    ...(row.hidden ? { rawStatus: "hidden" } : {}),
   }));
 }
 

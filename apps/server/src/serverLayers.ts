@@ -1,5 +1,6 @@
 import { RemoteHostTrustRepositoryLive } from "./persistence/Layers/RemoteHostTrust";
 import { RemoteDeviceTrustRepositoryLive } from "./persistence/Layers/RemoteDeviceTrust";
+import { ExternalHistoryRepositoryLive } from "./persistence/Layers/ExternalHistory";
 import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages";
 import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepositoryLive } from "./persistence/Layers/QueuedTurnPromotions";
@@ -269,6 +270,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(HostConnectionRegistryLive),
     Layer.provideMerge(
       Layer.mergeAll(
+        ExternalHistoryRepositoryLive,
         ProjectionThreadMessageRepositoryLive,
         OrchestrationCommandReceiptRepositoryLive,
         // The same instance the todo.* RPCs use, so a to-do an agent adds reaches open windows.

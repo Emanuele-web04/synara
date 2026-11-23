@@ -518,6 +518,36 @@ export const WsImportProjectRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importProjec
   error: WsRpcError,
 });
 
+export const WsListExternalHistorySourcesRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.listExternalHistorySources,
+  {
+    payload: OrchestrationRpcSchemas.listExternalHistorySources.input,
+    success: OrchestrationRpcSchemas.listExternalHistorySources.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsListExternalHistorySessionsRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.listExternalHistorySessions,
+  {
+    payload: OrchestrationRpcSchemas.listExternalHistorySessions.input,
+    success: OrchestrationRpcSchemas.listExternalHistorySessions.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsReadExternalHistoryRpc = Rpc.make(ORCHESTRATION_WS_METHODS.readExternalHistory, {
+  payload: OrchestrationRpcSchemas.readExternalHistory.input,
+  success: OrchestrationRpcSchemas.readExternalHistory.output,
+  error: WsRpcError,
+});
+
+export const WsImportExternalHistoryRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importExternalHistory, {
+  payload: OrchestrationRpcSchemas.importExternalHistory.input,
+  success: OrchestrationRpcSchemas.importExternalHistory.output,
+  error: WsRpcError,
+});
+
 export const WsOrchestrationRegenerateThreadTitleRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
   {
@@ -2363,6 +2393,10 @@ export type WsFeatureRpc =
   | typeof WsListProjectImportsRpc
   | typeof WsImportProjectRpc
   | typeof WsLoadProjectImportHistoryRpc
+  | typeof WsListExternalHistorySourcesRpc
+  | typeof WsListExternalHistorySessionsRpc
+  | typeof WsReadExternalHistoryRpc
+  | typeof WsImportExternalHistoryRpc
   | typeof WsOrchestrationRegenerateThreadTitleRpc
   | typeof WsOrchestrationGetSnapshotRpc
   | typeof WsOrchestrationGetShellSnapshotRpc
@@ -2569,6 +2603,10 @@ const wsOrchestrationRpcGroup = RpcGroup.make(
   WsListProjectImportsRpc,
   WsImportProjectRpc,
   WsLoadProjectImportHistoryRpc,
+  WsListExternalHistorySourcesRpc,
+  WsListExternalHistorySessionsRpc,
+  WsReadExternalHistoryRpc,
+  WsImportExternalHistoryRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,

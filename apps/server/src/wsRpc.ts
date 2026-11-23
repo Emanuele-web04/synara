@@ -218,6 +218,8 @@ import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { makeProjectImportHandlers } from "./orchestration/projectImportRoute";
 import { makeProjectImportRepository } from "./persistence/projectImportRepository";
+import { ExternalHistoryRepository } from "./persistence/Services/ExternalHistory";
+import { makeExternalHistoryService } from "./providerHistory/externalHistoryService.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
@@ -969,6 +971,11 @@ const makeWsRpcHandlersLayer = () =>
         serverConfig: config,
         serverSettings,
       });
+      const externalHistory = makeExternalHistoryService({
+        repository: yield* ExternalHistoryRepository,
+        orchestrationEngine,
+        homeDir: config.homeDir,
+      });
       const projectImports = makeProjectImportHandlers({
         repository: yield* makeProjectImportRepository,
         orchestrationEngine,
@@ -1682,6 +1689,17 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.importProject]: (input) =>
           rpcEffect(projectImports.importProject(input), "Failed to import project"),
+        [ORCHESTRATION_WS_METHODS.listExternalHistorySources]: (input) =>
+          rpcEffect(externalHistory.listSources(), "Failed to list external history sources"),
+        [ORCHESTRATION_WS_METHODS.listExternalHistorySessions]: (input) =>
+          rpcEffect(
+            externalHistory.listSessions(input),
+            "Failed to list external history sessions",
+          ),
+        [ORCHESTRATION_WS_METHODS.readExternalHistory]: (input) =>
+          rpcEffect(externalHistory.readHistory(input), "Failed to read external history"),
+        [ORCHESTRATION_WS_METHODS.importExternalHistory]: (input) =>
+          rpcEffect(externalHistory.importHistory(input), "Failed to import external history"),
         [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
           rpcEffect(
             providerCommandReactor.regenerateThreadTitle(input),

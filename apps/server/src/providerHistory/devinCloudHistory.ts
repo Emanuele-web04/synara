@@ -36,12 +36,15 @@ export interface DevinCloudPage<T> {
   readonly hasNextPage: boolean;
 }
 
-export interface DevinCloudClientOptions {
+export interface DevinCloudIdentityOptions {
   readonly apiUrl: string;
-  readonly orgId: string;
   readonly token: string;
   readonly fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
   readonly timeoutMs?: number;
+}
+
+export interface DevinCloudClientOptions extends DevinCloudIdentityOptions {
+  readonly orgId: string;
 }
 
 function fail(
@@ -70,7 +73,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 async function cloudGet(
-  options: DevinCloudClientOptions,
+  options: DevinCloudIdentityOptions,
   path: string,
   query: Record<string, string>,
   signal?: AbortSignal,
@@ -142,6 +145,34 @@ function parsePage<T>(
     endCursor: asText(record.end_cursor),
     hasNextPage: record.has_next_page === true,
   };
+}
+
+export interface DevinCloudOrganization {
+  readonly orgId: string;
+  readonly name: string | null;
+}
+
+/**
+ * Resolve the organization a token can read. Uses the first page of
+ * /v3/enterprise/organizations; history reads then scope every call to that
+ * org so the caller never has to know or configure the org id.
+ */
+export async function listDevinCloudOrganizations(
+  options: DevinCloudIdentityOptions,
+  input: { first?: number; signal?: AbortSignal } = {},
+): Promise<DevinCloudPage<DevinCloudOrganization>> {
+  const first = Math.min(Math.max(input.first ?? 100, 1), MAX_PAGE_SIZE);
+  const record = await cloudGet(
+    options,
+    "/v3/enterprise/organizations",
+    { first: String(first) },
+    input.signal,
+  );
+  return parsePage(record, (item) => {
+    const orgId = asText(item.org_id);
+    if (orgId === null) return null;
+    return { orgId, name: asText(item.name) };
+  });
 }
 
 export async function listDevinCloudSessions(
