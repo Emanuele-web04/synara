@@ -861,7 +861,7 @@ function findInlineCodeEndIndex(value: string, index: number, length: number): n
     cursor = markerEnd;
   }
 
-  return value.length;
+  return -1;
 }
 
 function looksLikeInlineMath(content: string): boolean {
@@ -1057,8 +1057,12 @@ function findInlineMarkdownLinkEnd(value: string, index: number): number {
 }
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
-function protectLiteralMarkdownDollars(value: string): string {
+function protectLiteralMarkdownDollars(value: string): {
+  readonly text: string;
+  readonly hasMath: boolean;
+} {
   let result = "";
+  let hasMath = false;
   let cursor = 0;
 
   while (cursor < value.length) {
@@ -1081,6 +1085,12 @@ function protectLiteralMarkdownDollars(value: string): string {
         markerEnd += 1;
       }
       const inlineCodeEndIndex = findInlineCodeEndIndex(value, cursor, markerEnd - cursor);
+      if (inlineCodeEndIndex === -1) {
+        // An unmatched backtick is ordinary Markdown text. Preserve the raw
+        // tail and let remark-math interpret any delimiters there.
+        const remainder = value.slice(cursor);
+        return { text: result + remainder, hasMath: hasMath || remainder.includes("$") };
+      }
       result += value.slice(cursor, inlineCodeEndIndex);
       cursor = inlineCodeEndIndex;
       continue;
@@ -1094,11 +1104,13 @@ function protectLiteralMarkdownDollars(value: string): string {
       nextCodeIndex += 1;
     }
 
-    result += protectLiteralDollarsInMarkdownLinks(value.slice(cursor, nextCodeIndex));
+    const prose = protectLiteralDollarsInMarkdownLinks(value.slice(cursor, nextCodeIndex));
+    hasMath ||= prose.includes("$");
+    result += prose;
     cursor = nextCodeIndex;
   }
 
-  return result;
+  return { text: result, hasMath };
 }
 
 // Returns the raw fence info string (the token after ```), e.g. "ts" or the
@@ -2083,8 +2095,8 @@ function ChatMarkdown({
     () => (isUserVariant || !text.includes("|") ? text : repairMarkdownTableDelimiters(text)),
     [isUserVariant, text],
   );
-  const normalizedText = useMemo(() => {
-    if (isUserVariant) return smoothedText;
+  const normalizedMarkdown = useMemo(() => {
+    if (isUserVariant) return { text: smoothedText, hasMath: false };
     // Once the reveal has caught up (and always outside streaming) the smoothed
     // text is the raw text, whose repair is already done above.
     const repairedText =
@@ -2097,18 +2109,19 @@ function ChatMarkdown({
       repairedText.includes("\\(") ||
       repairedText.includes("\\[")
       ? protectLiteralMarkdownDollars(repairedText)
-      : repairedText;
+      : { text: repairedText, hasMath: false };
   }, [isUserVariant, smoothedText, text, sourceText]);
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
   // completed messages render the exact current text immediately (no visual change).
-  const deferredNormalizedText = useDeferredValue(normalizedText);
-  const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  const deferredMarkdown = useDeferredValue(normalizedMarkdown);
+  const { text: renderedText, hasMath: needsMathPlugins } = isStreaming
+    ? deferredMarkdown
+    : normalizedMarkdown;
   // Only streaming assistant markdown is split; authored HTML previews go
   // through rehype-raw, which re-parses positions, and are never streamed.
   const splitBlocks = isStreaming && !isUserVariant && !parseHtml;
-  const needsMathPlugins = !isUserVariant && renderedText.includes("$");
   const [mathPlugins, setMathPlugins] = useState<MathPluginsBundle | null>(() => cachedMathPlugins);
   const [authoredHtmlPlugins, setAuthoredHtmlPlugins] = useState<AuthoredHtmlPluginsBundle | null>(
     () => cachedAuthoredHtmlPlugins,

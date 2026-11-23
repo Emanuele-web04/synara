@@ -659,7 +659,7 @@ describe("production Effect HTTP routes", () => {
     });
   });
 
-  it("serves a symlinked static root that appears after the first request", async () => {
+  it("serves the current build when a symlinked static root appears or changes", async () => {
     const parentDir = makeTempDir("synara-effect-static-");
     const realDir = path.join(parentDir, "build");
     const staticDir = path.join(parentDir, "current");
@@ -681,6 +681,16 @@ describe("production Effect HTTP routes", () => {
       const shell = await fetch(`${origin}/`);
       expect(shell.status).toBe(200);
       await expect(shell.text()).resolves.toContain("Synara shell");
+
+      const nextBuild = path.join(parentDir, "next-build");
+      mkdirSync(path.join(nextBuild, "assets"), { recursive: true });
+      writeFileSync(path.join(nextBuild, "assets", "app-abc123.js"), "globalThis.newBuild = true;");
+      rmSync(staticDir);
+      symlinkSync(nextBuild, staticDir);
+
+      const updatedAsset = await fetch(`${origin}/assets/app-abc123.js`);
+      expect(updatedAsset.status).toBe(200);
+      await expect(updatedAsset.text()).resolves.toBe("globalThis.newBuild = true;");
     });
   });
 

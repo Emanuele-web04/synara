@@ -5798,6 +5798,10 @@ export default function ChatView({
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
   const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
+  const [hasOpenedLibrary, setHasOpenedLibrary] = useState(false);
+  useEffect(() => {
+    if (libraryPanelVisible) setHasOpenedLibrary(true);
+  }, [libraryPanelVisible]);
   const environmentPanelVisibleEffective =
     environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
   const environmentAppliesContentInset =
@@ -7530,7 +7534,8 @@ export default function ChatView({
               }}
             />
           ) : null}
-          {projectPanelEnabled && libraryPanelVisible ? (
+          {/* Load on first open and retain the panel's state and close transition. */}
+          {projectPanelEnabled && (libraryPanelVisible || hasOpenedLibrary) ? (
             <Suspense fallback={null}>
               <LibraryPanel
                 open={libraryPanelVisible}

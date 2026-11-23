@@ -7,7 +7,7 @@ import { isAutomationRunThread } from "@synara/shared/automationMode";
 import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
-import type { AppState } from "./storeState";
+import { EMPTY_THREAD_IDS, type AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
@@ -118,14 +118,25 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
   };
 }
 
-/**
- * Streaming-immune thread selector for lifecycle notifications.
- * `collectCompletedThreadCandidates` and `collectInputNeededThreadCandidates` only react to
- * thread shells, session state, turn state, and activities — never to mid-turn token deltas in
- * `messageByThreadId`. Ignoring message/plan/diff slice churn prevents rebuilding hundreds of
- * Thread objects on every 100ms streaming flush while still exposing the final assistant message
- * once `threadTurnStateById` or `threadSessionById` settles.
- */
+// Shell fields read by the completion and attention collectors. Streaming timestamps
+// and other shell changes leave notification candidates untouched.
+function notificationShellsEqual(left: ThreadShell | undefined, right: ThreadShell | undefined) {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.title === right.title &&
+      left.projectId === right.projectId &&
+      left.snoozedUntil === right.snoozedUntil &&
+      left.parentThreadId === right.parentThreadId &&
+      left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
+      left.pendingInteractions === right.pendingInteractions &&
+      left.hasPendingApprovals === right.hasPendingApprovals &&
+      left.hasPendingUserInput === right.hasPendingUserInput)
+  );
+}
+
+/** Retains the notification projection until an input that can change a candidate does. */
 export function createNotificationThreadsSelector(): (state: AppState) => readonly Thread[] {
   let previousThreadIds: readonly ThreadId[] | undefined;
   let previousThreadShellById = {} as AppState["threadShellById"];
@@ -136,9 +147,15 @@ export function createNotificationThreadsSelector(): (state: AppState) => readon
   let previousThreads: readonly Thread[] = [];
 
   return (state) => {
-    if (
+    const shellInputsUnchanged =
       previousThreadIds === state.threadIds &&
-      previousThreadShellById === state.threadShellById &&
+      (previousThreadShellById === state.threadShellById ||
+        (state.threadIds ?? EMPTY_THREAD_IDS).every((id) =>
+          notificationShellsEqual(previousThreadShellById?.[id], state.threadShellById?.[id]),
+        ));
+    previousThreadShellById = state.threadShellById;
+    if (
+      shellInputsUnchanged &&
       previousThreadSessionById === state.threadSessionById &&
       previousThreadTurnStateById === state.threadTurnStateById &&
       previousActivityIdsByThreadId === state.activityIdsByThreadId &&
@@ -148,7 +165,6 @@ export function createNotificationThreadsSelector(): (state: AppState) => readon
     }
 
     previousThreadIds = state.threadIds;
-    previousThreadShellById = state.threadShellById;
     previousThreadSessionById = state.threadSessionById;
     previousThreadTurnStateById = state.threadTurnStateById;
     previousActivityIdsByThreadId = state.activityIdsByThreadId;

@@ -1939,7 +1939,14 @@ function EventRouter() {
     let transportOpen = false;
     const unsubTransportOpenCount = addWsTransportStateListener(
       (state) => {
-        if (state === "open" && !transportOpen) transportOpenCount += 1;
+        if (state === "open" && !transportOpen) {
+          transportOpenCount += 1;
+          // Boot hydrates from subscribeConfig. A reconnect must replace any
+          // config left in React Query from the previous socket.
+          if (transportOpenCount > 1) {
+            void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
+          }
+        }
         transportOpen = state === "open";
       },
       { replayCurrent: true },
@@ -2872,21 +2879,6 @@ function EventRouter() {
     const unsubControllerState = onControllerStateChange((state) => {
       if (state === "open") void invalidateAccountStatus(queryClient).catch(() => undefined);
     });
-    let sawTransportNonOpen = false;
-    const unsubWsTransportState = addWsTransportStateListener(
-      (state) => {
-        if (state !== "open") {
-          sawTransportNonOpen = true;
-          return;
-        }
-        // Only issue a forced config refresh after an actual disconnect/reconnect.
-        // Initial open is already hydrated by `server.subscribeConfig` + RQ.
-        if (!sawTransportNonOpen) return;
-        sawTransportNonOpen = false;
-        void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
-      },
-      { replayCurrent: true },
-    );
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       const previousSettings = queryClient.getQueryData<ServerSettingsView>(
         serverQueryKeys.settings(),
@@ -3054,7 +3046,6 @@ function EventRouter() {
       unsubServerConfigUpdated();
       unsubWorkspaceKeybindings?.();
       unsubProviderStatusesUpdated();
-      unsubWsTransportState();
       unsubControllerState();
       unsubTransportOpenCount();
       unsubServerSettingsUpdated();
@@ -3104,6 +3095,10 @@ function selectNeedsDesktopProjectRecovery(state: AppState): boolean {
 function DesktopProjectBootstrap() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const needsRecovery = useStore(selectNeedsDesktopProjectRecovery);
+  // Project inventory and thread membership can unblock a previously failed
+  // recovery without changing the missing-project predicate or rerunning for deltas.
+  const projects = useStore((store) => (needsRecovery ? store.projects : null));
+  const threadIds = useStore((store) => (needsRecovery ? store.threadIds : null));
   const recoveryAttemptGateRef = useRef<ReturnType<
     typeof createDesktopProjectRecoveryAttemptGate
   > | null>(null);
@@ -3119,36 +3114,48 @@ function DesktopProjectBootstrap() {
       return;
     }
 
-    const attempt = recoveryAttemptGate.begin();
-    if (!attempt) return;
-    const ownsAttempt = () => !disposed && attempt.isCurrent();
+    const recover = () => {
+      const attempt = recoveryAttemptGate.begin();
+      if (!attempt) return;
+      const ownsAttempt = () => !disposed && attempt.isCurrent();
 
-    // Shell subscriptions should normally hydrate the sidebar. If project rows
-    // are missing while live threads exist, repair before accepting the snapshot.
-    void api.orchestration
-      .getShellSnapshot()
-      .then((snapshot) => {
-        if (!ownsAttempt()) return;
-        const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
-        if (!needsRepair) {
-          if (!ownsAttempt() || !attempt.complete()) return;
-          useStore.getState().syncServerShellSnapshot(snapshot);
-          return;
-        }
-        return api.orchestration.repairState().then((repairedSnapshot) => {
-          if (!ownsAttempt() || !attempt.complete()) return;
-          syncServerReadModel(repairedSnapshot);
+      // Verify missing projects against the server before repairing them.
+      void api.orchestration
+        .getShellSnapshot()
+        .then((snapshot) => {
+          if (!ownsAttempt()) return;
+          if (!shouldRepairDesktopProjectSnapshot(snapshot)) {
+            if (!attempt.complete()) return;
+            useStore.getState().syncServerShellSnapshot(snapshot);
+            return;
+          }
+          return api.orchestration.repairState().then((repairedSnapshot) => {
+            if (!ownsAttempt() || !attempt.complete()) return;
+            syncServerReadModel(repairedSnapshot);
+          });
+        })
+        .catch(() => {
+          attempt.release();
         });
-      })
-      .catch(() => {
-        attempt.release();
-      });
+      return attempt;
+    };
 
+    let attempt = recover();
+    let disconnected = false;
+    const unsubscribeTransport = addWsTransportStateListener((state) => {
+      if (state === "closed") disconnected = true;
+      if (state === "open" && disconnected) {
+        disconnected = false;
+        attempt?.release();
+        attempt = recover();
+      }
+    });
     return () => {
       disposed = true;
-      attempt.release();
+      unsubscribeTransport();
+      attempt?.release();
     };
-  }, [needsRecovery, recoveryAttemptGate, syncServerReadModel]);
+  }, [needsRecovery, projects, recoveryAttemptGate, syncServerReadModel, threadIds]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;

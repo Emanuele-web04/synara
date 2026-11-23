@@ -1542,7 +1542,6 @@ interface CachedImmutableStaticAsset {
 }
 
 const IMMUTABLE_STATIC_CACHE_MAX_BYTES = 24 * 1024 * 1024;
-const canonicalStaticRootCache = new Map<string, string>();
 const immutableStaticAssetCache = new Map<string, CachedImmutableStaticAsset>();
 let immutableStaticAssetCacheBytes = 0;
 
@@ -1573,21 +1572,6 @@ function setCachedImmutableStaticAsset(key: string, entry: CachedImmutableStatic
   }
   immutableStaticAssetCache.set(key, entry);
   immutableStaticAssetCacheBytes += entry.byteLength;
-}
-
-// Immutable asset paths (source or sidecar) that a full lookup found absent.
-// The cache fast path may only skip a client's higher-ranked encoding when it
-// is listed here; an encoding it has never looked up must go through the full
-// lookup, or the first client to fetch an asset would pin its encoding for
-// every later client. This never short-circuits the full lookup itself.
-const IMMUTABLE_STATIC_MISSING_MAX_ENTRIES = 2048;
-const immutableStaticMissingPaths = new Set<string>();
-
-function rememberMissingImmutableStaticPath(servedPath: string): void {
-  if (immutableStaticMissingPaths.size >= IMMUTABLE_STATIC_MISSING_MAX_ENTRIES) {
-    immutableStaticMissingPaths.clear();
-  }
-  immutableStaticMissingPaths.add(servedPath);
 }
 
 function cachedImmutableStaticResponse(
@@ -1648,44 +1632,17 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       candidate === staticRoot ||
       candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
 
-    // Lexical containment is not containment: stat and readFile follow
-    // symlinks, so a link inside the root pointing outside it would be served.
-    // Canonicalize before opening anything. The root itself is canonicalized
-    // too, otherwise a symlinked staticDir would fail its own check.
-    // Only a successful canonicalization is remembered: a root that does not
-    // exist yet (or is a symlink that is later retargeted) must not pin a stale
-    // answer that then refuses every file.
-    const canonicalizeStaticRoot = Effect.fn(function* () {
-      const resolved = yield* fileSystem
-        .realPath(staticRoot)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (resolved === null) {
-        canonicalStaticRootCache.delete(staticRoot);
-        return staticRoot;
-      }
-      canonicalStaticRootCache.set(staticRoot, resolved);
-      return resolved;
-    });
-    const isWithinRoot = (root: string, candidate: string) =>
-      candidate === root ||
-      candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
-    const cachedCanonicalStaticRoot = canonicalStaticRootCache.get(staticRoot);
-    const resolvesInsideRoot = Effect.fn(function* (candidate: string) {
-      const real = yield* fileSystem
-        .realPath(candidate)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      // A path that cannot be canonicalized does not exist; the caller's own
-      // stat/readFile will fail it, and refusing here keeps 404 semantics.
-      if (real === null) return false;
-      if (
-        cachedCanonicalStaticRoot !== undefined &&
-        isWithinRoot(cachedCanonicalStaticRoot, real)
-      ) {
-        return true;
-      }
-      // Cache miss, or the remembered root no longer contains the file: decide
-      // against a freshly canonicalized root before refusing.
-      return isWithinRoot(yield* canonicalizeStaticRoot(), real);
+    // Resolve the root and the file for each request. A symlinked build can be
+    // replaced while the server is still running, including when assets are cached.
+    const canonicalStaticRoot = yield* fileSystem
+      .realPath(staticRoot)
+      .pipe(Effect.orElseSucceed(() => staticRoot));
+    const canonicalPrefix = canonicalStaticRoot.endsWith(path.sep)
+      ? canonicalStaticRoot
+      : `${canonicalStaticRoot}${path.sep}`;
+    const resolveStaticFile = Effect.fn(function* (candidate: string) {
+      const real = yield* fileSystem.realPath(candidate).pipe(Effect.orElseSucceed(() => null));
+      return real !== null && real.startsWith(canonicalPrefix) ? real : null;
     });
 
     let filePath = path.resolve(staticRoot, relativePath);
@@ -1719,20 +1676,17 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       const contentType =
         baseContentType === "text/html" ? "text/html; charset=utf-8" : baseContentType;
       const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
-        if (isImmutableAsset) {
-          const cached = getCachedImmutableStaticAsset(servedPath);
+        const real = yield* resolveStaticFile(servedPath);
+        if (real === null) return null;
+        // Include the representation URL so aliases with different MIME types
+        // never share cached headers even when they resolve to the same file.
+        const cacheKey = isImmutableAsset ? `${canonicalStaticRoot}\0${servedPath}\0${real}` : null;
+        if (cacheKey !== null) {
+          const cached = getCachedImmutableStaticAsset(cacheKey);
           if (cached) return cachedImmutableStaticResponse(cached, cacheHeaders, ifNoneMatch);
         }
-        // Canonicalize before opening: a symlink inside the root pointing
-        // outside it passes the lexical guard but must not be served.
-        if (!(yield* resolvesInsideRoot(servedPath))) return null;
-        const info = yield* fileSystem
-          .stat(servedPath)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!info || info.type !== "File") {
-          if (isImmutableAsset) rememberMissingImmutableStaticPath(servedPath);
-          return null;
-        }
+        const info = yield* fileSystem.stat(real).pipe(Effect.orElseSucceed(() => null));
+        if (!info || info.type !== "File") return null;
         const etag = staticEtag(Number(info.size), info.mtime?.getTime() ?? 0, encoding);
         const encodingHeaders = encoding ? { "Content-Encoding": encoding } : {};
         const headers = { ...cacheHeaders, ...encodingHeaders, ETag: etag };
@@ -1740,12 +1694,11 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
           return HttpServerResponse.empty({ status: 304, headers });
         }
         const data = yield* fileSystem
-          .readFile(servedPath)
+          .readFile(real)
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!data) return null;
-        if (isImmutableAsset) {
-          immutableStaticMissingPaths.delete(servedPath);
-          setCachedImmutableStaticAsset(servedPath, {
+        if (cacheKey !== null) {
+          setCachedImmutableStaticAsset(cacheKey, {
             data,
             etag,
             contentType,
@@ -1782,30 +1735,6 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       }
       return null;
     });
-
-    // Fast path: if an immutable hashed asset is already cached in memory
-    // (which only happens after passing resolvesInsideRoot + stat), skip the
-    // outer fileSystem.stat(filePath) probe completely. Candidates are walked in
-    // the client's ranked order and the walk stops at the first one whose
-    // availability is unknown, so a cached lower-ranked body is never served
-    // while a higher-ranked sidecar may exist on disk.
-    const immutableRequestPath = relativePath.replaceAll("\\", "/");
-    if (immutableRequestPath.startsWith("assets/")) {
-      const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);
-      for (const candidate of preference.candidates) {
-        const servedPath =
-          candidate === null ? filePath : `${filePath}${candidate.sidecarExtension}`;
-        const cached = getCachedImmutableStaticAsset(servedPath);
-        if (cached) {
-          return cachedImmutableStaticResponse(
-            cached,
-            { "Cache-Control": staticCacheControl(immutableRequestPath), Vary: "Accept-Encoding" },
-            request.headers["if-none-match"],
-          );
-        }
-        if (!immutableStaticMissingPaths.has(servedPath)) break;
-      }
-    }
 
     const fileInfo = yield* fileSystem
       .stat(filePath)
