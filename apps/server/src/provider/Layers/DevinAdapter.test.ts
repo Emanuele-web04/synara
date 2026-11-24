@@ -1954,6 +1954,27 @@ describe("applyDevinSessionConfiguration", () => {
       expect(calls).toEqual([]);
     },
   );
+
+  it("rejects Auto even when Devin advertises Full Access", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "bypass", name: "Full Access" },
+      ],
+    });
+
+    await expect(
+      Effect.runPromise(
+        applyDevinSessionConfiguration({
+          runtime,
+          runtimeMode: "auto",
+          interactionMode: "default",
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("resolveRequestedModeId", () => {
@@ -2014,7 +2035,7 @@ describe("resolveRequestedModeId", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
+  it("keeps Plan precedence and rejects unrecognized approval modes", async () => {
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2030,6 +2051,7 @@ describe("resolveRequestedModeId", () => {
       [
         { id: "smart", name: "Smart" },
         { id: "ask", name: "Ask" },
+        { id: "code-bypass", name: "Code Bypass" },
       ],
     ]) {
       await expect(
