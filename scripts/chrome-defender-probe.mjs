@@ -10,11 +10,16 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-const ASSET =
-  "https://github.com/Emanuele-web04/synara/releases/download/v1.6.6/Synara-1.6.6-x64.exe";
-const RELEASE = "https://github.com/Emanuele-web04/synara/releases/expanded_assets/v1.6.6";
-const FILE = "Synara-1.6.6-x64.exe";
-const EXPECTED = "ca92932ca72a7c26cc9c744b88420caeb30f1a9cfa8c57638a7f20ae73290134";
+const VERSIONS = {
+  "1.6.5": "1be49bd9814960a62b04297c614106f699a1b944c38f99c77a2f53cfcfdf6d6d",
+  "1.6.6": "ca92932ca72a7c26cc9c744b88420caeb30f1a9cfa8c57638a7f20ae73290134",
+};
+const version = process.env.PROBE_VERSION;
+if (!Object.hasOwn(VERSIONS, version)) throw new Error("Expected a pinned release version.");
+const FILE = `Synara-${version}-x64.exe`;
+const ASSET = `https://github.com/Emanuele-web04/synara/releases/download/v${version}/${FILE}`;
+const RELEASE = `https://github.com/Emanuele-web04/synara/releases/expanded_assets/v${version}`;
+const EXPECTED = VERSIONS[version];
 const evidence = path.resolve(process.argv[2] ?? "browser-defender-evidence");
 await mkdir(evidence, { recursive: true });
 const result = {
@@ -33,7 +38,7 @@ const result = {
     "Hosted-runner observation with a fresh profile and independently recorded OS and Defender configuration.",
     "Fresh unsigned-in Chrome profile; browser first-run UX skipped, security settings unchanged.",
     "Initial hosted-image definitions are not reconstructed historical user definitions. Automatic signature changes are reported by the workflow, not prevented.",
-    "The latest-definition repeat follows the initial download and a guard scan of the same hash; service caching may affect the comparison.",
+    "Both observations use the same runner and independent Chrome profiles. Service caching may affect the comparison.",
     "No Keep, Unblock, Open or Run action is performed. A withheld download stays withheld.",
     "Defender cloud guard connectivity does not by itself prove a Safe Browsing service verdict.",
     "Confirm active Safe Browsing using the captured Chrome security controls and policies; this probe does not infer it from a successful download.",

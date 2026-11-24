@@ -1,4 +1,4 @@
-name: Compare native Chrome download before and after Defender update
+name: Compare official 1.6.5 and 1.6.6 Chrome downloads
 
 on:
   push:
@@ -16,11 +16,7 @@ jobs:
   # Phase 1 is diagnostic, NOT release qualification; it must precede every
   # explicit signature update and every download/scan of the official installer.
   chrome_download_diagnostic:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-11-arm]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-2022
     timeout-minutes: 25
     permissions:
       contents: read
@@ -46,9 +42,7 @@ jobs:
                'Sequential downloads and cloud verdicts can affect caching.',
                'Hosted runners have their own device configuration and policy.') } |
             ConvertTo-Json -Depth 5 | Set-Content "$root/diagnostic-context.json"
-          if ('${{ matrix.os }}' -eq 'windows-11-arm') {
-            if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') { throw 'Expected Windows 11 ARM64 client.' }
-          } elseif ($os.Caption -notmatch 'Windows Server 2022') { throw 'Expected Windows Server 2022.' }
+          if ($os.Caption -notmatch 'Windows Server 2022') { throw 'Expected Windows Server 2022.' }
           @'
           function Get-ProbeEvidenceRoot {
             Join-Path $env:RUNNER_TEMP 'synara-chrome-defender-evidence'
@@ -198,74 +192,43 @@ jobs:
           Save-ProbeDefenderState $root after-enable
           Assert-ProbeProtection
           # Intentionally no signature update, downgrade, update-policy change or installer staging here.
-      - name: Observe Chrome with the initial hosted-image definitions
-        id: initial
+      - name: Observe the 1.6.5 download in a fresh Chrome profile
+        id: old
         continue-on-error: true
         timeout-minutes: 8
         shell: pwsh
+        env:
+          PROBE_VERSION: 1.6.5
         run: |
           $ErrorActionPreference = 'Stop'
           . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
-          Invoke-NativeChromeObservation initial-definitions $true
-      - name: Qualify official installer with the unchanged production guard
-        id: latest_guard
-        if: ${{ !cancelled() && steps.protection.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
-          $root = Get-ProbeEvidenceRoot
-          $assets = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-guard-assets') -Force
-          $file = Join-Path $assets 'Synara-1.6.6-x64.exe'
-          $url = 'https://github.com/Emanuele-web04/synara/releases/download/v1.6.6/Synara-1.6.6-x64.exe'
-          Save-ProbeDefenderState $root before-latest-guard-staging
-          try {
-            Invoke-WebRequest $url -OutFile $file
-            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
-          } catch {
-            # This fallback is AFTER phase 1. Initial AV may remove the file before
-            # the guard can hash its inputs. Refresh normally, never disable AV or restore quarantine.
-            $_ | Out-String | Set-Content "$root/latest-guard-initial-staging-error.txt"
-            Update-MpSignature
-            Save-ProbeDefenderState $root after-latest-staging-update
-            Invoke-WebRequest $url -OutFile $file
-            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
-          }
-          if ($hash -ne 'ca92932ca72a7c26cc9c744b88420caeb30f1a9cfa8c57638a7f20ae73290134') { throw 'Official installer hash mismatch.' }
-          Get-AuthenticodeSignature $file | ConvertTo-Json -Depth 6 | Set-Content "$root/installer-signature.json"
-          $guard = Resolve-Path scripts/verify-windows-defender.ps1
-          Get-FileHash -LiteralPath $guard -Algorithm SHA256 | ConvertTo-Json | Set-Content "$root/production-guard-sha256.json"
-          & $guard -AssetsDirectory $assets.FullName -EvidenceDirectory (Join-Path $root 'latest-production-guard')
-      - name: Observe fresh Chrome profile with qualified latest definitions
-        id: latest
-        if: ${{ !cancelled() && steps.latest_guard.outcome == 'success' }}
+          Invoke-NativeChromeObservation stable-1.6.5 $true
+      - name: Observe the 1.6.6 download in a fresh Chrome profile
+        id: new
         continue-on-error: true
         timeout-minutes: 8
         shell: pwsh
+        env:
+          PROBE_VERSION: 1.6.6
         run: |
           $ErrorActionPreference = 'Stop'
           . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
-          Invoke-NativeChromeObservation latest-definitions $false
-      - name: Record both phase outcomes without conflating diagnostics with qualification
+          Invoke-NativeChromeObservation stable-1.6.6 $true
+      - name: Record comparison outcomes
         if: always()
         shell: pwsh
         env:
-          INITIAL_OUTCOME: ${{ steps.initial.outcome }}
-          GUARD_OUTCOME: ${{ steps.latest_guard.outcome }}
-          LATEST_OUTCOME: ${{ steps.latest.outcome }}
+          OLD_OUTCOME: ${{ steps.old.outcome }}
+          NEW_OUTCOME: ${{ steps.new.outcome }}
         run: |
           $root = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-defender-evidence') -Force
-          @{ initialObservation = $env:INITIAL_OUTCOME; productionGuard = $env:GUARD_OUTCOME;
-             latestObservation = $env:LATEST_OUTCOME; diagnosticOnly = $true } |
+          @{ oldObservation = $env:OLD_OUTCOME; newObservation = $env:NEW_OUTCOME; diagnosticOnly = $true } |
             ConvertTo-Json | Set-Content "$root/job-outcomes.json"
-          Write-Output 'Read screenshots/live download data, pre-close hashes, history and Defender events together. This diagnostic job passing is not a clean download verdict.'
       - name: Retain diagnostic evidence, excluding profiles and installer bytes
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: defender-1.6.6-native-chrome-${{ matrix.os }}
+          name: chrome-1.6.5-vs-1.6.6-windows-2022
           path: ${{ runner.temp }}/synara-chrome-defender-evidence/
           retention-days: 14
           if-no-files-found: error
